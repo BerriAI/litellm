@@ -106,6 +106,13 @@ _CAPS_NONE: FrozenSet[str] = frozenset()
 
 ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
     ModelEntry(
+        alias="claude-fable-5",
+        model="anthropic/claude-fable-5",
+        mode="adaptive",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_OPUS_4_7,
+    ),
+    ModelEntry(
         alias="claude-opus-4-7",
         model="anthropic/claude-opus-4-7",
         mode="adaptive",
@@ -130,6 +137,19 @@ ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
 
 
 AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="azure-claude-fable-5",
+        model="azure_ai/claude-fable-5",
+        mode="adaptive",
+        required_env=_AZURE_FOUNDRY_REQ,
+        caps=_CAPS_OPUS_4_7,
+        fail_reason=(
+            "claude-fable-5 has no deployment on the CI Microsoft Foundry "
+            "resource yet; Foundry returns DeploymentNotFound until someone "
+            "creates the fable-5 deployment, so this cell stays loud in CI. "
+            "Remove this fail_reason once the deployment exists."
+        ),
+    ),
     ModelEntry(
         alias="azure-claude-opus-4-7",
         model="azure_ai/claude-opus-4-7",
@@ -162,6 +182,20 @@ AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
 
 
 VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="vertex-claude-fable-5",
+        model="vertex_ai/claude-fable-5",
+        mode="adaptive",
+        extra_params=(("vertex_location", "global"),),
+        required_env=_VERTEX_REQ,
+        caps=_CAPS_OPUS_4_7,
+        fail_reason=(
+            "claude-fable-5 availability on the CI Vertex project is not yet "
+            "confirmed for this brand-new release, so this cell stays loud in "
+            "CI until verified. Remove this fail_reason once the model is "
+            "confirmed available on the global Vertex endpoint."
+        ),
+    ),
     ModelEntry(
         alias="vertex-claude-opus-4-7",
         model="vertex_ai/claude-opus-4-7",
@@ -198,6 +232,21 @@ VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
 
 
 BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="bedrock-claude-fable-5",
+        model="bedrock/converse/us.anthropic.claude-fable-5",
+        mode="adaptive",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_OPUS_4_7,
+        fail_reason=(
+            "claude-fable-5 on Bedrock requires the account to opt in to "
+            "provider data sharing (data retention mode "
+            "'provider_data_sharing' via the Data Retention API); the CI "
+            "account has not opted in yet, so this cell stays loud in CI. "
+            "Remove this fail_reason once the opt-in is done."
+        ),
+    ),
     ModelEntry(
         alias="bedrock-claude-opus-4-7",
         model="bedrock/converse/us.anthropic.claude-opus-4-7",
