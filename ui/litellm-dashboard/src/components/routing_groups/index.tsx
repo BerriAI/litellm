@@ -7,6 +7,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { useRoutingGroups, useSaveRoutingGroups } from "@/app/(dashboard)/hooks/routingGroups/useRoutingGroups";
 import { useRouterFields } from "@/app/(dashboard)/hooks/router/useRouterFields";
 import { useModelHub } from "@/app/(dashboard)/hooks/models/useModels";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import RoutingGroupsTable from "./RoutingGroupsTable";
 import RoutingGroupModal from "./RoutingGroupModal";
@@ -20,7 +21,8 @@ const RoutingGroups: React.FC = () => {
   const { data, isLoading, refetch, isFetching } = useRoutingGroups();
   const { data: routerFields } = useRouterFields();
   const { data: modelHub } = useModelHub();
-  const proxySettings = useProxySettings();
+  const { accessToken } = useAuthorized();
+  const proxySettings = useProxySettings(accessToken);
   const saveMutation = useSaveRoutingGroups();
 
   const [searchQuery, setSearchQuery] = useState("");

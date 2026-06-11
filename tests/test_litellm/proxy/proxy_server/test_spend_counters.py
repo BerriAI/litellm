@@ -192,8 +192,9 @@ async def test_reconcile_budget_reservation_for_counter_update_returns_empty_set
 async def test_reconcile_budget_reservation_for_counter_update_failure_invalidates(
     monkeypatch,
 ):
-    """Reservation reconcile raising must invalidate reserved counters but
-    not propagate the exception."""
+    """Reservation reconcile raising must invalidate reserved counters, swallow
+    the exception, and return an empty set so the caller falls back to the
+    direct spend-counter increment instead of skipping it."""
     import litellm.proxy.spend_tracking.budget_reservation as br
 
     monkeypatch.setattr(
@@ -213,7 +214,7 @@ async def test_reconcile_budget_reservation_for_counter_update_failure_invalidat
         budget_reservation={"foo": "bar"}, response_cost=1.0
     )
 
-    assert result == {"spend:key:abc"}
+    assert result == set()
     assert fake_invalidate.called is True
 
 

@@ -164,11 +164,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/layout.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -226,11 +221,6 @@
   "src/app/model_hub_table/page.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
-    }
-  },
-  "src/app/page.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 2
     }
   },
   "src/components/AIHub/AgentHubTableColumns.test.tsx": {
@@ -1449,11 +1439,6 @@
   },
   "src/components/navbar.test.tsx": {
     "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/components/navbar.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },

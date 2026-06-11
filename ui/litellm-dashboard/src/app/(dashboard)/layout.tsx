@@ -1,65 +1,63 @@
 "use client";
 
-import React, { Suspense, useEffect, useState } from "react";
+import React, { Suspense, useState } from "react";
 import Navbar from "@/components/navbar";
+import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { useAuth } from "@/contexts/AuthContext";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
-import i18n from "@/lib/i18n";
 
-function LayoutContent({ children }: { children: React.ReactNode }) {
+function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
-  const { accessToken } = useAuthorized();
-  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
-  const [page, setPage] = useState(() => {
-    return legacyKeyForPathname(pathname) || searchParams.get("page") || "api-keys";
-  });
+  const { accessToken } = useAuth();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  const handleSetPage = (newPage: string) => {
+  const page = legacyKeyForPathname(pathname) || searchParams.get("page") || "api-keys";
+
+  const navigateToPage = (newPage: string) => {
     const migratedRoute = MIGRATED_PAGES[newPage];
     router.push(migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(newPage));
-    setPage(newPage);
   };
 
-  useEffect(() => {
-    setPage(legacyKeyForPathname(pathname) || searchParams.get("page") || "api-keys");
-  }, [pathname, searchParams]);
+  return (
+    <div className="flex flex-col min-h-screen">
+      <Navbar
+        accessToken={accessToken}
+        isPublicPage={false}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
+      />
+      <DebugWarningBanner accessToken={accessToken} />
+      <div className="flex flex-1">
+        <div className="mt-2">
+          <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
+        </div>
+        <main className="flex-1">{children}</main>
+      </div>
+    </div>
+  );
+}
 
-  const toggleSidebar = () => setSidebarCollapsed((v) => !v);
+function LayoutContent({ children }: { children: React.ReactNode }) {
+  const searchParams = useSearchParams();
+  const { accessToken } = useAuth();
+  const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
 
   return (
-    <ThemeProvider accessToken={""}>
-      <div className="flex flex-col min-h-screen">
-        <Navbar
-          isPublicPage={false}
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={toggleSidebar}
-          proxySettings={undefined}
-          setProxySettings={() => {}}
-          accessToken={accessToken}
-        />
-        <DebugWarningBanner accessToken={accessToken} />
-        <div className="flex flex-1 overflow-auto">
-          <div className="mt-2">
-            <SidebarProvider setPage={handleSetPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
-          </div>
-          <main className="flex-1">{children}</main>
-        </div>
-      </div>
+    <ThemeProvider accessToken={accessToken}>
+      {isInvitationFlow ? children : <DashboardShell>{children}</DashboardShell>}
     </ThemeProvider>
   );
 }
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <Suspense
-      fallback={<div className="flex items-center justify-center min-h-screen">{i18n.t("common.loading")}</div>}
-    >
+    <Suspense fallback={<LoadingScreen />}>
       <LayoutContent>{children}</LayoutContent>
     </Suspense>
   );
