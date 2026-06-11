@@ -1903,10 +1903,6 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
             "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         }
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
     def test_prompt_caching(self):
         """
         Remove override once we have access to Bedrock prompt caching
@@ -1956,11 +1952,6 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
             "aws_region_name": "us-east-1",
         }
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
-
 class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1970,10 +1961,6 @@ class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
             "model": "bedrock/us.amazon.nova-lite-v1:0",
             "aws_region_name": "us-east-1",
         }
-
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
 
     def test_prompt_caching(self):
         """

@@ -34,6 +34,3 @@ class TestMistralCompletion(BaseLLMChatTest):
         litellm.set_verbose = True
         return {"model": "mistral/mistral-medium-latest"}
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass

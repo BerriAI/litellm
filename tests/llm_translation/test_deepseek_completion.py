@@ -11,11 +11,6 @@ class TestDeepSeekChatCompletion(BaseLLMChatTest):
             "model": "deepseek/deepseek-reasoner",
         }
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
-
 def test_completion_cost_deepseek():
     litellm.set_verbose = True
     model_name = "deepseek/deepseek-chat"

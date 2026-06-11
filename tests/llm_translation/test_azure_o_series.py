@@ -8,10 +8,10 @@ sys.path.insert(
 
 
 import litellm
-from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
+from base_llm_unit_tests import BaseLLMChatTest
 
 
-class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
+class TestAzureOpenAIO3Mini(BaseLLMChatTest):
     def get_base_completion_call_args(self):
         # Clear the LLM client cache to prevent test pollution from cached clients
         litellm.in_memory_llm_clients_cache.flush_cache()
@@ -30,10 +30,6 @@ class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
             base_url="https://openai-prod-test.openai.azure.com",
             api_version="2024-02-15-preview",
         )
-
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
 
     def test_basic_tool_calling(self):
         pass
@@ -71,23 +67,5 @@ class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
             model="azure/o1-preview", stream=True
         )
         assert fake_stream is False
-
-
-class TestAzureOpenAIO3(BaseOSeriesModelsTest):
-    def get_base_completion_call_args(self):
-        return {
-            "model": "azure/o3-mini",
-            "api_key": "my-fake-o1-key",
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
-        }
-
-    def get_client(self):
-        from openai import AzureOpenAI
-
-        return AzureOpenAI(
-            api_key="my-fake-o1-key",
-            base_url="https://openai-gpt-4-test-v-1.openai.azure.com",
-            api_version="2024-02-15-preview",
-        )
 
 

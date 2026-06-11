@@ -36,10 +36,6 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
             "model": "bedrock/invoke/moonshot.kimi-k2-thinking",
         }
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly."""
-        pass
-
     # ---------------------------------------------------------------------
     # The overrides below replace inherited BaseLLMChatTest tests that would
     # otherwise make live AWS Bedrock calls. The live versions were
