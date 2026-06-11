@@ -619,8 +619,11 @@ async def extract_file_creation_params(
     # Extract target_storage (simplified - just use form parameter)
     target_storage = _extract_target_storage_simple(target_storage_form)
 
-    # Extract target_model_names (simplified - just use form parameter)
+    # Extract target_model_names from form field, then fall back to request body
+    # (OpenAI SDK sends list extra_body as target_model_names[] in multipart form)
     target_model_names = _extract_target_model_names_simple(target_model_names_form)
+    if not target_model_names and request_body:
+        target_model_names = _extract_target_model_names_from_request_body(request_body)
 
     # Extract model parameter
     model = _extract_model_param(request, request_body)
@@ -665,6 +668,73 @@ def _extract_target_model_names_simple(
         return [str(name).strip() for name in target_model_names_form if name]
 
     return []
+
+
+def _parse_target_model_names_value(value) -> List[str]:
+    """Parse a target_model_names value from form or JSON body."""
+    from fastapi import UploadFile
+
+    if value is None or isinstance(value, UploadFile):
+        return []
+    if isinstance(value, list):
+        return [str(name).strip() for name in value if str(name).strip()]
+    if isinstance(value, str):
+        return _extract_target_model_names_simple(value)
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _extract_target_model_names_from_request_body(request_body: dict) -> List[str]:
+    """
+    Extract target_model_names from parsed request body.
+
+    Supports:
+    - target_model_names (string or list)
+    - target_model_names[] (OpenAI SDK list extra_body in multipart form)
+    - target_model_names[0], target_model_names[1], ...
+    """
+    names: List[str] = []
+
+    for key in ("target_model_names", "target_model_names[]"):
+        if key in request_body:
+            names.extend(_parse_target_model_names_value(request_body[key]))
+
+    for key, value in request_body.items():
+        if key.startswith("target_model_names[") and key not in {
+            "target_model_names[]",
+        }:
+            names.extend(_parse_target_model_names_value(value))
+
+    # Preserve order while deduplicating
+    seen = set()
+    result: List[str] = []
+    for name in names:
+        if name and name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result
+
+
+def validate_managed_files_requirement(target_model_names: List[str]) -> None:
+    """
+    Enforce proxy-level managed files when litellm.require_managed_files is enabled.
+
+    Raises:
+        HTTPException: 400 if target_model_names is missing while enforcement is on.
+    """
+    import litellm
+    from fastapi import HTTPException
+
+    if litellm.require_managed_files is True and not target_model_names:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    "target_model_names is required when require_managed_files is enabled "
+                    "in litellm_settings. Provide one or more model aliases via the "
+                    "target_model_names form field (e.g. target_model_names=my-model-alias)."
+                ),
+            },
+        )
 
 
 def _extract_model_param(request: "Request", request_body: dict) -> Optional[str]:
