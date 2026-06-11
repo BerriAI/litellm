@@ -368,3 +368,23 @@ class TestPostCallFailureHookLiftsFirstApiCallStartTime:
         await self._run(request_data)
         assert "first_api_call_start_time" not in request_data
         assert "litellm_logging_obj" not in request_data
+
+
+class TestShouldUseSmtpSsl:
+    def test_port_465_uses_ssl(self, monkeypatch):
+        from litellm.proxy.utils import _should_use_smtp_ssl
+
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+        assert _should_use_smtp_ssl(smtp_port=465) is True
+
+    def test_smtp_use_ssl_env_var_forces_ssl_on_any_port(self, monkeypatch):
+        from litellm.proxy.utils import _should_use_smtp_ssl
+
+        monkeypatch.setenv("SMTP_USE_SSL", "True")
+        assert _should_use_smtp_ssl(smtp_port=2465) is True
+
+    def test_port_587_uses_plain_smtp(self, monkeypatch):
+        from litellm.proxy.utils import _should_use_smtp_ssl
+
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+        assert _should_use_smtp_ssl(smtp_port=587) is False
