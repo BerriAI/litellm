@@ -30,31 +30,61 @@ translation/
 │       ├── schema.py    # pydantic wire models, extra="forbid" + strict=True
 │       ├── messages.py  # wire messages -> IR messages (hot path)
 │       ├── parse.py     # top-level parse + semantic checks
-│       ├── response.py  # IR ChatResponse -> chat-completion body
-│       └── stream.py    # IR stream events -> chunk bodies (pure fold)
+│       ├── response.py  # IR ChatResponse -> chat-completion body; carries a
+│       │                #   ResponseDialect (anthropic | bedrock_converse)
+│       │                #   because v1's outbound shapes are per-provider
+│       └── stream.py    # IR stream events -> chunk bodies (pure fold); same
+│                        #   dialect idea via ChunkDialect on StreamState
 ├── providers/      # one subpackage per wire format. Pure, no I/O
-│   └── anthropic/
-│       ├── serialize.py # body assembly in v1 transform_request order
-│       ├── messages.py  # IR messages -> anthropic dicts (placeholder, dedupe,
-│       │                #   id sanitize, final-assistant rstrip)
-│       ├── tools.py     # tool defs, name sanitize maps, schema whitelists
-│       ├── params.py    # sampling gates, thinking/effort, model detection
-│       ├── response.py  # response JSON -> IR (json_tool_call rewrite here)
-│       └── stream.py    # SSE lines -> IR stream events
+│   ├── anthropic/
+│   │   ├── serialize.py # body assembly in v1 transform_request order
+│   │   ├── messages.py  # IR messages -> anthropic dicts (placeholder, dedupe,
+│   │   │                #   id sanitize, final-assistant rstrip)
+│   │   ├── tools.py     # tool defs, name sanitize maps, schema whitelists
+│   │   ├── params.py    # sampling gates, thinking/effort, model detection
+│   │   ├── response.py  # response JSON -> IR (json_tool_call rewrite here)
+│   │   └── stream.py    # SSE lines -> IR stream events
+│   ├── bedrock_converse/  # the one genuinely distinct bedrock wire format
+│   │   ├── serialize.py # messages/system/inferenceConfig/toolConfig/
+│   │   │                #   additionalModelRequestFields assembly
+│   │   ├── messages.py  # IR -> converse blocks (cachePoint, toolUse dedupe,
+│   │   │                #   reasoning-first sort, blank-assistant drop)
+│   │   ├── tools.py     # toolSpec build, bedrock tool-name normalization,
+│   │   │                #   cachePoint ttl gates, json_tool_call rf tool
+│   │   ├── params.py    # claude gates, thinking clamp, converse finish map
+│   │   ├── response.py  # converse JSON -> IR (properties-unwrap json rewrite)
+│   │   └── stream.py    # PARSED converse events -> IR events (pinned at the
+│   │                    #   parsed-event seam; AWS framing is botocore's)
+│   └── bedrock_invoke/  # anthropic serializer + envelope deltas ONLY:
+│       ├── serialize.py # pop model/stream, inject anthropic_version, spoof
+│       │                #   model for response_format (v1's json-tool forcing)
+│       ├── response.py  # re-export of anthropic parse_response (invoke
+│       │                #   response body IS anthropic wire format)
+│       └── stream.py    # re-export of anthropic parse_event (invoke stream
+│                        #   = anthropic events over AWS framing)
 └── engine/
     ├── pipeline.py # prepare (pure, drives the fallback decision) -> send;
-    │               #   async-first, the seam owns the one sync wrapper
+    │               #   per-provider serializer/parser/dialect tables; the
+    │               #   wire_body step strips transform-seam markers
+    │               #   (json_mode; converse additionalModelRequestFields.stream)
     ├── http.py     # the injected HttpPort + ExecuteError values
-    └── stream.py   # the ONE accumulator: lines -> IR events -> chunks
+    └── stream.py   # the ONE accumulator: lines OR parsed events -> IR
+                    #   events -> chunks (fold_lines / fold_events)
 ```
 
 The v1-side adapter lives OUTSIDE the package in `litellm/translation_seam.py`:
 deps building from litellm ambient state, ModelResponse/ModelResponseStream
-envelope adaptation, the `completion()` fork, and the
+envelope adaptation (per-provider usage construction, because `Usage` only
+serializes explicitly-set fields), the `completion()` forks (anthropic branch
+and the bedrock branch's converse/invoke routes, selected by
+`BedrockModelInfo.get_bedrock_route`), and the
 `litellm.translation_v2_providers` allowlist (env:
-`LITELLM_TRANSLATION_V2_PROVIDERS`). Streaming and `modify_params=True`
-traffic stay on v1 until their seams land; response headers passthrough into
-`_hidden_params` and pooled async clients are noted follow-ups there.
+`LITELLM_TRANSLATION_V2_PROVIDERS`). On bedrock, AWS auth params split out of
+the body BEFORE parsing (envelope, not payload) and SigV4 signs AFTER
+`wire_body` finalizes the bytes (sign-after-body-final, or bedrock 403s).
+Streaming and `modify_params=True` traffic stay on v1 until their seams land;
+response headers passthrough into `_hidden_params` and pooled async clients
+are noted follow-ups there.
 
 ## The fail-closed contract (the most important invariant)
 
@@ -122,25 +152,48 @@ test-unit-misc (tests). Format with black (CI enforces black, not ruff format).
 ## How parity is proven
 
 Characterization then differential, never mixed with a behavior change. The
-differential corpus (`tests/test_litellm/translation/test_differential_anthropic_request.py`)
+anthropic corpus (`tests/test_litellm/translation/test_differential_anthropic_request.py`)
 runs v1 (`map_openai_params` + `transform_request`) and v2 over the same
 requests and asserts identical normalized JSON, across current-generation
 model ids and all four Claude-Code feature surfaces (caching, thinking, tools,
-structured outputs). That corpus is the covered surface: the anthropic flag
-turns on only for shapes pinned there. Notable transform-seam facts the corpus
-pins: v1's output includes `json_mode: true` for response_format requests (the
-HTTP layer pops it before the wire — v2's engine must do the same), and the
-output_format schema-filter note order inherits v1's set-iteration order.
+structured outputs). The bedrock gates
+(`test_differential_bedrock_{request,response,stream}.py`) are two-sided over
+the characterization corpus copied verbatim into
+`tests/test_litellm/translation/characterization_bedrock/`: v1-at-HEAD must
+still equal the committed snapshot (drift guard) AND v2 must equal the
+snapshot byte-for-byte (canonical JSON), plus a quirk corpus (4.5 cache ttl,
+parallel tool config, bedrock name normalization, thinking clamp, tool_choice
+gates) referenced against v1 in-process. Streams compare v2's fold against
+the REAL decoders inside `CustomStreamWrapper`, pinned at the parsed-event
+seam (AWS event-stream framing is botocore plumbing). Those corpora are the
+covered surface: a provider's flag turns on only for shapes pinned there.
+Notable transform-seam facts the corpora pin: v1's anthropic output includes
+`json_mode: true` for response_format requests, and converse's
+`get_optional_params` invocation leaves `stream` inside
+`additionalModelRequestFields` — both are popped by `engine.pipeline.wire_body`
+before the wire, exactly like v1's HTTP layers. `DIFFERENTIAL_REPORT.md` is
+the merged artifact; regenerate with
+`python -m tests.test_litellm.translation.generate_differential_report`.
 A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in -> Anthropic-out request translation, differential-green on a
-46-shape corpus, fail-closed everywhere else. Not yet here, each its own
-follow-up: response and stream parsing (engine/http.py, engine/stream.py); the
-other inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
-`completions`); the other providers (bedrock converse/invoke, vertex, azure,
-`openai_compat`); wiring `dispatch.route` into the live `completion()` path
-with the `LITELLM_TRANSLATION_V2_PROVIDERS` allowlist. To add a provider:
-write `providers/<name>/`, register it in `engine/pipeline._SERIALIZERS`, add
-a differential corpus, keep the flag off until differential-green.
+OpenAI-chat-in to three providers out — `anthropic`, `bedrock_converse`,
+`bedrock_invoke` — request, response, and stream translation,
+differential-green (anthropic: 46-shape corpus + responses + stream replays;
+bedrock: the characterization corpus per route + quirk corpus), fail-closed
+everywhere else, with non-streaming flag-gated seams live in `completion()`.
+Deliberate bedrock fallback surfaces (each names the v1 path): non-Claude
+bedrock models, native structured outputs (outputConfig), adaptive-effort
+output_config/beta, response_format+stream (fake_stream), response_format
+with thinking on invoke (the model spoof crossing), tool history without
+tools (modify_params dummy tool), empty user text on converse
+(string-vs-list ambiguity), provisioned `model_id`, `guardrailConfig`, and
+`<thinking>`-tagged text in converse responses. Not yet here, each its own
+follow-up: streaming seams live; the other inbound schemas
+(`anthropic_messages`, `google_genai`, `responses`, `completions`); the other
+providers (vertex, azure, `openai_compat`); the same-family fast path
+(waits on the opaque-body relay). To add a provider: write
+`providers/<name>/`, register it in `engine/pipeline._SERIALIZERS` /
+`_RESPONSE_PARSERS` / `_RESPONSE_DIALECTS`, add a differential corpus, keep
+the flag off until differential-green.
