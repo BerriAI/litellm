@@ -34,9 +34,9 @@ def test_source_code_has_new_helper_method():
                 found_method = True
                 break
 
-    assert found_method, (
-        "_get_model_cost_map_reload_config method not found in proxy_server.py"
-    )
+    assert (
+        found_method
+    ), "_get_model_cost_map_reload_config method not found in proxy_server.py"
     print("✓ _get_model_cost_map_reload_config method exists")
 
 
@@ -49,19 +49,19 @@ def test_source_code_returns_tuple_with_source():
         source = f.read()
 
     # Check the return type annotation includes Tuple
-    assert "Tuple[Optional[dict], Optional[str]]" in source, (
-        "Return type annotation should be Tuple[Optional[dict], Optional[str]]"
-    )
+    assert (
+        "Tuple[Optional[dict], Optional[str]]" in source
+    ), "Return type annotation should be Tuple[Optional[dict], Optional[str]]"
     # Check it returns (db_config, \"db\") or (yaml_config, \"yaml\") or (None, None)
-    assert 'return db_config, "db"' in source, (
-        "Should return (db_config, 'db') for database source"
-    )
-    assert 'return yaml_config, "yaml"' in source, (
-        "Should return (yaml_config, 'yaml') for YAML source"
-    )
-    assert 'return None, None' in source, (
-        "Should return (None, None) when no config found"
-    )
+    assert (
+        'return db_config, "db"' in source
+    ), "Should return (db_config, 'db') for database source"
+    assert (
+        'return yaml_config, "yaml"' in source
+    ), "Should return (yaml_config, 'yaml') for YAML source"
+    assert (
+        "return None, None" in source
+    ), "Should return (None, None) when no config found"
     print("✓ Return type is Tuple[Optional[dict], Optional[str]] with source tracking")
 
 
@@ -74,15 +74,15 @@ def test_source_code_has_yaml_fallback_in_helper():
         source = f.read()
 
     # Check for the key parts of the new logic
-    assert "general_settings.get(\"model_cost_map_reload_config\")" in source, (
-        "YAML fallback logic not found in _get_model_cost_map_reload_config"
-    )
-    assert "model_cost_map_reload_config from config.yaml" in source, (
-        "Config.yaml debug log not found"
-    )
-    assert "Using model_cost_map_reload_config from database" in source, (
-        "Database debug log not found"
-    )
+    assert (
+        'general_settings.get("model_cost_map_reload_config")' in source
+    ), "YAML fallback logic not found in _get_model_cost_map_reload_config"
+    assert (
+        "model_cost_map_reload_config from config.yaml" in source
+    ), "Config.yaml debug log not found"
+    assert (
+        "Using model_cost_map_reload_config from database" in source
+    ), "Database debug log not found"
     print("✓ YAML fallback logic exists in _get_model_cost_map_reload_config")
 
 
@@ -95,12 +95,12 @@ def test_source_code_warns_when_db_overrides_yaml():
         source = f.read()
 
     # Check for the warning log when both configs exist
-    assert "model_cost_map_reload_config is set in both the database" in source, (
-        "Warning about DB overriding YAML not found"
-    )
-    assert "_yaml_override_warned" in source, (
-        "Module-level flag for suppressing repeated warnings not found"
-    )
+    assert (
+        "model_cost_map_reload_config is set in both the database" in source
+    ), "Warning about DB overriding YAML not found"
+    assert (
+        "_yaml_override_warned" in source
+    ), "Module-level flag for suppressing repeated warnings not found"
     print("✓ Warning is logged when DB config overrides YAML config")
 
 
@@ -116,17 +116,21 @@ def test_source_code_db_takes_precedence_over_yaml():
     start_idx = source.find("async def _get_model_cost_map_reload_config")
     assert start_idx != -1, "Method not found"
 
-    method_source = source[start_idx:source.find("async def _check_and_reload_model_cost_map", start_idx)]
+    method_source = source[
+        start_idx : source.find("async def _check_and_reload_model_cost_map", start_idx)
+    ]
 
     # DB check should come first (before YAML check)
     db_check_idx = method_source.find("get_config_param(")
-    yaml_check_idx = method_source.find("general_settings.get(\"model_cost_map_reload_config\")")
+    yaml_check_idx = method_source.find(
+        'general_settings.get("model_cost_map_reload_config")'
+    )
 
     assert db_check_idx != -1, "DB check not found"
     assert yaml_check_idx != -1, "YAML check not found"
-    assert db_check_idx < yaml_check_idx, (
-        "DB check should come before YAML check (precedence)"
-    )
+    assert (
+        db_check_idx < yaml_check_idx
+    ), "DB check should come before YAML check (precedence)"
     print("✓ DB config takes precedence over YAML config")
 
 
@@ -139,12 +143,12 @@ def test_source_code_ignores_force_reload_from_yaml():
         source = f.read()
 
     # Check for the force_reload YAML handling in _check_and_reload_model_cost_map
-    assert "force_reload is only effective via the API" in source, (
-        "Warning about force_reload from YAML not found"
-    )
-    assert 'source == "yaml" and force_reload' in source, (
-        "YAML force_reload check not found"
-    )
+    assert (
+        "force_reload is only effective via the API" in source
+    ), "Warning about force_reload from YAML not found"
+    assert (
+        'source == "yaml" and force_reload' in source
+    ), "YAML force_reload check not found"
     print("✓ force_reload from YAML is ignored with a warning")
 
 
@@ -161,23 +165,25 @@ def test_source_code_no_extra_db_roundtrip():
     start_idx = source.find("async def _check_and_reload_model_cost_map")
     assert start_idx != -1, "Method not found"
 
-    method_end = source.find("async def _check_and_reload_anthropic_beta_headers", start_idx)
+    method_end = source.find(
+        "async def _check_and_reload_anthropic_beta_headers", start_idx
+    )
     method_source = source[start_idx:method_end]
 
     # Should use source == "db" to decide writeback
-    assert 'source == "db"' in method_source, (
-        "Should use source == 'db' to decide writeback (eliminating extra DB call)"
-    )
+    assert (
+        'source == "db"' in method_source
+    ), "Should use source == 'db' to decide writeback (eliminating extra DB call)"
 
     # The old second get_config_param call should be gone
-    second_db_call_count = method_source.count('get_config_param(')
+    second_db_call_count = method_source.count("get_config_param(")
     # One call to _get_model_cost_map_reload_config which internally calls get_config_param
     # But there should be no second call in the writeback section
     # We can't easily check this with string matching, but the source == "db" check
     # is the key indicator
-    assert 'source == "db"' in method_source, (
-        "Extra DB round-trip not eliminated — source check not found"
-    )
+    assert (
+        'source == "db"' in method_source
+    ), "Extra DB round-trip not eliminated — source check not found"
     print("✓ Extra DB round-trip eliminated (uses source instead of second DB query)")
 
 
@@ -196,30 +202,31 @@ def test_source_code_docstring_mentions_yaml_config():
     # Find the docstring
     docstring_start = source.find('"""', start_idx)
     docstring_end = source.find('"""', docstring_start + 3)
-    docstring = source[docstring_start:docstring_end + 3]
+    docstring = source[docstring_start : docstring_end + 3]
 
-    assert "config.yaml" in docstring or "config.yaml" in source[start_idx:source.find("\n    async def", start_idx + 1)], (
-        "config.yaml not mentioned in reload method docstring or body"
-    )
+    assert (
+        "config.yaml" in docstring
+        or "config.yaml"
+        in source[start_idx : source.find("\n    async def", start_idx + 1)]
+    ), "config.yaml not mentioned in reload method docstring or body"
     print("✓ Docstring mentions config.yaml as a configuration source")
 
 
 def test_example_config_yaml_exists():
     """Verify the example config file with the new setting exists."""
     config_path = os.path.join(
-        os.path.dirname(__file__), "example_config_yaml/model_cost_map_reload_config.yaml"
+        os.path.dirname(__file__),
+        "example_config_yaml/model_cost_map_reload_config.yaml",
     )
     assert os.path.exists(config_path), f"Example config not found: {config_path}"
 
     with open(config_path, "r") as f:
         content = f.read()
 
-    assert "model_cost_map_reload_config" in content, (
-        "model_cost_map_reload_config not found in example config"
-    )
-    assert "interval_hours" in content, (
-        "interval_hours not found in example config"
-    )
+    assert (
+        "model_cost_map_reload_config" in content
+    ), "model_cost_map_reload_config not found in example config"
+    assert "interval_hours" in content, "interval_hours not found in example config"
     print("✓ Example config file exists with the new setting")
 
 
@@ -231,22 +238,18 @@ def test_main_config_yaml_has_documentation():
     with open(config_path, "r") as f:
         content = f.read()
 
-    assert "Model Cost Map Reload Configuration" in content, (
-        "Documentation header not found in proxy_server_config.yaml"
-    )
-    assert "model_cost_map_reload_config" in content, (
-        "model_cost_map_reload_config not documented in proxy_server_config.yaml"
-    )
-    assert "LITELLM_LOCAL_MODEL_COST_MAP" in content, (
-        "LITELLM_LOCAL_MODEL_COST_MAP not mentioned in documentation"
-    )
-    assert "interval_hours" in content, (
-        "interval_hours not documented"
-    )
+    assert (
+        "Model Cost Map Reload Configuration" in content
+    ), "Documentation header not found in proxy_server_config.yaml"
+    assert (
+        "model_cost_map_reload_config" in content
+    ), "model_cost_map_reload_config not documented in proxy_server_config.yaml"
+    assert (
+        "LITELLM_LOCAL_MODEL_COST_MAP" in content
+    ), "LITELLM_LOCAL_MODEL_COST_MAP not mentioned in documentation"
+    assert "interval_hours" in content, "interval_hours not documented"
     # Check that force_reload comment clarifies it's API-only
-    assert "force_reload" in content, (
-        "force_reload not documented"
-    )
+    assert "force_reload" in content, "force_reload not documented"
     print("✓ Main proxy_server_config.yaml has documentation for the new setting")
 
 
@@ -259,6 +262,7 @@ def test_logic_yaml_config_dict_value():
     result = general_settings.get("model_cost_map_reload_config")
     if isinstance(result, str):
         import json
+
         result = json.loads(result)
 
     assert result == {"interval_hours": 24, "force_reload": False}
@@ -319,9 +323,9 @@ def test_logic_force_reload_from_yaml_ignored():
     # After ignoring, both interval_hours and force_reload are None/False
     # so reload should be skipped
     should_reload = force_reload or (interval_hours is not None)
-    assert should_reload is False, (
-        "force_reload from YAML should be ignored, preventing reload"
-    )
+    assert (
+        should_reload is False
+    ), "force_reload from YAML should be ignored, preventing reload"
     print("✓ force_reload from YAML is correctly ignored")
 
 

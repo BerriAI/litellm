@@ -6080,10 +6080,10 @@ class ProxyConfig:
     ) -> Tuple[Optional[dict], Optional[str]]:
         """
         Get model cost map reload configuration from either the database or config.yaml.
-        
+
         The database configuration takes precedence over config.yaml (allows runtime updates via API).
         If neither is configured, returns (None, None).
-        
+
         Returns:
             Tuple of (config, source) where:
                 - config: dict with keys:
@@ -6093,10 +6093,10 @@ class ProxyConfig:
                 - source: "db" | "yaml" | None - where the config was loaded from
         """
         global general_settings, _yaml_override_warned
-        
+
         db_config = None
         yaml_config = None
-        
+
         # 1. Check database first (runtime/API-managed config takes precedence)
         try:
             config_record = await get_config_param(
@@ -6106,6 +6106,7 @@ class ProxyConfig:
                 db_config = config_record.param_value
                 if isinstance(db_config, str):
                     import json
+
                     db_config = json.loads(db_config)
                 verbose_proxy_logger.debug(
                     "Using model_cost_map_reload_config from database: %s", db_config
@@ -6114,7 +6115,7 @@ class ProxyConfig:
             verbose_proxy_logger.debug(
                 "Could not read model_cost_map_reload_config from database: %s", str(e)
             )
-        
+
         # 2. Check config.yaml (general_settings.model_cost_map_reload_config)
         if general_settings is not None:
             yaml_config_raw = general_settings.get("model_cost_map_reload_config")
@@ -6122,6 +6123,7 @@ class ProxyConfig:
                 try:
                     if isinstance(yaml_config_raw, str):
                         import json
+
                         yaml_config = json.loads(yaml_config_raw)
                     else:
                         yaml_config = yaml_config_raw
@@ -6134,7 +6136,7 @@ class ProxyConfig:
                         "Please ensure it is a valid dict or JSON string. Skipping.",
                         str(e),
                     )
-        
+
         # 3. Warn operator when DB config overrides YAML config
         if db_config is not None and yaml_config is not None:
             if not _yaml_override_warned:
@@ -6148,7 +6150,7 @@ class ProxyConfig:
             return db_config, "db"
         else:
             _yaml_override_warned = False
-        
+
         if db_config is not None:
             return db_config, "db"
         elif yaml_config is not None:
@@ -6159,11 +6161,11 @@ class ProxyConfig:
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
         """
         Check if model cost map needs to be reloaded based on configuration.
-        
+
         Configuration is read from (in order of precedence):
         1. Database (set via API endpoints like /schedule/model_cost_map_reload)
         2. config.yaml (general_settings.model_cost_map_reload_config)
-        
+
         This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
         """
         try:

@@ -28,12 +28,14 @@ from litellm.proxy.proxy_server import ProxyConfig
 
 class FakeConfigRecord:
     """Mock Prisma config record."""
+
     def __init__(self, param_value):
         self.param_value = param_value
 
 
 class FakeConfigRepository:
     """Mock Prisma ConfigRepository."""
+
     def __init__(self, prisma_client=None):
         self.table = MagicMock()
         self.table.upsert = AsyncMock()
@@ -91,9 +93,7 @@ async def test_get_model_cost_map_reload_config_from_db_takes_precedence():
         "litellm.proxy.proxy_server.get_config_param",
         new=AsyncMock(return_value=FakeConfigRecord(db_config)),
     ):
-        with patch.object(
-            proxy_server.verbose_proxy_logger, "warning"
-        ) as mock_warning:
+        with patch.object(proxy_server.verbose_proxy_logger, "warning") as mock_warning:
             config, source = await proxy_config._get_model_cost_map_reload_config(
                 mock_prisma
             )
@@ -116,9 +116,7 @@ async def test_get_model_cost_map_reload_config_from_yaml_when_db_empty():
     proxy_config = ProxyConfig()
 
     yaml_config = {"interval_hours": 12, "force_reload": False}
-    proxy_server.general_settings = {
-        "model_cost_map_reload_config": yaml_config
-    }
+    proxy_server.general_settings = {"model_cost_map_reload_config": yaml_config}
 
     mock_prisma = MagicMock()
 
@@ -166,9 +164,7 @@ async def test_get_model_cost_map_reload_config_yaml_string_value():
     proxy_config = ProxyConfig()
 
     yaml_config = json.dumps({"interval_hours": 6, "force_reload": False})
-    proxy_server.general_settings = {
-        "model_cost_map_reload_config": yaml_config
-    }
+    proxy_server.general_settings = {"model_cost_map_reload_config": yaml_config}
 
     mock_prisma = MagicMock()
 
@@ -212,18 +208,12 @@ async def test_check_and_reload_no_db_write_when_config_from_yaml():
             return_value=fake_repo,
         ):
             with patch(
-                "litellm.proxy.proxy_server.get_model_cost_map",
+                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map",
                 return_value={"gpt-4o": {"input_cost_per_token": 0.001}},
             ):
-                with patch.object(
-                    proxy_server, "_invalidate_model_cost_lowercase_map"
-                ):
-                    with patch(
-                        "litellm.proxy.proxy_server.litellm.add_known_models"
-                    ):
-                        await proxy_config._check_and_reload_model_cost_map(
-                            mock_prisma
-                        )
+                with patch.object(proxy_server, "_invalidate_model_cost_lowercase_map"):
+                    with patch("litellm.proxy.proxy_server.litellm.add_known_models"):
+                        await proxy_config._check_and_reload_model_cost_map(mock_prisma)
 
     # upsert should NOT have been called since config came from YAML
     fake_repo.table.upsert.assert_not_awaited()
@@ -250,21 +240,13 @@ async def test_check_and_reload_ignores_force_reload_from_yaml():
         "litellm.proxy.proxy_server.get_config_param",
         new=AsyncMock(return_value=None),
     ):
-        with patch.object(
-            proxy_server.verbose_proxy_logger, "warning"
-        ) as mock_warning:
+        with patch.object(proxy_server.verbose_proxy_logger, "warning") as mock_warning:
             with patch(
-                "litellm.proxy.proxy_server.get_model_cost_map",
+                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map",
             ) as mock_get_cost_map:
-                with patch.object(
-                    proxy_server, "_invalidate_model_cost_lowercase_map"
-                ):
-                    with patch(
-                        "litellm.proxy.proxy_server.litellm.add_known_models"
-                    ):
-                        await proxy_config._check_and_reload_model_cost_map(
-                            mock_prisma
-                        )
+                with patch.object(proxy_server, "_invalidate_model_cost_lowercase_map"):
+                    with patch("litellm.proxy.proxy_server.litellm.add_known_models"):
+                        await proxy_config._check_and_reload_model_cost_map(mock_prisma)
 
     # Warning should be logged about force_reload being ignored
     mock_warning.assert_called_once()
@@ -299,18 +281,12 @@ async def test_check_and_reload_db_write_when_config_from_db():
             return_value=fake_repo,
         ):
             with patch(
-                "litellm.proxy.proxy_server.get_model_cost_map",
+                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map",
                 return_value={"gpt-4o": {"input_cost_per_token": 0.001}},
             ):
-                with patch.object(
-                    proxy_server, "_invalidate_model_cost_lowercase_map"
-                ):
-                    with patch(
-                        "litellm.proxy.proxy_server.litellm.add_known_models"
-                    ):
-                        await proxy_config._check_and_reload_model_cost_map(
-                            mock_prisma
-                        )
+                with patch.object(proxy_server, "_invalidate_model_cost_lowercase_map"):
+                    with patch("litellm.proxy.proxy_server.litellm.add_known_models"):
+                        await proxy_config._check_and_reload_model_cost_map(mock_prisma)
 
     # upsert SHOULD have been called to clear force_reload in the DB
     fake_repo.table.upsert.assert_awaited_once()
