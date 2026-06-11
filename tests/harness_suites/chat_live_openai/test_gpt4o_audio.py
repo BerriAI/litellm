@@ -50,7 +50,6 @@ async def check_streaming_response(completion):
 
 
 @pytest.mark.asyncio
-# @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.parametrize("stream", [True, False])
 async def test_audio_output_from_model(stream):
     audio_format = "pcm16"
