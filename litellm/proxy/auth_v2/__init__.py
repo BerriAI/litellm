@@ -1,19 +1,18 @@
-from .config import (
+from litellm.proxy.auth_v2.config import (
     ApiKeySchemeConfig,
     AuthConfig,
     HttpBasicConfig,
     MutualTLSConfig,
     OAuth2IntrospectionConfig,
+    OIDCProviderConfig,
+    SAMLConfig,
+    SessionConfig,
     TrustedProxyConfig,
 )
-from .models import Principal
-from .oidc import OIDCProviderConfig, build_oidc_router
-from .rbac import Role
-from .resolver import IdentityResolver, InMemoryIdentityStore, ProvisioningStore
-from .saml import SAMLConfig, build_saml_router
-from .scim import build_scim_router
-from .security import AuthSecurity
-from .session import SessionConfig
+from litellm.proxy.auth_v2.models import Principal
+from litellm.proxy.auth_v2.authorization import Role
+from litellm.proxy.auth_v2.resolvers import IdentityResolver, InMemoryIdentityStore, ProvisioningStore
+from litellm.proxy.auth_v2.security import AuthSecurity
 
 __all__ = [
     "AuthSecurity",
@@ -31,7 +30,4 @@ __all__ = [
     "TrustedProxyConfig",
     "SessionConfig",
     "SAMLConfig",
-    "build_saml_router",
-    "build_scim_router",
-    "build_oidc_router",
 ]

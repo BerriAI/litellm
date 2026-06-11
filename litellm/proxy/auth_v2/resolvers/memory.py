@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import hashlib
 import uuid
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional
 
 from scim2_models import Group as ScimGroup
 from scim2_models import User as ScimUser
 
-from . import errors
-from .models import (
+from litellm.proxy.auth_v2 import errors
+from litellm.proxy.auth_v2.models import (
     AuthMethod,
     Credential,
     Principal,
@@ -16,43 +15,15 @@ from .models import (
     TeamIdentity,
     UserIdentity,
 )
-from .rbac import Role
+from litellm.proxy.auth_v2.resolvers.base import IdentityStore
+from litellm.proxy.auth_v2.resolvers.utils import (
+    hash_api_key,
+    public_claims,
+    roles_from_claims,
+)
 
 
-@runtime_checkable
-class IdentityResolver(Protocol):
-    async def resolve(self, credential: Credential) -> Principal: ...
-
-
-@runtime_checkable
-class ProvisioningStore(Protocol):
-    async def upsert_user(self, user: ScimUser) -> ScimUser: ...
-    async def get_user(self, resource_id: str) -> Optional[ScimUser]: ...
-    async def deactivate_user(self, resource_id: str) -> None: ...
-    async def list_users(self, filter_expr: Optional[str]) -> List[ScimUser]: ...
-    async def upsert_group(self, group: ScimGroup) -> ScimGroup: ...
-    async def get_group(self, resource_id: str) -> Optional[ScimGroup]: ...
-    async def delete_group(self, resource_id: str) -> None: ...
-    async def list_groups(self, filter_expr: Optional[str]) -> List[ScimGroup]: ...
-
-
-def _hash_api_key(raw: str) -> str:
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _roles_from_claims(claims: Dict[str, Any]) -> List[Role]:
-    raw = claims.get("roles", [])
-    if not isinstance(raw, list):
-        return []
-    valid = {role.value for role in Role}
-    return [Role(value) for value in raw if value in valid]
-
-
-def _public_claims(claims: Dict[str, Any]) -> Dict[str, Any]:
-    return {key: value for key, value in claims.items() if not key.startswith("_")}
-
-
-class InMemoryIdentityStore(IdentityResolver, ProvisioningStore):
+class InMemoryIdentityStore(IdentityStore):
     def __init__(
         self,
         api_keys: Optional[Dict[str, Principal]] = None,
@@ -117,7 +88,7 @@ class InMemoryIdentityStore(IdentityResolver, ProvisioningStore):
         raw = credential.claims.get("_raw_api_key")
         if not isinstance(raw, str):
             raise errors.invalid_token()
-        principal = self._api_keys.get(_hash_api_key(raw))
+        principal = self._api_keys.get(hash_api_key(raw))
         if principal is None:
             raise errors.invalid_token()
         return principal
@@ -139,7 +110,7 @@ class InMemoryIdentityStore(IdentityResolver, ProvisioningStore):
                 scopes=list(credential.scopes),
                 auth_method=credential.method,
                 credential_ref=credential.credential_ref,
-                claims=_public_claims(claims),
+                claims=public_claims(claims),
             )
         return Principal(
             principal_type=PrincipalType.HUMAN,
@@ -154,11 +125,11 @@ class InMemoryIdentityStore(IdentityResolver, ProvisioningStore):
                 display_name=claims.get("name"),
             ),
             teams=self._resolve_teams(claims),
-            roles=_roles_from_claims(claims),
+            roles=roles_from_claims(claims),
             scopes=list(credential.scopes),
             auth_method=credential.method,
             credential_ref=credential.credential_ref,
-            claims=_public_claims(claims),
+            claims=public_claims(claims),
         )
 
     async def upsert_user(self, user: ScimUser) -> ScimUser:

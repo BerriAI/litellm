@@ -5,8 +5,8 @@ from typing import List, Optional, Tuple
 
 from fastapi import Request
 
-from .config import TrustedProxyConfig
-from .models import NetworkContext
+from litellm.proxy.auth_v2.config import TrustedProxyConfig
+from litellm.proxy.auth_v2.models import NetworkContext
 
 
 def _is_valid_ip(value: str) -> bool:

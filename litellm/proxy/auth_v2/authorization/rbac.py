@@ -1,44 +1,14 @@
 from __future__ import annotations
 
-from enum import Enum
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import casbin
-from fastapi.security import SecurityScopes
+
+from litellm.proxy.auth_v2.authorization.base import Authorizer
+from litellm.proxy.auth_v2.authorization.roles import Role
 
 if TYPE_CHECKING:
-    from .models import Principal
-
-
-class Role(str, Enum):
-    PLATFORM_ADMIN = "platform_admin"
-    PLATFORM_VIEWER = "platform_viewer"
-    ORG_ADMIN = "org_admin"
-    ORG_VIEWER = "org_viewer"
-    TEAM_ADMIN = "team_admin"
-    TEAM_MEMBER = "team_member"
-
-
-_PLATFORM_ROLE_VALUES = {Role.PLATFORM_ADMIN.value, Role.PLATFORM_VIEWER.value}
-
-
-def filter_claim_roles(
-    roles: Any, allowed_roles: List[str], allow_platform_roles: bool
-) -> List[str]:
-    if not isinstance(roles, list):
-        return []
-    allowed = set(allowed_roles)
-    filtered = [role for role in roles if role in allowed]
-    if not allow_platform_roles:
-        filtered = [role for role in filtered if role not in _PLATFORM_ROLE_VALUES]
-    return filtered
-
-
-def has_required_scopes(
-    security_scopes: SecurityScopes, principal: "Principal"
-) -> bool:
-    return set(security_scopes.scopes).issubset(set(principal.scopes))
-
+    from litellm.proxy.auth_v2.models import Principal
 
 _MODEL_TEXT = """
 [request_definition]
@@ -72,7 +42,7 @@ _DEFAULT_POLICY: List[Tuple[str, str, str]] = [
 ]
 
 
-class RBACEngine:
+class RBACEngine(Authorizer):
     def __init__(self, policy_path: Optional[str] = None) -> None:
         model = casbin.Model()
         model.load_model_from_text(_MODEL_TEXT)
@@ -86,9 +56,7 @@ class RBACEngine:
             self._enforcer.add_policy(*rule)
 
     def enforce(self, principal: "Principal", obj: str, act: str) -> bool:
-        return any(
-            self._enforcer.enforce(role.value, obj, act) for role in principal.roles
-        )
+        return any(self._enforcer.enforce(role.value, obj, act) for role in principal.roles)
 
     def has_any_role(self, principal: "Principal", allowed: Tuple[Role, ...]) -> bool:
         allowed_values = {role.value for role in allowed}

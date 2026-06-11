@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .rbac import Role
+from litellm.proxy.auth_v2.authorization import Role
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 

@@ -1,24 +1,15 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import RedirectResponse, Response
 from saml2 import BINDING_HTTP_POST
 from saml2.client import Saml2Client
 from saml2.config import SPConfig
-from saml2.metadata import entity_descriptor
 from scim2_models import Email, Name
 from scim2_models import User as ScimUser
 
-from .config import SAMLConfig
-from ..rbac import filter_claim_roles
-from ..resolver import ProvisioningStore
-from ..session import safe_relay_state
-
-if TYPE_CHECKING:
-    from ..security import AuthSecurity
+from litellm.proxy.auth_v2.config import SAMLConfig
 
 _SINGLE_VALUE_TARGETS = {
     "email",
@@ -30,9 +21,7 @@ _SINGLE_VALUE_TARGETS = {
 _MULTI_VALUE_TARGETS = ("groups", "roles")
 
 
-def _map_attributes(
-    ava: Dict[str, Any], attribute_map: Dict[str, str]
-) -> Dict[str, Any]:
+def map_attributes(ava: Dict[str, Any], attribute_map: Dict[str, str]) -> Dict[str, Any]:
     mapped: Dict[str, Any] = {}
     for saml_attr, target in attribute_map.items():
         if saml_attr not in ava:
@@ -49,13 +38,11 @@ def _map_attributes(
 def _formatted_name(mapped: Dict[str, Any]) -> Optional[str]:
     if mapped.get("display_name"):
         return mapped["display_name"]
-    parts: List[str] = [
-        part for part in (mapped.get("given_name"), mapped.get("family_name")) if part
-    ]
+    parts: List[str] = [part for part in (mapped.get("given_name"), mapped.get("family_name")) if part]
     return " ".join(parts) if parts else None
 
 
-def _user_from_mapped(name_id: str, mapped: Dict[str, Any]) -> ScimUser:
+def user_from_mapped(name_id: str, mapped: Dict[str, Any]) -> ScimUser:
     display = _formatted_name(mapped)
     user = ScimUser(
         external_id=name_id,
@@ -73,7 +60,7 @@ def _user_from_mapped(name_id: str, mapped: Dict[str, Any]) -> ScimUser:
     return user
 
 
-def _claims_from_mapped(mapped: Dict[str, Any]) -> Dict[str, Any]:
+def claims_from_mapped(mapped: Dict[str, Any]) -> Dict[str, Any]:
     claims: Dict[str, Any] = {}
     if mapped.get("email"):
         claims["email"] = mapped["email"]
@@ -102,9 +89,7 @@ def _sp_config_dict(config: SAMLConfig) -> Dict[str, Any]:
         "entityid": config.entity_id,
         "service": {
             "sp": {
-                "endpoints": {
-                    "assertion_consumer_service": [(config.acs_url, BINDING_HTTP_POST)]
-                },
+                "endpoints": {"assertion_consumer_service": [(config.acs_url, BINDING_HTTP_POST)]},
                 "allow_unsolicited": config.allow_unsolicited,
                 "authn_requests_signed": False,
                 "want_assertions_signed": True,
@@ -149,9 +134,7 @@ class SAMLProtocolStore:
 
     def outstanding_relays(self) -> Dict[str, str]:
         now = time.time()
-        return {
-            rid: relay for rid, (exp, relay) in self._outstanding.items() if exp >= now
-        }
+        return {rid: relay for rid, (exp, relay) in self._outstanding.items() if exp >= now}
 
     def consume_request(self, request_id: str) -> Optional[str]:
         entry = self._outstanding.pop(request_id, None)
@@ -171,99 +154,8 @@ class SAMLProtocolStore:
 
     def consume_assertion(self, assertion_id: str) -> bool:
         now = time.time()
-        self._seen_assertions = {
-            aid: exp for aid, exp in self._seen_assertions.items() if exp >= now
-        }
+        self._seen_assertions = {aid: exp for aid, exp in self._seen_assertions.items() if exp >= now}
         if assertion_id in self._seen_assertions:
             return False
         self._seen_assertions[assertion_id] = now + self._replay_ttl
         return True
-
-
-def build_saml_router(auth: "AuthSecurity") -> APIRouter:
-    config = auth.config.saml
-    assert config is not None
-    session = auth.config.session
-    client = build_sp_client(config)
-    protocol = SAMLProtocolStore(session.ttl_seconds)
-    router = APIRouter(prefix="/auth/saml", tags=["saml"])
-
-    @router.get("/metadata")
-    async def metadata() -> Response:
-        return Response(
-            content=str(entity_descriptor(client.config)),
-            media_type="application/samlmetadata+xml",
-        )
-
-    @router.get("/login")
-    async def login(request: Request) -> RedirectResponse:
-        relay_state = safe_relay_state(
-            request.query_params.get("next"), session.default_redirect_path
-        )
-        request_id, info = client.prepare_for_authenticate(relay_state=relay_state)
-        protocol.remember_request(request_id, relay_state)
-        location = dict(info["headers"]).get("Location")
-        if not location:
-            raise HTTPException(status_code=500, detail="no SAML redirect produced")
-        return RedirectResponse(location, status_code=303)
-
-    @router.post("/acs")
-    async def assertion_consumer_service(request: Request) -> Response:
-        form = await request.form()
-        saml_response = form.get("SAMLResponse")
-        if not isinstance(saml_response, str):
-            raise HTTPException(status_code=400, detail="missing SAMLResponse")
-        try:
-            authn_response = client.parse_authn_request_response(
-                saml_response,
-                BINDING_HTTP_POST,
-                outstanding=protocol.outstanding_relays() or None,
-            )
-        except Exception as exc:
-            raise HTTPException(
-                status_code=401, detail="invalid SAML response"
-            ) from exc
-        if authn_response is None:
-            raise HTTPException(status_code=401, detail="invalid SAML response")
-
-        in_response_to = getattr(authn_response, "in_response_to", None)
-        bound_relay = (
-            protocol.consume_request(in_response_to) if in_response_to else None
-        )
-
-        assertion = getattr(authn_response, "assertion", None)
-        assertion_id = getattr(assertion, "id", None)
-        if assertion_id and not protocol.consume_assertion(assertion_id):
-            raise HTTPException(status_code=401, detail="SAML assertion replay")
-
-        name_id = authn_response.get_subject().text
-        ava = authn_response.get_identity() or {}
-        mapped = _map_attributes(ava, config.attribute_map)
-        mapped["roles"] = filter_claim_roles(
-            mapped.get("roles"), config.allowed_roles, config.allow_platform_roles
-        )
-        user = _user_from_mapped(name_id, mapped)
-
-        store = cast(ProvisioningStore, auth.resolver)
-        await store.upsert_user(user)
-
-        session_id = auth.session_store.create_session(
-            {
-                "method": "saml",
-                "subject": name_id,
-                "issuer": authn_response.issuer(),
-                "claims": _claims_from_mapped(mapped),
-            }
-        )
-        target = safe_relay_state(bound_relay, session.default_redirect_path)
-        response = RedirectResponse(target, status_code=303)
-        response.set_cookie(
-            session.cookie,
-            session_id,
-            httponly=True,
-            samesite="lax",
-            secure=session.secure,
-        )
-        return response
-
-    return router
