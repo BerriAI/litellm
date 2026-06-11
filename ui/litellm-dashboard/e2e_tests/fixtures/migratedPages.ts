@@ -11,13 +11,15 @@
  * Keep this in lockstep with MIGRATED_PAGES in src/utils/migratedPages.ts.
  * Pending (add as each PR lands): the leaf-pages batch
  * (budgets, caching, cost-tracking, guardrails, guardrails-monitor, logs,
- * mcp-servers, memory, policies, projects, prompts, search-tools, skills,
+ * mcp-servers, memory, policies, prompts, search-tools, skills,
  * tag-management, tool-policies, transform-request, ui-theme, vector-stores,
- * workflows, access-groups).
+ * workflows).
  */
 export const MIGRATED_E2E_PAGES: Record<string, string> = {
   api_ref: "api-reference",
   "llm-playground": "playground",
+  projects: "projects",
+  "access-groups": "access-groups",
 };
 
 export const MIGRATED_E2E_SEGMENTS: string[] = [...new Set(Object.values(MIGRATED_E2E_PAGES))];
