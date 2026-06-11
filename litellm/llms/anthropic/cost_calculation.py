@@ -3,10 +3,11 @@ Helper util for handling anthropic-specific cost calculation
 - e.g.: prompt caching
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_token_base_cost,
+    _get_web_search_requests,
     _parse_prompt_tokens_details,
     calculate_cache_writing_cost,
     generic_cost_per_token,
@@ -15,23 +16,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
 import litellm
-
-
-def _get_web_search_requests(server_tool_use: Any) -> Optional[int]:
-    """
-    Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
-    that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
-    or any other object supporting attribute access.
-
-    See https://github.com/BerriAI/litellm/issues/26153 — ``stream_chunk_builder``
-    historically left this as a plain ``dict``, which broke direct attribute
-    access in cost calculation.
-    """
-    if server_tool_use is None:
-        return None
-    if isinstance(server_tool_use, dict):
-        return server_tool_use.get("web_search_requests")
-    return getattr(server_tool_use, "web_search_requests", None)
 
 
 def _compute_cache_only_cost(model_info: "ModelInfo", usage: "Usage") -> float:
