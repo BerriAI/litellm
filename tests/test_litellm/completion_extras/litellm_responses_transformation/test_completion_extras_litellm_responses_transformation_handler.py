@@ -131,6 +131,7 @@ def test_completion_preserves_top_level_stream_flag_in_responses_request():
     bridge = ResponsesToCompletionBridgeHandler()
     kwargs = _bridge_kwargs(stream=False)
     kwargs["stream"] = True
+    kwargs["optional_params"].pop("stream")
 
     with (
         patch.object(
@@ -183,6 +184,7 @@ async def test_acompletion_preserves_top_level_stream_flag_in_responses_request(
     bridge = ResponsesToCompletionBridgeHandler()
     kwargs = _bridge_kwargs(stream=False)
     kwargs["stream"] = True
+    kwargs["optional_params"].pop("stream")
 
     with (
         patch.object(
