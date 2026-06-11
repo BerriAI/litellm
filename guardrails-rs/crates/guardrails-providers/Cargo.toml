@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+url = "2"
 
 [dev-dependencies]
 wiremock.workspace = true

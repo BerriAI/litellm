@@ -117,13 +117,19 @@ async fn apply_guardrail(
         },
         Ok(Err(provider_err)) => ApplyResponse {
             guardrail_status: GuardrailStatus::GuardrailFailedToRespond,
-            verdict: Verdict::Pass,
+            verdict: Verdict::Block {
+                violation_message: format!("Guardrail unavailable: {provider_err}"),
+                detections: vec![],
+            },
             provider_response: serde_json::to_value(&provider_err).unwrap_or_default(),
             duration_ms,
         },
         Err(_elapsed) => ApplyResponse {
             guardrail_status: GuardrailStatus::GuardrailFailedToRespond,
-            verdict: Verdict::Pass,
+            verdict: Verdict::Block {
+                violation_message: "Guardrail timed out".to_owned(),
+                detections: vec![],
+            },
             provider_response: serde_json::json!({"kind": "timeout", "ms": duration_ms}),
             duration_ms,
         },

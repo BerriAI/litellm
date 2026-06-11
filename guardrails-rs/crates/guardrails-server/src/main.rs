@@ -35,7 +35,7 @@ async fn main() {
         ))
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
+    let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
     tracing::info!("guardrails sidecar listening on {addr}");
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
