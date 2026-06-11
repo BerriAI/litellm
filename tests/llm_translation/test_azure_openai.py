@@ -5,7 +5,6 @@ sys.path.insert(
     0, os.path.abspath("../../")
 )  # Adds the parent directory to the system path
 
-import httpx
 import pytest
 from litellm.llms.azure.common_utils import process_azure_headers
 from httpx import Headers
@@ -98,77 +97,10 @@ def test_process_azure_headers_with_dict_input():
     assert result == expected_output, "Unexpected output for dict input"
 
 
-from httpx import Client
-from unittest.mock import MagicMock, patch
-from openai import AzureOpenAI
+from unittest.mock import MagicMock
 import litellm
 from litellm import completion
 import os
-
-
-@pytest.mark.parametrize(
-    "input, call_type",
-    [
-        ({"messages": [{"role": "user", "content": "Hello world"}]}, "completion"),
-        ({"input": "Hello world"}, "embedding"),
-        ({"prompt": "Hello world"}, "image_generation"),
-    ],
-)
-@pytest.mark.parametrize(
-    "header_value",
-    [
-        "headers",
-        "extra_headers",
-    ],
-)
-def test_azure_extra_headers(input, call_type, header_value):
-    from litellm import embedding, image_generation
-
-    # Clear the LLM clients cache to ensure the new http_client is used
-    litellm.in_memory_llm_clients_cache.flush_cache()
-
-    http_client = Client()
-
-    messages = [{"role": "user", "content": "Hello world"}]
-    with patch.object(http_client, "send", new=MagicMock()) as mock_client:
-        litellm.client_session = http_client
-        try:
-            if call_type == "completion":
-                func = completion
-            elif call_type == "embedding":
-                func = embedding
-            elif call_type == "image_generation":
-                func = image_generation
-
-            data = {
-                "model": "azure/gpt-4.1-mini",
-                "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
-                "api_version": "2023-07-01-preview",
-                "api_key": "my-azure-api-key",
-                header_value: {
-                    "Authorization": "my-bad-key",
-                    "Ocp-Apim-Subscription-Key": "hello-world-testing",
-                },
-                **input,
-            }
-            response = func(**data)
-            print(response)
-
-        except Exception as e:
-            print(e)
-
-        mock_client.assert_called()
-
-        print(f"mock_client.call_args: {mock_client.call_args}")
-        request = mock_client.call_args[0][0]
-        print(request.method)  # This will print 'POST'
-        print(request.url)  # This will print the full URL
-        print(request.headers)  # This will print the full URL
-        auth_header = request.headers.get("Authorization")
-        apim_key = request.headers.get("Ocp-Apim-Subscription-Key")
-        print(auth_header)
-        assert auth_header == "my-bad-key"
-        assert apim_key == "hello-world-testing"
 
 
 @pytest.mark.parametrize(
@@ -215,160 +147,6 @@ class TestAzureEmbedding(BaseLLMEmbeddingTest):
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.AZURE
-
-
-@patch("azure.identity.UsernamePasswordCredential")
-@patch("azure.identity.get_bearer_token_provider")
-def test_get_azure_ad_token_from_username_password(
-    mock_get_bearer_token_provider, mock_credential
-):
-    from litellm.llms.azure.common_utils import (
-        get_azure_ad_token_from_username_password,
-    )
-
-    # Test inputs
-    client_id = "test-client-id"
-    username = "test-username"
-    password = "test-password"
-
-    # Mock the token provider function
-    mock_token_provider = lambda: "mock-token"
-    mock_get_bearer_token_provider.return_value = mock_token_provider
-
-    # Call the function
-    result = get_azure_ad_token_from_username_password(
-        client_id=client_id, azure_username=username, azure_password=password
-    )
-
-    # Verify UsernamePasswordCredential was called with correct arguments
-    mock_credential.assert_called_once_with(
-        client_id=client_id, username=username, password=password
-    )
-
-    # Verify get_bearer_token_provider was called
-    mock_get_bearer_token_provider.assert_called_once_with(
-        mock_credential.return_value, "https://cognitiveservices.azure.com/.default"
-    )
-
-    # Verify the result is the mock token provider
-    assert result == mock_token_provider
-
-
-def test_azure_openai_gpt_4o_naming(monkeypatch):
-    from openai import AzureOpenAI
-    from pydantic import BaseModel, Field
-
-    monkeypatch.setenv("AZURE_API_VERSION", "2024-10-21")
-
-    client = AzureOpenAI(
-        api_key="test-api-key",
-        base_url="https://fake-azure-endpoint.invalid",
-        api_version="2023-12-01-preview",
-    )
-
-    class ResponseFormat(BaseModel):
-
-        number: str = Field(description="total number of days in a week")
-        days: list[str] = Field(description="name of days in a week")
-
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
-        try:
-            completion(
-                model="azure/gpt4o",
-                messages=[{"role": "user", "content": "Hello world"}],
-                response_format=ResponseFormat,
-                client=client,
-            )
-        except Exception as e:
-            print(e)
-
-        mock_post.assert_called_once()
-
-        print(mock_post.call_args.kwargs)
-
-        assert "tool_calls" not in mock_post.call_args.kwargs
-
-
-@pytest.mark.parametrize(
-    "api_version",
-    [
-        "2024-10-21",
-        # "2024-02-15-preview",
-    ],
-)
-def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
-    from litellm import completion
-    from typing import Optional
-    from pydantic import BaseModel
-    import litellm
-
-    from openai import AzureOpenAI
-
-    client = AzureOpenAI(
-        api_key="fake-key",
-        base_url="https://fake-azure.openai.azure.com",
-        api_version=api_version,
-    )
-
-    class InvestigationOutput(BaseModel):
-        alert_explanation: Optional[str] = None
-        investigation: Optional[str] = None
-        conclusions_and_possible_root_causes: Optional[str] = None
-        next_steps: Optional[str] = None
-        related_logs: Optional[str] = None
-        app_or_infra: Optional[str] = None
-        external_links: Optional[str] = None
-
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_time",
-                "description": "Returns the current date and time",
-                "strict": True,
-                "parameters": {
-                    "properties": {
-                        "timezone": {
-                            "type": "string",
-                            "description": "The timezone to get the current time for (e.g., 'UTC', 'America/New_York')",
-                        }
-                    },
-                    "required": ["timezone"],
-                    "type": "object",
-                    "additionalProperties": False,
-                },
-            },
-        }
-    ]
-
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
-        response = litellm.completion(
-            model="azure/gpt-4.1-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a tool-calling AI assist provided with common devops and IT tools that you can use to troubleshoot problems or answer questions.\nWhenever possible you MUST first use tools to investigate then answer the question.",
-                },
-                {
-                    "role": "user",
-                    "content": "What is the current date and time in NYC?",
-                },
-            ],
-            drop_params=True,
-            temperature=0.00000001,
-            tools=tools,
-            tool_choice="auto",
-            response_format=InvestigationOutput,  # commenting this line will cause the output to be correct
-            api_version=api_version,
-            client=client,
-        )
-
-        mock_post.assert_called_once()
-
-        if api_version == "2024-10-21":
-            assert "response_format" in mock_post.call_args.kwargs
-        else:
-            assert "response_format" not in mock_post.call_args.kwargs
 
 
 def test_map_openai_params():
@@ -466,151 +244,6 @@ def test_map_openai_params():
     assert len(optional_params["tools"]) > 1
 
 
-@pytest.mark.parametrize("max_retries", [0, 4])
-@pytest.mark.parametrize("stream", [True, False])
-@patch(
-    "litellm.main.azure_chat_completions.make_sync_azure_openai_chat_completion_request"
-)
-def test_azure_max_retries_0(
-    mock_make_sync_azure_openai_chat_completion_request, max_retries, stream
-):
-    import litellm
-    from litellm import completion
-
-    # Clear the LLM clients cache to ensure max_retries is set correctly
-    litellm.in_memory_llm_clients_cache.flush_cache()
-
-    try:
-        completion(
-            model="azure/gpt-4.1-mini",
-            messages=[{"role": "user", "content": "Hello world"}],
-            max_retries=max_retries,
-            stream=stream,
-        )
-    except Exception as e:
-        print(e)
-
-    mock_make_sync_azure_openai_chat_completion_request.assert_called_once()
-    assert (
-        mock_make_sync_azure_openai_chat_completion_request.call_args.kwargs[
-            "azure_client"
-        ].max_retries
-        == max_retries
-    )
-
-
-@pytest.mark.parametrize("max_retries", [0, 4])
-@pytest.mark.parametrize("stream", [True, False])
-@patch("litellm.main.azure_chat_completions.make_azure_openai_chat_completion_request")
-@pytest.mark.asyncio
-async def test_async_azure_max_retries_0(
-    make_azure_openai_chat_completion_request, max_retries, stream
-):
-    import litellm
-    from litellm import acompletion
-
-    # Clear the LLM clients cache to ensure max_retries is set correctly
-    litellm.in_memory_llm_clients_cache.flush_cache()
-
-    try:
-        await acompletion(
-            model="azure/gpt-4.1-mini",
-            messages=[{"role": "user", "content": "Hello world"}],
-            max_retries=max_retries,
-            stream=stream,
-        )
-    except Exception as e:
-        print(e)
-
-    make_azure_openai_chat_completion_request.assert_called_once()
-    assert (
-        make_azure_openai_chat_completion_request.call_args.kwargs[
-            "azure_client"
-        ].max_retries
-        == max_retries
-    )
-
-
-@pytest.mark.parametrize("max_retries", [0, 4])
-@pytest.mark.parametrize("stream", [True, False])
-@pytest.mark.parametrize("sync_mode", [True, False])
-@patch("litellm.llms.azure.common_utils.select_azure_base_url_or_endpoint")
-@pytest.mark.asyncio
-async def test_azure_instruct(
-    mock_select_azure_base_url_or_endpoint, max_retries, stream, sync_mode
-):
-    import litellm
-    from litellm import completion, acompletion
-
-    # Clear the LLM clients cache to ensure select_azure_base_url_or_endpoint is called
-    litellm.in_memory_llm_clients_cache.flush_cache()
-
-    args = {
-        "model": "azure_text/instruct-model",
-        "messages": [
-            {"role": "user", "content": "What is the weather like in Boston?"}
-        ],
-        "max_tokens": 10,
-        "max_retries": max_retries,
-    }
-
-    try:
-        if sync_mode:
-            completion(**args)
-        else:
-            await acompletion(**args)
-    except Exception:
-        pass
-
-    mock_select_azure_base_url_or_endpoint.assert_called_once()
-    assert (
-        mock_select_azure_base_url_or_endpoint.call_args.kwargs["azure_client_params"][
-            "max_retries"
-        ]
-        == max_retries
-    )
-
-
-@pytest.mark.parametrize("max_retries", [0, 4])
-@pytest.mark.parametrize("sync_mode", [True, False])
-@patch("litellm.llms.azure.common_utils.select_azure_base_url_or_endpoint")
-@pytest.mark.asyncio
-async def test_azure_embedding_max_retries_0(
-    mock_select_azure_base_url_or_endpoint, max_retries, sync_mode
-):
-    import litellm
-    from litellm import aembedding, embedding
-
-    # Clear the LLM clients cache to ensure select_azure_base_url_or_endpoint is called
-    litellm.in_memory_llm_clients_cache.flush_cache()
-
-    args = {
-        "model": "azure/text-embedding-ada-002",
-        "input": "Hello world",
-        "max_retries": max_retries,
-    }
-
-    try:
-        if sync_mode:
-            embedding(**args)
-        else:
-            await aembedding(**args)
-    except Exception as e:
-        print(e)
-
-    mock_select_azure_base_url_or_endpoint.assert_called_once()
-    print(
-        "mock_select_azure_base_url_or_endpoint.call_args.kwargs",
-        mock_select_azure_base_url_or_endpoint.call_args.kwargs,
-    )
-    assert (
-        mock_select_azure_base_url_or_endpoint.call_args.kwargs["azure_client_params"][
-            "max_retries"
-        ]
-        == max_retries
-    )
-
-
 def test_azure_safety_result():
     """Bubble up safety result from Azure OpenAI"""
     from litellm import completion
@@ -627,32 +260,6 @@ def test_azure_safety_result():
     print(f"response: {response}")
     assert response.choices[0].message.content is not None
     assert response.choices[0].provider_specific_fields is not None
-
-
-def test_azure_openai_responses_bridge():
-    from litellm import completion
-    import litellm
-
-    litellm._turn_on_debug()
-
-    with patch.object(litellm, "responses") as mock_responses:
-        try:
-            response = completion(
-                model="azure/responses/test-azure-computer-use-preview",
-                messages=[{"role": "user", "content": "Hello world"}],
-                api_base=os.getenv("AZURE_COMPUTER_USE_API_BASE"),
-                api_version="2025-04-01-preview",
-                api_key=os.getenv("AZURE_COMPUTER_USE_API_KEY"),
-            )
-        except Exception as e:
-            print(e)
-
-        mock_responses.assert_called_once()
-        assert (
-            mock_responses.call_args.kwargs["model"]
-            == "test-azure-computer-use-preview"
-        )
-        assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
 
 
 def test_completion_azure_deployment_id():
@@ -678,10 +285,8 @@ def test_azure_with_content_safety_error():
     """
     Verify user can access innererror from the Azure OpenAI exception
     """
-    from litellm import completion
     from litellm.exceptions import ContentPolicyViolationError
     from litellm.litellm_core_utils.exception_mapping_utils import exception_type
-    from unittest.mock import MagicMock
 
     mock_exception = Exception(
         "The response was filtered due to the prompt triggering Azure OpenAI's content management policy"

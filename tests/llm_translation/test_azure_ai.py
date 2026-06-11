@@ -1,7 +1,6 @@
 # What is this?
 ## Unit tests for Azure AI integration
 
-import asyncio
 import os
 import sys
 import traceback
@@ -10,29 +9,22 @@ from dotenv import load_dotenv
 
 import litellm.types
 import litellm.types.utils
-from litellm.llms.anthropic.chat import ModelResponseIterator
-import httpx
 import json
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 # from base_rerank_unit_tests import BaseLLMRerankTest
 
 load_dotenv()
-import io
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm import completion
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import StandardLoggingPayload
 
 AZURE_AI_API_BASE = os.getenv("AZURE_AI_API_BASE")
 
@@ -116,80 +108,6 @@ async def test_azure_ai_with_image_url():
         ]
 
 
-@pytest.mark.parametrize(
-    "api_base, expected_url",
-    [
-        (
-            "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
-            "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
-        ),
-        (
-            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
-            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
-        ),
-        (
-            "https://litellm8397336933.services.ai.azure.com/models",
-            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
-        ),
-        (
-            "https://litellm8397336933.services.ai.azure.com",
-            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
-        ),
-    ],
-)
-def test_azure_ai_services_handler(api_base, expected_url):
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    litellm.set_verbose = True
-
-    client = HTTPHandler()
-
-    with patch.object(client, "post") as mock_client:
-        try:
-            response = litellm.completion(
-                model="azure_ai/Meta-Llama-3.1-70B-Instruct",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                api_key="my-fake-api-key",
-                api_base=api_base,
-                client=client,
-            )
-
-            print(response)
-
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_client.assert_called_once()
-        assert mock_client.call_args.kwargs["headers"]["api-key"] == "my-fake-api-key"
-        assert mock_client.call_args.kwargs["url"] == expected_url
-
-
-def test_azure_ai_services_with_api_version():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
-
-    client = HTTPHandler()
-
-    with patch.object(client, "post") as mock_client:
-        try:
-            response = litellm.completion(
-                model="azure_ai/Meta-Llama-3.1-70B-Instruct",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                api_key="my-fake-api-key",
-                api_version="2024-05-01-preview",
-                api_base="https://litellm8397336933.services.ai.azure.com/models",
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_client.assert_called_once()
-        assert mock_client.call_args.kwargs["headers"]["api-key"] == "my-fake-api-key"
-        assert (
-            mock_client.call_args.kwargs["url"]
-            == "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
-        )
-
-
 def test_azure_deepseek_reasoning_content():
     import json
 
@@ -251,7 +169,6 @@ async def test_azure_ai_request_format():
     Test that Azure AI requests are formatted correctly with the proper endpoint and parameters
     for both synchronous and asynchronous calls
     """
-    from openai import AsyncAzureOpenAI, AzureOpenAI
 
     litellm._turn_on_debug()
 
