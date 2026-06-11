@@ -1687,18 +1687,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
             server_tool_use = ServerToolUse(**server_tool_use)
 
         if server_tool_use is not None:
-            # Coerce dict -> ServerToolUse so downstream cost-calc code can
-            # safely access attributes (e.g. .web_search_requests). Some
-            # streaming paths round-trip Usage through ``model_dump()`` and
-            # then re-construct with ``Usage(**dump)``, which would otherwise
-            # leave server_tool_use as a plain dict.
-            # See https://github.com/BerriAI/litellm/issues/26153.
-            if isinstance(server_tool_use, dict):
-                self.server_tool_use = ServerToolUse(**server_tool_use)
-            elif isinstance(server_tool_use, ServerToolUse):
-                self.server_tool_use = server_tool_use
-            else:
-                self.server_tool_use = ServerToolUse.model_validate(server_tool_use)
+            self.server_tool_use = server_tool_use
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 
