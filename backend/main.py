@@ -29,8 +29,9 @@ def _is_backend_route(route) -> bool:
     if path is None:
         return False
     if isinstance(route, Mount):
-        # Static UI mounts are served by the dedicated UI container, not here.
-        return False
+        # The dashboard UI static mounts are served by the dedicated UI container.
+        # Swagger static assets belong to the backend API docs and must remain available.
+        return path == "/swagger"
     if path in BACKEND_EXACT_PATHS:
         return True
     return any(path.startswith(prefix) for prefix in BACKEND_PATH_PREFIXES)
