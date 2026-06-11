@@ -472,22 +472,22 @@
       "count": 4
     }
   },
-  "src/components/Projects/ProjectDetailsPage.tsx": {
+  "src/app/(dashboard)/projects/components/ProjectDetailsPage.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/Projects/ProjectKeysSection.tsx": {
+  "src/app/(dashboard)/projects/components/ProjectKeysSection.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
-  "src/components/Projects/ProjectModals/ProjectBaseForm.tsx": {
+  "src/app/(dashboard)/projects/components/ProjectModals/ProjectBaseForm.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
   },
-  "src/components/Projects/ProjectsPage.tsx": {
+  "src/app/(dashboard)/projects/components/ProjectsPage.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1533,7 +1533,7 @@
       "count": 1
     }
   },
-  "src/components/playground/chat_ui/AdditionalModelSettings.tsx": {
+  "src/app/(dashboard)/playground/components/chat_ui/AdditionalModelSettings.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -1541,17 +1541,17 @@
       "count": 2
     }
   },
-  "src/components/playground/chat_ui/AgentBuilderView.tsx": {
+  "src/app/(dashboard)/playground/components/chat_ui/AgentBuilderView.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 5
     }
   },
-  "src/components/playground/chat_ui/ChatImageUtils.test.tsx": {
+  "src/app/(dashboard)/playground/components/chat_ui/ChatImageUtils.test.tsx": {
     "max-nested-callbacks": {
       "count": 1
     }
   },
-  "src/components/playground/chat_ui/ChatUI.tsx": {
+  "src/app/(dashboard)/playground/components/chat_ui/ChatUI.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -1562,17 +1562,17 @@
       "count": 13
     }
   },
-  "src/components/playground/chat_ui/CodeInterpreterOutput.tsx": {
+  "src/app/(dashboard)/playground/components/chat_ui/CodeInterpreterOutput.tsx": {
     "no-restricted-syntax": {
       "count": 2
     }
   },
-  "src/components/playground/chat_ui/CodeInterpreterTool.tsx": {
+  "src/app/(dashboard)/playground/components/chat_ui/CodeInterpreterTool.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/playground/chat_ui/RealtimePlayground.tsx": {
+  "src/app/(dashboard)/playground/components/chat_ui/RealtimePlayground.tsx": {
     "react-hooks/immutability": {
       "count": 2
     },
@@ -1580,22 +1580,22 @@
       "count": 1
     }
   },
-  "src/components/playground/compareUI/CompareUI.tsx": {
+  "src/app/(dashboard)/playground/components/compareUI/CompareUI.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
-  "src/components/playground/compareUI/components/ModelSelector.tsx": {
+  "src/app/(dashboard)/playground/components/compareUI/components/ModelSelector.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/playground/complianceUI/ComplianceUI.tsx": {
+  "src/app/(dashboard)/playground/components/complianceUI/ComplianceUI.tsx": {
     "react-hooks/preserve-manual-memoization": {
       "count": 3
     }
   },
-  "src/components/playground/llm_calls/a2a_send_message.tsx": {
+  "src/app/(dashboard)/playground/llm_calls/a2a_send_message.tsx": {
     "max-params": {
       "count": 2
     },
@@ -1603,50 +1603,27 @@
       "count": 2
     }
   },
-  "src/components/playground/llm_calls/anthropic_messages.tsx": {
+  "src/app/(dashboard)/playground/llm_calls/anthropic_messages.tsx": {
     "max-params": {
       "count": 1
     }
   },
-  "src/components/playground/llm_calls/audio_speech.tsx": {
+  "src/app/(dashboard)/playground/llm_calls/audio_speech.tsx": {
     "max-params": {
       "count": 1
     }
   },
-  "src/components/playground/llm_calls/audio_transcriptions.tsx": {
+  "src/app/(dashboard)/playground/llm_calls/audio_transcriptions.tsx": {
     "max-params": {
       "count": 1
     }
   },
-  "src/components/playground/llm_calls/chat_completion.tsx": {
+  "src/components/llm_calls/chat_completion.tsx": {
     "max-params": {
       "count": 1
     }
   },
-  "src/components/playground/llm_calls/embeddings_api.tsx": {
-    "max-params": {
-      "count": 1
-    },
-    "no-restricted-syntax": {
-      "count": 1
-    }
-  },
-  "src/components/playground/llm_calls/fetch_agents.tsx": {
-    "no-restricted-syntax": {
-      "count": 1
-    }
-  },
-  "src/components/playground/llm_calls/image_edits.tsx": {
-    "max-params": {
-      "count": 1
-    }
-  },
-  "src/components/playground/llm_calls/image_generation.tsx": {
-    "max-params": {
-      "count": 1
-    }
-  },
-  "src/components/playground/llm_calls/interactions_api.tsx": {
+  "src/app/(dashboard)/playground/llm_calls/embeddings_api.tsx": {
     "max-params": {
       "count": 1
     },
@@ -1654,7 +1631,30 @@
       "count": 1
     }
   },
-  "src/components/playground/llm_calls/responses_api.tsx": {
+  "src/app/(dashboard)/playground/llm_calls/fetch_agents.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/playground/llm_calls/image_edits.tsx": {
+    "max-params": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/playground/llm_calls/image_generation.tsx": {
+    "max-params": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/playground/llm_calls/interactions_api.tsx": {
+    "max-params": {
+      "count": 1
+    },
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/components/llm_calls/responses_api.tsx": {
     "max-params": {
       "count": 1
     }

@@ -40,6 +40,21 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES.api_ref).toBe("api-reference");
     expect(MIGRATED_PAGES["api-reference"]).toBe("api-reference");
   });
+
+  it("maps the llm-playground sidebar id to the playground route", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["llm-playground"]).toBe("playground");
+  });
+
+  it("maps the projects and access-groups sidebar ids to their routes", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.projects).toBe("projects");
+    expect(MIGRATED_PAGES["access-groups"]).toBe("access-groups");
+  });
 });
 
 describe("dev server (NODE_ENV=development)", () => {
