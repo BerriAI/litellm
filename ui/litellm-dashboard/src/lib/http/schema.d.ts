@@ -7787,6 +7787,15 @@ export interface paths {
          *     - scope: Optional scope parameter. Currently only accepts "expand".
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
+         *     - healthy_only: When true, hide models whose backing deployments are all marked
+         *                     unhealthy by background health checks. Requires
+         *                     `background_health_checks: true` in general_settings; without
+         *                     health state the listing is returned unfiltered (fail open).
+         *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
+         *                     filtered, and nothing is hidden when `allowed_fails_policy` is
+         *                     configured (cooldown remains the sole exclusion mechanism).
+         *                     Hiding is presentation-only: a hidden model can still be
+         *                     called directly.
          */
         get: operations["model_list_models_get"];
         put?: never;
@@ -16609,6 +16618,15 @@ export interface paths {
          *     - scope: Optional scope parameter. Currently only accepts "expand".
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
+         *     - healthy_only: When true, hide models whose backing deployments are all marked
+         *                     unhealthy by background health checks. Requires
+         *                     `background_health_checks: true` in general_settings; without
+         *                     health state the listing is returned unfiltered (fail open).
+         *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
+         *                     filtered, and nothing is hidden when `allowed_fails_policy` is
+         *                     configured (cooldown remains the sole exclusion mechanism).
+         *                     Hiding is presentation-only: a hidden model can still be
+         *                     called directly.
          */
         get: operations["model_list_v1_models_get"];
         put?: never;
@@ -42836,6 +42854,7 @@ export interface operations {
                 include_metadata?: boolean | null;
                 fallback_type?: string | null;
                 scope?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -53708,6 +53727,7 @@ export interface operations {
                 include_metadata?: boolean | null;
                 fallback_type?: string | null;
                 scope?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;
