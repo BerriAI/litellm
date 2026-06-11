@@ -141,5 +141,14 @@
     "special_handling": {
       "force_store_false": true
     }
+  },
+  "hanzo": {
+    "base_url": "https://api.hanzo.ai/v1",
+    "api_key_env": "HANZO_API_KEY",
+    "api_base_env": "HANZO_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }

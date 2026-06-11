@@ -776,6 +776,7 @@ openai_compatible_endpoints: List = [
     "https://api.publicai.co/v1",
     "https://api.synthetic.new/openai/v1",
     "https://serverless.tensormesh.ai/v1",
+    "https://api.hanzo.ai/v1",
     "https://api.stima.tech/v1",
     "https://nano-gpt.com/api/v1",
     "https://api.poe.com/v1",
@@ -832,6 +833,7 @@ openai_compatible_providers: List = [
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
+    "hanzo",  # Hanzo - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",

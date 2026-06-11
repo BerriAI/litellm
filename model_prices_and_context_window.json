@@ -42218,6 +42218,33 @@
     "supported_endpoints": ["/v1/audio/transcriptions"],
     "supports_audio_input": true
   },
+  "hanzo/zen4": {
+    "litellm_provider": "hanzo",
+    "mode": "chat",
+    "input_cost_per_token": 1.5e-06,
+    "output_cost_per_token": 4.5e-06,
+    "max_input_tokens": 200000,
+    "max_output_tokens": 8192,
+    "supports_function_calling": true,
+    "supports_tool_choice": true,
+    "supports_response_schema": true,
+    "supports_system_messages": true,
+    "source": "https://api.hanzo.ai/v1/models"
+  },
+  "hanzo/zen4-max": {
+    "litellm_provider": "hanzo",
+    "mode": "chat",
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.2e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 16384,
+    "supports_function_calling": true,
+    "supports_tool_choice": true,
+    "supports_response_schema": true,
+    "supports_system_messages": true,
+    "supports_reasoning": true,
+    "source": "https://api.hanzo.ai/v1/models"
+  },
   "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8": {
     "litellm_provider": "tensormesh",
     "mode": "chat",
