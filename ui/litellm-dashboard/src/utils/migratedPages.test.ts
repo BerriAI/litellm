@@ -1,8 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 describe("migratedHref / legacyPageHref", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.stubEnv("NODE_ENV", "test");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("builds a /ui-rooted path when serverRootPath is /", async () => {
@@ -37,9 +42,48 @@ describe("migratedHref / legacyPageHref", () => {
   });
 });
 
+describe("dev server (NODE_ENV=development)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubEnv("NODE_ENV", "development");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("builds root-relative hrefs because next dev serves the app at /, not /ui", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { migratedHref, legacyPageHref } = await import("./migratedPages");
+
+    expect(migratedHref("api-reference")).toBe("/api-reference");
+    expect(legacyPageHref("models")).toBe("/?page=models");
+  });
+
+  it("ignores serverRootPath, which only applies to proxy-mounted deployments", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/team-x/" }));
+    const { migratedHref } = await import("./migratedPages");
+
+    expect(migratedHref("api-reference")).toBe("/api-reference");
+  });
+
+  it("maps a bare migrated path back to its legacy sidebar key", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { legacyKeyForPathname } = await import("./migratedPages");
+
+    expect(legacyKeyForPathname("/api-reference/")).toBe("api_ref");
+    expect(legacyKeyForPathname("/")).toBeNull();
+  });
+});
+
 describe("legacyKeyForPathname", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.stubEnv("NODE_ENV", "test");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("maps a migrated path back to its legacy sidebar key (including trailing slash)", async () => {
