@@ -17,6 +17,7 @@ Usage:
 Idempotent: an agent that already exists (409 / duplicate) is reported as
 "skipped" rather than failing the run.
 """
+
 import argparse
 import json
 import os
@@ -60,21 +61,35 @@ def post_agent(base_url, key, agent, timeout=20):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="dev_config_with_agents.yaml")
-    ap.add_argument("--base-url", default=os.environ.get("LITELLM_BASEURL", "https://tokenhub.xcity.one"))
-    ap.add_argument("--public", action="store_true", help="force make_public: true on every agent")
+    ap.add_argument(
+        "--base-url",
+        default=os.environ.get("LITELLM_BASEURL", "https://tokenhub.xcity.one"),
+    )
+    ap.add_argument(
+        "--public", action="store_true", help="force make_public: true on every agent"
+    )
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    key = os.environ.get("LITELLM_ADMIN_KEY") or os.environ.get("LITELLM_API_KEY")
+    key = (
+        os.environ.get("LITELLM_ADMIN_KEY")
+        or os.environ.get("LITELLM_MASTER_KEY")
+        or os.environ.get("PROXY_MASTER_KEY")
+        or os.environ.get("LITELLM_API_KEY")
+    )
     if not key and not args.dry_run:
-        sys.exit("Set LITELLM_ADMIN_KEY (proxy admin key) in the environment.")
+        sys.exit(
+            "Set LITELLM_ADMIN_KEY / LITELLM_MASTER_KEY (proxy admin key) in the environment."
+        )
 
     agents = load_agents(args.config)
     print(f"Loaded {len(agents)} agents from {args.config}; target {args.base_url}")
 
     created = skipped = failed = 0
     for i, agent in enumerate(agents, 1):
-        name = agent.get("agent_name") or agent.get("agent_card_params", {}).get("name", f"#{i}")
+        name = agent.get("agent_name") or agent.get("agent_card_params", {}).get(
+            "name", f"#{i}"
+        )
         if args.public:
             agent.setdefault("litellm_params", {})["make_public"] = True
         if args.dry_run:
@@ -91,7 +106,9 @@ def main():
             failed += 1
             print(f"  ✗ {name} -> {status} {text[:200]}")
 
-    print(f"\nDone. created={created} skipped={skipped} failed={failed} total={len(agents)}")
+    print(
+        f"\nDone. created={created} skipped={skipped} failed={failed} total={len(agents)}"
+    )
     if failed:
         sys.exit(1)
 
