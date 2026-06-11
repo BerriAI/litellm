@@ -1,1 +1,1 @@
-"""Engine: composition, the injected I/O port, and stream accumulation."""
+"""Engine: composition and the public translate entry point."""

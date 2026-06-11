@@ -23,9 +23,12 @@ translation/
 ├── providers/      # one subpackage per wire format: IR -> body. Pure, no I/O
 │   └── anthropic/
 └── engine/
-    ├── pipeline.py # composition + the public translate entry point
-    └── http.py     # the ONLY I/O, an injected port (functional core / imperative shell)
+    └── pipeline.py # composition + the public translate entry point
 ```
+
+The injected I/O port (functional core, imperative shell) lands with the
+response and stream increment, when there is actual I/O to inject; this slice is
+a pure request transform with no network.
 
 ## Conventions
 

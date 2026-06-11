@@ -170,6 +170,45 @@ CORPUS = {
             {"role": "tool", "tool_call_id": "call_1", "content": "Sunny, 20C"},
         ],
     },
+    "system_as_array": {
+        "model": MODEL,
+        "max_tokens": 30,
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are helpful"},
+                    {"type": "text", "text": "Be concise"},
+                ],
+            },
+            {"role": "user", "content": "Hi"},
+        ],
+    },
+    "stop_as_string": {
+        "model": MODEL,
+        "max_tokens": 40,
+        "stop": "STOP",
+        "messages": [{"role": "user", "content": "Hello"}],
+    },
+    "max_completion_tokens": {
+        "model": MODEL,
+        "max_completion_tokens": 77,
+        "messages": [{"role": "user", "content": "Hello"}],
+    },
+    "tool_without_description": {
+        "model": MODEL,
+        "max_tokens": 50,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "ping",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        "messages": [{"role": "user", "content": "ping"}],
+    },
     "image_data_uri": {
         "model": MODEL,
         "max_tokens": 100,
