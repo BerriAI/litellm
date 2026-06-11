@@ -7029,6 +7029,7 @@ def _format_streaming_sse_chunk(chunk: Union[str, bytes]) -> Union[str, bytes]:
 
 
 _SSE_FRAME_DELIMITERS = ("\r\n\r\n", "\n\n", "\r\r")
+_MAX_RAW_SSE_BUFFER_CHARS = 8 * 1024 * 1024
 
 
 def _pop_complete_sse_frame(buffer: str) -> Tuple[Optional[str], str]:
@@ -7070,7 +7071,7 @@ async def async_data_generator(  # noqa: PLR0915
         # happened to ship a streaming-iterator override (the default).
         needs_iterator_wrap = proxy_logging_obj.needs_iterator_wrap()
         needs_per_chunk_hook = proxy_logging_obj.needs_per_chunk_streaming_hook()
-        is_raw_sse_stream = bool(request_data.get("_litellm_skip_openai_stream_done"))
+        is_raw_sse_stream = bool(request_data.get("_litellm_raw_sse_stream"))
         raw_sse_buffer = ""
 
         if needs_iterator_wrap:
@@ -7103,18 +7104,37 @@ async def async_data_generator(  # noqa: PLR0915
                 chunk = _serialize_streaming_chunk(chunk)
             elif isinstance(chunk, bytes):
                 chunk = chunk.decode("utf-8", errors="replace")
-                if (
-                    is_raw_sse_stream
-                    or raw_sse_buffer
-                    or chunk.startswith(("data:", "event:", ":"))
-                ):
+                if is_raw_sse_stream:
                     raw_sse_buffer += chunk
+                    if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
+                        raise ValueError(
+                            "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
+                        )
                     while True:
                         frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
                         if frame is None:
                             break
                         yield frame
                     continue
+                if chunk.startswith(("data:", "event:", ":")):
+                    yield (
+                        chunk
+                        if chunk.endswith(_SSE_FRAME_DELIMITERS)
+                        else chunk + "\n\n"
+                    )
+                    continue
+            elif isinstance(chunk, str) and is_raw_sse_stream:
+                raw_sse_buffer += chunk
+                if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
+                    raise ValueError(
+                        "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
+                    )
+                while True:
+                    frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
+                    if frame is None:
+                        break
+                    yield frame
+                continue
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break
@@ -7123,6 +7143,11 @@ async def async_data_generator(  # noqa: PLR0915
                 yield _format_streaming_sse_chunk(chunk=chunk)
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
+
+        if raw_sse_buffer:
+            raise ValueError(
+                "Raw SSE stream ended before a complete frame delimiter was received"
+            )
 
         if not needs_iterator_wrap:
             # The iterator-wrap path fires deferred logging itself; fire it
