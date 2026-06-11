@@ -52,6 +52,19 @@ Do not put names of customers or customer company names in code, PRs, and issues
 
 CI supply-chain safety: Never pipe a remote script into a shell (`curl ... | bash`, `wget ... | sh`); download the artifact to a file, verify its SHA-256 checksum, then install. Pin every external tool to a specific version with a full URL (not `latest` or `stable`). Verify checksums for all downloaded binaries, using the provider's official `.sha256` / `.sha256sum` sidecar when available. These rules apply to every download in CI
 
+Follow these coding conventions for new/updated code (a three-line fix in a legacy file shouldn't trigger huge drive-by refactors):
+
+- Composition over inheritance
+- Never-nester: early returns over deep nesting
+- Don't throw; model failures as values (One function (e.g., raise_public) maps error union to existing public exception contracts via exhaustive match + assert_never)
+- No mutation; instead of mutable lists and dicts, prefer tuples, NamedTuples, frozen dataclasses, etc.
+- Use dependency injection
+- Fully typed; no `Any` or coarse types like dict[str, Any]. Every function parameter must be strongly typed
+- Use tagged unions + match
+- No monster files or god objects
+
+Follow conventional commits for commit names and PR titles
+
 ## Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs**

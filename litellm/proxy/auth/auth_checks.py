@@ -3516,10 +3516,13 @@ async def _virtual_key_max_budget_check(
     if valid_token.max_budget is not None:
         from litellm.proxy.proxy_server import get_current_spend
 
+        fallback_spend = valid_token.spend or 0.0
+        counter_key = f"spend:key:{valid_token.token}"
+
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend = await get_current_spend(
-            counter_key=f"spend:key:{valid_token.token}",
-            fallback_spend=valid_token.spend or 0.0,
+            counter_key=counter_key,
+            fallback_spend=fallback_spend,
         )
 
         ####################################

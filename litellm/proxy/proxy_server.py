@@ -311,7 +311,10 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.exception_handler import (
+    PrismaDBExceptionHandler,
+    call_with_db_reconnect_retry,
+)
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
@@ -2263,7 +2266,7 @@ async def _reconcile_budget_reservation_for_counter_update(
         )
     except Exception:
         verbose_proxy_logger.warning(
-            "Failed to reconcile budget reservation after persisted spend; invalidating reserved counters and continuing",
+            "Failed to reconcile budget reservation after persisted spend; invalidating reserved counters and falling back to direct increment",
             exc_info=True,
         )
         try:
@@ -2274,6 +2277,7 @@ async def _reconcile_budget_reservation_for_counter_update(
             verbose_proxy_logger.exception(
                 "Failed to invalidate reserved counters after reservation reconciliation failed"
             )
+        return set()
     return reserved_counter_keys
 
 
@@ -4075,6 +4079,7 @@ class ProxyConfig:
                         premium_user=premium_user,
                         config_file_path=config_file_path,
                         litellm_settings=litellm_settings,
+                        callback_specific_params=callback_settings,
                     )
 
                 elif key == "model_group_settings":
@@ -4089,6 +4094,8 @@ class ProxyConfig:
                     verbose_proxy_logger.debug(
                         f"litellm.post_call_rules: {litellm.post_call_rules}"
                     )
+                elif key == "max_budget":
+                    litellm.max_budget = float(value)
                 elif key == "max_internal_user_budget":
                     litellm.max_internal_user_budget = float(value)  # type: ignore
                 elif key == "default_max_internal_user_budget":
@@ -5982,8 +5989,12 @@ class ProxyConfig:
         """
 
         try:
-            sso_settings = await SSOConfigRepository(prisma_client).table.find_unique(
-                where={"id": "sso_config"}
+            sso_settings = await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: SSOConfigRepository(prisma_client).table.find_unique(
+                    where={"id": "sso_config"}
+                ),
+                reason="init_sso_settings_in_db_lookup_failure",
             )
             if sso_settings is not None:
                 sso_settings.sso_settings.pop("role_mappings", None)
@@ -6018,9 +6029,13 @@ class ProxyConfig:
         )
 
         try:
-            db_record = await ConfigOverridesRepository(
-                prisma_client
-            ).table.find_unique(where={"config_type": "hashicorp_vault"})
+            db_record = await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: ConfigOverridesRepository(prisma_client).table.find_unique(
+                    where={"config_type": "hashicorp_vault"}
+                ),
+                reason="init_hashicorp_vault_config_override_lookup_failure",
+            )
 
             if db_record is None or db_record.config_value is None:
                 if self._last_hashicorp_vault_config is not None:
@@ -9202,6 +9217,16 @@ async def audio_speech(
             hidden_params=hidden_params,
         )
 
+        # Call response headers hook (matches audio_transcription behavior)
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=dict(request.headers),
+        )
+        if callback_headers:
+            custom_headers.update(callback_headers)
+
         # Determine media type based on model type
         media_type = "audio/mpeg"  # Default for OpenAI TTS
         request_model = data.get("model", "")
@@ -11126,6 +11151,22 @@ async def _get_caller_byok_team_scope(
     return set(user_row.teams or [])
 
 
+def _byok_row_outside_caller_teams(
+    model_info_dict: Dict[str, Any], allowed_team_ids: Optional[Set[str]]
+) -> bool:
+    """Whether a team BYOK row belongs to a team the caller is not a member of.
+
+    `team_id` is only set on team BYOK rows; non-team rows fall through
+    unaffected. `allowed_team_ids is None` means no scoping (e.g. admins).
+    """
+    if allowed_team_ids is None:
+        return False
+    team_id = model_info_dict.get("team_id")
+    if team_id is None:
+        return False
+    return team_id not in allowed_team_ids
+
+
 # Hard cap on rows the DB-side BYOK search may pull when results need to be
 # sorted across the full match set. Without this, an authenticated caller
 # can hit `/v2/model/info?search=<broad>&sortBy=<field>` and force the
@@ -11247,15 +11288,7 @@ async def _apply_search_filter_to_models(
     )
 
     def _is_byok_outside_caller_teams(model_info_dict: Dict[str, Any]) -> bool:
-        # `team_id` is only set on team BYOK rows. Non-team rows fall
-        # through unaffected — they are gated by other paths (router
-        # membership, direct_access, include_team_models).
-        if allowed_team_ids is None:
-            return False
-        team_id = model_info_dict.get("team_id")
-        if team_id is None:
-            return False
-        return team_id not in allowed_team_ids
+        return _byok_row_outside_caller_teams(model_info_dict, allowed_team_ids)
 
     def _model_matches_search(m: Dict[str, Any]) -> bool:
         # Team BYOK models persist an internal `model_name`
@@ -12395,6 +12428,72 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
+def _deployment_matches_allowed_model_names(
+    model: Dict[str, Any], allowed_model_names: Set[str]
+) -> bool:
+    """Match a router deployment against allowed public model names.
+
+    Team-scoped rows store an internal routing key in ``model_name``; callers
+    with key/team restrictions still refer to the public name in
+    ``model_info.team_public_model_name``.
+    """
+    if model.get("model_name") in allowed_model_names:
+        return True
+    model_info = model.get("model_info")
+    if not isinstance(model_info, dict):
+        return False
+    team_public_model_name = model_info.get("team_public_model_name")
+    return (
+        isinstance(team_public_model_name, str)
+        and team_public_model_name in allowed_model_names
+    )
+
+
+def _get_v1_model_info_allowed_model_names(
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router,
+) -> Optional[Set[str]]:
+    """Return key/team allowlisted public model names, or None if unrestricted."""
+    model_access_groups = llm_router.get_model_access_groups()
+    proxy_model_list = llm_router.get_model_names()
+    key_models = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    team_models = get_team_models(
+        team_models=user_api_key_dict.team_models,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    if not key_models and not team_models:
+        return None
+    return set(
+        get_complete_model_list(
+            key_models=key_models,
+            team_models=team_models,
+            proxy_model_list=proxy_model_list,
+            user_model=user_model,
+            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+            llm_router=llm_router,
+            return_wildcard_routes=False,
+        )
+    )
+
+
+def _filter_v1_model_info_deployments(
+    all_models: List[dict],
+    allowed_model_names: Optional[Set[str]],
+) -> List[dict]:
+    if allowed_model_names is None:
+        return all_models
+    return [
+        model
+        for model in all_models
+        if _deployment_matches_allowed_model_names(model, allowed_model_names)
+    ]
+
+
 def _translate_model_name_for_response(model: dict) -> dict:
     """For team-scoped DB rows, replace `model_name` with the public name
     in `model_info.team_public_model_name` before returning. The DB column
@@ -12564,49 +12663,42 @@ async def model_info_v1(  # noqa: PLR0915
         )
         return {"data": [_deployment_info_dict]}
 
-    all_models: List[dict] = []
-    model_access_groups: Dict[str, List[str]] = defaultdict(list)
-    ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
-    if llm_router is None:
-        proxy_model_list = []
-    else:
-        proxy_model_list = llm_router.get_model_names()
-        model_access_groups = llm_router.get_model_access_groups()
-    key_models = get_key_models(
+    # Return router deployments (same source as /v2/model/info), not wildcard-
+    # expanded model names from get_complete_model_list(). Team-scoped rows
+    # use internal routing keys (model_name_{team_id}_{uuid}) and were omitted
+    # when v1 resolved models only via public model_name strings.
+    all_models: List[dict] = copy.deepcopy(llm_router.model_list)
+    allowed_model_names = _get_v1_model_info_allowed_model_names(
         user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
-    team_models = get_team_models(
-        team_models=user_api_key_dict.team_models,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
-    all_models_str = get_complete_model_list(
-        key_models=key_models,
-        team_models=team_models,
-        proxy_model_list=proxy_model_list,
-        user_model=user_model,
-        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         llm_router=llm_router,
     )
 
-    if len(all_models_str) > 0:
-        _relevant_models = []
-        for model in all_models_str:
-            router_models = llm_router.get_model_list(model_name=model)
-            if router_models is not None:
-                _relevant_models.extend(router_models)
-        if llm_model_list is not None:
-            all_models = copy.deepcopy(_relevant_models)  # type: ignore
-        else:
-            all_models = []
+    all_models = _filter_v1_model_info_deployments(
+        all_models=all_models,
+        allowed_model_names=allowed_model_names,
+    )
 
-    # Reassign each entry: _get_proxy_model_info returns a (possibly new)
-    # dict via _translate_model_name_for_response, which does NOT mutate in
-    # place. Binding only the loop variable would drop the public-name swap
-    # for team-scoped rows and leak the internal routing key (#28382).
-    all_models = [_get_proxy_model_info(model=model) for model in all_models]
+    # Team BYOK deployments carry an internal routing key and other teams'
+    # public name/team_id/api_base; drop the ones the caller cannot access so
+    # listing the full router model_list does not leak cross-team metadata.
+    allowed_team_ids = await _get_caller_byok_team_scope(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+    all_models = [
+        model
+        for model in all_models
+        if not _byok_row_outside_caller_teams(
+            model.get("model_info") or {}, allowed_team_ids
+        )
+    ]
+
+    all_models = [
+        _translate_model_name_for_response(
+            _enrich_model_info_with_litellm_data(model=model, llm_router=llm_router)
+        )
+        for model in all_models
+    ]
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}

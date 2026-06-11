@@ -22013,6 +22013,11 @@ export interface components {
              */
             database_connection_timeout: number | null;
             /**
+             * Database Disable Prepared Statements
+             * @description Disable server-side prepared statements by setting Prisma's `pgbouncer=true` URL param. Use this for pgbouncer transaction-pooling deployments, or to prevent the 'cached plan must not change result type' error that pooled connections hit during rolling schema migrations. An explicit `pgbouncer` in `database_extra_connection_params` takes precedence.
+             */
+            database_disable_prepared_statements?: boolean | null;
+            /**
              * Database Extra Connection Params
              * @description Escape hatch: extra key/value pairs appended verbatim to the Prisma DATABASE_URL / DIRECT_URL query string (e.g. `sslmode`, `pgbouncer`, `statement_cache_size`). Keys here override any default LiteLLM sets.
              */
@@ -24886,6 +24891,8 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
+            /** Aws Bedrock Project Id */
+            aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
             /** Aws Region Name */
@@ -25081,6 +25088,12 @@ export interface components {
              * @default false
              */
             use_litellm_proxy: boolean | null;
+            /**
+             * Use Xai Oauth
+             * @description Use stored xAI OAuth credentials when no xAI API key is configured.
+             * @default false
+             */
+            use_xai_oauth: boolean | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
@@ -32484,6 +32497,8 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
+            /** Aws Bedrock Project Id */
+            aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
             /** Aws Region Name */
@@ -32679,6 +32694,12 @@ export interface components {
              * @default false
              */
             use_litellm_proxy: boolean | null;
+            /**
+             * Use Xai Oauth
+             * @description Use stored xAI OAuth credentials when no xAI API key is configured.
+             * @default false
+             */
+            use_xai_oauth: boolean | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
