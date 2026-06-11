@@ -8,7 +8,7 @@ the whole pipeline returns one ``Result`` and never raises.
 
 from __future__ import annotations
 
-from typing import Callable, Dict
+from typing import Callable, Dict, FrozenSet
 
 from expression import Error
 
@@ -21,6 +21,10 @@ from ..providers.anthropic import serialize_request
 _SERIALIZERS: Dict[Provider, Callable[[ChatRequest], Body]] = {
     "anthropic": serialize_request,
 }
+
+
+def ported_providers() -> FrozenSet[Provider]:
+    return frozenset(_SERIALIZERS)
 
 
 def translate_chat_request(

@@ -1,11 +1,14 @@
 # litellm/translation
 
-v2 of core LLM translation: hub-and-spoke through a frozen IR, shipped behind a
-per-provider opt-in flag so it runs beside v1 until a provider is differential-green
-and the harness stays green with its flag on. Inbound parsers map an accepted request
-schema into the IR, provider serializers map the IR onto one wire format, and
-`dispatch.route` is the single v1/v2 fork. This file is the seed the agents working
-here land against; keep it in sync when the layout or conventions move.
+v2 of core LLM translation: hub-and-spoke through a frozen IR, shipped behind the
+single `LLM_TRANSLATION_V2` opt-in flag so it runs beside v1 until each provider is
+differential-green and the harness stays green with the flag on. Which providers
+actually take v2 is not configuration: it is the serializer registry
+(`ported_providers()`), so registering a provider is what routes it to v2 for
+flagged deployments. Inbound parsers map an accepted request schema into the IR,
+provider serializers map the IR onto one wire format, and `dispatch.route` is the
+single v1/v2 fork. This file is the seed the agents working here land against;
+keep it in sync when the layout or conventions move.
 
 ## What goes where
 
@@ -17,7 +20,8 @@ translation/
 ├── errors.py       # failures as values; every error carries .summary
 ├── boundary.py     # the typed boundary: freeze/thaw + as_* accessors. Untyped
 │                   #   data enters here and nowhere else
-├── dispatch.py     # route(): per-provider allowlist + same-family fast path
+├── flag.py         # the single LLM_TRANSLATION_V2 opt-in; the only env read
+├── dispatch.py     # route(): flag gate + ported set + same-family fast path
 ├── inbound/        # one subpackage per accepted schema: raw dict -> IR
 │   └── openai_chat/
 ├── providers/      # one subpackage per wire format: IR -> body. Pure, no I/O
@@ -52,8 +56,8 @@ a pure request transform with no network.
 Characterization then differential, never mixed with a behavior change. The differential
 corpus (`test_differential_anthropic_request.py`) runs v1 (`map_openai_params` then
 `transform_request`) and v2 over the same requests and asserts identical normalized JSON.
-That corpus is the covered surface: the anthropic flag turns on only for the shapes
-pinned there. A behavior change ships as its own snapshot-diffed PR, never inside a port.
+That corpus is the covered surface: a provider registers only for shapes pinned there.
+A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
@@ -62,5 +66,6 @@ on the corpus. Not yet here, each its own follow-up: response and stream parsing
 other inbound schemas (`anthropic_messages`, `google_genai`, `responses`, `completions`);
 the other providers (bedrock converse/invoke, vertex, azure, `openai_compat`); and
 wiring `dispatch.route` into the live `completion()` path. To add a provider, write
-`providers/<name>/serialize.py`, register it in `engine/pipeline._SERIALIZERS`, add a
-differential corpus, and leave the flag off until it is differential-green.
+`providers/<name>/serialize.py` and its differential corpus, and register it in
+`engine/pipeline._SERIALIZERS` only once differential-green: registration is the act
+that routes it to v2 wherever `LLM_TRANSLATION_V2` is on.

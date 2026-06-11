@@ -1,11 +1,14 @@
 """The one v1/v2 fork.
 
-A pure decision: a request stays on v1 until its provider is opted in, takes
-the same-family fast path when the inbound schema already speaks the provider's
-wire format (so the IR semantic re-encode is skipped), and otherwise goes
-through the IR. Enabling any body-touching feature (param normalization,
-guardrails, semantic cache) sets ``body_touching`` and forces the IR path even
-for a same-family pair, because the fast path forwards the message payload as-is.
+A pure decision: every request stays on v1 until the single
+``LLM_TRANSLATION_V2`` flag is on, and even then stays on v1 unless its
+provider is ported (``ported`` comes from the serializer registry, a fact of
+the code rather than configuration). A ported request takes the same-family
+fast path when the inbound schema already speaks the provider's wire format
+(so the IR semantic re-encode is skipped), and otherwise goes through the IR.
+Enabling any body-touching feature (param normalization, guardrails, semantic
+cache) sets ``body_touching`` and forces the IR path even for a same-family
+pair, because the fast path forwards the message payload as-is.
 """
 
 from __future__ import annotations
@@ -64,10 +67,11 @@ def route(
     *,
     schema: InboundSchema,
     provider: Provider,
-    enabled_providers: FrozenSet[Provider],
+    v2_enabled: bool,
+    ported: FrozenSet[Provider],
     body_touching: bool,
 ) -> Route:
-    if provider not in enabled_providers:
+    if not v2_enabled or provider not in ported:
         return Route.of_v1()
     if (schema, provider) in _SAME_FAMILY and not body_touching:
         return Route.of_fast_path(provider)
