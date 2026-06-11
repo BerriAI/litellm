@@ -48,6 +48,10 @@ def _roles_from_claims(claims: Dict[str, Any]) -> List[Role]:
     return [Role(value) for value in raw if value in valid]
 
 
+def _public_claims(claims: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: value for key, value in claims.items() if not key.startswith("_")}
+
+
 def _teams_from_claims(claims: Dict[str, Any]) -> List[TeamIdentity]:
     groups = claims.get("groups", [])
     if not isinstance(groups, list):
@@ -70,8 +74,29 @@ class InMemoryIdentityStore(IdentityResolver, ProvisioningStore):
 
     async def resolve(self, credential: Credential) -> Principal:
         if credential.method == AuthMethod.API_KEY:
-            return self._resolve_api_key(credential)
-        return self._resolve_subject(credential)
+            principal = self._resolve_api_key(credential)
+        else:
+            principal = self._resolve_subject(credential)
+        self._reject_if_deactivated(principal)
+        return principal
+
+    def _reject_if_deactivated(self, principal: Principal) -> None:
+        user = self._lookup_scim_user(principal)
+        if user is not None and user.active is False:
+            raise errors.account_disabled()
+
+    def _lookup_scim_user(self, principal: Principal) -> Optional[ScimUser]:
+        if principal.user is None:
+            return None
+        by_id = self._users.get(principal.user.id)
+        if by_id is not None:
+            return by_id
+        external = principal.user.external_id
+        if external:
+            for user in self._users.values():
+                if user.external_id == external:
+                    return user
+        return None
 
     def _resolve_api_key(self, credential: Credential) -> Principal:
         raw = credential.claims.get("_raw_api_key")
@@ -99,7 +124,7 @@ class InMemoryIdentityStore(IdentityResolver, ProvisioningStore):
                 scopes=list(credential.scopes),
                 auth_method=credential.method,
                 credential_ref=credential.credential_ref,
-                claims=dict(claims),
+                claims=_public_claims(claims),
             )
         return Principal(
             principal_type=PrincipalType.HUMAN,
@@ -118,7 +143,7 @@ class InMemoryIdentityStore(IdentityResolver, ProvisioningStore):
             scopes=list(credential.scopes),
             auth_method=credential.method,
             credential_ref=credential.credential_ref,
-            claims=dict(claims),
+            claims=_public_claims(claims),
         )
 
     async def upsert_user(self, user: ScimUser) -> ScimUser:

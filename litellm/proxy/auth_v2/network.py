@@ -30,6 +30,10 @@ def _ip_in_cidrs(ip: Optional[str], cidrs: List[str]) -> bool:
     return False
 
 
+def ip_in_trusted_proxies(ip: Optional[str], config: TrustedProxyConfig) -> bool:
+    return _ip_in_cidrs(ip, config.trusted_proxy_cidrs)
+
+
 def resolve_client_ip(
     request: Request, config: TrustedProxyConfig
 ) -> Tuple[Optional[str], bool]:

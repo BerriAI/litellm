@@ -141,12 +141,23 @@ def build_sp_client(config: SamlConfig) -> Saml2Client:
 class SamlSessionStore:
     def __init__(self, ttl_seconds: int = 3600, max_size: int = 10000) -> None:
         self._sessions: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._seen_assertions: Dict[str, float] = {}
         self.outstanding: Dict[str, str] = {}
         self._ttl = ttl_seconds
         self._max_size = max_size
 
     def remember_request(self, request_id: str, relay_state: str = "/") -> None:
         self.outstanding[request_id] = relay_state
+
+    def consume_assertion(self, assertion_id: str) -> bool:
+        now = time.time()
+        self._seen_assertions = {
+            aid: exp for aid, exp in self._seen_assertions.items() if exp >= now
+        }
+        if assertion_id in self._seen_assertions:
+            return False
+        self._seen_assertions[assertion_id] = now + self._ttl
+        return True
 
     def create_session(self, identity: Dict[str, Any]) -> str:
         now = time.time()
@@ -244,6 +255,18 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
         if authn_response is None:
             raise HTTPException(status_code=401, detail="invalid SAML response")
 
+        in_response_to = getattr(authn_response, "in_response_to", None)
+        bound_relay = (
+            session_store.outstanding.pop(in_response_to, None)
+            if in_response_to
+            else None
+        )
+
+        assertion = getattr(authn_response, "assertion", None)
+        assertion_id = getattr(assertion, "id", None)
+        if assertion_id and not session_store.consume_assertion(assertion_id):
+            raise HTTPException(status_code=401, detail="SAML assertion replay")
+
         name_id = authn_response.get_subject().text
         ava = authn_response.get_identity() or {}
         mapped = _map_attributes(ava, config.attribute_map)
@@ -252,9 +275,6 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
         store: ProvisioningStore = request.app.state.auth_v2.resolver
         await store.upsert_user(user)
 
-        in_response_to = getattr(authn_response, "in_response_to", None)
-        if in_response_to:
-            session_store.outstanding.pop(in_response_to, None)
         session_id = session_store.create_session(
             {
                 "name_id": name_id,
@@ -262,11 +282,7 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
                 "claims": _claims_from_mapped(mapped),
             }
         )
-        relay_state = form.get("RelayState")
-        target = _safe_relay_state(
-            relay_state if isinstance(relay_state, str) else None,
-            config.default_redirect_path,
-        )
+        target = _safe_relay_state(bound_relay, config.default_redirect_path)
         response = RedirectResponse(target, status_code=303)
         response.set_cookie(
             config.session_cookie,

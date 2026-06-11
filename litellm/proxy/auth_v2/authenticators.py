@@ -23,6 +23,7 @@ from .config import (
     MutualTlsConfig,
     OAuth2IntrospectionConfig,
     OidcProviderConfig,
+    TrustedProxyConfig,
 )
 from .models import (
     AuthMethod,
@@ -31,6 +32,7 @@ from .models import (
     CredentialRef,
     SecuritySchemeType,
 )
+from .network import ip_in_trusted_proxies
 
 AT_JWT_TYPES = {"at+jwt", "application/at+jwt"}
 
@@ -323,12 +325,15 @@ class OAuth2Authenticator:
         body = response.json()
         if not body.get("active"):
             raise errors.invalid_token("token inactive")
+        token_audience = _normalize_audience(body.get("aud"))
+        if config.audience and not set(token_audience) & set(config.audience):
+            raise errors.invalid_token("audience mismatch")
         return Credential(
             scheme=self.scheme,
             method=AuthMethod.OAUTH2_INTROSPECTION,
             subject=str(body.get(config.subject_field, "")),
             issuer=body.get("iss"),
-            audience=_normalize_audience(body.get("aud")),
+            audience=token_audience,
             scopes=_split_scope(body.get("scope")),
             claims=body,
         )
@@ -360,8 +365,9 @@ class OidcAuthenticator:
 class MutualTlsAuthenticator:
     scheme = SecuritySchemeType.MUTUAL_TLS
 
-    def __init__(self, config: MutualTlsConfig) -> None:
+    def __init__(self, config: MutualTlsConfig, network: TrustedProxyConfig) -> None:
         self._config = config
+        self._network = network
 
     async def authenticate(self, request: Request) -> Optional[Credential]:
         cert = self._read_client_cert(request)
@@ -376,6 +382,9 @@ class MutualTlsAuthenticator:
 
     def _read_client_cert(self, request: Request) -> Optional[ClientCertificate]:
         if self._config.forwarded_subject_header:
+            peer = request.client.host if request.client else None
+            if not ip_in_trusted_proxies(peer, self._network):
+                return None
             dn = request.headers.get(self._config.forwarded_subject_header)
             return ClientCertificate(subject_dn=dn) if dn else None
         tls = request.scope.get("extensions", {}).get("tls", {})
@@ -402,6 +411,6 @@ def build_authenticators(
     )
     if config.mutual_tls.enabled:
         by_scheme[SecuritySchemeType.MUTUAL_TLS] = MutualTlsAuthenticator(
-            config.mutual_tls
+            config.mutual_tls, config.network
         )
     return [by_scheme[scheme] for scheme in config.scheme_order if scheme in by_scheme]

@@ -47,6 +47,7 @@ class OAuth2IntrospectionConfig(BaseModel):
     client_id: str
     client_secret: SecretStr
     subject_field: str = "sub"
+    audience: List[str] = Field(default_factory=list)
 
 
 class MutualTlsConfig(BaseModel):
@@ -66,7 +67,7 @@ class SamlConfig(BaseModel):
     idp_metadata: str = ""
     sp_key_file: Optional[str] = None
     sp_cert_file: Optional[str] = None
-    allow_unsolicited: bool = True
+    allow_unsolicited: bool = False
     session_cookie: str = "saml_session"
     cookie_secure: bool = True
     session_ttl_seconds: int = 3600

@@ -48,3 +48,7 @@ def forbidden_role() -> AuthError:
 
 def forbidden_permission() -> AuthError:
     return AuthError(403, "Forbidden")
+
+
+def account_disabled() -> AuthError:
+    return AuthError(403, "Account disabled")
