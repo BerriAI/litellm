@@ -68,6 +68,7 @@ class SamlConfig(BaseModel):
     sp_cert_file: Optional[str] = None
     allow_unsolicited: bool = True
     session_cookie: str = "saml_session"
+    default_redirect_path: str = "/"
     xmlsec_binary: Optional[str] = None
     attribute_map: Dict[str, str] = Field(
         default_factory=lambda: dict(DEFAULT_SAML_ATTRIBUTE_MAP)

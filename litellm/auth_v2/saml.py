@@ -4,7 +4,7 @@ import secrets
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response
 from saml2 import BINDING_HTTP_POST
 from saml2.client import Saml2Client
 from saml2.config import SPConfig
@@ -82,6 +82,18 @@ def _claims_from_mapped(mapped: Dict[str, Any]) -> Dict[str, Any]:
         if mapped.get(target):
             claims[target] = mapped[target]
     return claims
+
+
+def _safe_relay_state(target: Optional[str], default: str) -> str:
+    if (
+        target
+        and target.startswith("/")
+        and not target.startswith("//")
+        and "://" not in target
+        and "\\" not in target
+    ):
+        return target
+    return default
 
 
 def _metadata_source(idp_metadata: str) -> Dict[str, Any]:
@@ -181,9 +193,12 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
         )
 
     @router.get("/login")
-    async def login() -> RedirectResponse:
-        request_id, info = client.prepare_for_authenticate()
-        session_store.remember_request(request_id)
+    async def login(request: Request) -> RedirectResponse:
+        relay_state = _safe_relay_state(
+            request.query_params.get("next"), config.default_redirect_path
+        )
+        request_id, info = client.prepare_for_authenticate(relay_state=relay_state)
+        session_store.remember_request(request_id, relay_state)
         location = dict(info["headers"]).get("Location")
         if not location:
             raise HTTPException(status_code=500, detail="no SAML redirect produced")
@@ -226,7 +241,12 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
                 "claims": _claims_from_mapped(mapped),
             }
         )
-        response = JSONResponse(content=user.model_dump())
+        relay_state = form.get("RelayState")
+        target = _safe_relay_state(
+            relay_state if isinstance(relay_state, str) else None,
+            config.default_redirect_path,
+        )
+        response = RedirectResponse(target, status_code=303)
         response.set_cookie(
             config.session_cookie, session_id, httponly=True, samesite="lax"
         )
