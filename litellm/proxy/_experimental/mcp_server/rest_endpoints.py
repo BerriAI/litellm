@@ -176,6 +176,39 @@ if MCP_AVAILABLE:
             )
         return None
 
+    async def _get_user_byok_auth_header(
+        server,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Optional[str]:
+        """
+        For BYOK servers, return the user's stored per-user key as the raw
+        credential string so the REST tools-list path injects it the same way
+        the MCP protocol tool-call path does in ``execute_mcp_tool``. The
+        auth_type formatting (Bearer / x-api-key / ...) is applied downstream by
+        the MCP client. Returns None for non-BYOK servers or when no credential
+        is stored.
+        """
+        if not getattr(server, "is_byok", False):
+            return None
+        user_id = getattr(user_api_key_dict, "user_id", None)
+        server_id = getattr(server, "server_id", None)
+        if not user_id or not server_id:
+            return None
+        try:
+            from litellm.proxy._experimental.mcp_server.db import get_user_credential
+            from litellm.proxy.utils import get_prisma_client_or_throw
+
+            prisma_client = get_prisma_client_or_throw(
+                "Database not connected. Connect a database to use BYOK MCP tools."
+            )
+            return await get_user_credential(prisma_client, user_id, server_id)
+        except Exception as e:
+            verbose_logger.warning(
+                f"_get_user_byok_auth_header: failed to retrieve credential for "
+                f"user={user_id} server={server_id}: {e}"
+            )
+        return None
+
     async def _prefetch_user_oauth_creds(
         user_api_key_dict: UserAPIKeyAuth,
     ) -> Dict[str, Dict[str, Any]]:
@@ -527,6 +560,10 @@ if MCP_AVAILABLE:
         server_auth_header = _get_server_auth_header(
             server, mcp_server_auth_headers, mcp_auth_header
         )
+        if not server_auth_header:
+            server_auth_header = await _get_user_byok_auth_header(
+                server, user_api_key_dict
+            )
         user_oauth_extra_headers = await _get_user_oauth_extra_headers(
             server, user_api_key_dict
         )
@@ -692,6 +729,10 @@ if MCP_AVAILABLE:
                     server_auth_header = _get_server_auth_header(
                         server, mcp_server_auth_headers, mcp_auth_header
                     )
+                    if not server_auth_header:
+                        server_auth_header = await _get_user_byok_auth_header(
+                            server, user_api_key_dict
+                        )
                     user_oauth_extra_headers = await _get_user_oauth_extra_headers(
                         server,
                         user_api_key_dict,
