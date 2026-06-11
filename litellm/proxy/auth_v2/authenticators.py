@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+import functools
+import hashlib
+import hmac
+import secrets
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 import httpx
@@ -9,6 +13,7 @@ import jwt
 from fastapi import Request
 from jwt import PyJWKClient
 from jwt import decode as jwt_decode
+from starlette.concurrency import run_in_threadpool
 
 from . import errors
 from .config import (
@@ -86,6 +91,35 @@ def _credential_from_claims(
     )
 
 
+@runtime_checkable
+class BasicAuthVerifier(Protocol):
+    def verify(self, username: str, password: str) -> bool: ...
+
+
+def hash_basic_password(password: str, salt: Optional[str] = None) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.sha256(bytes.fromhex(salt) + password.encode()).hexdigest()
+    return f"{salt}${digest}"
+
+
+class InMemoryBasicAuthStore:
+    def __init__(self, credentials: Dict[str, str]) -> None:
+        self._credentials = credentials
+
+    def verify(self, username: str, password: str) -> bool:
+        stored = self._credentials.get(username)
+        if stored is None:
+            return False
+        salt, _, expected = stored.partition("$")
+        try:
+            candidate = hashlib.sha256(
+                bytes.fromhex(salt) + password.encode()
+            ).hexdigest()
+        except ValueError:
+            return False
+        return hmac.compare_digest(candidate, expected)
+
+
 class JwtVerifier:
     def __init__(
         self,
@@ -134,6 +168,14 @@ class JwtVerifier:
             raise errors.invalid_token(str(exc)) from exc
 
 
+async def _verify_jwt_off_loop(
+    verifier: JwtVerifier, token: str, *, require_at_jwt: Optional[bool] = None
+) -> Dict[str, Any]:
+    return await run_in_threadpool(
+        functools.partial(verifier.verify, token, require_at_jwt=require_at_jwt)
+    )
+
+
 def _select_verifier(token: str, verifiers: List[JwtVerifier]) -> Optional[JwtVerifier]:
     if not verifiers:
         return None
@@ -173,10 +215,14 @@ class HttpAuthenticator:
     scheme = SecuritySchemeType.HTTP
 
     def __init__(
-        self, basic: HttpBasicConfig, jwt_verifiers: List[JwtVerifier]
+        self,
+        basic: HttpBasicConfig,
+        jwt_verifiers: List[JwtVerifier],
+        basic_verifier: Optional[BasicAuthVerifier] = None,
     ) -> None:
         self._basic = basic
         self._verifiers = jwt_verifiers
+        self._basic_verifier = basic_verifier
 
     async def authenticate(self, request: Request) -> Optional[Credential]:
         header = request.headers.get("authorization")
@@ -185,35 +231,38 @@ class HttpAuthenticator:
         scheme, _, value = header.partition(" ")
         scheme_lower = scheme.lower()
         if scheme_lower == "bearer" and value:
-            return self._verify_bearer(value)
+            return await self._verify_bearer(value)
         if scheme_lower == "basic" and self._basic.enabled and value:
             return self._verify_basic(value)
         return None
 
-    def _verify_bearer(self, token: str) -> Credential:
+    async def _verify_bearer(self, token: str) -> Credential:
         verifier = _select_verifier(token, self._verifiers)
         if verifier is None:
             raise errors.invalid_token("no issuer match")
-        claims = verifier.verify(token)
+        claims = await _verify_jwt_off_loop(verifier, token)
         return _credential_from_claims(
             self.scheme, AuthMethod.BEARER_JWT, token, claims
         )
 
     def _verify_basic(self, value: str) -> Credential:
+        challenge = errors.basic_challenge(self._basic.realm)
         try:
             decoded = base64.b64decode(value).decode("utf-8")
         except (binascii.Error, UnicodeDecodeError) as exc:
-            raise errors.unauthenticated(
-                errors.basic_challenge(self._basic.realm)
-            ) from exc
-        username, _, password = decoded.partition(":")
-        if not username:
-            raise errors.unauthenticated(errors.basic_challenge(self._basic.realm))
+            raise errors.unauthenticated(challenge) from exc
+        username, separator, password = decoded.partition(":")
+        if (
+            not username
+            or separator != ":"
+            or self._basic_verifier is None
+            or not self._basic_verifier.verify(username, password)
+        ):
+            raise errors.unauthenticated(challenge)
         return Credential(
             scheme=self.scheme,
             method=AuthMethod.HTTP_BASIC,
             subject=username,
-            claims={"_basic_password": password},
         )
 
     def challenge(self) -> str:
@@ -239,16 +288,16 @@ class OAuth2Authenticator:
         if token is None:
             return None
         if _looks_like_jwt(token):
-            return self._verify_at_jwt(token)
+            return await self._verify_at_jwt(token)
         if self._introspection is not None:
             return await self._introspect(token)
         raise errors.invalid_token()
 
-    def _verify_at_jwt(self, token: str) -> Credential:
+    async def _verify_at_jwt(self, token: str) -> Credential:
         verifier = _select_verifier(token, self._verifiers)
         if verifier is None:
             raise errors.invalid_token("no issuer match")
-        claims = verifier.verify(token, require_at_jwt=True)
+        claims = await _verify_jwt_off_loop(verifier, token, require_at_jwt=True)
         return _credential_from_claims(
             self.scheme, AuthMethod.BEARER_JWT, token, claims
         )
@@ -301,7 +350,7 @@ class OidcAuthenticator:
         verifier = _select_verifier(token, self._verifiers)
         if verifier is None:
             raise errors.invalid_token("no issuer match")
-        claims = verifier.verify(token)
+        claims = await _verify_jwt_off_loop(verifier, token)
         return _credential_from_claims(self.scheme, AuthMethod.OIDC, token, claims)
 
     def challenge(self) -> str:
@@ -337,12 +386,16 @@ class MutualTlsAuthenticator:
         return ""
 
 
-def build_authenticators(config: AuthConfig) -> List[Authenticator]:
+def build_authenticators(
+    config: AuthConfig, *, basic_verifier: Optional[BasicAuthVerifier] = None
+) -> List[Authenticator]:
     verifiers = [JwtVerifier(provider) for provider in config.oidc_providers]
     by_scheme: Dict[SecuritySchemeType, Authenticator] = {}
     if config.api_key is not None:
         by_scheme[SecuritySchemeType.API_KEY] = ApiKeyAuthenticator(config.api_key)
-    by_scheme[SecuritySchemeType.HTTP] = HttpAuthenticator(config.http_basic, verifiers)
+    by_scheme[SecuritySchemeType.HTTP] = HttpAuthenticator(
+        config.http_basic, verifiers, basic_verifier
+    )
     by_scheme[SecuritySchemeType.OPENID_CONNECT] = OidcAuthenticator(verifiers)
     by_scheme[SecuritySchemeType.OAUTH2] = OAuth2Authenticator(
         verifiers, config.oauth2_introspection

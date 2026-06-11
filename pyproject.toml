@@ -287,7 +287,7 @@ plugins = "pydantic.mypy"
 
 # scim2-models ships py.typed, but its generic, alias-driven SCIM models report
 # phantom call-arg errors under mypy though they work at runtime. Treat the
-# library as untyped at the boundary; litellm/auth_v2 is its only consumer.
+# library as untyped at the boundary; litellm/proxy/auth_v2 is its only consumer.
 # CI runs mypy from litellm/ against litellm/mypy.ini, which carries the same
 # override; this block keeps root-level mypy runs consistent.
 [[tool.mypy.overrides]]

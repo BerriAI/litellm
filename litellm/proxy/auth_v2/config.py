@@ -68,6 +68,9 @@ class SamlConfig(BaseModel):
     sp_cert_file: Optional[str] = None
     allow_unsolicited: bool = True
     session_cookie: str = "saml_session"
+    cookie_secure: bool = True
+    session_ttl_seconds: int = 3600
+    session_max_size: int = 10000
     default_redirect_path: str = "/"
     xmlsec_binary: Optional[str] = None
     attribute_map: Dict[str, str] = Field(

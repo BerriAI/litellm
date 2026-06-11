@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, Security
 from fastapi.security import SecurityScopes
 
 from . import errors
-from .authenticators import Authenticator, build_authenticators
+from .authenticators import Authenticator, BasicAuthVerifier, build_authenticators
 from .config import AuthConfig
 from .models import Principal
 from .network import resolve_network_context
@@ -29,6 +29,7 @@ def install_auth(
     resolver: IdentityResolver,
     *,
     rbac: Optional[RbacEngine] = None,
+    basic_verifier: Optional[BasicAuthVerifier] = None,
     mount_scim: bool = True,
     mount_oidc: bool = True,
     mount_saml: bool = True,
@@ -43,7 +44,12 @@ def install_auth(
     rely on uvicorn's own ``--forwarded-allow-ips``. Do not enable both.
     """
     engine = rbac if rbac is not None else RbacEngine(config.casbin_policy_path)
-    ctx = AuthContext(config, build_authenticators(config), resolver, engine)
+    ctx = AuthContext(
+        config,
+        build_authenticators(config, basic_verifier=basic_verifier),
+        resolver,
+        engine,
+    )
     app.state.auth_v2 = ctx
     if mount_scim:
         from .scim import build_scim_router
@@ -56,7 +62,10 @@ def install_auth(
     if mount_saml and config.saml is not None and config.saml.enabled:
         from .saml import SamlAuthenticator, SamlSessionStore, build_saml_router
 
-        session_store = SamlSessionStore()
+        session_store = SamlSessionStore(
+            ttl_seconds=config.saml.session_ttl_seconds,
+            max_size=config.saml.session_max_size,
+        )
         ctx.authenticators.append(SamlAuthenticator(config.saml, session_store))
         app.include_router(build_saml_router(config.saml, session_store))
     return ctx

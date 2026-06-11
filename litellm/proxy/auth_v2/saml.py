@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import secrets
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
@@ -138,20 +139,40 @@ def build_sp_client(config: SamlConfig) -> Saml2Client:
 
 
 class SamlSessionStore:
-    def __init__(self) -> None:
-        self._sessions: Dict[str, Dict[str, Any]] = {}
+    def __init__(self, ttl_seconds: int = 3600, max_size: int = 10000) -> None:
+        self._sessions: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         self.outstanding: Dict[str, str] = {}
+        self._ttl = ttl_seconds
+        self._max_size = max_size
 
     def remember_request(self, request_id: str, relay_state: str = "/") -> None:
         self.outstanding[request_id] = relay_state
 
     def create_session(self, identity: Dict[str, Any]) -> str:
+        now = time.time()
+        self._evict(now)
         session_id = secrets.token_urlsafe(32)
-        self._sessions[session_id] = identity
+        self._sessions[session_id] = (now + self._ttl, identity)
         return session_id
 
     def get(self, session_id: str) -> Optional[Dict[str, Any]]:
-        return self._sessions.get(session_id)
+        entry = self._sessions.get(session_id)
+        if entry is None:
+            return None
+        expires_at, identity = entry
+        if expires_at < time.time():
+            self._sessions.pop(session_id, None)
+            return None
+        return identity
+
+    def _evict(self, now: float) -> None:
+        for key in [k for k, (exp, _) in self._sessions.items() if exp < now]:
+            self._sessions.pop(key, None)
+        overflow = len(self._sessions) - self._max_size + 1
+        if overflow > 0:
+            oldest = sorted(self._sessions, key=lambda k: self._sessions[k][0])
+            for key in oldest[:overflow]:
+                self._sessions.pop(key, None)
 
 
 class SamlAuthenticator:
@@ -248,7 +269,11 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
         )
         response = RedirectResponse(target, status_code=303)
         response.set_cookie(
-            config.session_cookie, session_id, httponly=True, samesite="lax"
+            config.session_cookie,
+            session_id,
+            httponly=True,
+            samesite="lax",
+            secure=config.cookie_secure,
         )
         return response
 
