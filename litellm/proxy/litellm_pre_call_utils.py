@@ -397,6 +397,11 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     )
 
 
+def is_claude_code_user_agent(user_agent: str) -> bool:
+    """Claude Code (CLI, IDE extensions, Agent SDK) identifies itself as ``claude-cli/<version> ...``."""
+    return user_agent.startswith("claude-cli/")
+
+
 def safe_add_api_version_from_query_params(data: dict, request: Request):
     try:
         if hasattr(request, "query_params"):
@@ -1741,6 +1746,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ):
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
+
+    # Claude Code sends Anthropic-specific params (e.g. top_k, thinking) that
+    # break requests routed to non-Anthropic providers; drop them instead of
+    # failing, unless the caller set drop_params explicitly.
+    if is_claude_code_user_agent(user_agent) and "drop_params" not in data:
+        data["drop_params"] = True
 
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
     # into request metadata for tag-based routing and spend attribution.
