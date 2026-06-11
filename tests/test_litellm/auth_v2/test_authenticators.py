@@ -1,0 +1,338 @@
+from __future__ import annotations
+
+import base64
+from typing import Any
+
+import pytest
+
+from litellm.auth_v2.authenticators import (
+    ApiKeyAuthenticator,
+    HttpAuthenticator,
+    JwtVerifier,
+    MutualTlsAuthenticator,
+    OAuth2Authenticator,
+    OidcAuthenticator,
+    build_authenticators,
+)
+from litellm.auth_v2.config import (
+    ApiKeySchemeConfig,
+    AuthConfig,
+    HttpBasicConfig,
+    MutualTlsConfig,
+    OidcProviderConfig,
+)
+from litellm.auth_v2.errors import AuthError
+from litellm.auth_v2.models import AuthMethod, SecuritySchemeType
+
+from auth_v2_helpers import (
+    TEST_AUDIENCE,
+    TEST_ISSUER,
+    FakeJwksClient,
+    make_request,
+)
+
+# --------------------------------------------------------------------------- #
+# JwtVerifier: every RFC 7519 check must be enforced.
+# --------------------------------------------------------------------------- #
+
+
+def test_jwt_verifier_accepts_valid_token(jwt_verifier, token_factory):
+    claims = jwt_verifier.verify(token_factory.mint(subject="alice", scope="a b"))
+    assert claims["sub"] == "alice"
+    assert claims["aud"] == TEST_AUDIENCE
+
+
+def test_jwt_verifier_rejects_bad_signature(
+    rsa_keypair, other_rsa_keypair, oidc_provider, token_factory
+):
+    _, public_key = rsa_keypair
+    verifier = JwtVerifier(oidc_provider, jwks_client=FakeJwksClient(public_key))
+    other_pem, _ = other_rsa_keypair
+    forged = token_factory.mint(private_pem=other_pem)
+    with pytest.raises(AuthError) as exc:
+        verifier.verify(forged)
+    assert exc.value.status_code == 401
+
+
+def test_jwt_verifier_rejects_wrong_audience(jwt_verifier, token_factory):
+    with pytest.raises(AuthError) as exc:
+        jwt_verifier.verify(token_factory.mint(audience="some-other-app"))
+    assert exc.value.status_code == 401
+
+
+def test_jwt_verifier_rejects_wrong_issuer(jwt_verifier, token_factory):
+    with pytest.raises(AuthError) as exc:
+        jwt_verifier.verify(token_factory.mint(issuer="https://evil.example.com"))
+    assert exc.value.status_code == 401
+
+
+def test_jwt_verifier_rejects_expired(jwt_verifier, token_factory):
+    with pytest.raises(AuthError) as exc:
+        jwt_verifier.verify(token_factory.mint(expires_in=-30))
+    assert exc.value.status_code == 401
+
+
+def test_jwt_verifier_requires_exp_iss_aud(jwt_verifier, rsa_keypair):
+    import jwt as pyjwt
+
+    private_pem, _ = rsa_keypair
+    # token deliberately missing exp/iss/aud
+    token = pyjwt.encode({"sub": "x"}, private_pem, algorithm="RS256")
+    with pytest.raises(AuthError) as exc:
+        jwt_verifier.verify(token)
+    assert exc.value.status_code == 401
+
+
+def test_jwt_verifier_enforces_at_jwt_typ(jwt_verifier, token_factory):
+    without_typ = token_factory.mint()
+    with pytest.raises(AuthError):
+        jwt_verifier.verify(without_typ, require_at_jwt=True)
+
+    with_typ = token_factory.mint(headers={"typ": "at+jwt"})
+    claims = jwt_verifier.verify(with_typ, require_at_jwt=True)
+    assert claims["sub"] == "user-1"
+
+
+# --------------------------------------------------------------------------- #
+# ApiKeyAuthenticator
+# --------------------------------------------------------------------------- #
+
+
+async def test_api_key_authenticator_extracts_header():
+    auth = ApiKeyAuthenticator(ApiKeySchemeConfig(header_name="x-litellm-api-key"))
+    request = make_request(headers={"x-litellm-api-key": "sk-secret-value"})
+    credential = await auth.authenticate(request)
+    assert credential is not None
+    assert credential.method == AuthMethod.API_KEY
+    assert credential.subject == "sk-secret-value"
+    assert credential.claims["_raw_api_key"] == "sk-secret-value"
+    assert credential.credential_ref.key_id == "sk-secret-"
+
+
+async def test_api_key_authenticator_returns_none_when_absent():
+    auth = ApiKeyAuthenticator(ApiKeySchemeConfig())
+    assert await auth.authenticate(make_request()) is None
+
+
+# --------------------------------------------------------------------------- #
+# HttpAuthenticator (bearer-JWT + basic)
+# --------------------------------------------------------------------------- #
+
+
+def _http_auth(public_key: Any, *, basic: HttpBasicConfig = None) -> HttpAuthenticator:
+    verifier = JwtVerifier(
+        OidcProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
+        jwks_client=FakeJwksClient(public_key),
+    )
+    return HttpAuthenticator(basic or HttpBasicConfig(), [verifier])
+
+
+async def test_http_bearer_valid_token_resolves_credential(rsa_keypair, token_factory):
+    _, public_key = rsa_keypair
+    auth = _http_auth(public_key)
+    token = token_factory.mint(subject="bob", scope="models:read chat:write")
+    request = make_request(headers={"authorization": f"Bearer {token}"})
+    credential = await auth.authenticate(request)
+    assert credential is not None
+    assert credential.method == AuthMethod.BEARER_JWT
+    assert credential.subject == "bob"
+    assert credential.issuer == TEST_ISSUER
+    assert credential.audience == [TEST_AUDIENCE]
+    assert credential.scopes == ["models:read", "chat:write"]
+
+
+async def test_http_bearer_present_but_invalid_fails_fast(rsa_keypair, token_factory):
+    _, public_key = rsa_keypair
+    auth = _http_auth(public_key)
+    # issuer with no configured verifier -> must raise, not return None
+    token = token_factory.mint(issuer="https://unconfigured.example.com")
+    request = make_request(headers={"authorization": f"Bearer {token}"})
+    with pytest.raises(AuthError) as exc:
+        await auth.authenticate(request)
+    assert exc.value.status_code == 401
+
+
+async def test_http_no_authorization_header_returns_none(rsa_keypair):
+    _, public_key = rsa_keypair
+    assert await _http_auth(public_key).authenticate(make_request()) is None
+
+
+async def test_http_basic_disabled_ignores_basic_scheme(rsa_keypair):
+    _, public_key = rsa_keypair
+    auth = _http_auth(public_key, basic=HttpBasicConfig(enabled=False))
+    creds = base64.b64encode(b"alice:pw").decode()
+    request = make_request(headers={"authorization": f"Basic {creds}"})
+    assert await auth.authenticate(request) is None
+
+
+async def test_http_basic_enabled_decodes_username(rsa_keypair):
+    _, public_key = rsa_keypair
+    auth = _http_auth(public_key, basic=HttpBasicConfig(enabled=True))
+    creds = base64.b64encode(b"alice:supersecret").decode()
+    request = make_request(headers={"authorization": f"Basic {creds}"})
+    credential = await auth.authenticate(request)
+    assert credential is not None
+    assert credential.method == AuthMethod.HTTP_BASIC
+    assert credential.subject == "alice"
+
+
+async def test_http_basic_malformed_payload_raises(rsa_keypair):
+    _, public_key = rsa_keypair
+    auth = _http_auth(public_key, basic=HttpBasicConfig(enabled=True))
+    request = make_request(headers={"authorization": "Basic !!!not-base64!!!"})
+    with pytest.raises(AuthError) as exc:
+        await auth.authenticate(request)
+    assert exc.value.status_code == 401
+
+
+def test_http_challenge_advertises_basic_only_when_enabled(rsa_keypair):
+    _, public_key = rsa_keypair
+    assert "Basic" not in _http_auth(public_key).challenge()
+    enabled = _http_auth(public_key, basic=HttpBasicConfig(enabled=True))
+    assert "Basic" in enabled.challenge()
+    assert "Bearer" in enabled.challenge()
+
+
+# --------------------------------------------------------------------------- #
+# OAuth2Authenticator (at+jwt enforcement + opaque token path)
+# --------------------------------------------------------------------------- #
+
+
+def _oauth2(public_key: Any) -> OAuth2Authenticator:
+    verifier = JwtVerifier(
+        OidcProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
+        jwks_client=FakeJwksClient(public_key),
+    )
+    return OAuth2Authenticator([verifier], introspection=None)
+
+
+async def test_oauth2_rejects_jwt_without_at_jwt_typ(rsa_keypair, token_factory):
+    _, public_key = rsa_keypair
+    token = token_factory.mint()  # no typ header
+    request = make_request(headers={"authorization": f"Bearer {token}"})
+    with pytest.raises(AuthError) as exc:
+        await _oauth2(public_key).authenticate(request)
+    assert exc.value.status_code == 401
+
+
+async def test_oauth2_accepts_at_jwt(rsa_keypair, token_factory):
+    _, public_key = rsa_keypair
+    token = token_factory.mint(headers={"typ": "at+jwt"}, subject="svc-1")
+    request = make_request(headers={"authorization": f"Bearer {token}"})
+    credential = await _oauth2(public_key).authenticate(request)
+    assert credential is not None
+    assert credential.subject == "svc-1"
+
+
+async def test_oauth2_opaque_token_without_introspection_raises(rsa_keypair):
+    _, public_key = rsa_keypair
+    request = make_request(headers={"authorization": "Bearer opaque-not-a-jwt"})
+    with pytest.raises(AuthError) as exc:
+        await _oauth2(public_key).authenticate(request)
+    assert exc.value.status_code == 401
+
+
+async def test_oauth2_no_bearer_returns_none(rsa_keypair):
+    _, public_key = rsa_keypair
+    assert await _oauth2(public_key).authenticate(make_request()) is None
+
+
+# --------------------------------------------------------------------------- #
+# OidcAuthenticator
+# --------------------------------------------------------------------------- #
+
+
+def _oidc(public_key: Any) -> OidcAuthenticator:
+    verifier = JwtVerifier(
+        OidcProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
+        jwks_client=FakeJwksClient(public_key),
+    )
+    return OidcAuthenticator([verifier])
+
+
+async def test_oidc_valid_token_sets_oidc_method(rsa_keypair, token_factory):
+    _, public_key = rsa_keypair
+    token = token_factory.mint(subject="carol", email="carol@example.com")
+    request = make_request(headers={"authorization": f"Bearer {token}"})
+    credential = await _oidc(public_key).authenticate(request)
+    assert credential is not None
+    assert credential.method == AuthMethod.OIDC
+    assert credential.subject == "carol"
+    assert credential.claims["email"] == "carol@example.com"
+
+
+async def test_oidc_unknown_issuer_raises(rsa_keypair, token_factory):
+    _, public_key = rsa_keypair
+    token = token_factory.mint(issuer="https://other.example.com")
+    request = make_request(headers={"authorization": f"Bearer {token}"})
+    with pytest.raises(AuthError):
+        await _oidc(public_key).authenticate(request)
+
+
+# --------------------------------------------------------------------------- #
+# MutualTlsAuthenticator
+# --------------------------------------------------------------------------- #
+
+
+async def test_mtls_reads_forwarded_subject_header():
+    auth = MutualTlsAuthenticator(
+        MutualTlsConfig(enabled=True, forwarded_subject_header="x-client-dn")
+    )
+    request = make_request(headers={"x-client-dn": "CN=svc-a,O=Co,C=US"})
+    credential = await auth.authenticate(request)
+    assert credential is not None
+    assert credential.method == AuthMethod.MUTUAL_TLS
+    assert credential.subject == "CN=svc-a,O=Co,C=US"
+    assert credential.client_certificate.subject_dn == "CN=svc-a,O=Co,C=US"
+
+
+async def test_mtls_forwarded_header_absent_returns_none():
+    auth = MutualTlsAuthenticator(
+        MutualTlsConfig(enabled=True, forwarded_subject_header="x-client-dn")
+    )
+    assert await auth.authenticate(make_request()) is None
+
+
+async def test_mtls_reads_asgi_tls_extension():
+    auth = MutualTlsAuthenticator(MutualTlsConfig(enabled=True))
+    request = make_request(
+        scope_extra={"extensions": {"tls": {"client_cert_name": "CN=from-asgi"}}}
+    )
+    credential = await auth.authenticate(request)
+    assert credential is not None
+    assert credential.subject == "CN=from-asgi"
+
+
+async def test_mtls_no_cert_returns_none():
+    auth = MutualTlsAuthenticator(MutualTlsConfig(enabled=True))
+    assert await auth.authenticate(make_request()) is None
+
+
+# --------------------------------------------------------------------------- #
+# build_authenticators: ordering and inclusion follow config
+# --------------------------------------------------------------------------- #
+
+
+def test_build_authenticators_follows_scheme_order():
+    config = AuthConfig()
+    authenticators = build_authenticators(config)
+    schemes = [a.scheme for a in authenticators]
+    # mutual_tls disabled by default -> excluded
+    assert schemes == [
+        SecuritySchemeType.API_KEY,
+        SecuritySchemeType.HTTP,
+        SecuritySchemeType.OPENID_CONNECT,
+        SecuritySchemeType.OAUTH2,
+    ]
+
+
+def test_build_authenticators_omits_api_key_when_unconfigured():
+    config = AuthConfig(api_key=None)
+    schemes = [a.scheme for a in build_authenticators(config)]
+    assert SecuritySchemeType.API_KEY not in schemes
+
+
+def test_build_authenticators_includes_mtls_when_enabled():
+    config = AuthConfig(mutual_tls=MutualTlsConfig(enabled=True))
+    schemes = [a.scheme for a in build_authenticators(config)]
+    assert SecuritySchemeType.MUTUAL_TLS == schemes[-1]
