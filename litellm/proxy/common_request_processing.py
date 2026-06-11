@@ -1383,16 +1383,27 @@ class ProxyBaseLLMRequestProcessing:
             if getattr(logging_obj, "_on_deferred_stream_complete", None):
                 logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
 
-            # Non-streaming allm_passthrough_route: buffer JSON, apply post-call guardrails, return early.
-            # The streaming branch handles streaming passthrough responses; this handles the
-            # common case where a plain httpx Response comes back from the provider
-            # (e.g. Bedrock Converse /converse endpoint).  The generic post_call_success_hook
-            # below receives the raw httpx Response which our handler cannot inspect as a dict.
             if route_type == "allm_passthrough_route":
+                _non_streaming_custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+                    user_api_key_dict=user_api_key_dict,
+                    call_id=logging_obj.litellm_call_id,
+                    model_id=model_id,
+                    cache_key=cache_key,
+                    api_base=api_base,
+                    version=version,
+                    response_cost=response_cost,
+                    model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                    fastest_response_batch_completion=fastest_response_batch_completion,
+                    request_data=self.data,
+                    hidden_params=hidden_params,
+                    litellm_logging_obj=logging_obj,
+                    **additional_headers,
+                )
                 _early = await self._handle_non_streaming_allm_passthrough_route(
                     response=response,
                     proxy_logging_obj=proxy_logging_obj,
                     user_api_key_dict=user_api_key_dict,
+                    custom_headers=_non_streaming_custom_headers,
                 )
                 if _early is not None:
                     return _early
@@ -1677,16 +1688,8 @@ class ProxyBaseLLMRequestProcessing:
         response: Any,
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
+        custom_headers: dict,
     ) -> Optional[Response]:
-        """
-        Buffer a non-streaming JSON response from an allm_passthrough_route, run
-        post-call guardrails against the parsed dict, and return a FastAPI Response
-        with the (possibly modified) body.
-
-        Returns None when no early-return is warranted (no guardrails configured,
-        non-2xx status, or non-JSON content-type) so the caller can fall through to
-        its normal path.
-        """
         if not self._has_post_call_guardrails():
             return None
 
@@ -1701,6 +1704,8 @@ class ProxyBaseLLMRequestProcessing:
         if response_status >= 300:
             return None
 
+        response_headers = {k: v for k, v in custom_headers.items() if k.lower() != "content-length"}
+
         if "vnd.amazon.eventstream" in content_type:
             body_bytes = await response.aread()  # type: ignore[union-attr]
             modified_bytes = await self._handle_event_stream_allm_passthrough_route(
@@ -1712,6 +1717,7 @@ class ProxyBaseLLMRequestProcessing:
                 content=modified_bytes,
                 status_code=response_status,
                 media_type=content_type,
+                headers=response_headers,
             )
 
         if "application/json" not in content_type:
@@ -1728,135 +1734,27 @@ class ProxyBaseLLMRequestProcessing:
             content=_json.dumps(parsed).encode(),
             status_code=response_status,
             media_type="application/json",
+            headers=response_headers,
         )
 
-    async def _handle_event_stream_allm_passthrough_route(  # noqa: PLR0915
+    async def _handle_event_stream_allm_passthrough_route(
         self,
         body_bytes: bytes,
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
     ) -> bytes:
-        import json as _json
-        import struct
-
-        from botocore.eventstream import EventStreamBuffer
-        from botocore.eventstream import crc32 as esm_crc32
-
-        frames: list[dict] = []
-        text_delta_indices: list[int] = []
-        offset = 0
-
-        while offset + 16 <= len(body_bytes):
-            total_length = struct.unpack("!I", body_bytes[offset : offset + 4])[0]
-
-            if total_length < 16 or offset + total_length > len(body_bytes):
-                break
-
-            frame_raw = body_bytes[offset : offset + total_length]
-            offset += total_length
-
-            try:
-                buf = EventStreamBuffer()
-                buf.add_data(frame_raw)
-                msg = next(iter(buf))
-                event_type = msg.headers.get(":event-type")
-                payload_bytes = msg.payload
-            except Exception:
-                frames.append({"raw": frame_raw, "is_text_delta": False, "text": None})
-                continue
-
-            text: Optional[str] = None
-            is_text_delta = False
-            if event_type == "contentBlockDelta":
-                try:
-                    payload_dict = _json.loads(payload_bytes)
-                    delta = payload_dict.get("delta", {})
-                    if isinstance(delta, dict) and "text" in delta:
-                        text = delta["text"]
-                        is_text_delta = True
-                except Exception:
-                    pass
-
-            if is_text_delta:
-                text_delta_indices.append(len(frames))
-            frames.append({"raw": frame_raw, "is_text_delta": is_text_delta, "text": text})
-
-        if not text_delta_indices:
+        if self.data.get("custom_llm_provider") != "bedrock":
             return body_bytes
-
-        full_text = "".join(frames[i]["text"] for i in text_delta_indices)  # type: ignore[misc]
-        synthetic_response: dict = {
-            "output": {
-                "message": {
-                    "role": "assistant",
-                    "content": [{"text": full_text}],
-                }
-            },
-            "stopReason": "end_turn",
-        }
-
-        processed = await proxy_logging_obj.post_call_success_hook(
-            data=self.data,
-            user_api_key_dict=user_api_key_dict,
-            response=synthetic_response,
+        from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
+            BedrockPassthroughGuardrailHandler,
         )
 
-        if not isinstance(processed, dict):
-            return body_bytes
-
-        try:
-            de_anonymized_text: str = processed["output"]["message"]["content"][0]["text"]
-        except (KeyError, IndexError, TypeError):
-            return body_bytes
-
-        # Distribute de-anonymized text proportionally across original delta frames.
-        # Each frame gets a slice whose length is proportional to its original masked text.
-        orig_lengths = [len(frames[i]["text"] or "") for i in text_delta_indices]  # type: ignore[misc]
-        total_orig = sum(orig_lengths) or 1
-        de_anon_len = len(de_anonymized_text)
-        chunk_texts: list[str] = []
-        pos = 0
-        for k, orig_len in enumerate(orig_lengths):
-            if k == len(orig_lengths) - 1:
-                chunk_texts.append(de_anonymized_text[pos:])
-            else:
-                end = pos + round(de_anon_len * orig_len / total_orig)
-                chunk_texts.append(de_anonymized_text[pos:end])
-                pos = end
-        text_chunk_map: dict[int, str] = dict(zip(text_delta_indices, chunk_texts))
-
-        result_parts: list[bytes] = []
-
-        for frame_idx, frame in enumerate(frames):
-            if not frame["is_text_delta"]:
-                result_parts.append(frame["raw"])
-                continue
-
-            new_text = text_chunk_map[frame_idx]
-            frame_raw = frame["raw"]
-            orig_total = struct.unpack("!I", frame_raw[0:4])[0]
-            orig_hdrs_len = struct.unpack("!I", frame_raw[4:8])[0]
-            headers_bytes = frame_raw[12 : 12 + orig_hdrs_len]
-
-            try:
-                payload_dict = _json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
-                payload_dict["delta"]["text"] = new_text
-                new_payload = _json.dumps(payload_dict, separators=(",", ":")).encode()
-            except Exception:
-                result_parts.append(frame_raw)
-                continue
-
-            new_total = 12 + orig_hdrs_len + len(new_payload) + 4
-            prelude = struct.pack("!II", new_total, orig_hdrs_len)
-            prelude_crc_val = esm_crc32(prelude) & 0xFFFFFFFF
-            prelude_crc_b = struct.pack("!I", prelude_crc_val)
-            part_for_msg_crc = prelude_crc_b + headers_bytes + new_payload
-            msg_crc_val = esm_crc32(part_for_msg_crc, prelude_crc_val) & 0xFFFFFFFF
-            msg_crc_b = struct.pack("!I", msg_crc_val)
-
-            result_parts.append(prelude + prelude_crc_b + headers_bytes + new_payload + msg_crc_b)
-
-        return b"".join(result_parts)
+        return await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+            body_bytes=body_bytes,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            data=self.data,
+        )
 
     @staticmethod
     def _flush_deferred_async_logging(
