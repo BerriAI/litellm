@@ -983,16 +983,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         {/* Navigation - only show when not embedded */}
         {!isEmbedded && (
           <Navbar
-            userID={null}
-            userEmail={null}
-            userRole={null}
-            premiumUser={false}
             setProxySettings={setProxySettings}
             proxySettings={proxySettings}
             accessToken={accessToken || null}
             isPublicPage={true}
-            isDarkMode={false}
-            toggleDarkMode={() => {}}
           />
         )}
 

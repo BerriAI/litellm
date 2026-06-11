@@ -1,5 +1,6 @@
 "use client";
 
+import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import PlaygroundPage from "@/app/(dashboard)/playground/page";
@@ -19,7 +20,7 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import { MCPServers } from "@/components/mcp_tools";
 import ModelHubTable from "@/components/AIHub/ModelHubTable";
 import Navbar from "@/components/navbar";
-import { getUiConfig, Organization, proxyBaseUrl, setGlobalLitellmHeaderName, getInProductNudgesCall } from "@/components/networking";
+import { Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components/networking";
 import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
 import OldTeams from "@/components/OldTeams";
 import { fetchUserModels, CreateKeyPrefillData } from "@/components/organisms/create_key_button";
@@ -44,23 +45,13 @@ import WorkflowRuns from "@/components/workflow_runs";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { ThemeProvider } from "@/contexts/ThemeContext";
-import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
-import { isJwtExpired } from "@/utils/jwtUtils";
+import { useAuth } from "@/contexts/AuthContext";
 import { buildLoginUrlWithReturn, consumeReturnUrl, isValidReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
-import { formatUserRole, isAdminRole } from "@/utils/roles";
+import { isAdminRole } from "@/utils/roles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { jwtDecode } from "jwt-decode";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ConfigProvider, theme } from "antd";
-
-function deleteCookie(name: string, path = "/") {
-  // Best-effort client-side clear (works for non-HttpOnly cookies without Domain)
-  document.cookie = `${name}=; Max-Age=0; Path=${path}`;
-  if (name === "token") {
-    clearTokenCookies();
-  }
-}
 
 interface ProxySettings {
   PROXY_BASE_URL: string;
@@ -73,16 +64,21 @@ interface ProxySettings {
  * When a user visits ?page=<key>, they are redirected to /ui/<value>.
  * Add entries here as pages are migrated from the if/else chain to path-based routes.
  */
-const LEGACY_REDIRECTS: Record<string, string> = {
-  api_ref: "api-reference",
-  "api-reference": "api-reference",
-};
+const LEGACY_REDIRECTS: Record<string, string> = {};
 
 function CreateKeyPageContent() {
-  const [userRole, setUserRole] = useState("");
-  const [premiumUser, setPremiumUser] = useState(false);
-  const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
-  const [userEmail, setUserEmail] = useState<null | string>(null);
+  const {
+    authLoading,
+    token,
+    userID,
+    userRole,
+    userEmail,
+    accessToken,
+    premiumUser,
+    setUserRole,
+    setUserEmail,
+  } = useAuth();
+
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<null | any[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -92,14 +88,10 @@ function CreateKeyPageContent() {
     PROXY_LOGOUT_URL: "",
   });
 
-  const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
   const router = useRouter();
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
-  const [token, setToken] = useState<string | null>(null);
   const [createClicked, setCreateClicked] = useState<boolean>(false);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [userID, setUserID] = useState<string | null>(null);
 
   // Survey state - always show by default
   const [showSurveyPrompt, setShowSurveyPrompt] = useState(true);
@@ -187,7 +179,6 @@ function CreateKeyPageContent() {
     setPage(newPage);
   };
 
-  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Track if we've already attempted a return URL redirect to prevent race conditions
@@ -202,38 +193,6 @@ function CreateKeyPageContent() {
     setCreateClicked(() => !createClicked);
   };
   const redirectToLogin = authLoading === false && token === null && invitation_id === null;
-
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      try {
-        await getUiConfig(); // ensures proxyBaseUrl etc. are ready
-      } catch {
-        // proceed regardless; we still need to decide auth state
-      }
-
-      if (cancelled) return;
-
-      const raw = getCookie("token");
-      const valid = raw && !isJwtExpired(raw) ? raw : null;
-
-      // If token exists but is invalid/expired, clear it so downstream code
-      // doesn't keep trying to use it and cause redirect spasms.
-      if (raw && !valid) {
-        deleteCookie("token", "/");
-      }
-
-      if (!cancelled) {
-        setToken(valid);
-        setAuthLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (redirectToLogin) {
@@ -290,62 +249,6 @@ function CreateKeyPageContent() {
   useEffect(() => {
     if (!token) {
       hasAttemptedReturnRedirectRef.current = false;
-    }
-  }, [token]);
-
-  useEffect(() => {
-    if (!token) {
-      return;
-    }
-
-    // Defensive: re-check expiry in case cookie changed after mount
-    if (isJwtExpired(token)) {
-      deleteCookie("token", "/");
-      setToken(null);
-      return;
-    }
-
-    let decoded: any = null;
-    try {
-      decoded = jwtDecode(token);
-    } catch {
-      // Malformed token → treat as unauthenticated
-      deleteCookie("token", "/");
-      setToken(null);
-      return;
-    }
-
-    if (decoded) {
-      // set accessToken
-      setAccessToken(decoded.key);
-
-      setDisabledPersonalKeyCreation(decoded.disabled_non_admin_personal_key_creation);
-
-      // check if userRole is defined
-      if (decoded.user_role) {
-        const formattedUserRole = formatUserRole(decoded.user_role);
-        setUserRole(formattedUserRole);
-      }
-
-      if (decoded.user_email) {
-        setUserEmail(decoded.user_email);
-      }
-
-      if (decoded.login_method) {
-        setShowSSOBanner(decoded.login_method == "username_password" ? true : false);
-      }
-
-      if (decoded.premium_user) {
-        setPremiumUser(decoded.premium_user);
-      }
-
-      if (decoded.auth_header_name) {
-        setGlobalLitellmHeaderName(decoded.auth_header_name);
-      }
-
-      if (decoded.user_id) {
-        setUserID(decoded.user_id);
-      }
     }
   }, [token]);
 
@@ -473,18 +376,12 @@ function CreateKeyPageContent() {
             ) : (
               <div className="flex flex-col min-h-screen">
                 <Navbar
-                  userID={userID}
-                  userRole={userRole}
-                  premiumUser={premiumUser}
-                  userEmail={userEmail}
                   setProxySettings={setProxySettings}
                   proxySettings={proxySettings}
                   accessToken={accessToken}
                   isPublicPage={false}
                   sidebarCollapsed={sidebarCollapsed}
                   onToggleSidebar={toggleSidebar}
-                  isDarkMode={isDarkMode}
-                  toggleDarkMode={toggleDarkMode}
                 />
                 <div className="flex flex-1">
                   <div className="mt-2">
@@ -553,6 +450,8 @@ function CreateKeyPageContent() {
                     <AdminPanel
                       proxySettings={proxySettings}
                     />
+                  ) : page == "api_ref" || page == "api-reference" ? (
+                    <APIReferenceView proxySettings={proxySettings} />
                   ) : page == "logging-and-alerts" ? (
                     <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                   ) : page == "budgets" ? (

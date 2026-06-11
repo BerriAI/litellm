@@ -49,12 +49,9 @@ const { Sider } = Layout;
 /**
  * Pages migrated to path-based routing under (dashboard)/.
  * Key = legacy page id, Value = route segment.
- * Keep in sync with MIGRATED_PAGES in (dashboard)/layout.tsx and
- * LEGACY_REDIRECTS in app/page.tsx.
+ * Keep in sync with MIGRATED_PAGES in (dashboard)/layout.tsx.
  */
-const MIGRATED_PAGES: Record<string, string> = {
-  "api-reference": "api-reference",
-};
+const MIGRATED_PAGES: Record<string, string> = {};
 
 /** Build an absolute href for a migrated page, respecting base URL + serverRootPath. */
 function migratedHref(routeSegment: string): string {
@@ -295,8 +292,8 @@ const menuGroups: MenuGroup[] = [
     groupLabel: "DEVELOPER TOOLS",
     items: [
       {
-        key: "api-reference",
-        page: "api-reference",
+        key: "api_ref",
+        page: "api_ref",
         label: "API Reference",
         icon: <ApiOutlined />,
       },

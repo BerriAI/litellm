@@ -241,7 +241,10 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.litellm_core_utils.sensitive_data_masker import (
+    SensitiveDataMasker,
+    mask_sensitive_keys,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
@@ -550,6 +553,7 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
@@ -989,6 +993,15 @@ _OPENAPI_HTTP_METHODS = {
 }
 
 
+# Credentials surfaced by `/get/config/callbacks` in the alerting block: the
+# full Slack incoming-webhook URL is itself a credential, and the SMTP
+# password is a service password. Masked on read so plaintext never reaches
+# the UI. Kept here at module scope to match the analogous
+# `_SSO_SENSITIVE_FIELDS` / `_CACHE_SENSITIVE_FIELDS` constants in the SSO
+# and cache endpoint files.
+_ALERTING_SENSITIVE_VARS: Set[str] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
+
+
 def _strip_operation_id_method_suffix(operation_id: str) -> str:
     base, separator, suffix = operation_id.rpartition("_")
     if separator and suffix in _OPENAPI_HTTP_METHODS:
@@ -1058,6 +1071,7 @@ app = FastAPI(
     root_path=server_root_path,
     lifespan=proxy_startup_event,  # type: ignore[reportGeneralTypeIssues]
     generate_unique_id_function=_generate_stable_operation_id,
+    strict_content_type=False,
 )
 
 vertex_live_passthrough_vertex_base = VertexBase()
@@ -1209,12 +1223,66 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     headers = exc.headers
     error_dict = exc.to_dict()
+    status_code = int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
+    _close_dangling_otel_server_span(request, status_code)
     return JSONResponse(
-        status_code=(
-            int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
-        ),
+        status_code=status_code,
         content={"error": error_dict},
         headers=headers,
+    )
+
+
+def _close_dangling_otel_server_span(request: Request, status_code: int) -> None:
+    parent_otel_span = getattr(request.state, "parent_otel_span", None)
+    if parent_otel_span is None:
+        return
+    if open_telemetry_logger is None:
+        return
+    try:
+        from opentelemetry.trace import Status, StatusCode
+
+        open_telemetry_logger.set_response_status_code_attribute(
+            parent_otel_span, status_code
+        )
+        parent_otel_span.set_status(
+            Status(StatusCode.ERROR if status_code >= 400 else StatusCode.OK)
+        )
+        parent_otel_span.end()
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Error closing dangling OTEL SERVER span: %s", str(e)
+        )
+    finally:
+        request.state.parent_otel_span = None
+
+
+@app.exception_handler(RequestValidationError)
+async def otel_request_validation_exception_handler(
+    request: Request, exc: RequestValidationError
+):
+    _close_dangling_otel_server_span(request, 422)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(exc.errors())},
+    )
+
+
+@app.exception_handler(Exception)
+async def otel_unhandled_exception_handler(request: Request, exc: Exception):
+    if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
+        raise exc
+    verbose_proxy_logger.exception(
+        "Unhandled exception in request: %s", type(exc).__name__
+    )
+    _close_dangling_otel_server_span(request, 500)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "message": "Internal server error",
+                "type": "internal_server_error",
+            }
+        },
     )
 
 
@@ -14653,6 +14721,9 @@ async def get_config():  # noqa: PLR0915
                         value=env_variable, key=_var
                     )
                     _slack_env_vars[_var] = _decrypted_value
+            _slack_env_vars = mask_sensitive_keys(
+                _slack_env_vars, _ALERTING_SENSITIVE_VARS
+            )
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
             _all_alert_types = (
@@ -14689,6 +14760,7 @@ async def get_config():  # noqa: PLR0915
                 # decode + decrypt the value
                 _decrypted_value = decrypt_value_helper(value=env_variable, key=_var)
                 _email_env_vars[_var] = _decrypted_value
+        _email_env_vars = mask_sensitive_keys(_email_env_vars, _ALERTING_SENSITIVE_VARS)
 
         alerting_data.append(
             {

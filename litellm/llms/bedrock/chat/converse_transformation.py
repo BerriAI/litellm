@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
+    make_valid_bedrock_tool_name,
 )
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -77,6 +78,7 @@ from ..common_utils import (
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_claude_4_5_on_bedrock,
+    normalize_bedrock_opus_output_config_effort,
 )
 
 # Computer use tool prefixes supported by Bedrock
@@ -447,10 +449,20 @@ class AmazonConverseConfig(BaseConfig):
                             value=reasoning_effort,
                             llm_provider="bedrock_converse",
                         )
+                    existing_output_config = optional_params.get("output_config")
+                    if not isinstance(existing_output_config, dict):
+                        existing_output_config = {}
+                    existing_output_config.setdefault("effort", mapped_effort)
+                    normalize_bedrock_opus_output_config_effort(
+                        model=model,
+                        output_config=existing_output_config,
+                    )
+                    mapped_effort = existing_output_config["effort"]
                     self._validate_anthropic_adaptive_effort(
                         model=model, effort=mapped_effort
                     )
-                    optional_params["output_config"] = {"effort": mapped_effort}
+                    optional_params["output_config"] = existing_output_config
+                    optional_params["_output_config_normalized"] = True
 
     @staticmethod
     def _validate_anthropic_adaptive_effort(model: str, effort: str) -> None:
@@ -595,7 +607,9 @@ class AmazonConverseConfig(BaseConfig):
         elif isinstance(tool_choice, dict):
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             specific_tool = SpecificToolChoiceBlock(
-                name=tool_choice.get("function", {}).get("name", "")
+                name=make_valid_bedrock_tool_name(
+                    tool_choice.get("function", {}).get("name", "")
+                )
             )
             return ToolChoiceValuesBlock(tool=specific_tool)
         else:
@@ -1198,6 +1212,12 @@ class AmazonConverseConfig(BaseConfig):
         self, optional_params: dict, model: str
     ) -> Tuple[dict, dict, dict, Optional[OutputConfigBlock]]:
         """Prepare and separate request parameters."""
+        # Consume the internal ``_output_config_normalized`` marker set by
+        # ``_handle_reasoning_effort_parameter`` so it does not linger on the
+        # caller's ``optional_params`` after the transformation returns.
+        anthropic_output_config_already_normalized = bool(
+            optional_params.pop("_output_config_normalized", False)
+        )
         # Filter out exception objects before deepcopy to prevent deepcopy failures
         # Exceptions should not be stored in optional_params (this is a defensive fix)
         cleaned_params = filter_exceptions_from_params(optional_params)
@@ -1216,8 +1236,17 @@ class AmazonConverseConfig(BaseConfig):
 
         # Anthropic-only ``output_config`` (snake_case) — re-attached to
         # ``additionalModelRequestFields`` for Anthropic models below. The
-        # Bedrock-native ``outputConfig`` (camelCase) is handled separately.
+        # structured-output ``format`` subfield is consumed into Bedrock's
+        # native ``outputConfig`` (camelCase), which is handled separately.
         anthropic_output_config = inference_params.pop("output_config", None)
+        output_config_format = None
+        if isinstance(anthropic_output_config, dict):
+            anthropic_output_config = dict(anthropic_output_config)
+            candidate_output_config_format = anthropic_output_config.pop("format", None)
+            if isinstance(candidate_output_config_format, dict):
+                output_config_format = candidate_output_config_format
+            if not anthropic_output_config:
+                anthropic_output_config = None
 
         # Extract requestMetadata before processing other parameters
         request_metadata = inference_params.pop("requestMetadata", None)
@@ -1227,6 +1256,30 @@ class AmazonConverseConfig(BaseConfig):
         output_config: Optional[OutputConfigBlock] = inference_params.pop(
             "outputConfig", None
         )
+        base_model = BedrockModelInfo.get_base_model(model)
+        if (
+            output_config is None
+            and output_config_format is not None
+            and output_config_format.get("type") == "json_schema"
+            and base_model.startswith("anthropic")
+            and self._supports_native_structured_outputs(
+                model, self.custom_llm_provider
+            )
+        ):
+            output_config = self._create_output_config_for_response_format(
+                json_schema=output_config_format.get("schema"),
+                name=output_config_format.get("name"),
+                description=output_config_format.get("description"),
+            )
+        elif output_config is None and output_config_format is not None:
+            litellm.verbose_logger.warning(
+                "Bedrock Converse: dropping `output_config.format` for model=%s — "
+                "model does not advertise `supports_native_structured_output` in "
+                "model_prices_and_context_window.json. The schema will not be "
+                "enforced; pass `response_format` to use the synthetic tool-call "
+                "fallback.",
+                model,
+            )
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
@@ -1272,7 +1325,6 @@ class AmazonConverseConfig(BaseConfig):
         if anthropic_output_config is not None and isinstance(
             anthropic_output_config, dict
         ):
-            base_model = BedrockModelInfo.get_base_model(model)
             if base_model.startswith("anthropic"):
                 if (
                     litellm.drop_params is True
@@ -1283,6 +1335,11 @@ class AmazonConverseConfig(BaseConfig):
                         model,
                     )
                 else:
+                    if not anthropic_output_config_already_normalized:
+                        normalize_bedrock_opus_output_config_effort(
+                            model=model,
+                            output_config=anthropic_output_config,
+                        )
                     effort = anthropic_output_config.get("effort")
                     if effort is not None:
                         self._validate_anthropic_adaptive_effort(

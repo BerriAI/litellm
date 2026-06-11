@@ -9,6 +9,7 @@ import {
   removeLocalStorageItem,
   setLocalStorageItem,
 } from "@/utils/localStorageUtils";
+import { navAccountDisplayName } from "@/components/Navbar/navDisplayName";
 import {
   CrownOutlined,
   DownOutlined,
@@ -22,6 +23,39 @@ import { Button, Divider, Dropdown, Space, Switch, Tag, Tooltip, Typography } fr
 import React, { useEffect, useState } from "react";
 
 const { Text } = Typography;
+
+function hueFromString(seed: string): number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    h = seed.charCodeAt(i) + ((h << 5) - h);
+  }
+  return Math.abs(h) % 360;
+}
+
+function initialsFromIdentity(email: string | null, userId: string | null): string {
+  const local = email?.split("@")[0]?.trim();
+  if (local) {
+    const parts = local
+      .replace(/[^a-zA-Z0-9]+/g, " ")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (parts.length >= 2) {
+      return `${parts[0]!.charAt(0)}${parts[1]!.charAt(0)}`.toUpperCase();
+    }
+    if (parts.length === 1) {
+      const p = parts[0]!;
+      return p.length >= 2 ? p.slice(0, 2).toUpperCase() : `${p.charAt(0)}`.toUpperCase();
+    }
+  }
+  if (userId && userId.length >= 2) {
+    return userId.slice(0, 2).toUpperCase();
+  }
+  if (userId && userId.length === 1) {
+    return `${userId.toUpperCase()}•`;
+  }
+  return "?";
+}
 
 interface UserDropdownProps {
   onLogout: () => void;
@@ -61,19 +95,12 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
           <Text type="secondary">{userEmail || "-"}</Text>
         </Space>
         {premiumUser ? (
-          <Tag
-            icon={<CrownOutlined />}
-            color="gold"
-          >
+          <Tag icon={<CrownOutlined />} color="gold">
             Premium
           </Tag>
         ) : (
           <Tooltip title="Upgrade to Premium for advanced features" placement="left">
-            <Tag
-              icon={<CrownOutlined />}
-            >
-              Standard
-            </Tag>
+            <Tag icon={<CrownOutlined />}>Standard</Tag>
           </Tooltip>
         )}
       </Space>
@@ -83,12 +110,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
           <UserOutlined />
           <Text type="secondary">User ID</Text>
         </Space>
-        <Text
-          copyable
-          ellipsis
-          style={{ maxWidth: "150px" }}
-          title={userId || "-"}
-        >
+        <Text copyable ellipsis style={{ maxWidth: "150px" }} title={userId || "-"}>
           {userId || "-"}
         </Text>
       </Space>
@@ -189,13 +211,17 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
     </Space>
   );
 
+  const seed = userEmail || userId || "user";
+  const initials = initialsFromIdentity(userEmail, userId);
+  const hue = hueFromString(seed);
+  const displayName = navAccountDisplayName(userEmail, userId);
+
   return (
     <Dropdown
+      trigger={["click"]}
       menu={{ items: userItems }}
       popupRender={(menu) => (
-        <div
-          className="bg-white rounded-lg shadow-lg"
-        >
+        <div className="rounded-lg bg-white shadow-lg">
           {renderUserInfoSection()}
           <Divider style={{ margin: 0 }} />
           {React.cloneElement(menu as React.ReactElement, {
@@ -204,12 +230,23 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
         </div>
       )}
     >
-      <Button type="text" >
-        <Space>
-          <UserOutlined />
-          <Text>User</Text>
-          <DownOutlined />
-        </Space>
+      <Button
+        type="text"
+        className="!flex max-w-[min(200px,34vw)] items-center gap-2 !rounded-md !py-0.5 !pl-1 !pr-2 transition-colors hover:!bg-gray-100"
+        aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
+        aria-haspopup="menu"
+      >
+        <span
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white shadow-inner ring-1 ring-black/5"
+          style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}
+          aria-hidden
+        >
+          {initials}
+        </span>
+        <span className="hidden min-w-0 truncate text-left text-sm font-medium leading-none text-gray-900 md:inline">
+          {displayName}
+        </span>
+        <DownOutlined className="hidden shrink-0 text-[10px] text-gray-400 md:inline" aria-hidden />
       </Button>
     </Dropdown>
   );

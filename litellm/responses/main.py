@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 else:
     ResponseText = str  # Fallback for ResponseText import
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -1139,6 +1140,9 @@ def responses(
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
                 "model_info": kwargs.get("model_info"),
+                "data_residency": infer_openai_data_residency(
+                    custom_llm_provider, litellm_params.api_base
+                ),
                 "metadata": (
                     kwargs["litellm_metadata"]
                     if "litellm_metadata" in kwargs
@@ -2032,6 +2036,9 @@ def compact_responses(
             litellm_params={
                 **responses_api_request_params,
                 "litellm_call_id": litellm_call_id,
+                "data_residency": infer_openai_data_residency(
+                    custom_llm_provider, litellm_params.api_base
+                ),
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -2127,6 +2134,11 @@ async def _aresponses_websocket(
         model=model,
         api_base=api_base,
         api_key=api_key,
+    )
+
+    litellm_params_dict["data_residency"] = infer_openai_data_residency(
+        _custom_llm_provider,
+        dynamic_api_base or litellm_params.api_base or litellm.api_base,
     )
 
     litellm_logging_obj.update_from_kwargs(

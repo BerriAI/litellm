@@ -30,14 +30,12 @@ function withBase(path: string): string {
  *
  * Key = legacy page id used in leftnav, Value = route segment under (dashboard)/
  */
-const MIGRATED_PAGES: Record<string, string> = {
-  "api-reference": "api-reference",
-};
+const MIGRATED_PAGES: Record<string, string> = {};
 
 function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
+  const { accessToken } = useAuthorized();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [page, setPage] = useState(() => {
     return searchParams.get("page") || "api-keys";
@@ -70,15 +68,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
           isPublicPage={false}
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={toggleSidebar}
-          userID={userId}
-          userEmail={userEmail}
-          userRole={userRole}
-          premiumUser={premiumUser}
           proxySettings={undefined}
           setProxySettings={() => { }}
           accessToken={accessToken}
-          isDarkMode={false}
-          toggleDarkMode={() => { }}
         />
         <DebugWarningBanner accessToken={accessToken} />
         <div className="flex flex-1 overflow-auto">

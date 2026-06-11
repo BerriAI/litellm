@@ -7,6 +7,7 @@ on:
       - litellm_internal_staging
       - litellm_oss_branch
       - "litellm_**"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -42,3 +43,16 @@ jobs:
       workers: 2
       reruns: 2
       artifact-name: proxy-endpoints
+
+  # Behavior-pinning tests for litellm/proxy/proxy_server.py. Owns its
+  # own job (not a path on the proxy-endpoints job above) so its budget
+  # is independent and its coverage artifact is uploaded separately.
+  # See: https://www.notion.so/36c43b8acdab81ee845fd5365128a2fc
+  proxy-server:
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: tests/test_litellm/proxy/proxy_server
+      workers: 4
+      reruns: 2
+      timeout-minutes: 60
+      artifact-name: proxy-server

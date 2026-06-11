@@ -739,6 +739,98 @@ class ResponsesAPIRequestUtils:
             )
 
     @staticmethod
+    def _collect_container_ids_from_annotations(
+        annotations: Any,
+        collected: set[str],
+    ) -> None:
+        if not annotations or not isinstance(annotations, list):
+            return
+        for ann in annotations:
+            ResponsesAPIRequestUtils._collect_container_ids_from_output_item(
+                ann, collected
+            )
+
+    @staticmethod
+    def _collect_container_ids_from_message_content(
+        content: Any,
+        collected: set[str],
+    ) -> None:
+        if not content:
+            return
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    ResponsesAPIRequestUtils._collect_container_ids_from_annotations(
+                        part.get("annotations"),
+                        collected,
+                    )
+                else:
+                    ResponsesAPIRequestUtils._collect_container_ids_from_annotations(
+                        getattr(part, "annotations", None),
+                        collected,
+                    )
+
+    @staticmethod
+    def _collect_container_ids_from_output_item(
+        item: Any,
+        collected: set[str],
+    ) -> None:
+        """Collect managed or raw ``container_id`` values from one output item."""
+        if item is None:
+            return
+
+        if isinstance(item, dict):
+            cid = item.get("container_id")
+            if isinstance(cid, str) and cid:
+                collected.add(cid)
+            nested = item.get("code_interpreter_call")
+            if isinstance(nested, dict):
+                nc = nested.get("container_id")
+                if isinstance(nc, str) and nc:
+                    collected.add(nc)
+            if item.get("type") == "message":
+                ResponsesAPIRequestUtils._collect_container_ids_from_message_content(
+                    item.get("content"),
+                    collected,
+                )
+            return
+
+        cid_attr = getattr(item, "container_id", None)
+        if isinstance(cid_attr, str) and cid_attr:
+            collected.add(cid_attr)
+
+        nested_obj = getattr(item, "code_interpreter_call", None)
+        if nested_obj is not None:
+            ResponsesAPIRequestUtils._collect_container_ids_from_output_item(
+                nested_obj, collected
+            )
+
+        if getattr(item, "type", None) == "message":
+            ResponsesAPIRequestUtils._collect_container_ids_from_message_content(
+                getattr(item, "content", None),
+                collected,
+            )
+
+    @staticmethod
+    def collect_container_ids_from_responses_response(response: Any) -> list[str]:
+        """Return unique container IDs referenced in a Responses API payload."""
+        if response is None:
+            return []
+
+        if isinstance(response, dict):
+            output = response.get("output", [])
+        else:
+            output = getattr(response, "output", []) or []
+
+        collected: set[str] = set()
+        if output:
+            for item in output:
+                ResponsesAPIRequestUtils._collect_container_ids_from_output_item(
+                    item, collected
+                )
+        return list(collected)
+
+    @staticmethod
     def _update_container_ids_in_response(
         responses_api_response: Union[ResponsesAPIResponse, Dict[str, Any]],
         custom_llm_provider: Optional[str],

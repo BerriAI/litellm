@@ -1337,6 +1337,39 @@ async def test_update_without_metadata_still_preserves_existing():
 
 
 @pytest.mark.asyncio
+async def test_prepare_key_update_data_encrypts_callback_vars(monkeypatch):
+    """/key/update must encrypt callback_vars values before they reach the DB."""
+    from litellm.proxy.common_utils.callback_utils import decrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    data = UpdateKeyRequest(
+        key="sk-1",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_public_key": "pk-real",
+                        "langfuse_secret_key": "sk-real",
+                    },
+                }
+            ]
+        },
+    )
+    existing_key = LiteLLM_VerificationToken(token="hashed")
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    cv = result["metadata"]["logging"][0]["callback_vars"]
+    assert cv["langfuse_secret_key"] != "sk-real"
+    assert cv["langfuse_public_key"] != "pk-real"
+    recovered = decrypt_callback_vars(result["metadata"])["logging"][0]["callback_vars"]
+    assert recovered["langfuse_secret_key"] == "sk-real"
+    assert recovered["langfuse_public_key"] == "pk-real"
+
+
+@pytest.mark.asyncio
 async def test_prepare_key_update_data_duration_never_expires():
     """Test that duration="-1" sets expires to None (never expires)."""
     from litellm.proxy._types import UpdateKeyRequest

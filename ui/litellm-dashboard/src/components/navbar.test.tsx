@@ -30,6 +30,7 @@ const mockUserDropdownData = vi.hoisted(() => ({
 vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
   const React = await import("react");
   const { useState } = React;
+  const { Button } = await import("antd");
   const localStorageUtils = await import("@/utils/localStorageUtils");
   return {
     default: function MockUserDropdown({ onLogout }: { onLogout: () => void }) {
@@ -37,9 +38,9 @@ vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
       const [open, setOpen] = useState(false);
       return (
         <div>
-          <button type="button" onClick={() => setOpen(!open)}>
-            User
-          </button>
+          <Button type="text" aria-label="Open account menu" onClick={() => setOpen(!open)}>
+            Account
+          </Button>
           {open && (
             <div data-testid="user-dropdown-content">
               <span>{userId}</span>
@@ -136,30 +137,25 @@ Object.defineProperty(window, "location", {
 
 describe("Navbar", () => {
   const defaultProps = {
-    userID: "test-user",
-    userEmail: "test@example.com",
-    userRole: "Admin",
-    premiumUser: false,
     proxySettings: {},
     setProxySettings: vi.fn(),
     accessToken: "test-token",
     isPublicPage: false,
-    isDarkMode: false,
-    toggleDarkMode: vi.fn(),
   };
 
   it("should render without crashing", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
+    expect(screen.getByRole("button", { name: /^notifications$/i })).toBeInTheDocument();
     expect(screen.getByText("Docs")).toBeInTheDocument();
-    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /open account menu/i })).toBeInTheDocument();
   });
 
   it("should display user information in dropdown", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("test-user")).toBeInTheDocument();
@@ -198,7 +194,7 @@ describe("Navbar", () => {
     });
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("Premium")).toBeInTheDocument();
@@ -247,11 +243,12 @@ describe("Navbar", () => {
     mockUseThemeImpl = () => ({ logoUrl: null });
   });
 
-  it("should hide user dropdown on public pages", () => {
+  it("should hide user dropdown and notifications on public pages", () => {
     const publicPageProps = { ...defaultProps, isPublicPage: true };
     renderWithProviders(<Navbar {...publicPageProps} />);
 
-    expect(screen.queryByText("User")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /open account menu/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^notifications$/i })).not.toBeInTheDocument();
   });
 
   it("should handle hide new features toggle", async () => {
@@ -265,7 +262,7 @@ describe("Navbar", () => {
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("test-user")).toBeInTheDocument();
@@ -290,7 +287,7 @@ describe("Navbar", () => {
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("test-user")).toBeInTheDocument();

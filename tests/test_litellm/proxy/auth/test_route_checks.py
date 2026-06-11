@@ -262,10 +262,164 @@ def test_virtual_key_mcp_routes_allows_v1_mcp_server_subpaths(route):
 )
 def test_mcp_management_routes_classified_as_management_not_llm_api(route):
     """MCP server CRUD must be management routes, not llm_api routes, so
-    DISABLE_LLM_API_ENDPOINTS on admin nodes does not block the Admin UI."""
+    DISABLE_LLM_API_ENDPOINTS on admin nodes does not block the Admin UI.
+
+    Note: virtual keys with allowed_routes=["llm_api_routes"] can still call
+    *GET* `/v1/mcp/server` and *GET* `/v1/mcp/server/{server_id}` — that
+    carve-out is enforced method-aware inside
+    `is_virtual_key_allowed_to_call_route`, not by adding the paths to
+    `llm_api_routes`. So `is_llm_api_route()` still returns False here and
+    `DISABLE_LLM_API_ENDPOINTS` still does not block these paths.
+    """
 
     assert RouteChecks.is_llm_api_route(route=route) is False
     assert RouteChecks.is_management_route(route=route) is True
+
+
+def _mock_request(method: str) -> Request:
+    request = MagicMock(spec=Request)
+    request.method = method
+    return request
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/mcp/server",
+        "/v1/mcp/server/abc-123",
+    ],
+)
+def test_virtual_key_llm_api_routes_allows_get_mcp_server_discovery(route):
+    """
+    Regression test: virtual keys with allowed_routes=["llm_api_routes"] must
+    be able to list/inspect MCP servers via GET /v1/mcp/server[/{server_id}].
+
+    The handlers strip credential-bearing fields via
+    `_sanitize_mcp_server_list_for_virtual_key` when the caller is a
+    restricted virtual key, so GET is safe to expose. The carve-out is
+    method-aware (see below) — non-GET requests to the same paths are
+    rejected at this layer, so admin-only writes remain gated.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+        request=_mock_request("GET"),
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/mcp/server",
+        "/v1/mcp/server/abc-123",
+    ],
+)
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_virtual_key_llm_api_routes_rejects_non_get_mcp_server_discovery(route, method):
+    """Method-aware: the MCP server discovery carve-out is GET-only.
+
+    POST/PUT/PATCH/DELETE on `/v1/mcp/server[/{server_id}]` are admin-only
+    management writes and must not be reachable via llm_api_routes.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+            request=_mock_request(method),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        # Multi-segment admin-only sub-paths must NOT be reachable via
+        # llm_api_routes, even on GET.
+        "/v1/mcp/server/abc-123/approve",
+        "/v1/mcp/server/abc-123/reject",
+        "/v1/mcp/server/oauth/session",
+        "/v1/mcp/server/abc-123/user-credential",
+    ],
+)
+def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
+    route,
+):
+    """Multi-segment admin-only MCP sub-paths are not reachable via llm_api_routes.
+
+    The discovery carve-out only matches `/v1/mcp/server` and
+    `/v1/mcp/server/{server_id}` (single segment after `/server/`), so any
+    path with additional segments is rejected even when the request is GET.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+            request=_mock_request("GET"),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_spend_logs_v2_classified_as_management_not_llm_api():
+    """Paginated spend logs are a management/spend read route, not an LLM API."""
+
+    assert RouteChecks.is_llm_api_route(route="/spend/logs/v2") is False
+    assert RouteChecks.is_management_route(route="/spend/logs/v2") is True
+
+
+def test_virtual_key_management_routes_allows_spend_logs_v2():
+    """Management virtual keys should be allowed to call the v2 spend logs endpoint."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["management_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/spend/logs/v2",
+        valid_token=valid_token,
+    )
+
+    assert result is True
+
+
+def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
+    """AI API virtual keys should not gain spend-log access."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/spend/logs/v2",
+            valid_token=valid_token,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
 
 
 @pytest.mark.parametrize(
@@ -1322,6 +1476,7 @@ ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
     "/cost/estimate",
     # Public spend logs / spend tracking routes that admin viewer should read
     "/spend/logs",
+    "/spend/logs/v2",
     "/spend/keys",
     "/spend/users",
     "/spend/tags",
