@@ -168,8 +168,7 @@ class TestDeepSeekThinkingParams:
         assert "thinking" not in result
 
     def test_map_thinking_disabled_passed_through(self):
-        """thinking={"type": "disabled"} must be forwarded so users can opt out
-        of DeepSeek V4's default-on thinking mode."""
+        """thinking={"type": "disabled"} is forwarded (opt-out of V4 default thinking)."""
         result = self.config.map_openai_params(
             non_default_params={"thinking": {"type": "disabled"}},
             optional_params={},
@@ -181,11 +180,7 @@ class TestDeepSeekThinkingParams:
 
 
 class TestDeepSeekV4DefaultThinkingMode:
-    """
-    DeepSeek V4 models run in thinking mode BY DEFAULT and require
-    `reasoning_content` to be passed back on assistant messages
-    (https://github.com/BerriAI/litellm/issues/26395).
-    """
+    """DeepSeek V4 default-on thinking mode / reasoning_content pass-back."""
 
     def setup_method(self):
         self.config = DeepSeekChatConfig()
@@ -221,10 +216,6 @@ class TestDeepSeekV4DefaultThinkingMode:
         )
 
     def test_reasoning_capable_models_active_by_default(self):
-        """Any reasoning-capable DeepSeek model counts as potentially
-        thinking-mode (V4 enables thinking by default). Injection is harmless
-        when thinking is not actually active: the live API ignores
-        reasoning_content in non-thinking requests."""
         assert self.config._thinking_mode_active(
             model="deepseek-v3.2", optional_params={}
         )

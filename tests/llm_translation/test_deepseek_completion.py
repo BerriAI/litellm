@@ -234,13 +234,7 @@ def test_deepseek_fill_reasoning_content_multiturn():
 def test_deepseek_fill_reasoning_content_guard_in_transform_request():
     """
     _fill_reasoning_content runs for any reasoning-capable DeepSeek model
-    unless thinking is explicitly disabled.
-
-    DeepSeek V4 enables thinking mode BY DEFAULT (no `thinking` param
-    required), so the guard cannot rely on an explicit opt-in (issue #26395).
-    Injecting reasoning_content when thinking is not actually active is
-    harmless: the DeepSeek API ignores the field in non-thinking requests
-    (verified against the live API, including thinking={"type": "disabled"}).
+    unless thinking is explicitly disabled (V4 enables thinking by default).
     """
     from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
