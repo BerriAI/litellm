@@ -206,6 +206,25 @@ def _parse_above_token_threshold(key: str) -> float:
 
 
 def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
+    """Return the total effective input tokens for tier-threshold comparisons.
+
+    Some providers (Anthropic direct, Bedrock) roll cache_creation and cache_read
+    tokens into prompt_tokens before constructing the Usage object, while others
+    (Vertex AI) keep them separate.  When prompt_tokens_details is present we can
+    derive the true total from its per-category fields and avoid double-counting.
+    """
+    if usage.prompt_tokens_details is not None:
+        details = usage.prompt_tokens_details
+        text_tokens = float(getattr(details, "text_tokens", None) or 0)
+        if text_tokens == 0:
+            # text_tokens not set by this provider; fall back to prompt_tokens
+            text_tokens = float(getattr(usage, "prompt_tokens", 0) or 0)
+        cached_tokens = float(getattr(details, "cached_tokens", 0) or 0)
+        cache_creation = float(getattr(details, "cache_creation_tokens", 0) or 0)
+        return text_tokens + cached_tokens + cache_creation
+
+    # No prompt_tokens_details — add explicit cache fields only if they are
+    # not already rolled into prompt_tokens (determined by their presence).
     prompt_tokens = float(getattr(usage, "prompt_tokens", 0) or 0)
     cache_read_tokens = float(getattr(usage, "cache_read_input_tokens", 0) or 0)
     cache_creation_tokens = float(getattr(usage, "cache_creation_input_tokens", 0) or 0)
