@@ -3090,6 +3090,14 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="Galileo",
     )
 
+    newrelic: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="newrelic",
+        ui_callback_name="New Relic",
+        litellm_callback_params=[
+            "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED",
+        ],
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """

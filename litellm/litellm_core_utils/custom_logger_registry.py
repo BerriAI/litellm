@@ -40,6 +40,7 @@ from litellm.integrations.langsmith import LangsmithLogger
 from litellm.integrations.litellm_agent import LiteLLMAgentModelResolver
 from litellm.integrations.literal_ai import LiteralAILogger
 from litellm.integrations.mlflow import MlflowLogger
+from litellm.integrations.newrelic import NewRelicLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
@@ -106,6 +107,7 @@ class CustomLoggerRegistry:
         "mavvrik": MavvrikFocusLogger,
         "vantage": VantageLogger,
         "posthog": PostHogLogger,
+        "newrelic": NewRelicLogger,
     }
 
     try:
