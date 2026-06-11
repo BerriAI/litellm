@@ -2,7 +2,7 @@ import React from "react";
 import { TextInput, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { Button as Button2, Modal, Form, InputNumber, Select } from "antd";
 import { useCreateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
-import NotificationsManager from "../molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
 interface BudgetModalProps {
   isModalVisible: boolean;

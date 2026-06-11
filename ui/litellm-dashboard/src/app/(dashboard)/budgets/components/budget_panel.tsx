@@ -21,10 +21,10 @@ import {
 } from "@tremor/react";
 import React, { useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import DeleteResourceModal from "../common_components/DeleteResourceModal";
-import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
-import NotificationsManager from "../molecules/notifications_manager";
-import { useBudgets, useDeleteBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { useBudgets, useDeleteBudget, budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import BudgetModal from "./budget_modal";
 import EditBudgetModal from "./edit_budget_modal";
 import { CREATE_END_USER_CURL_COMMAND, CHAT_COMPLETIONS_CURL_COMMAND, OPENAI_SDK_PYTHON_CODE } from "./constants";
@@ -33,14 +33,6 @@ import { isProxyAdminRole } from "@/utils/roles";
 
 interface BudgetSettingsPageProps {
   accessToken: string | null;
-}
-
-export interface budgetItem {
-  budget_id: string;
-  max_budget: number | null;
-  rpm_limit: number | null;
-  tpm_limit: number | null;
-  updated_at: string;
 }
 
 const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {

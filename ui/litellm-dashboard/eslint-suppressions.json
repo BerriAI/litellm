@@ -419,22 +419,22 @@
       "count": 1
     }
   },
-  "src/components/GuardrailsMonitor/EvaluationSettingsModal.tsx": {
+  "src/app/(dashboard)/guardrails-monitor/components/EvaluationSettingsModal.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
-  "src/components/GuardrailsMonitor/GuardrailsMonitorView.tsx": {
+  "src/app/(dashboard)/guardrails-monitor/components/GuardrailsMonitorView.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/GuardrailsMonitor/ScoreChart.test.tsx": {
+  "src/app/(dashboard)/guardrails-monitor/components/ScoreChart.test.tsx": {
     "react/display-name": {
       "count": 1
     }
   },
-  "src/components/GuardrailsMonitor/ScoreChart.tsx": {
+  "src/app/(dashboard)/guardrails-monitor/components/ScoreChart.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -798,22 +798,22 @@
       "count": 1
     }
   },
-  "src/components/budgets/budget_modal.tsx": {
+  "src/app/(dashboard)/budgets/components/budget_modal.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/budgets/budget_panel.test.tsx": {
+  "src/app/(dashboard)/budgets/components/budget_panel.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 2
     }
   },
-  "src/components/budgets/budget_panel.tsx": {
+  "src/app/(dashboard)/budgets/components/budget_panel.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/budgets/edit_budget_modal.tsx": {
+  "src/app/(dashboard)/budgets/components/edit_budget_modal.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -2163,7 +2163,7 @@
       "count": 1
     }
   },
-  "src/components/workflow_runs/index.tsx": {
+  "src/app/(dashboard)/workflows/WorkflowRuns.tsx": {
     "no-restricted-syntax": {
       "count": 3
     },

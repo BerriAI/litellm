@@ -4,9 +4,9 @@ import { Button, Card, Col, Row, Spin, Table, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import React, { useMemo, useState } from "react";
 import { getGuardrailsUsageOverview } from "@/components/networking";
-import { type PerformanceRow } from "./mockData";
+import { type PerformanceRow } from "@/components/GuardrailsMonitor/mockData";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
-import { MetricCard } from "./MetricCard";
+import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
 import { ScoreChart } from "./ScoreChart";
 
 interface GuardrailsOverviewProps {

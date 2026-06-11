@@ -2,8 +2,8 @@ import React, { useEffect } from "react";
 import { TextInput, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { Button as Button2, Modal, Form, InputNumber, Select } from "antd";
 import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
-import { budgetItem } from "./budget_panel";
-import NotificationsManager from "../molecules/notifications_manager";
+import { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
 interface EditBudgetModalProps {
   isModalVisible: boolean;

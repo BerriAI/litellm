@@ -55,6 +55,15 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES.projects).toBe("projects");
     expect(MIGRATED_PAGES["access-groups"]).toBe("access-groups");
   });
+
+  it("maps the budgets, workflows, and guardrails-monitor sidebar ids to their routes", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.budgets).toBe("budgets");
+    expect(MIGRATED_PAGES.workflows).toBe("workflows");
+    expect(MIGRATED_PAGES["guardrails-monitor"]).toBe("guardrails-monitor");
+  });
 });
 
 describe("dev server (NODE_ENV=development)", () => {
