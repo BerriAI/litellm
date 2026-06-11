@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/BerriAI/litellm"
+
+[workspace.dependencies]
+async-trait = "0.1"
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+dashmap = "6"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["timeout", "limit", "catch-panic", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+wiremock = "0.6"

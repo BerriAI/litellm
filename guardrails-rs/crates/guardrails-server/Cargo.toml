@@ -1,0 +1,28 @@
+[package]
+name = "guardrails-server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "litellm-guardrails"
+path = "src/main.rs"
+
+[dependencies]
+guardrails-core = { path = "../guardrails-core" }
+guardrails-http = { path = "../guardrails-http" }
+guardrails-providers = { path = "../guardrails-providers" }
+axum.workspace = true
+clap.workspace = true
+dashmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
