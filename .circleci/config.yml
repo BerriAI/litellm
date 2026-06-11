@@ -722,7 +722,7 @@ jobs:
     docker:
       - *python312_image
     working_directory: ~/project
-    resource_class: xlarge
+    resource_class: large
 
     steps:
       - checkout
@@ -747,8 +747,10 @@ jobs:
             # Add --durations=20 to show 20 slowest tests for debugging
             # Subdirectories with dedicated jobs (maintain this list as new jobs are added)
             mkdir -p test-results
-            # Glob excludes the realtime/ subdirectory since it has its own job
-            TEST_FILES=$(circleci tests glob "tests/llm_translation/**/test_*.py" | grep -v "^tests/llm_translation/realtime/")
+            # Glob excludes the realtime/ subdirectory since it has its own job.
+            # llm_responses_api unit survivors fold in here since their live
+            # tests moved to the 4h harness (tests/harness_suites/).
+            TEST_FILES=$(circleci tests glob "tests/llm_translation/**/test_*.py" "tests/llm_responses_api_testing/**/test_*.py" | grep -v "^tests/llm_translation/realtime/")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
@@ -757,7 +759,6 @@ jobs:
                 --durations=20 \
                 -n 4 \
                 --timeout=120 --timeout_method=thread \
-                --retries 2 --retry-delay 5 \
                 --max-worker-restart=5"
           no_output_timeout: 15m
 
@@ -938,45 +939,6 @@ jobs:
             - google_generate_content_endpoint_coverage.xml
             - google_generate_content_endpoint_coverage
 
-  llm_responses_api_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-
-    steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/llm_responses_api_testing/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -n 8"
-          no_output_timeout: 15m
-
-      # Store test results
-      - store_test_results:
-          path: test-results
   ocr_testing:
     docker:
       - *python312_image
@@ -2956,8 +2918,6 @@ workflows:
       - guardrails_testing:
           filters: *main_branches
       - google_generate_content_endpoint_testing:
-          filters: *main_branches
-      - llm_responses_api_testing:
           filters: *main_branches
       - ocr_testing:
           filters: *main_branches
