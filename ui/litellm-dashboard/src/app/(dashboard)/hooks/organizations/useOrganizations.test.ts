@@ -82,7 +82,6 @@ describe("useOrganizations", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -145,7 +144,6 @@ describe("useOrganizations", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useOrganizations(), { wrapper });
@@ -169,7 +167,6 @@ describe("useOrganizations", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useOrganizations(), { wrapper });
@@ -193,7 +190,6 @@ describe("useOrganizations", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useOrganizations(), { wrapper });
@@ -217,7 +213,6 @@ describe("useOrganizations", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useOrganizations(), { wrapper });

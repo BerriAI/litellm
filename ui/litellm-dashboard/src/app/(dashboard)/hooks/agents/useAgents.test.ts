@@ -81,7 +81,6 @@ describe("useAgents", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -144,7 +143,6 @@ describe("useAgents", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useAgents(), { wrapper });
@@ -168,7 +166,6 @@ describe("useAgents", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useAgents(), { wrapper });
@@ -192,7 +189,6 @@ describe("useAgents", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useAgents(), { wrapper });
@@ -216,7 +212,6 @@ describe("useAgents", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useAgents(), { wrapper });
@@ -240,7 +235,6 @@ describe("useAgents", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useAgents(), { wrapper });
@@ -283,7 +277,6 @@ describe("useAgents", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useAgents(), { wrapper });

@@ -143,7 +143,6 @@ describe("KeyInfoView", () => {
     token: "test-token",
     userEmail: null,
     disabledPersonalKeyCreation: null,
-    showSSOBanner: false,
   };
 
   it("should render tags", async () => {

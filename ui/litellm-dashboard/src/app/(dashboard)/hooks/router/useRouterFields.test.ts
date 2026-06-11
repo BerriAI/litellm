@@ -77,7 +77,6 @@ describe("useRouterFields", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -159,7 +158,6 @@ describe("useRouterFields", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useRouterFields(), { wrapper });
@@ -182,7 +180,6 @@ describe("useRouterFields", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useRouterFields(), { wrapper });
@@ -205,7 +202,6 @@ describe("useRouterFields", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useRouterFields(), { wrapper });

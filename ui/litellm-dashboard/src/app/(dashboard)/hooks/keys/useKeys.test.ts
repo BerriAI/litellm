@@ -182,7 +182,6 @@ describe("useKeys", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     // Reset fetch mock
@@ -273,7 +272,6 @@ describe("useKeys", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useKeys(1, 10), { wrapper });
@@ -485,7 +483,6 @@ describe("useDeletedKeys", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     // Reset fetch mock
@@ -596,7 +593,6 @@ describe("useDeletedKeys", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useDeletedKeys(1, 10), { wrapper });

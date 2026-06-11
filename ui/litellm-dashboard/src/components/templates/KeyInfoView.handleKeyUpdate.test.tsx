@@ -322,7 +322,6 @@ const renderView = (premiumUser: boolean) => {
     token: "token_123",
     userEmail: "test@example.com",
     disabledPersonalKeyCreation: false,
-    showSSOBanner: false,
   });
 
   return render(
@@ -353,7 +352,6 @@ describe("KeyInfoView handleKeyUpdate guardrails guard", () => {
       token: "token_123",
       userEmail: "test@example.com",
       disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
     });
 
     render(

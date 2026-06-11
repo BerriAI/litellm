@@ -3,28 +3,20 @@ import React from "react";
 import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { AuthProvider } from "@/contexts/AuthContext";
 import useAuthorized from "./useAuthorized";
 
 // Unmock useAuthorized to test the actual implementation
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 
-const {
-  replaceMock,
-  clearTokenCookiesMock,
-  getProxyBaseUrlMock,
-  getUiConfigMock,
-  decodeTokenMock,
-  checkTokenValidityMock,
-  buildLoginUrlWithReturnMock,
-} = vi.hoisted(() => ({
-  replaceMock: vi.fn(),
-  clearTokenCookiesMock: vi.fn(),
-  getProxyBaseUrlMock: vi.fn(() => "http://proxy.example"),
-  getUiConfigMock: vi.fn(),
-  decodeTokenMock: vi.fn(),
-  checkTokenValidityMock: vi.fn(),
-  buildLoginUrlWithReturnMock: vi.fn((baseUrl: string) => baseUrl),
-}));
+const { replaceMock, clearTokenCookiesMock, getProxyBaseUrlMock, getUiConfigMock, buildLoginUrlWithReturnMock } =
+  vi.hoisted(() => ({
+    replaceMock: vi.fn(),
+    clearTokenCookiesMock: vi.fn(),
+    getProxyBaseUrlMock: vi.fn(() => "http://proxy.example"),
+    getUiConfigMock: vi.fn(),
+    buildLoginUrlWithReturnMock: vi.fn((baseUrl: string) => baseUrl),
+  }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -49,15 +41,6 @@ vi.mock("@/utils/cookieUtils", async (importOriginal) => {
   };
 });
 
-vi.mock("@/utils/jwtUtils", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/utils/jwtUtils")>();
-  return {
-    ...actual,
-    decodeToken: decodeTokenMock,
-    checkTokenValidity: checkTokenValidityMock,
-  };
-});
-
 vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/utils/returnUrlUtils")>();
   return {
@@ -66,6 +49,7 @@ vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
     storeReturnUrl: vi.fn(),
   };
 });
+
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {
@@ -78,7 +62,11 @@ const createQueryClient = () =>
 
 const wrapper = ({ children }: { children: React.ReactNode }) => {
   const queryClient = createQueryClient();
-  return React.createElement(QueryClientProvider, { client: queryClient }, children);
+  return React.createElement(
+    QueryClientProvider,
+    { client: queryClient },
+    React.createElement(AuthProvider, null, children),
+  );
 };
 
 const createJwt = (payload: Record<string, unknown>) => {
@@ -90,39 +78,37 @@ const clearCookie = () => {
   document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
 };
 
+const uiConfig = (overrides: Record<string, unknown> = {}) => ({
+  server_root_path: "/",
+  proxy_base_url: null,
+  auto_redirect_to_sso: false,
+  admin_ui_disabled: false,
+  sso_configured: false,
+  ...overrides,
+});
+
+const decodedPayload = {
+  key: "api-key-123",
+  user_id: "user-1",
+  user_email: "user@example.com",
+  user_role: "app_admin",
+  premium_user: true,
+  disabled_non_admin_personal_key_creation: false,
+  login_method: "username_password",
+};
+
 describe("useAuthorized", () => {
   afterEach(() => {
     replaceMock.mockReset();
     clearTokenCookiesMock.mockReset();
     getProxyBaseUrlMock.mockClear();
     getUiConfigMock.mockReset();
-    decodeTokenMock.mockReset();
-    checkTokenValidityMock.mockReset();
     buildLoginUrlWithReturnMock.mockClear();
     clearCookie();
   });
 
   it("should decode the token and expose user details", async () => {
-    getUiConfigMock.mockResolvedValue({
-      server_root_path: "/",
-      proxy_base_url: null,
-      auto_redirect_to_sso: false,
-      admin_ui_disabled: false,
-      sso_configured: false,
-    });
-
-    const decodedPayload = {
-      key: "api-key-123",
-      user_id: "user-1",
-      user_email: "user@example.com",
-      user_role: "app_admin",
-      premium_user: true,
-      disabled_non_admin_personal_key_creation: false,
-      login_method: "username_password",
-    };
-
-    decodeTokenMock.mockReturnValue(decodedPayload);
-    checkTokenValidityMock.mockReturnValue(true);
+    getUiConfigMock.mockResolvedValue(uiConfig());
 
     const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
@@ -133,63 +119,36 @@ describe("useAuthorized", () => {
       expect(result.current.token).toBe(token);
     });
 
+    expect(result.current.isAuthorized).toBe(true);
     expect(result.current.accessToken).toBe("api-key-123");
     expect(result.current.userId).toBe("user-1");
     expect(result.current.userEmail).toBe("user@example.com");
     expect(result.current.userRole).toBe("Admin");
     expect(result.current.premiumUser).toBe(true);
     expect(result.current.disabledPersonalKeyCreation).toBe(false);
-    expect(result.current.showSSOBanner).toBe(true);
     expect(replaceMock).not.toHaveBeenCalled();
     expect(clearTokenCookiesMock).not.toHaveBeenCalled();
   });
 
-  it("should clear cookies and redirect on an invalid token", async () => {
-    getUiConfigMock.mockResolvedValue({
-      server_root_path: "/",
-      proxy_base_url: null,
-      auto_redirect_to_sso: false,
-      admin_ui_disabled: false,
-      sso_configured: false,
-    });
-
-    decodeTokenMock.mockReturnValue(null);
-    checkTokenValidityMock.mockReturnValue(false);
+  it("should clear cookies and redirect on an undecodable token", async () => {
+    getUiConfigMock.mockResolvedValue(uiConfig());
 
     document.cookie = "token=invalid-token; path=/;";
 
     const { result } = renderHook(() => useAuthorized(), { wrapper });
 
     await waitFor(() => {
-      expect(clearTokenCookiesMock).toHaveBeenCalled();
+      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
     });
 
-    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+    expect(clearTokenCookiesMock).toHaveBeenCalled();
+    expect(result.current.token).toBeNull();
     expect(result.current.accessToken).toBeNull();
     expect(result.current.userRole).toBe("Undefined Role");
   });
 
   it("should redirect even with valid token if admin_ui_disabled is true", async () => {
-    getUiConfigMock.mockResolvedValue({
-      server_root_path: "/",
-      proxy_base_url: null,
-      auto_redirect_to_sso: false,
-      admin_ui_disabled: true,
-      sso_configured: false,
-    });
-
-    const decodedPayload = {
-      key: "api-key-123",
-      user_id: "user-1",
-      user_email: "user@example.com",
-      user_role: "app_admin",
-      premium_user: true,
-      disabled_non_admin_personal_key_creation: false,
-      login_method: "username_password",
-    };
-
-    decodeTokenMock.mockReturnValue(decodedPayload);
-    checkTokenValidityMock.mockReturnValue(true);
+    getUiConfigMock.mockResolvedValue(uiConfig({ admin_ui_disabled: true }));
 
     const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
@@ -200,22 +159,22 @@ describe("useAuthorized", () => {
       expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
     });
 
-    expect(result.current.accessToken).toBe("api-key-123");
-    expect(result.current.userId).toBe("user-1");
-    expect(result.current.userEmail).toBe("user@example.com");
+    expect(clearTokenCookiesMock).toHaveBeenCalled();
+    expect(result.current.isAuthorized).toBe(false);
+    expect(result.current.token).toBeNull();
+
+    // clearAuth must reset the context, not just the cookie, so no consumer
+    // can keep acting on the revoked session until a hard reload.
+    await waitFor(() => {
+      expect(result.current.accessToken).toBeNull();
+    });
+    expect(result.current.userId).toBeNull();
+    expect(result.current.userEmail).toBeNull();
+    expect(result.current.userRole).toBe("Undefined Role");
   });
 
   it("should redirect when token is missing", async () => {
-    getUiConfigMock.mockResolvedValue({
-      server_root_path: "/",
-      proxy_base_url: null,
-      auto_redirect_to_sso: false,
-      admin_ui_disabled: false,
-      sso_configured: false,
-    });
-
-    decodeTokenMock.mockReturnValue(null);
-    checkTokenValidityMock.mockReturnValue(false);
+    getUiConfigMock.mockResolvedValue(uiConfig());
 
     // No token cookie set
     const { result } = renderHook(() => useAuthorized(), { wrapper });
@@ -229,25 +188,9 @@ describe("useAuthorized", () => {
   });
 
   it("should clear cookies and redirect when token is expired", async () => {
-    getUiConfigMock.mockResolvedValue({
-      server_root_path: "/",
-      proxy_base_url: null,
-      auto_redirect_to_sso: false,
-      admin_ui_disabled: false,
-      sso_configured: false,
-    });
+    getUiConfigMock.mockResolvedValue(uiConfig());
 
-    const decodedPayload = {
-      key: "api-key-123",
-      user_id: "user-1",
-      user_email: "user@example.com",
-      user_role: "app_admin",
-    };
-
-    decodeTokenMock.mockReturnValue(decodedPayload);
-    checkTokenValidityMock.mockReturnValue(false);
-
-    const token = createJwt(decodedPayload);
+    const token = createJwt({ ...decodedPayload, exp: Math.floor(Date.now() / 1000) - 60 });
     document.cookie = `token=${token}; path=/;`;
 
     const { result } = renderHook(() => useAuthorized(), { wrapper });
@@ -257,6 +200,7 @@ describe("useAuthorized", () => {
     });
 
     expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
-    expect(checkTokenValidityMock).toHaveBeenCalledWith(token);
+    expect(result.current.token).toBeNull();
+    expect(result.current.accessToken).toBeNull();
   });
 });

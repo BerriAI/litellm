@@ -67,7 +67,6 @@ describe("useModelsInfo", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -164,7 +163,6 @@ describe("useModelsInfo", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useModelsInfo(), { wrapper });
@@ -184,7 +182,6 @@ describe("useModelsInfo", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useModelsInfo(), { wrapper });
@@ -204,7 +201,6 @@ describe("useModelsInfo", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useModelsInfo(), { wrapper });
@@ -224,7 +220,6 @@ describe("useModelsInfo", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useModelsInfo(), { wrapper });
@@ -258,7 +253,6 @@ describe("useModelHub", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -322,7 +316,6 @@ describe("useModelHub", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useModelHub(), { wrapper });
@@ -356,7 +349,6 @@ describe("useAllProxyModels", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -428,7 +420,6 @@ describe("useAllProxyModels", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useAllProxyModels(), { wrapper });
@@ -448,7 +439,6 @@ describe("useAllProxyModels", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useAllProxyModels(), { wrapper });
@@ -468,7 +458,6 @@ describe("useAllProxyModels", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useAllProxyModels(), { wrapper });
@@ -502,7 +491,6 @@ describe("useSelectedTeamModels", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -574,7 +562,6 @@ describe("useSelectedTeamModels", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useSelectedTeamModels("team-1"), { wrapper });
@@ -594,7 +581,6 @@ describe("useSelectedTeamModels", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useSelectedTeamModels("team-1"), { wrapper });
@@ -614,7 +600,6 @@ describe("useSelectedTeamModels", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useSelectedTeamModels("team-1"), { wrapper });
@@ -673,7 +658,6 @@ describe("useInfiniteModelInfo", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -802,7 +786,6 @@ describe("useInfiniteModelInfo", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useInfiniteModelInfo(), { wrapper });
@@ -822,7 +805,6 @@ describe("useInfiniteModelInfo", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useInfiniteModelInfo(), { wrapper });
@@ -842,7 +824,6 @@ describe("useInfiniteModelInfo", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useInfiniteModelInfo(), { wrapper });

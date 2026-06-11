@@ -222,7 +222,7 @@ describe("CreateKeyPage auth behavior", () => {
       return { exp: Math.floor(Date.now() / 1000) - 60 }; // expired 60s ago
     });
 
-    // Spy on cookie writes to ensure we clear with Max-Age=0
+    // Spy on cookie writes to ensure we write a deletion for the token
     const cookieSetSpy = vi.spyOn(document, "cookie", "set");
 
     // Act
@@ -235,9 +235,13 @@ describe("CreateKeyPage auth behavior", () => {
       );
     });
 
-    // And we attempted to clear the cookie (defensive deletion)
+    // And we attempted to clear the cookie (defensive deletion, via either
+    // Max-Age=0 or an already-past expires date)
     const wroteDeletion = cookieSetSpy.mock.calls.some(
-      (args) => typeof args[0] === "string" && args[0].includes("Max-Age=0") && args[0].startsWith("token="),
+      (args) =>
+        typeof args[0] === "string" &&
+        args[0].startsWith("token=;") &&
+        (args[0].includes("Max-Age=0") || args[0].includes("expires=Thu, 01 Jan 1970")),
     );
     expect(wroteDeletion).toBe(true);
   });

@@ -42,7 +42,6 @@ describe("TopKeyView", () => {
     userRole: "admin",
     premiumUser: true,
     disabledPersonalKeyCreation: false,
-    showSSOBanner: false,
   };
 
   const mockSetTopKeysLimit = vi.fn();

@@ -79,7 +79,6 @@ describe("useTeams", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -150,7 +149,6 @@ describe("useTeams", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useTeams(), { wrapper });
@@ -174,7 +172,6 @@ describe("useTeams", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useTeams(), { wrapper });
@@ -250,7 +247,6 @@ describe("useTeams", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useTeams(), { wrapper });
@@ -276,7 +272,6 @@ describe("useTeams", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useTeams(), { wrapper });
@@ -312,7 +307,6 @@ describe("useTeam", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -376,7 +370,6 @@ describe("useTeam", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useTeam("team-1"), { wrapper });
@@ -433,7 +426,6 @@ describe("useTeam", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     // Import useQueryClient to get access to query client
@@ -465,7 +457,6 @@ describe("useTeam", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const testQueryFnMissingTeamId = async () => {
@@ -651,7 +642,6 @@ describe("useDeletedTeams", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     global.fetch = vi.fn();
@@ -719,7 +709,6 @@ describe("useDeletedTeams", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useDeletedTeams(1, 10, {}), { wrapper });

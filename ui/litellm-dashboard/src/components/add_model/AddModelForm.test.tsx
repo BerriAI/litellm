@@ -113,7 +113,6 @@ const mockAuthorizedUser = (userRole: string, userId: string, premiumUser: boole
   userRole,
   premiumUser,
   disabledPersonalKeyCreation: false,
-  showSSOBanner: false,
 });
 
 const testTeam: Team = {

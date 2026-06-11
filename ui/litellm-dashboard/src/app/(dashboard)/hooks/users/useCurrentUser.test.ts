@@ -70,7 +70,6 @@ describe("useCurrentUser", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -134,7 +133,6 @@ describe("useCurrentUser", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useCurrentUser(), { wrapper });
@@ -158,7 +156,6 @@ describe("useCurrentUser", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useCurrentUser(), { wrapper });
@@ -182,7 +179,6 @@ describe("useCurrentUser", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useCurrentUser(), { wrapper });

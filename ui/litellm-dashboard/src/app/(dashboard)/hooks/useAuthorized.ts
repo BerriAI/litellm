@@ -1,56 +1,61 @@
 "use client";
 
 import { getProxyBaseUrl } from "@/components/networking";
-import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
-import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
 import { buildLoginUrlWithReturn, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo } from "react";
-import { formatUserRole } from "@/utils/roles";
+import { useCallback, useEffect } from "react";
+import { useAuth } from "@/contexts/AuthContext";
 import { useUIConfig } from "./uiConfig/useUIConfig";
+
+// Decoded-JWT fields keep their legacy `any` typing; call sites still pass them
+// where `string` is expected, so tightening to `string | null` is a follow-up.
+type LegacyDecodedField = any;
 
 const useAuthorized = () => {
   const router = useRouter();
   const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
+  const {
+    authLoading,
+    token,
+    userID,
+    userRole,
+    userEmail,
+    accessToken,
+    premiumUser,
+    disabledPersonalKeyCreation,
+    clearAuth,
+  } = useAuth();
 
-  const token = typeof document !== "undefined" ? getCookie("token") : null;
+  const isLoading = authLoading || isUIConfigLoading;
+  const isAuthorized = token !== null && !uiConfig?.admin_ui_disabled;
 
-  const decoded = useMemo(() => decodeToken(token), [token]);
-  const isTokenValid = useMemo(() => checkTokenValidity(token), [token]);
-  const isLoading = isUIConfigLoading;
-  const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled;
-
-  // Helper function to redirect to login while preserving the current URL
   const redirectToLogin = useCallback(() => {
     storeReturnUrl();
     const baseLoginUrl = `${getProxyBaseUrl()}/ui/login`;
-    const loginUrlWithReturn = buildLoginUrlWithReturn(baseLoginUrl);
-    router.replace(loginUrlWithReturn);
+    router.replace(buildLoginUrlWithReturn(baseLoginUrl));
   }, [router]);
 
-  // Single useEffect for all redirect logic
   useEffect(() => {
     if (isLoading) return;
 
     if (!isAuthorized) {
       if (token) {
-        clearTokenCookies();
+        clearAuth();
       }
       redirectToLogin();
     }
-  }, [isLoading, isAuthorized, token, redirectToLogin]);
+  }, [isLoading, isAuthorized, token, clearAuth, redirectToLogin]);
 
   return {
     isLoading,
     isAuthorized,
     token: isAuthorized ? token : null,
-    accessToken: decoded?.key ?? null,
-    userId: decoded?.user_id ?? null,
-    userEmail: decoded?.user_email ?? null,
-    userRole: formatUserRole(decoded?.user_role),
-    premiumUser: decoded?.premium_user ?? null,
-    disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
-    showSSOBanner: decoded?.login_method === "username_password",
+    accessToken: accessToken as LegacyDecodedField,
+    userId: userID as LegacyDecodedField,
+    userEmail: userEmail as LegacyDecodedField,
+    userRole,
+    premiumUser: premiumUser as LegacyDecodedField,
+    disabledPersonalKeyCreation: disabledPersonalKeyCreation as LegacyDecodedField,
   };
 };
 

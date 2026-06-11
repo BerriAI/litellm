@@ -72,7 +72,6 @@ describe("TopKeyView", () => {
       userRole: mockProps.userRole,
       premiumUser: mockProps.premiumUser,
       disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
     });
   });
 

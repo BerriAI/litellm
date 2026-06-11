@@ -93,7 +93,6 @@ describe("useStoreModelInDB", () => {
       userEmail: null,
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     } as any);
 
     const { result } = renderHook(() => useStoreModelInDB(), { wrapper });

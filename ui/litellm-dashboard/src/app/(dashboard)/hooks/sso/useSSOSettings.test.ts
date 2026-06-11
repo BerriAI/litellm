@@ -79,7 +79,6 @@ describe("useSSOSettings", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -143,7 +142,6 @@ describe("useSSOSettings", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useSSOSettings(), { wrapper });
@@ -164,7 +162,6 @@ describe("useSSOSettings", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useSSOSettings(), { wrapper });
@@ -185,7 +182,6 @@ describe("useSSOSettings", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useSSOSettings(), { wrapper });
@@ -206,7 +202,6 @@ describe("useSSOSettings", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useSSOSettings(), { wrapper });
