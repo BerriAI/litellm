@@ -76,6 +76,14 @@ class MavvrikFocusLogger(FocusLogger):
     """FOCUS-based export logger that routes to the Mavvrik destination."""
 
     def __init__(self, **kwargs: Any) -> None:
+        frequency = os.getenv("MAVVRIK_FOCUS_FREQUENCY", "daily").lower()
+        if frequency != "daily":
+            raise ValueError(
+                f"MAVVRIK_FOCUS_FREQUENCY='{frequency}' is not supported. "
+                "Only 'daily' is allowed -- the Mavvrik ingestion protocol stores one "
+                "file per calendar date (metrics/YYYY-MM-DD). Hourly or interval "
+                "exports would overwrite each other within the same day."
+            )
         super().__init__(
             provider="mavvrik",
             export_format="csv",
