@@ -2425,12 +2425,11 @@ class BaseTokenUsageProcessor:
                     if not attr.startswith("_") and not callable(
                         getattr(usage.completion_tokens_details, attr)
                     ):
-                        current_val = getattr(
-                            combined.completion_tokens_details, attr, 0
+                        current_val = (
+                            getattr(combined.completion_tokens_details, attr, 0) or 0
                         )
-                        new_val = getattr(usage.completion_tokens_details, attr, 0)
-
-                        if new_val is not None and current_val is not None:
+                        new_val = getattr(usage.completion_tokens_details, attr, 0) or 0
+                        if isinstance(new_val, (int, float)):
                             setattr(
                                 combined.completion_tokens_details,
                                 attr,
@@ -2534,4 +2533,102 @@ def handle_realtime_stream_cost_calculation(
         break  # exit if we find a valid model
     total_cost = input_cost_per_token + output_cost_per_token
 
+    if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results):
+        total_cost += handle_realtime_transcription_cost_calculation(
+            results=results,
+            custom_llm_provider=custom_llm_provider,
+            litellm_model_name=litellm_model_name,
+        )
+
     return total_cost
+
+
+_TRANSCRIPTION_COMPLETED_EVENT_TYPE = (
+    "conversation.item.input_audio_transcription.completed"
+)
+
+
+def handle_realtime_transcription_cost_calculation(
+    results: OpenAIRealtimeStreamList,
+    custom_llm_provider: str,
+    litellm_model_name: str,
+) -> float:
+    """
+    Cost for realtime transcription sessions (e.g. gpt-realtime-whisper).
+
+    Transcription sessions emit no `response.done` events; instead each
+    `conversation.item.input_audio_transcription.completed` event carries a
+    `usage` object billed by the ASR model. The usage is one of:
+      - {"type": "duration", "seconds": <float>}  → priced via input_cost_per_second
+      - {"type": "tokens", "input_tokens": ...}    → priced via input/audio token cost
+    """
+    completed_events = [
+        cast(dict, result)
+        for result in results
+        if result.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE
+    ]
+    if not completed_events:
+        return 0.0
+
+    model_name = (
+        _get_transcription_model_name_from_results(results) or litellm_model_name
+    )
+    try:
+        model_info = litellm.get_model_info(
+            model=model_name, custom_llm_provider=custom_llm_provider
+        )
+    except Exception:
+        model_info = {}
+
+    total_cost = 0.0
+    for event in completed_events:
+        usage = event.get("usage") or {}
+        total_cost += _transcription_usage_cost(usage, model_info)
+    return total_cost
+
+
+def _get_transcription_model_name_from_results(
+    results: OpenAIRealtimeStreamList,
+) -> Optional[str]:
+    """Resolve the ASR model from a transcription_session.* / session.* event."""
+    for result in results:
+        if result.get("type") in (
+            "transcription_session.created",
+            "transcription_session.updated",
+            "session.created",
+            "session.updated",
+        ):
+            session = cast(dict, result).get("session", {}) or {}
+            transcription = (
+                (session.get("audio", {}) or {}).get("input", {}) or {}
+            ).get("transcription", {}) or session.get("input_audio_transcription", {})
+            model = (transcription or {}).get("model") or session.get("model")
+            if model:
+                return model
+    return None
+
+
+def _transcription_usage_cost(usage: dict, model_info: dict) -> float:
+    usage_type = usage.get("type")
+    if usage_type == "duration":
+        seconds = usage.get("seconds") or 0.0
+        per_second = model_info.get("input_cost_per_second") or 0.0
+        return float(seconds) * float(per_second)
+    if usage_type == "tokens":
+        input_token_details = usage.get("input_token_details") or {}
+        audio_tokens = input_token_details.get("audio_tokens") or 0
+        text_tokens = input_token_details.get("text_tokens") or 0
+        output_tokens = usage.get("output_tokens") or 0
+        audio_cost = float(audio_tokens) * float(
+            model_info.get("input_cost_per_audio_token")
+            or model_info.get("input_cost_per_token")
+            or 0.0
+        )
+        text_cost = float(text_tokens) * float(
+            model_info.get("input_cost_per_token") or 0.0
+        )
+        output_cost = float(output_tokens) * float(
+            model_info.get("output_cost_per_token") or 0.0
+        )
+        return audio_cost + text_cost + output_cost
+    return 0.0

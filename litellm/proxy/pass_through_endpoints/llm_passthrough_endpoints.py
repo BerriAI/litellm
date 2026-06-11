@@ -426,12 +426,7 @@ async def mistral_proxy_route(
     )
 
     ## check for streaming
-    is_streaming_request = False
-    # anthropic is streaming when 'stream' = True is in the body
-    if request.method == "POST":
-        _request_body = await request.json()
-        if _request_body.get("stream"):
-            is_streaming_request = True
+    is_streaming_request = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(

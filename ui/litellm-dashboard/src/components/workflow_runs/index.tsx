@@ -587,6 +587,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
   return (
     <div
       style={{
+        width: "100%",
         padding: "24px 32px",
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         minHeight: "calc(100vh - 64px)",

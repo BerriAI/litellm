@@ -6,7 +6,7 @@ import unusedImports from "eslint-plugin-unused-imports";
 
 const eslintConfig = [
   {
-    ignores: [".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts"],
+    ignores: [".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts", "src/lib/http/schema.d.ts"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -32,6 +32,14 @@ const eslintConfig = [
       "max-depth": ["warn", 4],
       "max-params": ["error", 4],
       "max-nested-callbacks": ["error", 4],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.name='fetch']",
+          message:
+            "Raw fetch() is only allowed in src/lib/http/. Use the shared client (createApiClient / apiClient) from @/lib/http/client instead.",
+        },
+      ],
       "no-restricted-imports": [
         "error",
         {
@@ -43,6 +51,12 @@ const eslintConfig = [
           ],
         },
       ],
+    },
+  },
+  {
+    files: ["src/lib/http/**"],
+    rules: {
+      "no-restricted-syntax": "off",
     },
   },
 ];

@@ -321,6 +321,44 @@ class TestAzureAnthropicCostCalculation:
         assert call_kwargs["model"] == "azure_ai/claude-sonnet-4-5_gb_20250929"
         assert call_kwargs["custom_llm_provider"] == "azure_ai"
 
+    def test_passthrough_logging_sets_response_cost_with_server_tool_use_dict(self):
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        logging_obj = self._create_mock_logging_obj(model="claude-3-7-sonnet-20250219")
+        logging_obj.get_router_model_id.return_value = None
+        logging_obj.litellm_params = {}
+
+        response = ModelResponse(
+            id="test-id",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="test", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="claude-3-7-sonnet-20250219",
+            usage={
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "server_tool_use": {"web_search_requests": 1},
+            },
+        )
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="claude-3-7-sonnet-20250219",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert "response_cost" in kwargs
+        assert kwargs["response_cost"] > 0
+
 
 class TestAnthropicBatchPassthroughCostTracking:
     """Test cases for Anthropic batch passthrough cost tracking functionality"""

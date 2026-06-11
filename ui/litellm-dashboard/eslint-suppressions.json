@@ -4,8 +4,83 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/accessGroups/useAccessGroups.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/accessGroups/useCreateAccessGroup.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/accessGroups/useEditAccessGroup.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/blogPosts/useBlogPosts.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/cloudzero/useCloudZeroCreate.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/cloudzero/useCloudZeroDryRun.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/cloudzero/useCloudZeroExport.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings.ts": {
+    "no-restricted-syntax": {
+      "count": 3
+    }
+  },
+  "src/app/(dashboard)/hooks/configOverrides/hashicorpVaultApi.ts": {
+    "no-restricted-syntax": {
+      "count": 4
+    }
+  },
+  "src/app/(dashboard)/hooks/guardrails/useRegisterGuardrail.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/hooks/keys/useKeyAliases.test.ts": {
     "react/display-name": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/keys/useKeys.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/keys/useResetKeySpend.ts": {
+    "no-restricted-syntax": {
       "count": 1
     }
   },
@@ -19,8 +94,18 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/hooks/projects/useCreateProject.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/hooks/projects/useDeleteProject.test.ts": {
     "react/display-name": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/projects/useDeleteProject.ts": {
+    "no-restricted-syntax": {
       "count": 1
     }
   },
@@ -29,8 +114,18 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/hooks/projects/useProjectDetails.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/hooks/projects/useProjects.test.ts": {
     "react/display-name": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/projects/useProjects.ts": {
+    "no-restricted-syntax": {
       "count": 1
     }
   },
@@ -39,9 +134,34 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/layout.tsx": {
-    "react-hooks/set-state-in-effect": {
+  "src/app/(dashboard)/hooks/projects/useUpdateProject.ts": {
+    "no-restricted-syntax": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/proxyConfig/useProxyConfig.ts": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/hooks/router/useRouterFields.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/hooks/teams/useTeams.ts": {
+    "no-restricted-syntax": {
+      "count": 2
     }
   },
   "src/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView.tsx": {
@@ -103,11 +223,6 @@
       "count": 1
     }
   },
-  "src/app/page.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 2
-    }
-  },
   "src/components/AIHub/AgentHubTableColumns.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 1
@@ -115,14 +230,6 @@
   },
   "src/components/AIHub/AgentHubTableColumns.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/AIHub/ClaudeCodeMarketplaceTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
       "count": 1
     }
   },
@@ -178,11 +285,6 @@
       "count": 1
     }
   },
-  "src/components/AIHub/marketplace_table_columns.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/AdminPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -231,6 +333,11 @@
       "count": 1
     }
   },
+  "src/components/CostTrackingSettings/pricing_calculator/use_multi_cost_estimate.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
   "src/components/CostTrackingSettings/provider_discount_table.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 1
@@ -249,6 +356,16 @@
   "src/components/CostTrackingSettings/provider_margin_table.tsx": {
     "no-restricted-imports": {
       "count": 1
+    }
+  },
+  "src/components/CostTrackingSettings/use_discount_config.ts": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/components/CostTrackingSettings/use_margin_config.ts": {
+    "no-restricted-syntax": {
+      "count": 2
     }
   },
   "src/components/CreateUserButton.tsx": {
@@ -562,6 +679,9 @@
     }
   },
   "src/components/WebRTCTester.jsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    },
     "react/no-unescaped-entities": {
       "count": 2
     }
@@ -670,11 +790,6 @@
       "count": 1
     },
     "react-hooks/immutability": {
-      "count": 1
-    }
-  },
-  "src/components/agents/agent_table.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -813,14 +928,6 @@
       "count": 1
     }
   },
-  "src/components/claude_code_plugins/plugin_info.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    }
-  },
   "src/components/claude_code_plugins/plugin_table.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -829,6 +936,9 @@
   "src/components/cloudzero_export_modal.tsx": {
     "no-restricted-imports": {
       "count": 1
+    },
+    "no-restricted-syntax": {
+      "count": 3
     },
     "react-hooks/immutability": {
       "count": 1
@@ -1032,6 +1142,9 @@
     "no-restricted-imports": {
       "count": 1
     },
+    "no-restricted-syntax": {
+      "count": 1
+    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1101,6 +1214,11 @@
   },
   "src/components/mcp_server_management/MCPToolPermissions.tsx": {
     "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/components/mcp_tools/ByokCredentialModal.tsx": {
+    "no-restricted-syntax": {
       "count": 1
     }
   },
@@ -1179,14 +1297,6 @@
       "count": 2
     }
   },
-  "src/components/mcp_tools/mcp_server_columns.tsx": {
-    "max-params": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/mcp_tools/mcp_server_cost_config.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1194,11 +1304,6 @@
   },
   "src/components/mcp_tools/mcp_server_cost_display.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/mcp_tools/mcp_server_edit.test.tsx": {
-    "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
@@ -1340,14 +1445,12 @@
       "count": 1
     }
   },
-  "src/components/navbar.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/components/networking.tsx": {
     "max-params": {
       "count": 23
+    },
+    "no-restricted-syntax": {
+      "count": 154
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -1357,11 +1460,6 @@
   },
   "src/components/onboarding_link.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/organisms/RegenerateKeyModal.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
@@ -1464,6 +1562,11 @@
       "count": 13
     }
   },
+  "src/components/playground/chat_ui/CodeInterpreterOutput.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
   "src/components/playground/chat_ui/CodeInterpreterTool.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1495,6 +1598,9 @@
   "src/components/playground/llm_calls/a2a_send_message.tsx": {
     "max-params": {
       "count": 2
+    },
+    "no-restricted-syntax": {
+      "count": 2
     }
   },
   "src/components/playground/llm_calls/anthropic_messages.tsx": {
@@ -1520,6 +1626,14 @@
   "src/components/playground/llm_calls/embeddings_api.tsx": {
     "max-params": {
       "count": 1
+    },
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "src/components/playground/llm_calls/fetch_agents.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
     }
   },
   "src/components/playground/llm_calls/image_edits.tsx": {
@@ -1534,6 +1648,9 @@
   },
   "src/components/playground/llm_calls/interactions_api.tsx": {
     "max-params": {
+      "count": 1
+    },
+    "no-restricted-syntax": {
       "count": 1
     }
   },
@@ -1728,6 +1845,11 @@
       "count": 1
     }
   },
+  "src/components/prompts/prompt_editor_view/conversation_panel/useConversation.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
   "src/components/prompts/prompt_info.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1786,6 +1908,11 @@
   },
   "src/components/survey/NudgePrompt.tsx": {
     "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/components/survey/SurveyModal.tsx": {
+    "no-restricted-syntax": {
       "count": 1
     }
   },
@@ -1851,6 +1978,11 @@
       "count": 1
     }
   },
+  "src/components/team/useMyTeamMember.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
   "src/components/templates/key_edit_view.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1877,6 +2009,9 @@
   "src/components/ui_theme_settings.tsx": {
     "no-restricted-imports": {
       "count": 1
+    },
+    "no-restricted-syntax": {
+      "count": 3
     },
     "react-hooks/immutability": {
       "count": 1
@@ -2029,12 +2164,20 @@
     }
   },
   "src/components/workflow_runs/index.tsx": {
+    "no-restricted-syntax": {
+      "count": 3
+    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
   "src/contexts/AuthContext.tsx": {
     "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/contexts/ThemeContext.tsx": {
+    "no-restricted-syntax": {
       "count": 1
     }
   },
