@@ -1,12 +1,14 @@
-# Translation v2 differential report (anthropic)
+# Translation v2 differential report (anthropic + bedrock)
 
-v1 and v2 run over the same corpus; every row must be IDENTICAL for
-the anthropic flag to turn on. Regenerate with:
+v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
+explained FALLBACK that v1 serves) for a provider's flag to turn on.
+Bedrock rows additionally pin the characterization-corpus snapshot, so
+each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: 23724c4392
+- commit: 44d6b0b78b
 
-## Request bodies (v1 map_openai_params + transform_request vs v2)
+## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
 - IDENTICAL: assistant_text_and_tool_call
 - IDENTICAL: cache_control_everywhere
@@ -61,17 +63,100 @@ the anthropic flag to turn on. Regenerate with:
 - IDENTICAL: user_metadata
 - IDENTICAL: whitespace_text_part_placeholder
 
-## Responses (v1 transform_response vs v2)
+## anthropic: responses (v1 transform_response vs v2)
 
 - IDENTICAL: json_tool
 - IDENTICAL: text
 - IDENTICAL: thinking
 - IDENTICAL: tools
 
-## Streams (v1 CustomStreamWrapper replay vs v2 engine/stream)
+## anthropic: streams (v1 CustomStreamWrapper replay vs v2 engine/stream)
 
 - IDENTICAL: text
 - IDENTICAL: thinking
 - IDENTICAL: tools
+
+## bedrock_converse: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON)
+
+- IDENTICAL: cache_control_messages
+- IDENTICAL: cache_control_tools
+- IDENTICAL: full_combo
+- IDENTICAL: image_base64
+- SKIPPED (corpus): image_url (v1 downloads URL media for bedrock transforms (network))
+- IDENTICAL: multi_turn
+- IDENTICAL: params_sampling
+- FALLBACK (v1 serves it): pdf_base64 (file/document parts are outside the v2 inbound surface)
+- IDENTICAL: plain_text
+- IDENTICAL: reasoning_effort_low
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema
+- IDENTICAL: system_prompt
+- IDENTICAL: thinking_enabled
+- IDENTICAL: thinking_history_blocks
+- IDENTICAL: tools_basic
+- IDENTICAL: tools_forced_choice
+- IDENTICAL: tools_parallel
+- IDENTICAL: tools_streamed_args_roundtrip
+- IDENTICAL: quirk no_max_tokens_no_default (v1 in-process)
+- IDENTICAL: quirk stop_whitespace_kept (v1 in-process)
+- IDENTICAL: quirk thinking_budget_clamped_to_bedrock_min (v1 in-process)
+- IDENTICAL: quirk thinking_rewrites_forced_choice_to_auto (v1 in-process)
+- IDENTICAL: quirk tool_name_normalized (v1 in-process)
+- IDENTICAL: quirk top_k_additional_field (v1 in-process)
+- IDENTICAL: quirk assistant_blank_text_dropped (v1 in-process)
+- IDENTICAL: quirk json_schema_with_effort_drops_forced_choice (v1 in-process)
+
+## bedrock_invoke: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON)
+
+- IDENTICAL: cache_control_messages
+- IDENTICAL: cache_control_tools
+- IDENTICAL: full_combo
+- IDENTICAL: image_base64
+- SKIPPED (corpus): image_url (v1 downloads URL media for bedrock transforms (network))
+- IDENTICAL: multi_turn
+- IDENTICAL: params_sampling
+- FALLBACK (v1 serves it): pdf_base64 (file/document parts are outside the v2 inbound surface)
+- IDENTICAL: plain_text
+- IDENTICAL: reasoning_effort_low
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema
+- IDENTICAL: system_prompt
+- IDENTICAL: thinking_enabled
+- IDENTICAL: thinking_history_blocks
+- IDENTICAL: tools_basic
+- IDENTICAL: tools_forced_choice
+- IDENTICAL: tools_parallel
+- IDENTICAL: tools_streamed_args_roundtrip
+- IDENTICAL: quirk no_max_tokens_no_default (v1 in-process)
+- IDENTICAL: quirk stop_whitespace_kept (v1 in-process)
+- IDENTICAL: quirk thinking_budget_clamped_to_bedrock_min (v1 in-process)
+- IDENTICAL: quirk thinking_rewrites_forced_choice_to_auto (v1 in-process)
+- IDENTICAL: quirk tool_name_normalized (v1 in-process)
+- IDENTICAL: quirk top_k_additional_field (v1 in-process)
+
+## bedrock_converse: responses (snapshot == v1 transform_response == v2)
+
+- IDENTICAL: cache_usage
+- IDENTICAL: reasoning
+- IDENTICAL: text_basic
+- IDENTICAL: tool_use
+
+## bedrock_invoke: responses (snapshot == v1 transform_response == v2)
+
+- IDENTICAL: text_basic
+- IDENTICAL: thinking
+- IDENTICAL: tool_use
+
+## bedrock_converse: streams (snapshot == real decoder replay == v2 fold, parsed-event seam)
+
+- IDENTICAL: cache_usage_stream
+- IDENTICAL: reasoning_stream
+- IDENTICAL: text_stream
+- IDENTICAL: tool_stream
+
+## bedrock_invoke: streams (snapshot == real decoder replay == v2 fold, parsed-event seam)
+
+- IDENTICAL: text_stream
+- IDENTICAL: tool_stream
 
 Result: 0 divergent rows. Shapes outside the corpus fall back to v1 (fail-closed), so this table is the complete flag-on surface.

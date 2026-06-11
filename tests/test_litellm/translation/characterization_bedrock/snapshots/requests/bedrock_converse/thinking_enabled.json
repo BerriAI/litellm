@@ -1,0 +1,22 @@
+{
+  "additionalModelRequestFields": {
+    "stream": false,
+    "thinking": {
+      "budget_tokens": 1024,
+      "type": "enabled"
+    }
+  },
+  "inferenceConfig": {
+    "maxTokens": 2048
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?"
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}

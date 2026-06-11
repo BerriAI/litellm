@@ -137,3 +137,142 @@ def test_streaming_stays_on_v1() -> None:
         )
         is None
     )
+
+
+# ---------------------------------------------------------------------------
+# bedrock seam: the completion() fork on the bedrock branch (SigV4 signs the
+# FINAL wire bytes; respx intercepts the runtime endpoint).
+# ---------------------------------------------------------------------------
+
+_CONVERSE_MODEL = "bedrock/anthropic.claude-sonnet-4-20250514-v1:0"
+_CONVERSE_URL = (
+    "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+    "anthropic.claude-sonnet-4-20250514-v1%3A0/converse"
+)
+_INVOKE_MODEL = "bedrock/invoke/anthropic.claude-3-7-sonnet-20250219-v1:0"
+_INVOKE_URL = (
+    "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+    "anthropic.claude-3-7-sonnet-20250219-v1:0/invoke"
+)
+
+_CONVERSE_RESPONSE = {
+    "output": {
+        "message": {"role": "assistant", "content": [{"text": "Hello from v2."}]}
+    },
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+}
+
+_INVOKE_RESPONSE = {
+    "id": "msg_bdrk_seam01",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-3-7-sonnet-20250219",
+    "content": [{"type": "text", "text": "Hello from v2."}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 10, "output_tokens": 5},
+}
+
+
+@pytest.fixture()
+def _bedrock_flag(monkeypatch):
+    monkeypatch.setattr(
+        litellm, "translation_v2_providers", ["bedrock_converse", "bedrock_invoke"]
+    )
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIASEAMTESTKEY00000")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "seam-test-secret")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+
+@respx.mock
+def test_bedrock_converse_flag_on_serves_through_v2(_bedrock_flag) -> None:
+    route = respx.post(_CONVERSE_URL).mock(
+        return_value=Response(200, json=_CONVERSE_RESPONSE)
+    )
+    response = litellm.completion(
+        model=_CONVERSE_MODEL,
+        max_tokens=32,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert route.called
+    request = route.calls.last.request
+    assert "Authorization" in request.headers  # SigV4 over the final bytes
+    sent = json.loads(request.content)
+    # the transform-seam stream marker never reaches the wire
+    assert "additionalModelRequestFields" not in sent
+    assert sent["inferenceConfig"] == {"maxTokens": 32}
+    assert response.choices[0].message.content == "Hello from v2."
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.total_tokens == 15
+
+
+@respx.mock
+def test_bedrock_invoke_flag_on_serves_through_v2(_bedrock_flag) -> None:
+    route = respx.post(_INVOKE_URL).mock(
+        return_value=Response(200, json=_INVOKE_RESPONSE)
+    )
+    response = litellm.completion(
+        model=_INVOKE_MODEL,
+        max_tokens=32,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert route.called
+    request = route.calls.last.request
+    assert "Authorization" in request.headers
+    sent = json.loads(request.content)
+    assert sent["anthropic_version"] == "bedrock-2023-05-31"
+    assert "model" not in sent
+    assert "stream" not in sent
+    assert response.choices[0].message.content == "Hello from v2."
+
+
+@respx.mock
+def test_bedrock_provider_error_raises_contract_not_fallback(_bedrock_flag) -> None:
+    route = respx.post(_CONVERSE_URL).mock(
+        return_value=Response(429, json={"message": "rate limited"})
+    )
+    with pytest.raises(litellm.exceptions.RateLimitError):
+        litellm.completion(
+            model=_CONVERSE_MODEL,
+            max_tokens=32,
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=0,
+        )
+    assert route.call_count == 1  # sent once: no silent re-send through v1
+
+
+def test_bedrock_seam_stays_on_v1_for_stream_and_non_claude(_bedrock_flag) -> None:
+    from litellm.translation_seam import try_completion_v2_bedrock
+
+    common = dict(
+        messages=[{"role": "user", "content": "hi"}],
+        optional_param_args={},
+        non_default_params={},
+        api_key=None,
+        api_base=None,
+        timeout=None,
+        acompletion=None,
+        logging_obj=None,
+        model_response=None,
+        request_drop_params=None,
+    )
+    assert (
+        try_completion_v2_bedrock(
+            bedrock_route="converse",
+            model="anthropic.claude-sonnet-4-20250514-v1:0",
+            stream=True,
+            **common,
+        )
+        is None
+    )
+    assert (
+        try_completion_v2_bedrock(
+            bedrock_route="invoke",
+            model="meta.llama3-1-70b-instruct-v1:0",
+            stream=None,
+            **common,
+        )
+        is None
+    )

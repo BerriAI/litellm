@@ -1,0 +1,27 @@
+{
+  "anthropic_version": "bedrock-2023-05-31",
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "What is the capital of France?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "system": [
+    {
+      "cache_control": {
+        "type": "ephemeral"
+      },
+      "text": "You are a terse geographer.",
+      "type": "text"
+    }
+  ]
+}

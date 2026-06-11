@@ -1,0 +1,17 @@
+{
+  "id": "system_prompt",
+  "messages": [
+    {
+      "content": "You are a terse geographer.",
+      "role": "system"
+    },
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 256
+  },
+  "skip": {}
+}

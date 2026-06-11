@@ -1,0 +1,16 @@
+{
+  "id": "response_format_json_object",
+  "messages": [
+    {
+      "content": "Reply in JSON: capital of France?",
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 256,
+    "response_format": {
+      "type": "json_object"
+    }
+  },
+  "skip": {}
+}

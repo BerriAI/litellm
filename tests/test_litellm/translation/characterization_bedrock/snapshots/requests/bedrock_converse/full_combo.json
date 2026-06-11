@@ -1,0 +1,88 @@
+{
+  "additionalModelRequestFields": {
+    "stream": false,
+    "thinking": {
+      "budget_tokens": 1024,
+      "type": "enabled"
+    }
+  },
+  "inferenceConfig": {
+    "maxTokens": 2048,
+    "temperature": 1
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Weather in Paris?"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "toolUse": {
+            "input": {
+              "city": "Paris"
+            },
+            "name": "get_weather",
+            "toolUseId": "call_char_001"
+          }
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "toolResult": {
+            "content": [
+              {
+                "text": "18C, clear"
+              }
+            ],
+            "toolUseId": "call_char_001"
+          }
+        },
+        {
+          "text": "Summarize, then check the weather again."
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "system": [
+    {
+      "text": "You are a terse geographer."
+    },
+    {
+      "cachePoint": {
+        "type": "default"
+      }
+    }
+  ],
+  "toolConfig": {
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "Get current weather for a city.",
+          "inputSchema": {
+            "json": {
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ],
+              "type": "object"
+            }
+          },
+          "name": "get_weather"
+        }
+      }
+    ]
+  }
+}

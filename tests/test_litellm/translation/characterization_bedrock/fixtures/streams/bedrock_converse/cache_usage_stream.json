@@ -1,0 +1,7 @@
+[
+  {"role": "assistant"},
+  {"contentBlockIndex": 0, "delta": {"text": "Paris."}},
+  {"contentBlockIndex": 0},
+  {"stopReason": "end_turn"},
+  {"usage": {"inputTokens": 6, "outputTokens": 4, "totalTokens": 3082, "cacheReadInputTokens": 2048, "cacheWriteInputTokens": 1024}, "metrics": {"latencyMs": 430}}
+]

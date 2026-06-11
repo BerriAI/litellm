@@ -1,0 +1,65 @@
+{
+  "additionalModelRequestFields": {
+    "stream": false
+  },
+  "inferenceConfig": {
+    "maxTokens": 256
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "toolConfig": {
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "Get current weather for a city.",
+          "inputSchema": {
+            "json": {
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ],
+              "type": "object"
+            }
+          },
+          "name": "get_weather"
+        }
+      },
+      {
+        "toolSpec": {
+          "description": "Get current time for a timezone.",
+          "inputSchema": {
+            "json": {
+              "properties": {
+                "tz": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tz"
+              ],
+              "type": "object"
+            }
+          },
+          "name": "get_time"
+        }
+      },
+      {
+        "cachePoint": {
+          "type": "default"
+        }
+      }
+    ]
+  }
+}
