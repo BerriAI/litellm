@@ -604,6 +604,49 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     assert "login" in response.text
 
 
+def test_admin_ui_export_serves_nested_extensionless_routes():
+    out_dir = (
+        Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
+    )
+    assert out_dir.is_dir(), f"missing UI export at {out_dir}"
+
+    nested_html_offenders = [
+        path.relative_to(out_dir).as_posix()
+        for path in out_dir.rglob("*.html")
+        if path.parent != out_dir
+        and path.name != "index.html"
+        and "_next" not in path.parts
+        and "litellm-asset-prefix" not in path.parts
+    ]
+    assert not nested_html_offenders, (
+        "Nested routes must be named index.html. Offenders: "
+        f"{nested_html_offenders}"
+    )
+
+    callback_index = out_dir / "mcp" / "oauth" / "callback" / "index.html"
+    assert callback_index.is_file(), (
+        f"MCP OAuth callback page must exist at {callback_index}; "
+        "without it /ui/mcp/oauth/callback 404s after Linear redirects back."
+    )
+
+    fastapi_app = FastAPI()
+    fastapi_app.mount(
+        "/ui", StaticFiles(directory=str(out_dir), html=True), name="ui"
+    )
+    client = TestClient(fastapi_app)
+
+    redirect = client.get(
+        "/ui/mcp/oauth/callback?code=abc&state=xyz",
+        follow_redirects=False,
+    )
+    assert redirect.status_code == 307
+    assert redirect.headers["location"].endswith("/ui/mcp/oauth/callback/?code=abc&state=xyz")
+
+    landed = client.get("/ui/mcp/oauth/callback?code=abc&state=xyz")
+    assert landed.status_code == 200
+    assert "<html" in landed.text.lower()
+
+
 def test_restructure_always_happens(monkeypatch):
     """
     Test that restructuring logic always executes regardless of LITELLM_NON_ROOT setting.

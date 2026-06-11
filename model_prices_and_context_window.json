@@ -982,7 +982,9 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "high"
     },
     "anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1013,7 +1015,8 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "max"
     },
     "global.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1044,7 +1047,8 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "max"
     },
     "us.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1075,7 +1079,8 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "max"
     },
     "eu.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1105,7 +1110,8 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "max"
     },
     "au.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1135,7 +1141,8 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "max"
     },
     "anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1166,7 +1173,9 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "anthropic.claude-mythos-preview": {
         "input_cost_per_token": 0,
@@ -1212,7 +1221,9 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "us.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1243,7 +1254,9 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "eu.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1273,7 +1286,9 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "au.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1303,7 +1318,9 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -6067,6 +6084,17 @@
         "mode": "audio_speech",
         "source": "https://azure.microsoft.com/en-us/pricing/calculator/"
     },
+    "azure/speech/azure-stt": {
+        "audio_transcription_config": "azure_speech",
+        "input_cost_per_second": 0.0002777778,
+        "litellm_provider": "azure",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/speech-services/",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "azure/tts-1": {
         "input_cost_per_character": 1.5e-05,
         "litellm_provider": "azure",
@@ -9793,7 +9821,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_output_config": true
     },
     "claude-opus-4-5": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -9821,7 +9850,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_output_config": true
     },
     "claude-opus-4-6": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -19039,6 +19069,8 @@
         "output_cost_per_token": 8e-06,
         "output_cost_per_token_batches": 4e-06,
         "output_cost_per_token_priority": 1.4e-05,
+        "regional_processing_uplift_multiplier_eu": 1.10,
+        "regional_processing_uplift_multiplier_us": 1.10,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -19112,6 +19144,8 @@
         "output_cost_per_token": 1.6e-06,
         "output_cost_per_token_batches": 8e-07,
         "output_cost_per_token_priority": 2.8e-06,
+        "regional_processing_uplift_multiplier_eu": 1.10,
+        "regional_processing_uplift_multiplier_us": 1.10,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -19185,6 +19219,8 @@
         "output_cost_per_token": 4e-07,
         "output_cost_per_token_batches": 2e-07,
         "output_cost_per_token_priority": 8e-07,
+        "regional_processing_uplift_multiplier_eu": 1.10,
+        "regional_processing_uplift_multiplier_us": 1.10,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -19256,6 +19292,8 @@
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
         "output_cost_per_token_priority": 1.7e-05,
+        "regional_processing_uplift_multiplier_eu": 1.10,
+        "regional_processing_uplift_multiplier_us": 1.10,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -19297,6 +19335,8 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
+        "regional_processing_uplift_multiplier_eu": 1.10,
+        "regional_processing_uplift_multiplier_us": 1.10,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -19318,6 +19358,8 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
+        "regional_processing_uplift_multiplier_eu": 1.10,
+        "regional_processing_uplift_multiplier_us": 1.10,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -19606,6 +19648,8 @@
         "output_cost_per_token": 6e-07,
         "output_cost_per_token_batches": 3e-07,
         "output_cost_per_token_priority": 1e-06,
+        "regional_processing_uplift_multiplier_eu": 1.10,
+        "regional_processing_uplift_multiplier_us": 1.10,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -20309,6 +20353,8 @@
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_flex": 5e-06,
         "output_cost_per_token_priority": 2e-05,
+        "regional_processing_uplift_multiplier_eu": 1.10,
+        "regional_processing_uplift_multiplier_us": 1.10,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -21231,6 +21277,8 @@
         "mode": "responses",
         "output_cost_per_token": 0.00012,
         "output_cost_per_token_batches": 6e-05,
+        "regional_processing_uplift_multiplier_eu": 1.10,
+        "regional_processing_uplift_multiplier_us": 1.10,
         "supported_endpoints": [
             "/v1/batch",
             "/v1/responses"
@@ -21637,6 +21685,8 @@
         "output_cost_per_token": 2e-06,
         "output_cost_per_token_flex": 1e-06,
         "output_cost_per_token_priority": 3.6e-06,
+        "regional_processing_uplift_multiplier_eu": 1.10,
+        "regional_processing_uplift_multiplier_us": 1.10,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -21718,6 +21768,8 @@
         "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
+        "regional_processing_uplift_multiplier_eu": 1.10,
+        "regional_processing_uplift_multiplier_us": 1.10,
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "output_cost_per_token_flex": 2e-07,
@@ -26018,6 +26070,32 @@
         "supports_vision": true,
         "supports_web_search": true
     },
+    "oci/meta.llama-3.1-8b-instruct": {
+        "input_cost_per_token": 7.2e-07,
+        "litellm_provider": "oci",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4000,
+        "max_tokens": 4000,
+        "mode": "chat",
+        "output_cost_per_token": 7.2e-07,
+        "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
+        "supports_function_calling": true,
+        "supports_response_schema": false,
+        "supports_native_streaming": true
+    },
+    "oci/meta.llama-3.1-70b-instruct": {
+        "input_cost_per_token": 7.2e-07,
+        "litellm_provider": "oci",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4000,
+        "max_tokens": 4000,
+        "mode": "chat",
+        "output_cost_per_token": 7.2e-07,
+        "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
+        "supports_function_calling": true,
+        "supports_response_schema": false,
+        "supports_native_streaming": true
+    },
     "oci/meta.llama-3.1-405b-instruct": {
         "input_cost_per_token": 1.068e-05,
         "litellm_provider": "oci",
@@ -26028,7 +26106,8 @@
         "output_cost_per_token": 1.068e-05,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true
     },
     "oci/meta.llama-3.2-90b-vision-instruct": {
         "input_cost_per_token": 2e-06,
@@ -26041,6 +26120,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
+        "supports_native_streaming": true,
         "supports_vision": true
     },
     "oci/meta.llama-3.3-70b-instruct": {
@@ -26053,31 +26133,35 @@
         "output_cost_per_token": 7.2e-07,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true
     },
     "oci/meta.llama-4-maverick-17b-128e-instruct-fp8": {
         "input_cost_per_token": 7.2e-07,
         "litellm_provider": "oci",
-        "max_input_tokens": 512000,
-        "max_output_tokens": 4000,
-        "max_tokens": 4000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 7.2e-07,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true,
+        "supports_vision": true
     },
     "oci/meta.llama-4-scout-17b-16e-instruct": {
         "input_cost_per_token": 7.2e-07,
         "litellm_provider": "oci",
-        "max_input_tokens": 192000,
-        "max_output_tokens": 4000,
-        "max_tokens": 4000,
+        "max_input_tokens": 10485760,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 7.2e-07,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true
     },
     "oci/xai.grok-3": {
         "input_cost_per_token": 3e-06,
@@ -26089,7 +26173,8 @@
         "output_cost_per_token": 1.5e-05,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true
     },
     "oci/xai.grok-3-fast": {
         "input_cost_per_token": 5e-06,
@@ -26101,7 +26186,8 @@
         "output_cost_per_token": 2.5e-05,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true
     },
     "oci/xai.grok-3-mini": {
         "input_cost_per_token": 3e-07,
@@ -26113,7 +26199,8 @@
         "output_cost_per_token": 5e-07,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true
     },
     "oci/xai.grok-3-mini-fast": {
         "input_cost_per_token": 6e-07,
@@ -26125,7 +26212,8 @@
         "output_cost_per_token": 4e-06,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true
     },
     "oci/xai.grok-4": {
         "input_cost_per_token": 3e-06,
@@ -26137,7 +26225,8 @@
         "output_cost_per_token": 1.5e-05,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true
     },
     "oci/cohere.command-latest": {
         "input_cost_per_token": 1.56e-06,
@@ -26149,7 +26238,8 @@
         "output_cost_per_token": 1.56e-06,
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true
     },
     "oci/cohere.command-a-03-2025": {
         "input_cost_per_token": 1.56e-06,
@@ -26161,7 +26251,8 @@
         "output_cost_per_token": 1.56e-06,
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true
     },
     "oci/cohere.command-plus-latest": {
         "input_cost_per_token": 1.56e-06,
@@ -26173,7 +26264,86 @@
         "output_cost_per_token": 1.56e-06,
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
-        "supports_response_schema": false
+        "supports_response_schema": false,
+        "supports_native_streaming": true
+    },
+    "oci/google.gemini-2.5-flash": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "oci",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_native_streaming": true
+    },
+    "oci/google.gemini-2.5-pro": {
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "oci",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_native_streaming": true
+    },
+    "oci/google.gemini-2.5-flash-lite": {
+        "input_cost_per_token": 7.5e-08,
+        "litellm_provider": "oci",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 3e-07,
+        "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_native_streaming": true
+    },
+    "oci/cohere.command-a-vision": {
+        "input_cost_per_token": 1.56e-06,
+        "litellm_provider": "oci",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.56e-06,
+        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
+        "supports_function_calling": true,
+        "supports_response_schema": false,
+        "supports_native_streaming": true,
+        "supports_vision": true
+    },
+    "oci/cohere.command-a-reasoning": {
+        "input_cost_per_token": 1.56e-06,
+        "litellm_provider": "oci",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.56e-06,
+        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
+        "supports_function_calling": false,
+        "supports_response_schema": false,
+        "supports_native_streaming": true
+    },
+    "oci/cohere.embed-multilingual-image-v3.0": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "oci",
+        "max_input_tokens": 512,
+        "mode": "embedding",
+        "output_vector_size": 1024,
+        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
+        "supports_vision": true
     },
     "oci/cohere.command-a-reasoning-08-2025": {
         "input_cost_per_token": 1.56e-06,
@@ -26249,18 +26419,6 @@
         "supports_response_schema": false,
         "supports_vision": true
     },
-    "oci/meta.llama-3.1-70b-instruct": {
-        "input_cost_per_token": 7.2e-07,
-        "litellm_provider": "oci",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4000,
-        "max_tokens": 4000,
-        "mode": "chat",
-        "output_cost_per_token": 7.2e-07,
-        "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
-        "supports_function_calling": true,
-        "supports_response_schema": false
-    },
     "oci/meta.llama-3.3-70b-instruct-fp8-dynamic": {
         "input_cost_per_token": 7.2e-07,
         "litellm_provider": "oci",
@@ -26333,42 +26491,48 @@
         "supports_function_calling": true,
         "supports_response_schema": false
     },
-    "oci/google.gemini-2.5-pro": {
+    "oci/openai.gpt-5": {
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "oci",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
-        "max_tokens": 65536,
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
-    "oci/google.gemini-2.5-flash": {
-        "input_cost_per_token": 1.5e-07,
+    "oci/openai.gpt-5-mini": {
+        "input_cost_per_token": 2.5e-07,
         "litellm_provider": "oci",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
-        "max_tokens": 65536,
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 6e-07,
+        "output_cost_per_token": 2e-06,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
-    "oci/google.gemini-2.5-flash-lite": {
-        "input_cost_per_token": 7.5e-08,
+    "oci/openai.gpt-5-nano": {
+        "input_cost_per_token": 5e-08,
         "litellm_provider": "oci",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
-        "max_tokens": 65536,
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 3e-07,
+        "output_cost_per_token": 4e-07,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31538,7 +31702,9 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "high"
     },
     "global.anthropic.claude-opus-4-5-20251101-v1:0": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -31567,7 +31733,9 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "high"
     },
     "eu.anthropic.claude-opus-4-5-20251101-v1:0": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -31595,7 +31763,9 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "high"
     },
     "us.anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,

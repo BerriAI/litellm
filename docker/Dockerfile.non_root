@@ -55,22 +55,10 @@ COPY . .
 # Set non-root flag for build time consistency
 ENV LITELLM_NON_ROOT=true
 
-# Stage the pre-built Admin UI from the checked-in Next.js static export.
-# _experimental/out/ is regenerated as part of the release runbook.
-# Restructure extensionless routes (foo.html -> foo/index.html) to match the layout
-# proxy_server.py expects, and drop a readiness marker.
 RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
     cp -r /app/litellm/proxy/_experimental/out/. /var/lib/litellm/ui/ && \
     cp /app/litellm/proxy/logo.jpg /var/lib/litellm/assets/logo.jpg && \
-    ( cd /var/lib/litellm/ui && \
-      for html_file in *.html; do \
-        if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
-          folder_name="${html_file%.html}" && \
-          mkdir -p "$folder_name" && \
-          mv "$html_file" "$folder_name/index.html"; \
-        fi; \
-      done && \
-      touch .litellm_ui_ready )
+    touch /var/lib/litellm/ui/.litellm_ui_ready
 
 RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
     if [ "$PROXY_EXTRAS_SOURCE" = "published" ]; then \

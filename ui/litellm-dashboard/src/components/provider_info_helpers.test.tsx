@@ -218,14 +218,83 @@ describe("provider_info_helpers", () => {
       expect(result).toEqual(["gpt-3.5-turbo", "gpt-4"]);
     });
 
-    it("should return models when litellm_provider includes the provider string", () => {
+    it("should return models whose litellm_provider is a prefix-anchored variant of the provider", () => {
       const modelMap = {
-        "custom-openai-model": { litellm_provider: "custom_openai_endpoint" },
-        "another-model": { litellm_provider: "openai" },
+        "anthropic-text-model": { litellm_provider: "anthropic_text" },
+        "claude-3-opus": { litellm_provider: "anthropic" },
+      };
+      const result = getProviderModels(Providers.Anthropic, modelMap);
+      expect(result).toContain("anthropic-text-model");
+      expect(result).toContain("claude-3-opus");
+    });
+
+    it("should not leak vertex_ai-anthropic_models into the Anthropic provider", () => {
+      const modelMap = {
+        "claude-3-opus": { litellm_provider: "anthropic" },
+        "vertex_ai/claude-3-5-sonnet": { litellm_provider: "vertex_ai-anthropic_models" },
+        "vertex_ai/claude-haiku-4-5": { litellm_provider: "vertex_ai-anthropic_models" },
+      };
+      const result = getProviderModels(Providers.Anthropic, modelMap);
+      expect(result).toEqual(["claude-3-opus"]);
+      expect(result).not.toContain("vertex_ai/claude-3-5-sonnet");
+      expect(result).not.toContain("vertex_ai/claude-haiku-4-5");
+    });
+
+    it("should not leak vertex_ai-openai_models into the OpenAI provider", () => {
+      const modelMap = {
+        "gpt-4": { litellm_provider: "openai" },
+        "vertex_ai/openai-something": { litellm_provider: "vertex_ai-openai_models" },
       };
       const result = getProviderModels(Providers.OpenAI, modelMap);
-      expect(result).toContain("custom-openai-model");
-      expect(result).toContain("another-model");
+      expect(result).toEqual(["gpt-4"]);
+      expect(result).not.toContain("vertex_ai/openai-something");
+    });
+
+    // Note on the next three tests: in production, AddModelForm passes the
+    // backend `provider` field (the provider_map *key*, e.g. "Vertex_AI",
+    // "Bedrock", "FireworksAI") into getProviderModels, not the Providers
+    // enum value. The `as Providers` cast in callers is misleading. We mirror
+    // the production shape here by passing the key directly.
+    it("should include all vertex_ai variants when called with 'Vertex_AI' provider key", () => {
+      const modelMap = {
+        "vertex_ai/gemini-pro": { litellm_provider: "vertex_ai" },
+        "vertex_ai/claude-3-5-sonnet": { litellm_provider: "vertex_ai-anthropic_models" },
+        "vertex_ai/text-bison": { litellm_provider: "vertex_ai-text-models" },
+        "vertex_ai_beta/something": { litellm_provider: "vertex_ai_beta" },
+        "anthropic-native": { litellm_provider: "anthropic" },
+      };
+      const result = getProviderModels("Vertex_AI" as Providers, modelMap);
+      expect(result).toContain("vertex_ai/gemini-pro");
+      expect(result).toContain("vertex_ai/claude-3-5-sonnet");
+      expect(result).toContain("vertex_ai/text-bison");
+      expect(result).toContain("vertex_ai_beta/something");
+      expect(result).not.toContain("anthropic-native");
+    });
+
+    it("should include bedrock variants (converse, mantle) when called with 'Bedrock' provider key", () => {
+      const modelMap = {
+        "bedrock-base": { litellm_provider: "bedrock" },
+        "bedrock-converse-model": { litellm_provider: "bedrock_converse" },
+        "bedrock-mantle-model": { litellm_provider: "bedrock_mantle" },
+        "openai-model": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels("Bedrock" as Providers, modelMap);
+      expect(result).toContain("bedrock-base");
+      expect(result).toContain("bedrock-converse-model");
+      expect(result).toContain("bedrock-mantle-model");
+      expect(result).not.toContain("openai-model");
+    });
+
+    it("should include fireworks_ai-embedding-models when called with 'FireworksAI' provider key", () => {
+      const modelMap = {
+        "fireworks-base": { litellm_provider: "fireworks_ai" },
+        "fireworks-embed": { litellm_provider: "fireworks_ai-embedding-models" },
+        "openai-model": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels("FireworksAI" as Providers, modelMap);
+      expect(result).toContain("fireworks-base");
+      expect(result).toContain("fireworks-embed");
+      expect(result).not.toContain("openai-model");
     });
 
     it("should filter out models with null values", () => {

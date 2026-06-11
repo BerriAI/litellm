@@ -146,8 +146,9 @@ def make_redis_persister(
     class _RedisPersister:
         @staticmethod
         def load_cassette(cassette_path, serializer):
+            key = redis_key_for(cassette_path)
             try:
-                data = redis_client.get(redis_key_for(cassette_path))
+                data = redis_client.get(key)
             except RedisError as exc:
                 _record_cache_failure("load", exc)
                 msg = (
@@ -162,7 +163,7 @@ def make_redis_persister(
             try:
                 if isinstance(data, bytes):
                     data = data.decode("utf-8")
-                return deserialize(data, serializer)
+                result = deserialize(data, serializer)
             except Exception as exc:
                 _record_cache_failure("load", exc)
                 msg = (
@@ -173,6 +174,22 @@ def make_redis_persister(
                 _log.warning(msg)
                 warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
                 raise CassetteNotFoundError() from exc
+            # Slide the expiry forward on every successful read. A plain GET
+            # does not touch the key's TTL, so a cassette that is only ever
+            # replayed (HIT/NOOP, never re-recorded) expires exactly
+            # ``ttl_seconds`` after its last *write* no matter how often it is
+            # read — and whichever CI run happens to cross that boundary
+            # re-records it live, surfacing as a spurious VCR MISS that no
+            # amount of matcher tolerance can prevent. Refreshing the TTL on
+            # read keeps any cassette used at least once per TTL window alive
+            # indefinitely, so the second/third run of a day replays cleanly.
+            # Best-effort: a failed refresh must never turn a successful load
+            # into a miss.
+            try:
+                redis_client.expire(key, ttl_seconds)
+            except RedisError:
+                pass
+            return result
 
         @staticmethod
         def save_cassette(cassette_path, cassette_dict, serializer):

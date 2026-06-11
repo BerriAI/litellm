@@ -38,7 +38,7 @@ async def test_async_create_file():
         file=open(file_path, "rb"),
         purpose="batch",
         custom_llm_provider="bedrock",
-        s3_bucket_name="litellm-proxy",
+        s3_bucket_name="litellm-proxy-941277531214",
     )
 
 
@@ -55,7 +55,7 @@ async def test_async_file_and_batch():
         file=open(file_path, "rb"),
         purpose="batch",
         custom_llm_provider="bedrock",
-        s3_bucket_name="litellm-proxy",
+        s3_bucket_name="litellm-proxy-941277531214",
     )
     print("CREATED FILE RESPONSE=", file_obj)
 
@@ -70,7 +70,7 @@ async def test_async_file_and_batch():
         # bedrock specific params
         #########################################################
         model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        aws_batch_role_arn="arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV",
+        aws_batch_role_arn="arn:aws:iam::941277531214:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV",
     )
     print("CREATED BATCH RESPONSE=", create_batch_response)
 
@@ -129,7 +129,7 @@ async def test_mock_bedrock_file_url_mapping():
             ),
             purpose="batch",
             custom_llm_provider="bedrock",
-            s3_bucket_name="litellm-proxy",
+            s3_bucket_name="litellm-proxy-941277531214",
         )
 
         print(f"PUT URL: {captured_put_url}")

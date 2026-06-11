@@ -117,6 +117,58 @@ async def _get_prisma_client():
     return prisma_client
 
 
+def _custom_llm_provider_from_responses_response(
+    response: Any,
+    default: str = "openai",
+) -> str:
+    hidden_params: Dict[str, Any] = {}
+    if isinstance(response, dict):
+        hidden_params = response.get("_hidden_params") or {}
+    else:
+        hidden_params = getattr(response, "_hidden_params", None) or {}
+
+    provider = hidden_params.get("custom_llm_provider")
+    if isinstance(provider, str) and provider:
+        return provider
+    return default
+
+
+async def record_container_owners_from_responses_response(
+    response: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+    custom_llm_provider: Optional[str] = None,
+) -> None:
+    """Track containers created implicitly by code interpreter in /v1/responses."""
+    container_ids = (
+        ResponsesAPIRequestUtils.collect_container_ids_from_responses_response(response)
+    )
+    if not container_ids:
+        return
+
+    resolved_provider = (
+        custom_llm_provider or _custom_llm_provider_from_responses_response(response)
+    )
+
+    for container_id in container_ids:
+        try:
+            await record_container_owner(
+                response={"id": container_id, "object": "container"},
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=resolved_provider,
+            )
+        except Exception as e:
+            # Per-container errors (including ``HTTPException`` from
+            # conflicting/forbidden ownership rows) must not abort the
+            # batch — other containers in the same response should still
+            # get recorded so their follow-up file API calls don't 403.
+            verbose_proxy_logger.exception(
+                "Failed to record container ownership from responses output "
+                "for container_id=%s: %s",
+                container_id,
+                e,
+            )
+
+
 async def record_container_owner(
     response: Any,
     user_api_key_dict: UserAPIKeyAuth,
@@ -151,6 +203,8 @@ async def record_container_owner(
     file_object = _dump_response(response)
     file_object["custom_llm_provider"] = resolved_provider
     file_object["provider_container_id"] = original_container_id
+    # Prisma Python requires Json fields to be serialized as a JSON string.
+    file_object_json: str = json.dumps(file_object)
 
     prisma_client = await _get_prisma_client()
     if prisma_client is None:
@@ -172,7 +226,7 @@ async def record_container_owner(
             where={"model_object_id": model_object_id},
             data={
                 "unified_object_id": container_id,
-                "file_object": file_object,
+                "file_object": file_object_json,
                 "updated_by": owner,
             },
         )
@@ -181,7 +235,7 @@ async def record_container_owner(
             data={
                 "unified_object_id": container_id,
                 "model_object_id": model_object_id,
-                "file_object": file_object,
+                "file_object": file_object_json,
                 "file_purpose": CONTAINER_OBJECT_PURPOSE,
                 "created_by": owner,
                 "updated_by": owner,

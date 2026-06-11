@@ -53,3 +53,31 @@ jobs:
         uses: github/codeql-action/analyze@ebcb5b36ded6beda4ceefea6a8bc4cc885255bb3 # v3
         with:
           category: "/language:${{ matrix.language }}"
+          output: sarif-results
+          upload: failure-only
+
+      # py/weak-sensitive-data-hashing (CWE-328) fires on the OCI signing call at
+      # litellm/llms/oci/common_utils.py, which hashes the HTTP request body to
+      # produce the x-content-sha256 header required by the OCI HTTP signing spec —
+      # a content-integrity hash, not a password or secret hash. SHA-256 is mandated
+      # by Oracle for this header; see
+      # https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
+      # The `usedforsecurity=False` flag on the hashlib.sha256 call already declares
+      # non-security intent, but CodeQL's taint flow still re-fires when callers
+      # further up the stack are modified. The suppression is scoped to this one
+      # file/rule pair via SARIF post-filtering so every other callsite of
+      # py/weak-sensitive-data-hashing in the repository continues to be analyzed.
+      - name: Filter SARIF (OCI sha256)
+        if: matrix.language == 'python'
+        uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
+        with:
+          patterns: |
+            -litellm/llms/oci/common_utils.py:py/weak-sensitive-data-hashing
+          input: sarif-results/python.sarif
+          output: sarif-results/python.sarif
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@ebcb5b36ded6beda4ceefea6a8bc4cc885255bb3 # v3
+        with:
+          sarif_file: sarif-results
+          category: "/language:${{ matrix.language }}"
