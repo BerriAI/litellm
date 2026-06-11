@@ -1,78 +1,20 @@
-from __future__ import annotations
-
-from dataclasses import dataclass, field
 from typing import Annotated, Callable, List, Optional
 
-from fastapi import FastAPI, Request, Security
+from fastapi import Request, Security
 from fastapi.security import SecurityScopes
 
 from . import errors
-from .authenticators import Authenticator, BasicAuthVerifier, build_authenticators
+from .authenticators import (
+    Authenticator,
+    BasicAuthVerifier,
+    build_authenticators,
+)
 from .config import AuthConfig
 from .models import Principal
 from .network import resolve_network_context
-from .rbac import RbacEngine, Role, has_required_scopes
+from .rbac import RBACEngine, Role, has_required_scopes
 from .resolver import IdentityResolver
-
-
-@dataclass
-class AuthContext:
-    config: AuthConfig
-    authenticators: List[Authenticator]
-    resolver: IdentityResolver
-    rbac: RbacEngine = field(default_factory=RbacEngine)
-
-
-def install_auth(
-    app: FastAPI,
-    config: AuthConfig,
-    resolver: IdentityResolver,
-    *,
-    rbac: Optional[RbacEngine] = None,
-    basic_verifier: Optional[BasicAuthVerifier] = None,
-    mount_scim: bool = True,
-    mount_oidc: bool = True,
-    mount_saml: bool = True,
-) -> AuthContext:
-    """Wire the authenticators, resolver and optional routers onto the app.
-
-    Deployment requirement for trusted-proxy IP resolution: uvicorn's
-    ``--proxy-headers`` (enabled by default) overwrites ``request.client`` from
-    ``X-Forwarded-For`` before this module's ``trusted_proxy_cidrs`` check runs,
-    which silently bypasses it. Run uvicorn with ``--no-proxy-headers`` and let
-    this module resolve the client IP, or leave ``trusted_proxy_cidrs`` empty and
-    rely on uvicorn's own ``--forwarded-allow-ips``. Do not enable both.
-    """
-    engine = rbac if rbac is not None else RbacEngine(config.casbin_policy_path)
-    ctx = AuthContext(
-        config,
-        build_authenticators(config, basic_verifier=basic_verifier),
-        resolver,
-        engine,
-    )
-    app.state.auth_v2 = ctx
-    if mount_scim:
-        from .scim import build_scim_router
-
-        app.include_router(build_scim_router())
-    if mount_oidc and config.oidc_providers:
-        from .oidc import build_oidc_router
-
-        app.include_router(build_oidc_router(config))
-    if mount_saml and config.saml is not None and config.saml.enabled:
-        from .saml import SamlAuthenticator, SamlSessionStore, build_saml_router
-
-        session_store = SamlSessionStore(
-            ttl_seconds=config.saml.session_ttl_seconds,
-            max_size=config.saml.session_max_size,
-        )
-        ctx.authenticators.append(SamlAuthenticator(config.saml, session_store))
-        app.include_router(build_saml_router(config.saml, session_store))
-    return ctx
-
-
-def _ctx(request: Request) -> AuthContext:
-    return request.app.state.auth_v2
+from .session import SessionAuthenticator, SessionStore
 
 
 def _combined_challenge(authenticators: List[Authenticator]) -> str:
@@ -84,47 +26,82 @@ def _combined_challenge(authenticators: List[Authenticator]) -> str:
     return ", ".join(seen)
 
 
-async def get_current_principal(
-    security_scopes: SecurityScopes, request: Request
-) -> Principal:
-    ctx = _ctx(request)
-    credential = None
-    for authenticator in ctx.authenticators:
-        credential = await authenticator.authenticate(request)
-        if credential is not None:
-            break
-    if credential is None:
-        raise errors.unauthenticated(_combined_challenge(ctx.authenticators))
+class AuthSecurity:
+    """Enforcement layer consumed purely through FastAPI ``Security()``.
 
-    resolved = await ctx.resolver.resolve(credential)
-    principal = resolved.model_copy(
-        update={"network": resolve_network_context(request, ctx.config.network)}
-    )
+    Construct once at the composition root and pass the bound methods
+    (``principal``, ``require_roles``, ``require_permission``) to ``Security()``;
+    routers receive the instance explicitly via ``build_*_router(auth)``. There is
+    no app mutation and no ``app.state``.
 
-    if not has_required_scopes(security_scopes, principal):
-        raise errors.insufficient_scope()
-    return principal
+    Deployment note for trusted-proxy IP resolution: uvicorn's ``--proxy-headers``
+    (on by default) overwrites ``request.client`` from ``X-Forwarded-For`` before
+    this module's ``trusted_proxy_cidrs`` check runs, silently bypassing it. Run
+    uvicorn with ``--no-proxy-headers`` and let this module resolve the client IP,
+    or leave ``trusted_proxy_cidrs`` empty and rely on uvicorn's
+    ``--forwarded-allow-ips``. Do not enable both.
+    """
 
+    def __init__(
+        self,
+        config: AuthConfig,
+        resolver: IdentityResolver,
+        rbac: Optional[RBACEngine] = None,
+        authenticators: Optional[List[Authenticator]] = None,
+        basic_verifier: Optional[BasicAuthVerifier] = None,
+    ) -> None:
+        self.config = config
+        self.resolver = resolver
+        self.rbac = rbac or RBACEngine(config.casbin_policy_path)
+        self.session_store = SessionStore(
+            config.session.ttl_seconds, config.session.max_size
+        )
+        self.oauth_txn_store = SessionStore(
+            config.session.login_state_ttl, config.session.max_size
+        )
+        chain = (
+            list(authenticators)
+            if authenticators is not None
+            else build_authenticators(config, basic_verifier=basic_verifier)
+        )
+        chain.append(SessionAuthenticator(config.session.cookie, self.session_store))
+        self.authenticators = chain
 
-def require_roles(*allowed: Role) -> Callable[..., object]:
-    async def dependency(
-        request: Request,
-        principal: Annotated[Principal, Security(get_current_principal)],
+    async def principal(
+        self, security_scopes: SecurityScopes, request: Request
     ) -> Principal:
-        if not _ctx(request).rbac.has_role(principal, allowed):
-            raise errors.forbidden_role()
+        credential = None
+        for authenticator in self.authenticators:
+            credential = await authenticator.authenticate(request)
+            if credential is not None:
+                break
+        if credential is None:
+            raise errors.unauthenticated(_combined_challenge(self.authenticators))
+
+        resolved = await self.resolver.resolve(credential)
+        principal = resolved.model_copy(
+            update={"network": resolve_network_context(request, self.config.network)}
+        )
+        if not has_required_scopes(security_scopes, principal):
+            raise errors.insufficient_scope()
         return principal
 
-    return dependency
+    def require_roles(self, *allowed: Role) -> Callable[..., object]:
+        async def dependency(
+            principal: Annotated[Principal, Security(self.principal)],
+        ) -> Principal:
+            if not self.rbac.has_any_role(principal, allowed):
+                raise errors.forbidden_role()
+            return principal
 
+        return dependency
 
-def require_permission(obj: str, act: str) -> Callable[..., object]:
-    async def dependency(
-        request: Request,
-        principal: Annotated[Principal, Security(get_current_principal)],
-    ) -> Principal:
-        if not _ctx(request).rbac.enforce(principal, obj, act):
-            raise errors.forbidden_permission()
-        return principal
+    def require_permission(self, obj: str, act: str) -> Callable[..., object]:
+        async def dependency(
+            principal: Annotated[Principal, Security(self.principal)],
+        ) -> Principal:
+            if not self.rbac.enforce(principal, obj, act):
+                raise errors.forbidden_permission()
+            return principal
 
-    return dependency
+        return dependency

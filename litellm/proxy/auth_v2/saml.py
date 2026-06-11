@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import secrets
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
@@ -13,9 +12,12 @@ from saml2.metadata import entity_descriptor
 from scim2_models import Email, Name
 from scim2_models import User as ScimUser
 
-from .config import SamlConfig
-from .models import AuthMethod, Credential, CredentialRef, SecuritySchemeType
+from .config import SAMLConfig
 from .resolver import ProvisioningStore
+from .session import safe_relay_state
+
+if TYPE_CHECKING:
+    from .security import AuthSecurity
 
 _SINGLE_VALUE_TARGETS = {
     "email",
@@ -85,18 +87,6 @@ def _claims_from_mapped(mapped: Dict[str, Any]) -> Dict[str, Any]:
     return claims
 
 
-def _safe_relay_state(target: Optional[str], default: str) -> str:
-    if (
-        target
-        and target.startswith("/")
-        and not target.startswith("//")
-        and "://" not in target
-        and "\\" not in target
-    ):
-        return target
-    return default
-
-
 def _metadata_source(idp_metadata: str) -> Dict[str, Any]:
     stripped = idp_metadata.strip()
     if stripped.startswith("<"):
@@ -106,7 +96,7 @@ def _metadata_source(idp_metadata: str) -> Dict[str, Any]:
     return {"local": [idp_metadata]}
 
 
-def _sp_config_dict(config: SamlConfig) -> Dict[str, Any]:
+def _sp_config_dict(config: SAMLConfig) -> Dict[str, Any]:
     cfg: Dict[str, Any] = {
         "entityid": config.entity_id,
         "service": {
@@ -132,21 +122,19 @@ def _sp_config_dict(config: SamlConfig) -> Dict[str, Any]:
     return cfg
 
 
-def build_sp_client(config: SamlConfig) -> Saml2Client:
+def build_sp_client(config: SAMLConfig) -> Saml2Client:
     conf = SPConfig()
     conf.load(_sp_config_dict(config))
     return Saml2Client(config=conf)
 
 
-class SamlSessionStore:
-    def __init__(self, ttl_seconds: int = 3600, max_size: int = 10000) -> None:
-        self._sessions: Dict[str, Tuple[float, Dict[str, Any]]] = {}
-        self._seen_assertions: Dict[str, float] = {}
+class SAMLProtocolStore:
+    def __init__(self, replay_ttl_seconds: int) -> None:
         self.outstanding: Dict[str, str] = {}
-        self._ttl = ttl_seconds
-        self._max_size = max_size
+        self._seen_assertions: Dict[str, float] = {}
+        self._replay_ttl = replay_ttl_seconds
 
-    def remember_request(self, request_id: str, relay_state: str = "/") -> None:
+    def remember_request(self, request_id: str, relay_state: str) -> None:
         self.outstanding[request_id] = relay_state
 
     def consume_assertion(self, assertion_id: str) -> bool:
@@ -156,65 +144,16 @@ class SamlSessionStore:
         }
         if assertion_id in self._seen_assertions:
             return False
-        self._seen_assertions[assertion_id] = now + self._ttl
+        self._seen_assertions[assertion_id] = now + self._replay_ttl
         return True
 
-    def create_session(self, identity: Dict[str, Any]) -> str:
-        now = time.time()
-        self._evict(now)
-        session_id = secrets.token_urlsafe(32)
-        self._sessions[session_id] = (now + self._ttl, identity)
-        return session_id
 
-    def get(self, session_id: str) -> Optional[Dict[str, Any]]:
-        entry = self._sessions.get(session_id)
-        if entry is None:
-            return None
-        expires_at, identity = entry
-        if expires_at < time.time():
-            self._sessions.pop(session_id, None)
-            return None
-        return identity
-
-    def _evict(self, now: float) -> None:
-        for key in [k for k, (exp, _) in self._sessions.items() if exp < now]:
-            self._sessions.pop(key, None)
-        overflow = len(self._sessions) - self._max_size + 1
-        if overflow > 0:
-            oldest = sorted(self._sessions, key=lambda k: self._sessions[k][0])
-            for key in oldest[:overflow]:
-                self._sessions.pop(key, None)
-
-
-class SamlAuthenticator:
-    scheme = SecuritySchemeType.HTTP
-
-    def __init__(self, config: SamlConfig, session_store: SamlSessionStore) -> None:
-        self._config = config
-        self._store = session_store
-
-    async def authenticate(self, request: Request) -> Optional[Credential]:
-        session_id = request.cookies.get(self._config.session_cookie)
-        if not session_id:
-            return None
-        identity = self._store.get(session_id)
-        if identity is None:
-            return None
-        return Credential(
-            scheme=self.scheme,
-            method=AuthMethod.SAML,
-            subject=identity["name_id"],
-            issuer=identity.get("issuer"),
-            claims=identity.get("claims", {}),
-            credential_ref=CredentialRef(token_id=session_id),
-        )
-
-    def challenge(self) -> str:
-        return ""
-
-
-def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> APIRouter:
+def build_saml_router(auth: "AuthSecurity") -> APIRouter:
+    config = auth.config.saml
+    assert config is not None
+    session = auth.config.session
     client = build_sp_client(config)
+    protocol = SAMLProtocolStore(session.ttl_seconds)
     router = APIRouter(prefix="/auth/saml", tags=["saml"])
 
     @router.get("/metadata")
@@ -226,11 +165,11 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
 
     @router.get("/login")
     async def login(request: Request) -> RedirectResponse:
-        relay_state = _safe_relay_state(
-            request.query_params.get("next"), config.default_redirect_path
+        relay_state = safe_relay_state(
+            request.query_params.get("next"), session.default_redirect_path
         )
         request_id, info = client.prepare_for_authenticate(relay_state=relay_state)
-        session_store.remember_request(request_id, relay_state)
+        protocol.remember_request(request_id, relay_state)
         location = dict(info["headers"]).get("Location")
         if not location:
             raise HTTPException(status_code=500, detail="no SAML redirect produced")
@@ -246,7 +185,7 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
             authn_response = client.parse_authn_request_response(
                 saml_response,
                 BINDING_HTTP_POST,
-                outstanding=session_store.outstanding or None,
+                outstanding=protocol.outstanding or None,
             )
         except Exception as exc:
             raise HTTPException(
@@ -257,14 +196,12 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
 
         in_response_to = getattr(authn_response, "in_response_to", None)
         bound_relay = (
-            session_store.outstanding.pop(in_response_to, None)
-            if in_response_to
-            else None
+            protocol.outstanding.pop(in_response_to, None) if in_response_to else None
         )
 
         assertion = getattr(authn_response, "assertion", None)
         assertion_id = getattr(assertion, "id", None)
-        if assertion_id and not session_store.consume_assertion(assertion_id):
+        if assertion_id and not protocol.consume_assertion(assertion_id):
             raise HTTPException(status_code=401, detail="SAML assertion replay")
 
         name_id = authn_response.get_subject().text
@@ -272,24 +209,25 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
         mapped = _map_attributes(ava, config.attribute_map)
         user = _user_from_mapped(name_id, mapped)
 
-        store: ProvisioningStore = request.app.state.auth_v2.resolver
+        store = cast(ProvisioningStore, auth.resolver)
         await store.upsert_user(user)
 
-        session_id = session_store.create_session(
+        session_id = auth.session_store.create_session(
             {
-                "name_id": name_id,
+                "method": "saml",
+                "subject": name_id,
                 "issuer": authn_response.issuer(),
                 "claims": _claims_from_mapped(mapped),
             }
         )
-        target = _safe_relay_state(bound_relay, config.default_redirect_path)
+        target = safe_relay_state(bound_relay, session.default_redirect_path)
         response = RedirectResponse(target, status_code=303)
         response.set_cookie(
-            config.session_cookie,
+            session.cookie,
             session_id,
             httponly=True,
             samesite="lax",
-            secure=config.cookie_secure,
+            secure=session.secure,
         )
         return response
 

@@ -57,7 +57,7 @@ _DEFAULT_POLICY: List[Tuple[str, str, str]] = [
 ]
 
 
-class RbacEngine:
+class RBACEngine:
     def __init__(self, policy_path: Optional[str] = None) -> None:
         model = casbin.Model()
         model.load_model_from_text(_MODEL_TEXT)
@@ -75,7 +75,7 @@ class RbacEngine:
             self._enforcer.enforce(role.value, obj, act) for role in principal.roles
         )
 
-    def has_role(self, principal: "Principal", allowed: Tuple[Role, ...]) -> bool:
+    def has_any_role(self, principal: "Principal", allowed: Tuple[Role, ...]) -> bool:
         allowed_values = {role.value for role in allowed}
         for role in principal.roles:
             if role.value in allowed_values:

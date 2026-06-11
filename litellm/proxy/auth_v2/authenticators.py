@@ -6,9 +6,8 @@ import functools
 import hashlib
 import hmac
 import secrets
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
-import httpx
 import jwt
 from fastapi import Request
 from jwt import PyJWKClient
@@ -20,9 +19,9 @@ from .config import (
     ApiKeySchemeConfig,
     AuthConfig,
     HttpBasicConfig,
-    MutualTlsConfig,
+    MutualTLSConfig,
     OAuth2IntrospectionConfig,
-    OidcProviderConfig,
+    OIDCProviderConfig,
     TrustedProxyConfig,
 )
 from .models import (
@@ -39,11 +38,38 @@ AT_JWT_TYPES = {"at+jwt", "application/at+jwt"}
 
 @runtime_checkable
 class Authenticator(Protocol):
-    scheme: SecuritySchemeType
-
     async def authenticate(self, request: Request) -> Optional[Credential]: ...
 
     def challenge(self) -> str: ...
+
+
+@runtime_checkable
+class BasicAuthVerifier(Protocol):
+    def verify(self, username: str, password: str) -> bool: ...
+
+
+def hash_basic_password(password: str, salt: Optional[str] = None) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.sha256(bytes.fromhex(salt) + password.encode()).hexdigest()
+    return f"{salt}${digest}"
+
+
+class InMemoryBasicAuthStore:
+    def __init__(self, credentials: Dict[str, str]) -> None:
+        self._credentials = credentials
+
+    def verify(self, username: str, password: str) -> bool:
+        stored = self._credentials.get(username)
+        if stored is None:
+            return False
+        salt, _, expected = stored.partition("$")
+        try:
+            candidate = hashlib.sha256(
+                bytes.fromhex(salt) + password.encode()
+            ).hexdigest()
+        except ValueError:
+            return False
+        return hmac.compare_digest(candidate, expected)
 
 
 def _extract_bearer(request: Request) -> Optional[str]:
@@ -93,39 +119,10 @@ def _credential_from_claims(
     )
 
 
-@runtime_checkable
-class BasicAuthVerifier(Protocol):
-    def verify(self, username: str, password: str) -> bool: ...
-
-
-def hash_basic_password(password: str, salt: Optional[str] = None) -> str:
-    salt = salt or secrets.token_hex(16)
-    digest = hashlib.sha256(bytes.fromhex(salt) + password.encode()).hexdigest()
-    return f"{salt}${digest}"
-
-
-class InMemoryBasicAuthStore:
-    def __init__(self, credentials: Dict[str, str]) -> None:
-        self._credentials = credentials
-
-    def verify(self, username: str, password: str) -> bool:
-        stored = self._credentials.get(username)
-        if stored is None:
-            return False
-        salt, _, expected = stored.partition("$")
-        try:
-            candidate = hashlib.sha256(
-                bytes.fromhex(salt) + password.encode()
-            ).hexdigest()
-        except ValueError:
-            return False
-        return hmac.compare_digest(candidate, expected)
-
-
-class JwtVerifier:
+class JWTVerifier:
     def __init__(
         self,
-        provider: OidcProviderConfig,
+        provider: OIDCProviderConfig,
         jwks_client: Optional[PyJWKClient] = None,
     ) -> None:
         self.provider = provider
@@ -138,6 +135,8 @@ class JwtVerifier:
         self._jwks_client = PyJWKClient(jwks_uri, cache_keys=True)
 
     def _discover_jwks(self) -> str:
+        import httpx
+
         url = f"{self.provider.issuer.rstrip('/')}/.well-known/openid-configuration"
         response = httpx.get(url, timeout=10.0)
         response.raise_for_status()
@@ -171,14 +170,14 @@ class JwtVerifier:
 
 
 async def _verify_jwt_off_loop(
-    verifier: JwtVerifier, token: str, *, require_at_jwt: Optional[bool] = None
+    verifier: JWTVerifier, token: str, *, require_at_jwt: Optional[bool] = None
 ) -> Dict[str, Any]:
     return await run_in_threadpool(
         functools.partial(verifier.verify, token, require_at_jwt=require_at_jwt)
     )
 
 
-def _select_verifier(token: str, verifiers: List[JwtVerifier]) -> Optional[JwtVerifier]:
+def _select_verifier(token: str, verifiers: List[JWTVerifier]) -> Optional[JWTVerifier]:
     if not verifiers:
         return None
     try:
@@ -191,9 +190,22 @@ def _select_verifier(token: str, verifiers: List[JwtVerifier]) -> Optional[JwtVe
     return None
 
 
-class ApiKeyAuthenticator:
-    scheme = SecuritySchemeType.API_KEY
+async def _authenticate_bearer_jwt(
+    token: str,
+    verifiers: List[JWTVerifier],
+    scheme: SecuritySchemeType,
+    method: AuthMethod,
+    *,
+    require_at_jwt: bool = False,
+) -> Credential:
+    verifier = _select_verifier(token, verifiers)
+    if verifier is None:
+        raise errors.invalid_token("no issuer match")
+    claims = await _verify_jwt_off_loop(verifier, token, require_at_jwt=require_at_jwt)
+    return _credential_from_claims(scheme, method, token, claims)
 
+
+class APIKeyAuthenticator:
     def __init__(self, config: ApiKeySchemeConfig) -> None:
         self._header_name = config.header_name
 
@@ -202,7 +214,7 @@ class ApiKeyAuthenticator:
         if not raw:
             return None
         return Credential(
-            scheme=self.scheme,
+            scheme=SecuritySchemeType.API_KEY,
             method=AuthMethod.API_KEY,
             subject=raw,
             credential_ref=CredentialRef(key_id=raw[:10]),
@@ -214,12 +226,10 @@ class ApiKeyAuthenticator:
 
 
 class HttpAuthenticator:
-    scheme = SecuritySchemeType.HTTP
-
     def __init__(
         self,
         basic: HttpBasicConfig,
-        jwt_verifiers: List[JwtVerifier],
+        jwt_verifiers: List[JWTVerifier],
         basic_verifier: Optional[BasicAuthVerifier] = None,
     ) -> None:
         self._basic = basic
@@ -233,19 +243,12 @@ class HttpAuthenticator:
         scheme, _, value = header.partition(" ")
         scheme_lower = scheme.lower()
         if scheme_lower == "bearer" and value:
-            return await self._verify_bearer(value)
+            return await _authenticate_bearer_jwt(
+                value, self._verifiers, SecuritySchemeType.HTTP, AuthMethod.BEARER_JWT
+            )
         if scheme_lower == "basic" and self._basic.enabled and value:
             return self._verify_basic(value)
         return None
-
-    async def _verify_bearer(self, token: str) -> Credential:
-        verifier = _select_verifier(token, self._verifiers)
-        if verifier is None:
-            raise errors.invalid_token("no issuer match")
-        claims = await _verify_jwt_off_loop(verifier, token)
-        return _credential_from_claims(
-            self.scheme, AuthMethod.BEARER_JWT, token, claims
-        )
 
     def _verify_basic(self, value: str) -> Credential:
         challenge = errors.basic_challenge(self._basic.realm)
@@ -262,7 +265,7 @@ class HttpAuthenticator:
         ):
             raise errors.unauthenticated(challenge)
         return Credential(
-            scheme=self.scheme,
+            scheme=SecuritySchemeType.HTTP,
             method=AuthMethod.HTTP_BASIC,
             subject=username,
         )
@@ -274,46 +277,47 @@ class HttpAuthenticator:
         return bearer
 
 
-class OAuth2Authenticator:
-    scheme = SecuritySchemeType.OAUTH2
+def _default_introspection_client() -> Any:
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
 
+    return get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+
+
+class OAuth2Authenticator:
     def __init__(
         self,
-        jwt_verifiers: List[JwtVerifier],
+        jwt_verifiers: List[JWTVerifier],
         introspection: Optional[OAuth2IntrospectionConfig],
+        client_factory: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._verifiers = jwt_verifiers
         self._introspection = introspection
+        self._client_factory = client_factory or _default_introspection_client
 
     async def authenticate(self, request: Request) -> Optional[Credential]:
         token = _extract_bearer(request)
         if token is None:
             return None
         if _looks_like_jwt(token):
-            return await self._verify_at_jwt(token)
+            return await _authenticate_bearer_jwt(
+                token,
+                self._verifiers,
+                SecuritySchemeType.OAUTH2,
+                AuthMethod.BEARER_JWT,
+                require_at_jwt=True,
+            )
         if self._introspection is not None:
             return await self._introspect(token)
         raise errors.invalid_token()
 
-    async def _verify_at_jwt(self, token: str) -> Credential:
-        verifier = _select_verifier(token, self._verifiers)
-        if verifier is None:
-            raise errors.invalid_token("no issuer match")
-        claims = await _verify_jwt_off_loop(verifier, token, require_at_jwt=True)
-        return _credential_from_claims(
-            self.scheme, AuthMethod.BEARER_JWT, token, claims
-        )
-
     async def _introspect(self, token: str) -> Credential:
         config = self._introspection
         assert config is not None
-        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-        from litellm.types.llms.custom_http import httpxSpecialProvider
-
         basic = base64.b64encode(
             f"{config.client_id}:{config.client_secret.get_secret_value()}".encode()
         ).decode()
-        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+        client = self._client_factory()
         response = await client.post(
             str(config.introspection_endpoint),
             data={"token": token},
@@ -329,7 +333,7 @@ class OAuth2Authenticator:
         if config.audience and not set(token_audience) & set(config.audience):
             raise errors.invalid_token("audience mismatch")
         return Credential(
-            scheme=self.scheme,
+            scheme=SecuritySchemeType.OAUTH2,
             method=AuthMethod.OAUTH2_INTROSPECTION,
             subject=str(body.get(config.subject_field, "")),
             issuer=body.get("iss"),
@@ -342,30 +346,24 @@ class OAuth2Authenticator:
         return errors.bearer_challenge()
 
 
-class OidcAuthenticator:
-    scheme = SecuritySchemeType.OPENID_CONNECT
-
-    def __init__(self, jwt_verifiers: List[JwtVerifier]) -> None:
+class OIDCAuthenticator:
+    def __init__(self, jwt_verifiers: List[JWTVerifier]) -> None:
         self._verifiers = jwt_verifiers
 
     async def authenticate(self, request: Request) -> Optional[Credential]:
         token = _extract_bearer(request)
         if token is None:
             return None
-        verifier = _select_verifier(token, self._verifiers)
-        if verifier is None:
-            raise errors.invalid_token("no issuer match")
-        claims = await _verify_jwt_off_loop(verifier, token)
-        return _credential_from_claims(self.scheme, AuthMethod.OIDC, token, claims)
+        return await _authenticate_bearer_jwt(
+            token, self._verifiers, SecuritySchemeType.OPENID_CONNECT, AuthMethod.OIDC
+        )
 
     def challenge(self) -> str:
         return errors.bearer_challenge()
 
 
-class MutualTlsAuthenticator:
-    scheme = SecuritySchemeType.MUTUAL_TLS
-
-    def __init__(self, config: MutualTlsConfig, network: TrustedProxyConfig) -> None:
+class MutualTLSAuthenticator:
+    def __init__(self, config: MutualTLSConfig, network: TrustedProxyConfig) -> None:
         self._config = config
         self._network = network
 
@@ -374,7 +372,7 @@ class MutualTlsAuthenticator:
         if cert is None:
             return None
         return Credential(
-            scheme=self.scheme,
+            scheme=SecuritySchemeType.MUTUAL_TLS,
             method=AuthMethod.MUTUAL_TLS,
             subject=cert.subject_dn,
             client_certificate=cert,
@@ -398,19 +396,19 @@ class MutualTlsAuthenticator:
 def build_authenticators(
     config: AuthConfig, *, basic_verifier: Optional[BasicAuthVerifier] = None
 ) -> List[Authenticator]:
-    verifiers = [JwtVerifier(provider) for provider in config.oidc_providers]
+    verifiers = [JWTVerifier(provider) for provider in config.oidc_providers]
     by_scheme: Dict[SecuritySchemeType, Authenticator] = {}
     if config.api_key is not None:
-        by_scheme[SecuritySchemeType.API_KEY] = ApiKeyAuthenticator(config.api_key)
+        by_scheme[SecuritySchemeType.API_KEY] = APIKeyAuthenticator(config.api_key)
     by_scheme[SecuritySchemeType.HTTP] = HttpAuthenticator(
         config.http_basic, verifiers, basic_verifier
     )
-    by_scheme[SecuritySchemeType.OPENID_CONNECT] = OidcAuthenticator(verifiers)
+    by_scheme[SecuritySchemeType.OPENID_CONNECT] = OIDCAuthenticator(verifiers)
     by_scheme[SecuritySchemeType.OAUTH2] = OAuth2Authenticator(
         verifiers, config.oauth2_introspection
     )
     if config.mutual_tls.enabled:
-        by_scheme[SecuritySchemeType.MUTUAL_TLS] = MutualTlsAuthenticator(
+        by_scheme[SecuritySchemeType.MUTUAL_TLS] = MutualTLSAuthenticator(
             config.mutual_tls, config.network
         )
     return [by_scheme[scheme] for scheme in config.scheme_order if scheme in by_scheme]

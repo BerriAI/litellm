@@ -1,17 +1,35 @@
-from .config import AuthConfig
-from .models import Principal
-from .security import (
-    get_current_principal,
-    install_auth,
-    require_permission,
-    require_roles,
+from .config import (
+    ApiKeySchemeConfig,
+    AuthConfig,
+    HttpBasicConfig,
+    MutualTLSConfig,
+    OAuth2IntrospectionConfig,
+    OIDCProviderConfig,
+    SAMLConfig,
+    SessionConfig,
+    TrustedProxyConfig,
 )
+from .models import Principal
+from .rbac import Role
+from .resolver import IdentityResolver, InMemoryIdentityStore, ProvisioningStore
+from .saml import build_saml_router
+from .security import AuthSecurity
 
 __all__ = [
-    "Principal",
+    "AuthSecurity",
     "AuthConfig",
-    "get_current_principal",
-    "require_roles",
-    "require_permission",
-    "install_auth",
+    "Principal",
+    "Role",
+    "IdentityResolver",
+    "ProvisioningStore",
+    "InMemoryIdentityStore",
+    "ApiKeySchemeConfig",
+    "HttpBasicConfig",
+    "OIDCProviderConfig",
+    "OAuth2IntrospectionConfig",
+    "MutualTLSConfig",
+    "TrustedProxyConfig",
+    "SessionConfig",
+    "SAMLConfig",
+    "build_saml_router",
 ]
