@@ -493,6 +493,7 @@ CallTypesLiteral = Literal[
     "create_batch",
     "acreate_batch",
     "pass_through_endpoint",
+    "allm_passthrough_route",
     "anthropic_messages",
     "aretrieve_batch",
     "retrieve_batch",

@@ -6,7 +6,7 @@ It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -208,3 +208,70 @@ class PassThroughEndpointHandler(BaseTranslation):
         )
 
         return response
+
+
+_PROVIDER_HANDLERS: Dict[str, Type[BaseTranslation]] = {}
+
+
+def _get_provider_handlers() -> Dict[str, Type[BaseTranslation]]:
+    global _PROVIDER_HANDLERS
+    if not _PROVIDER_HANDLERS:
+        from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
+            BedrockPassthroughGuardrailHandler,
+        )
+
+        _PROVIDER_HANDLERS = {"bedrock": BedrockPassthroughGuardrailHandler}
+    return _PROVIDER_HANDLERS
+
+
+class LlmPassthroughRouteHandler(BaseTranslation):
+    """
+    Dispatcher for allm_passthrough_route guardrail translation.
+
+    Routes to a per-provider handler based on data["custom_llm_provider"].
+    Unknown providers are skipped with a debug log.
+    """
+
+    async def process_input_messages(
+        self,
+        data: dict,
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> Any:
+        provider = data.get("custom_llm_provider")
+        handler_cls = _get_provider_handlers().get(provider or "")
+        if handler_cls is None:
+            verbose_proxy_logger.debug(
+                "LlmPassthroughRouteHandler: no handler for provider=%s, skipping guardrail",
+                provider,
+            )
+            return data
+        return await handler_cls().process_input_messages(
+            data=data,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+        )
+
+    async def process_output_response(
+        self,
+        response: Any,
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
+    ) -> Any:
+        provider = (request_data or {}).get("custom_llm_provider")
+        handler_cls = _get_provider_handlers().get(provider or "")
+        if handler_cls is None:
+            verbose_proxy_logger.debug(
+                "LlmPassthroughRouteHandler: no handler for provider=%s, skipping guardrail",
+                provider,
+            )
+            return response
+        return await handler_cls().process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        )

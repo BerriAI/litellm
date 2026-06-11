@@ -1600,6 +1600,56 @@ class TestBedrockLLMProxyRoute:
                 # and they're available in the router's deployment
                 assert mock_process.called
 
+    @pytest.mark.asyncio
+    async def test_key_guardrail_blocks_bedrock_converse_passthrough(self):
+        """
+        Regression: key/team guardrails must fire for /bedrock/model/.../converse requests.
+        Before the fix, CallTypes.allm_passthrough_route was not in the guardrail
+        translation registry, so UnifiedLLMGuardrails silently skipped all guardrails.
+        """
+        from fastapi import HTTPException
+
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.llms.pass_through.guardrail_translation import (
+            guardrail_translation_mappings,
+        )
+        from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+
+        assert CallTypes.allm_passthrough_route in guardrail_translation_mappings, (
+            "allm_passthrough_route missing from guardrail_translation_mappings; "
+            "this is the regression that lets guardrails bypass bedrock passthrough"
+        )
+
+        class _BlockingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: str,
+                logging_obj=None,
+            ) -> GenericGuardrailAPIInputs:
+                raise HTTPException(status_code=400, detail="Blocked by guardrail")
+
+        handler_cls = guardrail_translation_mappings[CallTypes.allm_passthrough_route]
+        handler = handler_cls()
+
+        guardrail = _BlockingGuardrail(guardrail_name="block-all")
+
+        data = {
+            "custom_llm_provider": "bedrock",
+            "endpoint": "model/anthropic.claude-3-sonnet-20240229-v1:0/converse",
+            "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+            "data": {
+                "messages": [{"role": "user", "content": [{"text": "Hello"}]}],
+            },
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert exc_info.value.status_code == 400
+        assert "Blocked by guardrail" in str(exc_info.value.detail)
+
 
 class TestLLMPassthroughFactoryProxyRoute:
     @pytest.mark.asyncio

@@ -71,9 +71,45 @@ class TestProxyBaseLLMRequestProcessing:
         assert result.headers["x-litellm-version"] == "test-version"
 
     @pytest.mark.asyncio
-    async def test_common_processing_pre_call_logic_pre_call_hook_receives_litellm_call_id(
-        self, monkeypatch
-    ):
+    async def test_base_passthrough_process_llm_request_returns_fastapi_response_from_guardrails(self, monkeypatch):
+        """Post-call guardrails return a FastAPI Response; must not call httpx aread()."""
+        import json
+
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        guardrailed_body = {
+            "output": {"message": {"content": [{"text": "masked"}]}},
+            "stopReason": "end_turn",
+        }
+
+        async def fake_base_process_llm_request(**kwargs):
+            return Response(
+                content=json.dumps(guardrailed_body).encode(),
+                status_code=200,
+                media_type="application/json",
+            )
+
+        monkeypatch.setattr(
+            processing_obj,
+            "base_process_llm_request",
+            fake_base_process_llm_request,
+        )
+
+        result = await processing_obj.base_passthrough_process_llm_request(
+            request=MagicMock(spec=Request),
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=MagicMock(),
+            model="bedrock-test-model",
+        )
+
+        assert isinstance(result, Response)
+        assert json.loads(result.body) == guardrailed_body
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_pre_call_hook_receives_litellm_call_id(self, monkeypatch):
         processing_obj = ProxyBaseLLMRequestProcessing(data={})
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {}
@@ -81,16 +117,12 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return {}
 
-        async def mock_common_processing_pre_call_logic(
-            user_api_key_dict, data, call_type
-        ):
+        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type):
             data_copy = copy.deepcopy(data)
             return data_copy
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
-        mock_proxy_logging_obj.pre_call_hook = AsyncMock(
-            side_effect=mock_common_processing_pre_call_logic
-        )
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_common_processing_pre_call_logic)
         monkeypatch.setattr(
             litellm.proxy.common_request_processing,
             "add_litellm_data_to_request",
@@ -126,9 +158,7 @@ class TestProxyBaseLLMRequestProcessing:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
-    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(
-        self, monkeypatch
-    ):
+    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
         mock_set_active_span_tag = MagicMock(return_value=True)
         import litellm.proxy.dd_span_tagger
 
@@ -140,14 +170,10 @@ class TestProxyBaseLLMRequestProcessing:
 
         DDSpanTagger.tag_call_id("test-call-id")
 
-        mock_set_active_span_tag.assert_called_once_with(
-            "litellm.call_id", "test-call-id"
-        )
+        mock_set_active_span_tag.assert_called_once_with("litellm.call_id", "test-call-id")
 
     @pytest.mark.asyncio
-    async def test_should_apply_hierarchical_router_settings_as_override(
-        self, monkeypatch
-    ):
+    async def test_should_apply_hierarchical_router_settings_as_override(self, monkeypatch):
         """
         Test that hierarchical router settings are stored as router_settings_override
         instead of creating a full user_config with model_list.
@@ -162,16 +188,12 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return {}
 
-        async def mock_common_processing_pre_call_logic(
-            user_api_key_dict, data, call_type
-        ):
+        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type):
             data_copy = copy.deepcopy(data)
             return data_copy
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
-        mock_proxy_logging_obj.pre_call_hook = AsyncMock(
-            side_effect=mock_common_processing_pre_call_logic
-        )
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_common_processing_pre_call_logic)
         monkeypatch.setattr(
             litellm.proxy.common_request_processing,
             "add_litellm_data_to_request",
@@ -187,9 +209,7 @@ class TestProxyBaseLLMRequestProcessing:
             "timeout": 30.0,
             "num_retries": 3,
         }
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(
-            return_value=mock_router_settings
-        )
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=mock_router_settings)
 
         mock_llm_router = MagicMock()
 
@@ -243,24 +263,18 @@ class TestProxyBaseLLMRequestProcessing:
 
         # Test with stream timeout header
         headers_with_timeout = {"x-litellm-stream-timeout": "30.5"}
-        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
-            headers_with_timeout
-        )
+        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_timeout)
         assert result == 30.5
 
         # Test without stream timeout header
         headers_without_timeout = {}
-        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
-            headers_without_timeout
-        )
+        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_without_timeout)
         assert result is None
 
         # Test with invalid header value (should raise ValueError when converting to float)
         headers_with_invalid = {"x-litellm-stream-timeout": "invalid"}
         with pytest.raises(ValueError):
-            LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
-                headers_with_invalid
-            )
+            LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_invalid)
 
     @pytest.mark.asyncio
     async def test_build_litellm_proxy_success_headers_from_llm_response(self):
@@ -355,9 +369,7 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         assert headers["x-litellm-model-id"] == "stream-model-id"
-        assert headers["x-litellm-model-api-base"] == (
-            "https://generativelanguage.googleapis.com/v1beta"
-        )
+        assert headers["x-litellm-model-api-base"] == ("https://generativelanguage.googleapis.com/v1beta")
         assert headers["llm_provider-x"] == "y"
 
     @pytest.mark.asyncio
@@ -797,9 +809,7 @@ class TestProxyBaseLLMRequestProcessing:
 
         assert "x-litellm-key-spend" in headers_1
         expected_spend_1 = 0.001 + 0.0005  # Initial spend + current request cost
-        assert float(headers_1["x-litellm-key-spend"]) == pytest.approx(
-            expected_spend_1, abs=1e-10
-        )
+        assert float(headers_1["x-litellm-key-spend"]) == pytest.approx(expected_spend_1, abs=1e-10)
         assert float(headers_1["x-litellm-response-cost"]) == response_cost_1
 
         # Test case 2: response_cost is provided as string
@@ -812,9 +822,7 @@ class TestProxyBaseLLMRequestProcessing:
 
         assert "x-litellm-key-spend" in headers_2
         expected_spend_2 = 0.001 + 0.0003  # Initial spend + current request cost
-        assert float(headers_2["x-litellm-key-spend"]) == pytest.approx(
-            expected_spend_2, abs=1e-10
-        )
+        assert float(headers_2["x-litellm-key-spend"]) == pytest.approx(expected_spend_2, abs=1e-10)
 
         # Test case 3: response_cost is None (should use original spend)
         headers_3 = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -824,9 +832,7 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         assert "x-litellm-key-spend" in headers_3
-        assert (
-            float(headers_3["x-litellm-key-spend"]) == 0.001
-        )  # Should use original spend
+        assert float(headers_3["x-litellm-key-spend"]) == 0.001  # Should use original spend
 
         # Test case 4: response_cost is 0 (should not change spend)
         headers_4 = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -836,9 +842,7 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         assert "x-litellm-key-spend" in headers_4
-        assert (
-            float(headers_4["x-litellm-key-spend"]) == 0.001
-        )  # Should remain unchanged for 0 cost
+        assert float(headers_4["x-litellm-key-spend"]) == 0.001  # Should remain unchanged for 0 cost
 
         # Test case 5: user_api_key_dict.spend is None (should default to 0.0)
         mock_user_api_key_dict.spend = None
@@ -860,9 +864,7 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         assert "x-litellm-key-spend" in headers_6
-        assert (
-            float(headers_6["x-litellm-key-spend"]) == 0.001
-        )  # Should use original spend
+        assert float(headers_6["x-litellm-key-spend"]) == 0.001  # Should use original spend
 
         # Test case 7: response_cost is invalid string (should fallback to original spend)
         headers_7 = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -872,9 +874,7 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         assert "x-litellm-key-spend" in headers_7
-        assert (
-            float(headers_7["x-litellm-key-spend"]) == 0.001
-        )  # Should use original spend on error
+        assert float(headers_7["x-litellm-key-spend"]) == 0.001  # Should use original spend on error
 
     @pytest.mark.asyncio
     async def test_queue_time_seconds_is_set_in_metadata(self, monkeypatch):
@@ -935,12 +935,10 @@ class TestProxyBaseLLMRequestProcessing:
 
         # Verify queue_time_seconds is set and non-negative
         metadata = returned_data.get("metadata", {})
-        assert (
-            "queue_time_seconds" in metadata
-        ), "queue_time_seconds should be set in metadata"
-        assert (
-            metadata["queue_time_seconds"] >= 0.5
-        ), f"queue_time_seconds should be at least 0.5, got {metadata['queue_time_seconds']}"
+        assert "queue_time_seconds" in metadata, "queue_time_seconds should be set in metadata"
+        assert metadata["queue_time_seconds"] >= 0.5, (
+            f"queue_time_seconds should be at least 0.5, got {metadata['queue_time_seconds']}"
+        )
 
 
 @pytest.mark.asyncio
@@ -1091,9 +1089,7 @@ class TestCommonRequestProcessingHelpers:
         the original status code instead of hardcoding 500.
         """
         mock_gen = AsyncMock()
-        mock_gen.__anext__.side_effect = HTTPException(
-            status_code=400, detail="Content blocked by guardrail"
-        )
+        mock_gen.__anext__.side_effect = HTTPException(status_code=400, detail="Content blocked by guardrail")
 
         response = await create_response(mock_gen, "text/event-stream", {})
         assert response.status_code == 400
@@ -1187,14 +1183,8 @@ class TestCommonRequestProcessingHelpers:
         response = await create_response(mock_gen, "text/event-stream", {})
         content = await self.consume_stream(response)
         payload = json.loads(content[0][len("data: ") :].strip())
-        assert (
-            payload["error"]["message"]
-            == "MCP request blocked: no rewritable argument field present"
-        )
-        assert (
-            payload["error"]["provider_specific_fields"]["error"]["code"]
-            == "panw_prisma_airs_blocked"
-        )
+        assert payload["error"]["message"] == "MCP request blocked: no rewritable argument field present"
+        assert payload["error"]["provider_specific_fields"]["error"]["code"] == "panw_prisma_airs_blocked"
 
     async def test_serialize_http_exception_detail_helper(self):
         """Direct unit coverage for the L1 helper across all branches."""
@@ -1205,15 +1195,11 @@ class TestCommonRequestProcessingHelpers:
 
         assert _serialize_http_exception_detail("plain") == ("plain", None)
 
-        msg, fields = _serialize_http_exception_detail(
-            {"error": "Violated", "extra": "x"}
-        )
+        msg, fields = _serialize_http_exception_detail({"error": "Violated", "extra": "x"})
         assert msg == "Violated"
         assert fields == {"error": "Violated", "extra": "x"}
 
-        msg, fields = _serialize_http_exception_detail(
-            {"error": {"message": "blocked", "code": "x"}}
-        )
+        msg, fields = _serialize_http_exception_detail({"error": {"message": "blocked", "code": "x"}})
         assert msg == "blocked"
         assert fields == {"error": {"message": "blocked", "code": "x"}}
 
@@ -1253,9 +1239,7 @@ class TestCommonRequestProcessingHelpers:
             yield "data: [DONE]\n\n"
 
         custom_headers = {"X-Custom-Header": "TestValue"}
-        response = await create_response(
-            mock_generator(), "text/event-stream", custom_headers
-        )
+        response = await create_response(mock_generator(), "text/event-stream", custom_headers)
         assert response.headers["x-custom-header"] == "TestValue"
 
     async def test_create_streaming_response_disables_proxy_buffering(self):
@@ -1275,9 +1259,7 @@ class TestCommonRequestProcessingHelpers:
         error_stream.__anext__.side_effect = ValueError("boom")
 
         for generator in (normal_stream(), empty_stream(), error_stream):
-            response = await create_response(
-                generator, "text/event-stream", {"X-Custom-Header": "keep"}
-            )
+            response = await create_response(generator, "text/event-stream", {"X-Custom-Header": "keep"})
             assert isinstance(response, StreamingResponse)
             assert response.headers["x-accel-buffering"] == "no"
             assert response.headers["cache-control"] == "no-cache"
@@ -1376,9 +1358,9 @@ class TestCommonRequestProcessingHelpers:
 
             for i, call in enumerate(actual_calls):
                 args, kwargs = call
-                assert (
-                    args[0] == "streaming.chunk.yield"
-                ), f"Call {i} should have operation name 'streaming.chunk.yield', got {args[0]}"
+                assert args[0] == "streaming.chunk.yield", (
+                    f"Call {i} should have operation name 'streaming.chunk.yield', got {args[0]}"
+                )
 
     async def test_create_streaming_response_skips_dd_trace_when_disabled(self):
         """When DD tracing is disabled (the default), the per-chunk span
@@ -1559,9 +1541,7 @@ class TestOverrideOpenAIResponseModel:
         # _hidden_params is an attribute (not a dict key) accessed via getattr
         response_obj = MagicMock()
         response_obj.model = fallback_model
-        response_obj._hidden_params = {
-            "additional_headers": {"x-litellm-attempted-fallbacks": 1}
-        }
+        response_obj._hidden_params = {"additional_headers": {"x-litellm-attempted-fallbacks": 1}}
 
         # Call the function - should preserve fallback model
         _override_openai_response_model(
@@ -1688,9 +1668,7 @@ class TestOverrideOpenAIResponseModel:
         # Create a mock object response
         response_obj = MagicMock()
         response_obj.model = downstream_model
-        response_obj._hidden_params = {
-            "additional_headers": {"x-litellm-attempted-fallbacks": None}
-        }
+        response_obj._hidden_params = {"additional_headers": {"x-litellm-attempted-fallbacks": None}}
 
         # Call the function - should override to requested model
         _override_openai_response_model(
@@ -1735,9 +1713,7 @@ class TestOverrideOpenAIResponseModel:
         # Create a mock object response
         response_obj = MagicMock()
         response_obj.model = fallback_model
-        response_obj._hidden_params = {
-            "additional_headers": {"x-litellm-attempted-fallbacks": 1}
-        }
+        response_obj._hidden_params = {"additional_headers": {"x-litellm-attempted-fallbacks": 1}}
 
         # Call the function with None requested_model
         _override_openai_response_model(
@@ -1903,10 +1879,7 @@ class TestIsAzureModelRouterRequest:
 
     def test_detects_model_router_with_underscore(self):
         assert _is_azure_model_router_request("azure_ai/model_router") is True
-        assert (
-            _is_azure_model_router_request("azure_ai/model_router/my-deployment")
-            is True
-        )
+        assert _is_azure_model_router_request("azure_ai/model_router/my-deployment") is True
 
     def test_detects_model_router_with_hyphen(self):
         assert _is_azure_model_router_request("azure_ai/model-router") is True
@@ -2130,9 +2103,7 @@ class TestDDSpanTaggerTagRequest:
 
     def test_tags_key_alias_and_model(self):
         """key_alias and requested_model are set on the span when present."""
-        user_key = self._make_user_api_key_dict(
-            key_alias="my-prod-key", token="hashed123"
-        )
+        user_key = self._make_user_api_key_dict(key_alias="my-prod-key", token="hashed123")
 
         with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
@@ -2166,9 +2137,7 @@ class TestDDSpanTaggerTagRequest:
                 requested_model="claude-3-5-sonnet",
             )
 
-        mock_set_tag.assert_called_once_with(
-            "litellm.requested_model", "claude-3-5-sonnet"
-        )
+        mock_set_tag.assert_called_once_with("litellm.requested_model", "claude-3-5-sonnet")
 
 
 class TestHasAttributeErrorInChain:
@@ -2257,9 +2226,7 @@ class TestHandleLLMApiExceptionDictDetail:
         )
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.message == "Violated guardrail policy"
-        assert (
-            proxy_exc.provider_specific_fields["guardrail_name"] == "bedrock-pii-guard"
-        )
+        assert proxy_exc.provider_specific_fields["guardrail_name"] == "bedrock-pii-guard"
         # No Python repr leakage of the dict into the message field.
         assert "{'error':" not in proxy_exc.message
 
@@ -2287,9 +2254,7 @@ class TestAsyncStreamingDataGeneratorFastPath:
 
         proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
         hook_spy = AsyncMock(side_effect=lambda **kw: kw["response"])
-        monkeypatch.setattr(
-            proxy_logging_obj, "async_post_call_streaming_hook", hook_spy
-        )
+        monkeypatch.setattr(proxy_logging_obj, "async_post_call_streaming_hook", hook_spy)
 
         chunks = [b"event: a\ndata: {}\n\n", b"event: b\ndata: {}\n\n"]
         out = [
@@ -2322,9 +2287,7 @@ class TestAsyncStreamingDataGeneratorFastPath:
 
         proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
         hook_spy = AsyncMock(side_effect=lambda **kw: kw["response"])
-        monkeypatch.setattr(
-            proxy_logging_obj, "async_post_call_streaming_hook", hook_spy
-        )
+        monkeypatch.setattr(proxy_logging_obj, "async_post_call_streaming_hook", hook_spy)
 
         out = [
             c
@@ -2341,4 +2304,378 @@ class TestAsyncStreamingDataGeneratorFastPath:
         assert len(out) == 1
         hook_spy.assert_awaited_once()
 
+        ProxyLogging._callback_capabilities_cache.clear()
+
+
+class TestAllmPassthroughRoutePostCallGuardrails:
+    """
+    Regression: non-streaming allm_passthrough_route responses are httpx.Response objects.
+    The generic post_call_success_hook path passes them as-is, but our Bedrock guardrail
+    handler short-circuits on non-dict inputs.  The fix buffers JSON responses before the
+    hook so guardrails receive a dict (and output_parse_pii de-anonymisation works).
+    """
+
+    def _make_guardrail_cb(self, name: str = "presidio-pre-guard") -> MagicMock:
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        cb = MagicMock(spec=CustomGuardrail)
+        cb.guardrail_name = name
+        cb.event_hook = [GuardrailEventHooks.pre_call.value, GuardrailEventHooks.post_call.value]
+        cb._event_hook_is_event_type = lambda et: et.value in cb.event_hook
+        cb.should_run_guardrail = MagicMock(return_value=True)
+        return cb
+
+    @pytest.mark.asyncio
+    async def test_post_call_hook_receives_parsed_dict_not_httpx_response(self, monkeypatch):
+        """
+        post_call_success_hook must be called with the parsed JSON dict when the
+        non-streaming allm_passthrough_route response is application/json.
+        """
+        import json
+
+        bedrock_response_body = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "Hello, <PERSON_1>!"}],
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 5, "outputTokens": 8},
+        }
+
+        httpx_response = httpx.Response(
+            status_code=200,
+            content=json.dumps(bedrock_response_body).encode(),
+            headers={"content-type": "application/json"},
+        )
+
+        received_responses = []
+
+        async def capture_hook(data, user_api_key_dict, response):
+            received_responses.append(response)
+            return response
+
+        cb = self._make_guardrail_cb()
+        monkeypatch.setattr(litellm, "callbacks", [cb])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", capture_hook)
+
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
+            processing_obj = ProxyBaseLLMRequestProcessing(data={})
+            result = await processing_obj._handle_non_streaming_allm_passthrough_route(
+                response=httpx_response,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+        assert len(received_responses) == 1
+        assert isinstance(received_responses[0], dict), (
+            "post_call_success_hook must receive parsed dict, not httpx.Response"
+        )
+        assert received_responses[0]["stopReason"] == "end_turn"
+        assert isinstance(result, Response)
+        body = json.loads(result.body)
+        assert body["stopReason"] == "end_turn"
+
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_no_aread_when_no_post_call_guardrails(self, monkeypatch):
+        """
+        When _has_post_call_guardrails() is False the httpx response must not be
+        read — the caller handles streaming or error paths normally.
+        """
+        import json
+
+        httpx_response = httpx.Response(
+            status_code=200,
+            content=json.dumps({"output": "x"}).encode(),
+            headers={"content-type": "application/json"},
+        )
+        spy_read = AsyncMock(wraps=httpx_response.aread)
+        httpx_response.aread = spy_read
+
+        monkeypatch.setattr(litellm, "callbacks", [])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        hook_spy = AsyncMock()
+        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", hook_spy)
+
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=False):
+            processing_obj = ProxyBaseLLMRequestProcessing(data={})
+            result = await processing_obj._handle_non_streaming_allm_passthrough_route(
+                response=httpx_response,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+        spy_read.assert_not_called()
+        hook_spy.assert_not_called()
+        assert result is None
+
+        ProxyLogging._callback_capabilities_cache.clear()
+
+
+def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
+    import json
+    import struct
+    from botocore.eventstream import crc32 as esm_crc32
+
+    payload_bytes = json.dumps(payload, separators=(",", ":")).encode()
+
+    def _encode_str_header(name: str, value: str) -> bytes:
+        name_b = name.encode()
+        value_b = value.encode()
+        return (
+            struct.pack("!B", len(name_b))
+            + name_b
+            + struct.pack("!B", 7)  # type 7 = string
+            + struct.pack("!H", len(value_b))
+            + value_b
+        )
+
+    headers_bytes = (
+        _encode_str_header(":event-type", event_type)
+        + _encode_str_header(":content-type", "application/json")
+        + _encode_str_header(":message-type", "event")
+    )
+
+    headers_length = len(headers_bytes)
+    total_length = 12 + headers_length + len(payload_bytes) + 4
+    prelude = struct.pack("!II", total_length, headers_length)
+    prelude_crc_val = esm_crc32(prelude) & 0xFFFFFFFF
+    prelude_crc_b = struct.pack("!I", prelude_crc_val)
+    part_for_msg = prelude_crc_b + headers_bytes + payload_bytes
+    msg_crc_val = esm_crc32(part_for_msg, prelude_crc_val) & 0xFFFFFFFF
+    msg_crc_b = struct.pack("!I", msg_crc_val)
+    return prelude + prelude_crc_b + headers_bytes + payload_bytes + msg_crc_b
+
+
+class TestEventStreamAllmPassthroughRoute:
+    def _make_guardrail_cb(self) -> MagicMock:
+        cb = MagicMock()
+        cb.event_hook = ["pre_call", "post_call"]
+        cb.async_post_call_success_hook = AsyncMock(return_value=None)
+        return cb
+
+    @pytest.mark.asyncio
+    async def test_text_delta_de_anonymized_in_modified_bytes(self, monkeypatch):
+        import json
+        from botocore.eventstream import EventStreamBuffer
+
+        stream_bytes = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"})
+            + _build_event_stream_frame(
+                "contentBlockDelta",
+                {"contentBlockIndex": 0, "delta": {"text": "<PERSON_1> works at <ORG_2>"}},
+            )
+            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0})
+            + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
+        )
+
+        de_anon_response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "John Doe works at Acme Corp"}],
+                }
+            },
+            "stopReason": "end_turn",
+        }
+
+        async def mock_hook(data, user_api_key_dict, response):
+            return de_anon_response
+
+        cb = self._make_guardrail_cb()
+        monkeypatch.setattr(litellm, "callbacks", [cb])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", mock_hook)
+
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
+            processing_obj = ProxyBaseLLMRequestProcessing(data={})
+            result = await processing_obj._handle_event_stream_allm_passthrough_route(
+                body_bytes=stream_bytes,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+        # Re-parse the modified bytes to check text content
+        buf = EventStreamBuffer()
+        buf.add_data(result)
+        texts = []
+        for msg in buf:
+            if msg.headers.get(":event-type") == "contentBlockDelta":
+                payload = json.loads(msg.payload)
+                texts.append(payload["delta"]["text"])
+
+        assert "".join(texts) == "John Doe works at Acme Corp"
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_tokens_split_across_chunks_reassembled(self, monkeypatch):
+        import json
+        from botocore.eventstream import EventStreamBuffer
+
+        stream_bytes = _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"text": "<PERSON_"}},
+        ) + _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"text": "1> called."}},
+        )
+
+        de_anon_response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "Alice called."}],
+                }
+            },
+            "stopReason": "end_turn",
+        }
+
+        async def mock_hook(data, user_api_key_dict, response):
+            assert response["output"]["message"]["content"][0]["text"] == "<PERSON_1> called."
+            return de_anon_response
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", mock_hook)
+
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
+            processing_obj = ProxyBaseLLMRequestProcessing(data={})
+            result = await processing_obj._handle_event_stream_allm_passthrough_route(
+                body_bytes=stream_bytes,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+        buf = EventStreamBuffer()
+        buf.add_data(result)
+        texts = []
+        for msg in buf:
+            if msg.headers.get(":event-type") == "contentBlockDelta":
+                payload = json.loads(msg.payload)
+                texts.append(payload["delta"]["text"])
+
+        assert "".join(texts) == "Alice called."
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_non_text_frames_preserved_unchanged(self, monkeypatch):
+        from botocore.eventstream import EventStreamBuffer
+
+        stream_bytes = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"})
+            + _build_event_stream_frame(
+                "contentBlockDelta",
+                {"contentBlockIndex": 0, "delta": {"text": "<PERSON_1>"}},
+            )
+            + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
+        )
+
+        de_anon_response = {
+            "output": {"message": {"role": "assistant", "content": [{"text": "Bob"}]}},
+            "stopReason": "end_turn",
+        }
+
+        async def mock_hook(data, user_api_key_dict, response):
+            return de_anon_response
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", mock_hook)
+
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
+            processing_obj = ProxyBaseLLMRequestProcessing(data={})
+            result = await processing_obj._handle_event_stream_allm_passthrough_route(
+                body_bytes=stream_bytes,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+        buf = EventStreamBuffer()
+        buf.add_data(result)
+        event_types = [msg.headers.get(":event-type") for msg in buf]
+
+        assert "messageStart" in event_types
+        assert "messageStop" in event_types
+        assert event_types.count("contentBlockDelta") == 1
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_no_text_deltas_returns_original_bytes(self, monkeypatch):
+        stream_bytes = _build_event_stream_frame("messageStart", {"role": "assistant"})
+
+        hook_spy = AsyncMock()
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", hook_spy)
+
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
+            processing_obj = ProxyBaseLLMRequestProcessing(data={})
+            result = await processing_obj._handle_event_stream_allm_passthrough_route(
+                body_bytes=stream_bytes,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+        hook_spy.assert_not_called()
+        assert result is stream_bytes
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_text_distributed_proportionally_across_chunks(self, monkeypatch):
+        import json
+        from botocore.eventstream import EventStreamBuffer
+
+        # Two chunks of unequal length: 10 chars vs 4 chars (= 14 total)
+        stream_bytes = _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"text": "<PERSON_1>"}},
+        ) + _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"text": "<ORG>"}},
+        )
+
+        de_anon_response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "John Acme"}],
+                }
+            },
+            "stopReason": "end_turn",
+        }
+
+        async def mock_hook(data, user_api_key_dict, response):
+            return de_anon_response
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", mock_hook)
+
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
+            processing_obj = ProxyBaseLLMRequestProcessing(data={})
+            result = await processing_obj._handle_event_stream_allm_passthrough_route(
+                body_bytes=stream_bytes,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+        buf = EventStreamBuffer()
+        buf.add_data(result)
+        texts = [
+            json.loads(msg.payload)["delta"]["text"]
+            for msg in buf
+            if msg.headers.get(":event-type") == "contentBlockDelta"
+        ]
+
+        # Full text is preserved
+        assert "".join(texts) == "John Acme"
+        # Neither chunk is empty — text was distributed across both
+        assert all(t != "" for t in texts), f"Expected no empty chunks, got: {texts}"
         ProxyLogging._callback_capabilities_cache.clear()
