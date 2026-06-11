@@ -1,21 +1,21 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { renderHook, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { usePaginatedDailyActivity } from "../src/components/UsagePage/hooks/usePaginatedDailyActivity";
 
 function makeWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return ({ children }: { children: React.ReactNode }) =>
+
+  const Wrapper = ({ children }: { children: React.ReactNode }) =>
     React.createElement(QueryClientProvider, { client: qc }, children);
+
+  Wrapper.displayName = "QueryClientWrapper";
+  return Wrapper;
 }
 
 /** Build a mock page response with controllable totals. */
-function mockPage(
-  page: number,
-  totalPages: number,
-  extra: Record<string, any> = {},
-) {
+function mockPage(page: number, totalPages: number, extra: Record<string, unknown> = {}) {
   return {
     results: [{ date: `2025-01-0${page}`, spend: page }],
     metadata: {

@@ -3,27 +3,47 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { UsageViewSelect } from "../src/components/UsagePage/components/UsageViewSelect/UsageViewSelect";
 
+// ── Types for antd mocks ─────────────────────────────────────────────────────
+
+type SelectOption = {
+  value: string;
+  label: React.ReactNode;
+};
+
+type SelectProps = {
+  value?: string;
+  onChange?: (value: string) => void;
+  options?: SelectOption[];
+};
+
+type BadgeProps = {
+  count?: React.ReactNode;
+  children?: React.ReactNode;
+};
+
 // ── Mocks (mirrors the pattern from UsageViewSelect.test.tsx in src/) ──────────
 
 vi.mock("antd", async () => {
   const React = await import("react");
 
-  function Select(props: any) {
+  function Select(props: SelectProps) {
     const { value, onChange, options } = props;
     return React.createElement(
       "select",
-      { value, onChange: (e: any) => onChange?.(e.target.value), role: "combobox" },
-      options?.map((opt: any) =>
-        React.createElement("option", { key: opt.value, value: opt.value }, opt.label),
-      ),
+      {
+        value,
+        onChange: (e: React.ChangeEvent<HTMLSelectElement>) => onChange?.(e.target.value),
+        role: "combobox",
+      },
+      options?.map((opt) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
     );
   }
-  (Select as any).displayName = "AntdSelect";
+  Select.displayName = "AntdSelect";
 
-  function Badge(props: any) {
+  function Badge(props: BadgeProps) {
     return React.createElement("span", { "data-testid": "antd-badge" }, props.count, props.children);
   }
-  (Badge as any).displayName = "AntdBadge";
+  Badge.displayName = "AntdBadge";
 
   return { Select, Badge };
 });
@@ -53,9 +73,7 @@ const NON_ADMIN_VISIBLE = ["global", "organization", "team"];
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function getOptionValues(): string[] {
-  return Array.from(screen.getByRole("combobox").querySelectorAll("option")).map(
-    (o) => (o as HTMLOptionElement).value,
-  );
+  return Array.from(screen.getByRole("combobox").querySelectorAll("option")).map((o) => (o as HTMLOptionElement).value);
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
