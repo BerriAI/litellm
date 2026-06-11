@@ -3,14 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Fallbacks from "./Fallbacks";
 import * as networkingModule from "../../../networking";
-import * as fetchModelsModule from "../../../playground/llm_calls/fetch_models";
+import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
 
 vi.mock("../../../networking", () => ({
   getCallbacksCall: vi.fn(),
   setCallbacksCall: vi.fn(),
 }));
 
-vi.mock("../../../playground/llm_calls/fetch_models", () => ({
+vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
 

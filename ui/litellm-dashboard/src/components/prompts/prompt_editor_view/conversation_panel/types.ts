@@ -1,4 +1,4 @@
-import { TokenUsage } from "../../../playground/chat_ui/ResponseMetrics";
+import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 
 export interface Message {
   role: string;

@@ -14,7 +14,7 @@ vi.mock("@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useUpdateMCPSemanticF
   useUpdateMCPSemanticFilterSettings: vi.fn(),
 }));
 
-vi.mock("@/components/playground/llm_calls/fetch_models", () => ({
+vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([]),
 }));
 

@@ -1,7 +1,6 @@
 "use client";
 
 import ModelsAndEndpointsView from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
-import PlaygroundPage from "@/app/(dashboard)/playground/page";
 import AdminPanel from "@/components/AdminPanel";
 import AgentsPanel from "@/components/agents";
 import BudgetPanel from "@/components/budgets/budget_panel";
@@ -354,8 +353,6 @@ function CreateKeyPageContent() {
               premiumUser={premiumUser}
               teams={teams}
             />
-          ) : page == "llm-playground" ? (
-            <PlaygroundPage />
           ) : page == "users" ? (
             <ViewUserDashboard
               userID={userID}

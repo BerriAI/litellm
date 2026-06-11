@@ -7,8 +7,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
-import ReasoningContent from "../playground/chat_ui/ReasoningContent";
-import MCPEventsDisplay from "../playground/chat_ui/MCPEventsDisplay";
+import ReasoningContent from "@/components/chat_ui/ReasoningContent";
+import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
 import { ChatMessage } from "./types";
 
 const { Panel } = Collapse;
