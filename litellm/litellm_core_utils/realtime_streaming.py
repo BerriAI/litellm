@@ -47,6 +47,7 @@ class RealTimeStreaming:
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[Dict] = None,
         backend_uses_beta_protocol: Optional[bool] = None,
+        force_transcription_model: Optional[str] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -100,6 +101,11 @@ class RealTimeStreaming:
         self._flushing_pending_messages_until_setup: bool = False
         self._pending_messages_until_setup: List[str] = []
         self._pending_messages_byte_total: int = 0
+        # Whether this is a transcription-only session (session.type == "transcription",
+        # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
+        # their input_audio_transcription.completed usage drives duration-based cost.
+        self._force_transcription_model = force_transcription_model
+        self._is_transcription_session: bool = force_transcription_model is not None
 
     # Per-connection caps for pre-setup audio frames (message count + total bytes).
     _MAX_BUFFERED_MESSAGES: int = 200
@@ -207,6 +213,8 @@ class RealTimeStreaming:
                     self.session_tools = tools
                 # GA: session.type is required; log it for traceability but no action needed
                 verbose_logger.debug(f"Realtime session.type: {session.get('type')}")
+                if session.get("type") == "transcription":
+                    self._is_transcription_session = True
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
@@ -220,6 +228,55 @@ class RealTimeStreaming:
                 transcript = cast(str, event_obj.get("transcript", ""))
                 if transcript:
                     self.input_messages.append({"role": "user", "content": transcript})
+        except (AttributeError, TypeError):
+            pass
+
+    def _detect_transcription_session_from_backend(
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
+    ) -> None:
+        """Flag transcription-only sessions from backend session events."""
+        try:
+            event_type = event_obj.get("type", "")
+            if event_type in (
+                "transcription_session.created",
+                "transcription_session.updated",
+            ):
+                self._is_transcription_session = True
+            elif event_type in ("session.created", "session.updated"):
+                session = cast(dict, event_obj).get("session", {}) or {}
+                if session.get("type") == "transcription":
+                    self._is_transcription_session = True
+        except (AttributeError, TypeError):
+            pass
+
+    def _capture_transcription_usage(
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
+    ) -> None:
+        """
+        Append a usage-only transcription completed event to the logged results so
+        the cost calculator can bill it by audio duration. The default logged event
+        types exclude this event, so it is captured here directly for transcription
+        sessions rather than widening logging for every realtime session. Only the
+        type and usage are kept — the transcript is already captured separately in
+        input_messages, so it is not duplicated into the response log here.
+        """
+        try:
+            usage = event_obj.get("usage")
+            if usage is None:
+                return
+            # If this event type is already captured by store_message (e.g. the user
+            # logs all realtime events), don't append a second copy.
+            if self._should_store_message(event_obj):
+                return
+            self.messages.append(
+                cast(
+                    OpenAIRealtimeEvents,
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "usage": usage,
+                    },
+                )
+            )
         except (AttributeError, TypeError):
             pass
 
@@ -283,6 +340,7 @@ class RealTimeStreaming:
         backend, False if the provider transformation produced no output and
         the message was effectively dropped.
         """
+        message = self._enforce_transcription_session_model(message)
         if self.provider_config:
             transformed = self.provider_config.transform_realtime_request(
                 message, self.model, self.session_configuration_request
@@ -301,6 +359,80 @@ class RealTimeStreaming:
             return sent
         await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
         return True
+
+    def _enforce_transcription_session_model(self, message: str) -> str:
+        """Force client transcription session updates to the authorized model.
+
+        `/v1/realtime?intent=transcription` may intentionally omit `model` from
+        the upstream URL for Azure compatibility, but the proxy still authorizes
+        a resolved LiteLLM model before opening the backend websocket. If a
+        client later sends a transcription `session.update`, any model embedded
+        in that update must be rewritten to the same authorized model instead of
+        allowing a post-auth model/deployment switch.
+
+        Normal realtime sessions keep their independent nested transcription
+        model behavior because `_force_transcription_model` is only set for
+        transcription-intent websocket routes.
+        """
+        if self._force_transcription_model is None:
+            return message
+
+        try:
+            message_obj = json.loads(message)
+        except (json.JSONDecodeError, TypeError):
+            return message
+
+        if message_obj.get("type") not in (
+            "session.update",
+            "transcription_session.update",
+        ):
+            return message
+
+        session = message_obj.get("session")
+        if not isinstance(session, dict):
+            return message
+
+        if session.get("type") == "transcription":
+            self._is_transcription_session = True
+
+        authorized_model = self._force_transcription_model
+        changed = False
+
+        transcription = session.get("input_audio_transcription")
+        if (
+            isinstance(transcription, dict)
+            and transcription.get("model") != authorized_model
+        ):
+            session["input_audio_transcription"] = {
+                **transcription,
+                "model": authorized_model,
+            }
+            changed = True
+
+        audio = session.get("audio")
+        if isinstance(audio, dict):
+            audio_input = audio.get("input")
+            if isinstance(audio_input, dict):
+                nested_transcription = audio_input.get("transcription")
+                if (
+                    isinstance(nested_transcription, dict)
+                    and nested_transcription.get("model") != authorized_model
+                ):
+                    session["audio"] = {
+                        **audio,
+                        "input": {
+                            **audio_input,
+                            "transcription": {
+                                **nested_transcription,
+                                "model": authorized_model,
+                            },
+                        },
+                    }
+                    changed = True
+
+        if not changed:
+            return message
+        return json.dumps(message_obj)
 
     def _uses_deferred_backend_setup(self) -> bool:
         """True when setup is deferred until the client's first session.update."""
@@ -719,6 +851,8 @@ class RealTimeStreaming:
         """
         event_type = event_obj.get("type")
 
+        self._detect_transcription_session_from_backend(event_obj)
+
         # Send session.created to the client FIRST so it stays in sync, then inject
         # the disable-auto-response session.update; otherwise a backend error could
         # reach the client before it sees session.created.
@@ -736,6 +870,14 @@ class RealTimeStreaming:
             self._collect_user_input_from_backend_event(event_obj)
             self.store_message(event_obj)
             await self.websocket.send_text(raw_response)
+
+            # Transcription-only sessions (e.g. gpt-realtime-whisper) have no
+            # assistant turn: capture audio-duration usage for cost and never
+            # trigger response.create.
+            if self._is_transcription_session:
+                self._capture_transcription_usage(event_obj)
+                return True
+
             blocked = await self.run_realtime_guardrails(
                 transcript,
                 item_id=event_obj.get("item_id"),
