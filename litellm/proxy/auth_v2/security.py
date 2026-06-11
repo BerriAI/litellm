@@ -70,6 +70,7 @@ class AuthSecurity:
     async def principal(
         self, security_scopes: SecurityScopes, request: Request
     ) -> Principal:
+        """Resolve the caller to a Principal, enforcing scheme OR and required scopes."""
         credential = None
         for authenticator in self.authenticators:
             credential = await authenticator.authenticate(request)
@@ -87,6 +88,8 @@ class AuthSecurity:
         return principal
 
     def require_roles(self, *allowed: Role) -> Callable[..., object]:
+        """Security() dependency that admits a principal holding any allowed role (hierarchy-aware)."""
+
         async def dependency(
             principal: Annotated[Principal, Security(self.principal)],
         ) -> Principal:
@@ -97,6 +100,8 @@ class AuthSecurity:
         return dependency
 
     def require_permission(self, obj: str, act: str) -> Callable[..., object]:
+        """Security() dependency that admits a principal whose roles permit obj/act via Casbin."""
+
         async def dependency(
             principal: Annotated[Principal, Security(self.principal)],
         ) -> Principal:
