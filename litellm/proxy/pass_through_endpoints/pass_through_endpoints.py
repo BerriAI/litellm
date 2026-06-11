@@ -2456,10 +2456,41 @@ async def initialize_pass_through_endpoints(
             config_file_path=config_file_path,
         )
 
-    # remove the ones that are not visited from the list
-    for endpoint_key in registered_pass_through_endpoints:
-        if endpoint_key not in visited_endpoints:
-            InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_key)
+    _remove_stale_pass_through_routes(
+        registered_keys=registered_pass_through_endpoints,
+        visited_keys=visited_endpoints,
+    )
+
+
+def _remove_stale_pass_through_routes(
+    registered_keys: List[str],
+    visited_keys: set,
+) -> None:
+    """Drop any route key from the registry that was not visited this cycle.
+
+    Also strips the route's path (and wildcard path for subpath routes) from
+    LiteLLMRoutes.openai_routes — that list is the authorization allowlist
+    consulted by RouteChecks; leaving stale paths there causes the allowlist
+    to grow unboundedly across reload cycles.
+    """
+    for endpoint_key in registered_keys:
+        if endpoint_key in visited_keys:
+            continue
+        route_info = _registered_pass_through_routes.pop(endpoint_key, None)
+        if route_info is not None:
+            path = route_info.get("path")
+            if isinstance(path, str):
+                openai_routes = LiteLLMRoutes.openai_routes.value
+                if path in openai_routes:
+                    openai_routes.remove(path)
+                if route_info.get("type") == "subpath":
+                    wildcard_path = path.rstrip("/") + "/*"
+                    if wildcard_path in openai_routes:
+                        openai_routes.remove(wildcard_path)
+        verbose_proxy_logger.debug(
+            "Removed stale pass-through route from registry: %s",
+            endpoint_key,
+        )
 
 
 def _get_pass_through_endpoints_from_config() -> List[PassThroughGenericEndpoint]:
