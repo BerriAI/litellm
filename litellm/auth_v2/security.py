@@ -29,6 +29,7 @@ def install_auth(
     *,
     mount_scim: bool = True,
     mount_oidc: bool = True,
+    mount_saml: bool = True,
 ) -> AuthContext:
     ctx = AuthContext(config, build_authenticators(config), resolver)
     app.state.auth_v2 = ctx
@@ -40,6 +41,12 @@ def install_auth(
         from .oidc import build_oidc_router
 
         app.include_router(build_oidc_router(config))
+    if mount_saml and config.saml is not None and config.saml.enabled:
+        from .saml import SamlAuthenticator, SamlSessionStore, build_saml_router
+
+        session_store = SamlSessionStore()
+        ctx.authenticators.append(SamlAuthenticator(config.saml, session_store))
+        app.include_router(build_saml_router(config.saml, session_store))
     return ctx
 
 

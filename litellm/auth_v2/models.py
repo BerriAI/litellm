@@ -22,6 +22,7 @@ class AuthMethod(str, Enum):
     BEARER_JWT = "bearer_jwt"
     OAUTH2_INTROSPECTION = "oauth2_introspection"
     OIDC = "oidc"
+    SAML = "saml"
     MUTUAL_TLS = "mutual_tls"
 
 

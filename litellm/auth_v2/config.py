@@ -1,10 +1,21 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr
+from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr, model_validator
 
 from .models import SecuritySchemeType
+
+DEFAULT_SAML_ATTRIBUTE_MAP = {
+    "email": "email",
+    "mail": "email",
+    "emailAddress": "email",
+    "displayName": "display_name",
+    "cn": "display_name",
+    "userName": "user_name",
+    "uid": "user_name",
+    "sAMAccountName": "user_name",
+}
 
 
 class ApiKeySchemeConfig(BaseModel):
@@ -46,6 +57,31 @@ class TrustedProxyConfig(BaseModel):
     trusted_proxy_cidrs: List[str] = Field(default_factory=list)
 
 
+class SamlConfig(BaseModel):
+    enabled: bool = False
+    sp_entity_id: str
+    acs_url: str
+    idp_metadata_path: Optional[str] = None
+    idp_metadata_inline: Optional[str] = None
+    sp_key_file: Optional[str] = None
+    sp_cert_file: Optional[str] = None
+    want_assertions_signed: bool = True
+    allow_unsolicited: bool = True
+    session_cookie: str = "saml_session"
+    xmlsec_binary: Optional[str] = None
+    attribute_map: Dict[str, str] = Field(
+        default_factory=lambda: dict(DEFAULT_SAML_ATTRIBUTE_MAP)
+    )
+
+    @model_validator(mode="after")
+    def _require_idp_metadata(self) -> "SamlConfig":
+        if self.enabled and not (self.idp_metadata_path or self.idp_metadata_inline):
+            raise ValueError(
+                "SAML enabled but no IdP metadata: set idp_metadata_path or idp_metadata_inline"
+            )
+        return self
+
+
 class AuthConfig(BaseModel):
     scheme_order: List[SecuritySchemeType] = Field(
         default_factory=lambda: [
@@ -62,3 +98,4 @@ class AuthConfig(BaseModel):
     oauth2_introspection: Optional[OAuth2IntrospectionConfig] = None
     mutual_tls: MutualTlsConfig = Field(default_factory=MutualTlsConfig)
     network: TrustedProxyConfig = Field(default_factory=TrustedProxyConfig)
+    saml: Optional[SamlConfig] = None

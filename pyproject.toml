@@ -56,6 +56,11 @@ proxy = [
     "PyJWT[crypto]>=2.13.0,<3.0",
     "Authlib>=1.6.0,<2.0",
     "scim2-models>=0.6.0,<1.0",
+    "pysaml2>=7.5.0,<8.0",
+    # pysaml2 pulls pyOpenSSL transitively without pinning it; force a floor that
+    # supports cryptography 46 (older pyOpenSSL caps cryptography below 46 and
+    # breaks at import against the version this proxy already requires).
+    "pyOpenSSL>=26.0.0,<27.0",
     "python-multipart>=0.0.27,<1.0",
     "cryptography>=46.0.7,<47.0",
     "pynacl>=1.6.2,<2.0",

@@ -1298,6 +1298,15 @@ wheels = [
 ]
 
 [[package]]
+name = "defusedxml"
+version = "0.7.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/d5/c66da9b79e5bdb124974bfe172b4daf3c984ebd9c2a06e2b8a4dc7331c72/defusedxml-0.7.1.tar.gz", hash = "sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69", size = 75520, upload-time = "2021-03-08T10:59:26.269Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl", hash = "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61", size = 25604, upload-time = "2021-03-08T10:59:24.45Z" },
+]
+
+[[package]]
 name = "deprecated"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1420,6 +1429,15 @@ resolution-markers = [
 sdist = { url = "https://files.pythonhosted.org/packages/ae/b6/03bb70946330e88ffec97aefd3ea75ba575cb2e762061e0e62a213befee8/docutils-0.22.4.tar.gz", hash = "sha256:4db53b1fde9abecbb74d91230d32ab626d94f6badfc575d6db9194a49df29968", size = 2291750, upload-time = "2025-12-18T19:00:26.443Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/10/5da547df7a391dcde17f59520a231527b8571e6f46fc8efb02ccb370ab12/docutils-0.22.4-py3-none-any.whl", hash = "sha256:d0013f540772d1420576855455d050a2180186c91c15779301ac2ccb3eeb68de", size = 633196, upload-time = "2025-12-18T19:00:18.077Z" },
+]
+
+[[package]]
+name = "elementpath"
+version = "4.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ac/41/afdd82534c80e9675d1c51dc21d0889b72d023bfe395a2f5a44d751d3a73/elementpath-4.8.0.tar.gz", hash = "sha256:5822a2560d99e2633d95f78694c7ff9646adaa187db520da200a8e9479dc46ae", size = 358528, upload-time = "2025-03-03T20:51:08.397Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/95/615af832e7f507fe5ce4562b4be1bd2fec080c4ff6da88dcd0c2dbfca582/elementpath-4.8.0-py3-none-any.whl", hash = "sha256:5393191f84969bcf8033b05ec4593ef940e58622ea13cefe60ecefbbf09d58d9", size = 243271, upload-time = "2025-03-03T20:51:03.027Z" },
 ]
 
 [[package]]
@@ -3366,7 +3384,9 @@ proxy = [
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pynacl" },
+    { name = "pyopenssl" },
     { name = "pyroscope-io", marker = "sys_platform != 'win32'" },
+    { name = "pysaml2" },
     { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "restrictedpython" },
@@ -3557,8 +3577,10 @@ requires-dist = [
     { name = "pydantic-settings", marker = "extra == 'proxy'", specifier = ">=2.14.1,<3.0" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'proxy'", specifier = ">=2.13.0,<3.0" },
     { name = "pynacl", marker = "extra == 'proxy'", specifier = ">=1.6.2,<2.0" },
+    { name = "pyopenssl", marker = "extra == 'proxy'", specifier = ">=26.0.0,<27.0" },
     { name = "pypdf", marker = "python_full_version < '3.14' and extra == 'proxy-runtime'", specifier = ">=6.10.2,<7.0" },
     { name = "pyroscope-io", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.8.16,<1.0" },
+    { name = "pysaml2", marker = "extra == 'proxy'", specifier = ">=7.5.0,<8.0" },
     { name = "python-dotenv", specifier = ">=1.0.0,<2.0" },
     { name = "python-multipart", marker = "extra == 'proxy'", specifier = ">=0.0.27,<1.0" },
     { name = "pyyaml", marker = "extra == 'cli'", specifier = ">=6.0.3,<7.0" },
@@ -6078,6 +6100,19 @@ wheels = [
 ]
 
 [[package]]
+name = "pyopenssl"
+version = "26.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1a/51/27a5ad5f939d08f690a326ef9582cda7140555180db71695f6fb747d6a36/pyopenssl-26.2.0.tar.gz", hash = "sha256:8c6fcecd1183a7fc897548dfe388b0cdb7f37e018200d8409cf33959dbe35387", size = 182195, upload-time = "2026-05-04T23:06:09.72Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/73/b8/a0e2790ae249d6f38c9f66de7a211621a7ab2650217bcd04e1262f578a56/pyopenssl-26.2.0-py3-none-any.whl", hash = "sha256:4f9d971bc5298b8bc1fab282803da04bf000c755d4ad9d99b52de2569ca19a70", size = 55823, upload-time = "2026-05-04T23:06:08.395Z" },
+]
+
+[[package]]
 name = "pyparsing"
 version = "3.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -6132,6 +6167,24 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/5e/c1/90fc335f2224da86d49016ebe15fb4f709c7b8853d4b5beced5a052d9ea3/pyroscope_io-0.8.16-py2.py3-none-macosx_11_0_x86_64.whl", hash = "sha256:dc98355e27c0b7b61f27066500fe1045b70e9459bb8b9a3082bc4755cb6392b6", size = 3375865, upload-time = "2026-01-22T06:23:27.736Z" },
     { url = "https://files.pythonhosted.org/packages/39/7a/261f53ede16b7db19984ec80480572b8e9aa3be0ffc82f62650c4b9ca7d6/pyroscope_io-0.8.16-py2.py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:86f0f047554ff62bd92c3e5a26bc2809ccd467d11fbacb9fef898ba299dbda59", size = 3236172, upload-time = "2026-01-22T06:23:29.107Z" },
     { url = "https://files.pythonhosted.org/packages/eb/8f/88d792e9cacd6ff3bd9a50100586ddc665e02a917662c17d30931f778542/pyroscope_io-0.8.16-py2.py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:6b91ce5b240f8de756c16a17022ca8e25ef8a4eed461c7d074b8a0841cf7b445", size = 3485288, upload-time = "2026-01-22T06:23:32Z" },
+]
+
+[[package]]
+name = "pysaml2"
+version = "7.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "defusedxml" },
+    { name = "pyopenssl" },
+    { name = "python-dateutil" },
+    { name = "pytz" },
+    { name = "requests" },
+    { name = "xmlschema" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/76/02/e8ecb5d1574a2add1431c8ec16dff137610f30580a7c1d6205929b3db3ee/pysaml2-7.5.0.tar.gz", hash = "sha256:f36871d4e5ee857c6b85532e942550d2cf90ea4ee943d75eb681044bbc4f54f7", size = 340338, upload-time = "2024-01-30T11:49:08.589Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/d1/92d84ae0e80e829e84785c6e4e425ff6d447116289f0ecf2af068f771a73/pysaml2-7.5.0-py3-none-any.whl", hash = "sha256:bc6627cc344476a83c757f440a73fda1369f13b6fda1b4e16bca63ffbabb5318", size = 419304, upload-time = "2024-01-30T11:49:04.5Z" },
 ]
 
 [[package]]
@@ -8151,6 +8204,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c7/79/12135bdf8b9c9367b8701c2c19a14c913c120b882d50b014ca0d38083c2c/wsproto-1.3.2.tar.gz", hash = "sha256:b86885dcf294e15204919950f666e06ffc6c7c114ca900b060d6e16293528294", size = 50116, upload-time = "2025-11-20T18:18:01.871Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a4/f5/10b68b7b1544245097b2a1b8238f66f2fc6dcaeb24ba5d917f52bd2eed4f/wsproto-1.3.2-py3-none-any.whl", hash = "sha256:61eea322cdf56e8cc904bd3ad7573359a242ba65688716b0710a5eb12beab584", size = 24405, upload-time = "2025-11-20T18:18:00.454Z" },
+]
+
+[[package]]
+name = "xmlschema"
+version = "2.5.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "elementpath" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/59/af/42e9e773eaa6bc8e8c322f93c75454b0d370979048b250bfef7786ff26ec/xmlschema-2.5.1.tar.gz", hash = "sha256:4f7497de6c8b6dc2c28ad7b9ed6e21d186f4afe248a5bea4f54eedab4da44083", size = 539267, upload-time = "2023-12-19T15:51:57.663Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5e/2a/c2bc97fd20efe65cfcfc21666d1b0213969133d37ea093761d264d9ed9f8/xmlschema-2.5.1-py3-none-any.whl", hash = "sha256:ec2b2a15c8896c1fcd14dcee34ca30032b99456c3c43ce793fdb9dca2fb4b869", size = 395065, upload-time = "2023-12-19T15:51:53.136Z" },
 ]
 
 [[package]]
