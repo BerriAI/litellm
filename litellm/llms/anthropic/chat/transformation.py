@@ -250,6 +250,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     # to drop them on the wire. Anthropic-direct (this base class) must leave
     # them in place: Claude Code uses them as the recognition signal for
     # Max/Pro OAuth tokens, and stripping them causes 429s on Anthropic (#29572).
+    #
+    # Other subclasses (`VertexAIAnthropicConfig`, `AzureAnthropicConfig`,
+    # `DatabricksConfig`) inherit False and therefore forward the header.
+    # The reserved-keyword rejection in #20951 was reported only for Bedrock;
+    # those gateways pass the system array through to Anthropic models, which
+    # tolerate the block. If another gateway is found to reject it, set this
+    # flag to True on that subclass.
     _strips_x_anthropic_billing_header: bool = False
 
     def __init__(
@@ -1617,7 +1624,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Translate system message to anthropic format.
 
         Removes system message from the original list and returns a new list of anthropic system message content.
-        Filters out system messages containing x-anthropic-billing-header metadata.
+        When `_strips_x_anthropic_billing_header` is True (Bedrock subclasses),
+        also filters out system messages containing x-anthropic-billing-header
+        metadata; Anthropic-direct keeps them (#29572).
         """
         system_prompt_indices = []
         anthropic_system_message_list: List[AnthropicSystemMessageContent] = []
