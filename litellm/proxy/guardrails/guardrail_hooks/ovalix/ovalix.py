@@ -31,9 +31,6 @@ if TYPE_CHECKING:
 BLOCKED_BY_OVALIX_FALLBACK_MESSAGE = "This message was blocked by Ovalix"
 BLOCKED_ACTION_TYPE = "block"
 
-# Fixed salt so actor/session fingerprints are deterministic per LiteLLM release salt version.
-_OVALIX_TRACKER_ACTOR_SCRYPT_SALT = b"litellm-ovalix-tracker-actor-v1"
-
 
 class OvalixGuardrailMissingSecrets(Exception):
     """Raised when required Ovalix config (API base, key, application/checkpoint IDs) is missing."""
@@ -182,17 +179,14 @@ class OvalixGuardrail(CustomGuardrail):
         return "unknown"
 
     def _get_tracker_actor_id(self, data: dict) -> str:
-        """Opaque actor id for Tracker API payloads (scrypt KDF of _get_actor; avoids sending PII)."""
-        material = self._get_actor(data).encode()
-        dk = hashlib.scrypt(
-            material,
-            salt=_OVALIX_TRACKER_ACTOR_SCRYPT_SALT,
-            n=16384,
-            r=8,
-            p=1,
-            dklen=32,
-        )
-        return dk.hex()[:8]
+        """Normalize the actor string into a short, stable id for Tracker API payloads."""
+        # NOTE: this hash is purely for normalization — it collapses an arbitrary actor
+        # string (email, user id, or "unknown") into a compact, fixed-length, consistent
+        # key. It is not a privacy/security measure and the actor value is not sensitive,
+        # so a plain SHA-256 (truncated) is sufficient; no salting/KDF is needed here.
+        actor_id = self._get_actor(data).encode()
+        normalized_actor_id = hashlib.sha256(actor_id).hexdigest()[:8]
+        return normalized_actor_id
 
     def _get_session_id(self, data: dict) -> str:
         """Return a unique identifier for the chat/session (actor + date + application_id)."""
