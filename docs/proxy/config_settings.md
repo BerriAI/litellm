@@ -954,6 +954,7 @@ router_settings:
 | LITELLM_SSL_CIPHERS | SSL/TLS cipher configuration for faster handshakes. Controls cipher suite preferences for OpenSSL connections.
 | LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
 | LITELLM_TOKEN | Access token for LiteLLM integration
+| LITELLM_TPM_TOKEN_RESERVATION_ENABLED | When false, the v3 rate limiter skips the upfront TPM token reservation and enforces TPM post-call from actual usage. Default is true
 | LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES | When set to "true", routes OpenAI /v1/messages requests through chat/completions instead of the Responses API for Anthropic models. Can also be set via `litellm_settings.use_chat_completions_url_for_anthropic_messages`
 | LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES | When set to "true", routes all OpenAI /chat/completions requests through the Responses API bridge. Recommended for OpenAI models. Can also be set via `litellm_settings.route_all_chat_openai_to_responses`
 | LITELLM_GEMINI_LIVE_DEFER_SETUP | When set to "true", defers Gemini/Vertex Live setup until the client sends `session.update` (required for runtime tool injection). Default is "false" for backwards compatibility, which auto-sends setup on connect. Can also be set via `litellm.gemini_live_defer_setup`
@@ -1101,6 +1102,7 @@ router_settings:
 | QDRANT_URL | Connection URL for Qdrant database
 | QDRANT_VECTOR_SIZE | Vector size for Qdrant operations. Default is 1536
 | REDIS_CONNECTION_POOL_TIMEOUT | Timeout in seconds for Redis connection pool. Default is 5
+| REDIS_CIRCUIT_BREAKER_ENABLED | When false, the Redis circuit breaker is disabled and never opens. Default is true
 | REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD | Number of consecutive failures before the Redis circuit breaker opens. Default is 5
 | REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT | Time in seconds before the Redis circuit breaker attempts recovery after opening. Default is 60
 | REDIS_CLUSTER_NODES | JSON-formatted list of Redis cluster startup nodes for Redis Cluster mode. Example: `[{"host": "node1", "port": 6379}]`
