@@ -2368,7 +2368,10 @@ class TestCheckRequestDisconnection:
         monkeypatch.setattr(cpr.asyncio, "sleep", AsyncMock())
 
         await _check_request_disconnection(mock_request, task)
-        await asyncio.sleep(0)
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
         assert task.cancelled() or task_cancelled
 
@@ -2484,3 +2487,207 @@ class TestCheckRequestDisconnection:
 
         assert exc_info.value.status_code == 499
         assert "disconnected" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_cancels_during_call_hook_task(self, monkeypatch):
+        import asyncio
+
+        import litellm.proxy.common_request_processing as cpr
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        hook_cancelled = False
+
+        async def slow_during_call_hook(**_kwargs):
+            try:
+                await asyncio.sleep(9999)
+            except asyncio.CancelledError:
+                nonlocal hook_cancelled
+                hook_cancelled = True
+                raise
+
+        async def slow_llm():
+            await asyncio.sleep(9999)
+
+        async def fake_route_request(**_kwargs):
+            return slow_llm()
+
+        async def instant_disconnect(_request, task):
+            task.cancel()
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_call_id = "test-call-id"
+        mock_logging_obj._defer_async_logging = False
+
+        mock_proxy_logging = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging.during_call_hook = slow_during_call_hook
+        mock_proxy_logging._callback_capabilities_cache = {}
+
+        monkeypatch.setattr(cpr, "route_request", fake_route_request)
+        monkeypatch.setattr(cpr, "_check_request_disconnection", instant_disconnect)
+
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "gemini-2.0-flash"})
+        monkeypatch.setattr(
+            processing_obj,
+            "common_processing_pre_call_logic",
+            AsyncMock(return_value=({"model": "gemini-2.0-flash"}, mock_logging_obj)),
+        )
+        monkeypatch.setattr(
+            processing_obj, "_has_post_call_guardrails", MagicMock(return_value=False)
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        mock_request.headers = {}
+
+        with pytest.raises(HTTPException):
+            await processing_obj.base_process_llm_request(
+                request=mock_request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                proxy_logging_obj=mock_proxy_logging,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+                route_type="acompletion",
+                version=None,
+            )
+
+        assert hook_cancelled is True
+
+
+class TestStreamingClientDisconnectLogging:
+    @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_sets_error_information(self):
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"litellm_params": {}, "metadata": {}}
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "litellm_logging_obj": mock_logging_obj,
+            "metadata": {},
+            "litellm_params": {"metadata": {}},
+        }
+
+        recorded = await _record_streaming_client_disconnect_if_needed(
+            mock_request, request_data
+        )
+
+        assert recorded is True
+        assert request_data["metadata"]["client_disconnected"] is True
+        assert (
+            request_data["metadata"]["error_information"]["error_code"] == "499"
+        )
+        assert (
+            mock_logging_obj.model_call_details["litellm_params"]["metadata"][
+                "error_information"
+            ]["error_code"]
+            == "499"
+        )
+
+    @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_no_op_when_connected(self):
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+        request_data = {"metadata": {}}
+
+        recorded = await _record_streaming_client_disconnect_if_needed(
+            mock_request, request_data
+        )
+
+        assert recorded is False
+        assert "client_disconnected" not in request_data["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_finalize_streaming_generator_cleanup_fires_deferred_logging(
+        self, monkeypatch
+    ):
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        fire_spy = MagicMock()
+        monkeypatch.setattr(
+            "litellm.proxy.utils.ProxyLogging._fire_deferred_stream_logging",
+            fire_spy,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+        request_data = {
+            "metadata": {},
+            "litellm_params": {"metadata": {}},
+            "litellm_logging_obj": MagicMock(model_call_details={"metadata": {}, "litellm_params": {}}),
+        }
+
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=mock_request,
+            request_data=request_data,
+            response=mock_response,
+        )
+
+        fire_spy.assert_called_once_with(request_data)
+        mock_response.aclose.assert_awaited_once()
+        assert request_data["metadata"]["error_information"]["error_code"] == "499"
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_data_generator_records_499_on_early_aclose(
+        self, monkeypatch
+    ):
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        monkeypatch.setattr(
+            "litellm.proxy.utils.ProxyLogging._fire_deferred_stream_logging",
+            MagicMock(),
+        )
+
+        async def mock_streaming_iterator(*_args, **_kwargs):
+            yield {"choices": [{"delta": {"content": "hi"}}]}
+            yield {"choices": [{"delta": {"content": " there"}}]}
+
+        mock_proxy_logging = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging.async_post_call_streaming_iterator_hook = (
+            mock_streaming_iterator
+        )
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+        request_data = {
+            "model": "gemini-2.0-flash",
+            "metadata": {},
+            "litellm_params": {"metadata": {}},
+            "litellm_logging_obj": MagicMock(
+                model_call_details={"metadata": {}, "litellm_params": {}}
+            ),
+        }
+
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=mock_response,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            request_data=request_data,
+            proxy_logging_obj=mock_proxy_logging,
+            serialize_chunk=lambda chunk: f"data: {chunk}\n\n",
+            serialize_error=lambda proxy_exc: f"data: {proxy_exc.to_dict()}\n\n",
+            request=mock_request,
+        )
+        await gen.__anext__()
+        await gen.aclose()
+
+        assert request_data["metadata"]["client_disconnected"] is True
+        assert request_data["metadata"]["error_information"]["error_code"] == "499"
+
+        ProxyLogging._callback_capabilities_cache.clear()

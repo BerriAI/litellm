@@ -5675,6 +5675,18 @@ def get_standard_logging_object_payload(
         error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,
         )
+        if metadata.get("client_disconnected"):
+            client_disconnect_error = metadata.get("error_information")
+            if isinstance(client_disconnect_error, dict):
+                error_information = client_disconnect_error
+            else:
+                error_information = {
+                    "error_code": "499",
+                    "error_message": "Client disconnected the request",
+                    "error_class": "ClientDisconnected",
+                }
+            if not error_str:
+                error_str = "Client disconnected the request"
 
         ## get final response object ##
         final_response_obj = StandardLoggingPayloadSetup.get_final_response_obj(
