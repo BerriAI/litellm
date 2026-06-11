@@ -278,7 +278,7 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
                         continue
                     try:
                         await aclose()
-                    except Exception as e:
+                    except BaseException as e:
                         verbose_proxy_logger.debug(
                             "error closing streaming generator: %s", e
                         )

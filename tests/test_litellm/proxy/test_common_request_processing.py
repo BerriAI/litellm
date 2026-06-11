@@ -2376,6 +2376,45 @@ class TestStreamCloseOnDisconnect:
         assert closed.is_set()
         assert body_sends < 1000
 
+    async def test_upstream_closed_even_if_body_iterator_aclose_raises(self):
+        """A BaseException from body_iterator.aclose() (e.g. CancelledError)
+        must not prevent the upstream generator from being closed."""
+        upstream_closed = asyncio.Event()
+
+        class ExplodingIterator:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            async def aclose(self):
+                raise asyncio.CancelledError()
+
+        async def upstream():
+            try:
+                yield "data: a\n\n"
+            finally:
+                upstream_closed.set()
+
+        upstream_gen = upstream()
+        await upstream_gen.__anext__()
+        response = _UpstreamClosingStreamingResponse(
+            ExplodingIterator(),
+            media_type="text/event-stream",
+            upstream_generator=upstream_gen,
+        )
+
+        async def receive():
+            await asyncio.Event().wait()
+
+        async def send(message):
+            pass
+
+        await response({"type": "http"}, receive, send)
+
+        assert upstream_closed.is_set()
+
     async def test_create_response_closes_wrapped_generator_on_cancellation(self):
         """End to end through create_response: the upstream-facing generator
         must be closed even when the body iterator was never started (client
