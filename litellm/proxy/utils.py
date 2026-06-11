@@ -5184,6 +5184,47 @@ class ProxyUpdateSpend:
                 )
 
     @staticmethod
+    def _ensure_unique_request_ids(logs_to_process: List[Dict[str, Any]]) -> None:
+        """
+        Make request_ids unique within a batch before writing to LiteLLM_SpendLogs.
+
+        Some upstream providers reuse short request IDs (e.g. ``chatcmpl-424``).
+        Since ``request_id`` is the table's primary key and the batch insert
+        uses ``skip_duplicates=True``, colliding entries were silently dropped.
+
+        Strategy (backward compatible):
+        - The FIRST entry with a given request_id keeps its original id, so
+          existing exact-match lookups, UI links, and external integrations
+          keep working for the common case of globally-unique upstream ids.
+        - Subsequent entries with the SAME id within the batch get a
+          deterministic sha256 content-hash suffix appended. Identical
+          re-enqueued entries hash to the same suffix (deduped by
+          skip_duplicates=True); different content is preserved as a new row.
+        - Entries missing a request_id entirely get their content hash as id.
+
+        This must be called ONCE per batch, before the retry loop, so retries
+        regenerate identical ids and already-committed rows are deduped.
+        """
+        seen_ids: set = set()
+        for entry in logs_to_process:
+            original_id = entry.get("request_id", "")
+            if not original_id:
+                entry["request_id"] = hashlib.sha256(
+                    json.dumps(entry, sort_keys=True, default=str).encode()
+                ).hexdigest()
+                seen_ids.add(entry["request_id"])
+                continue
+            if original_id not in seen_ids:
+                seen_ids.add(original_id)
+                continue
+            # Collision within batch: append deterministic content-hash suffix
+            entry_hash = hashlib.sha256(
+                json.dumps(entry, sort_keys=True, default=str).encode()
+            ).hexdigest()
+            entry["request_id"] = f"{original_id}-{entry_hash[:8]}"
+            seen_ids.add(entry["request_id"])
+
+    @staticmethod
     async def update_spend_logs(
         n_retry_times: int,
         prisma_client: PrismaClient,
@@ -5212,29 +5253,10 @@ class ProxyUpdateSpend:
                 "Spend tracking - processing %d spend logs for DB write",
                 len(logs_to_process),
             )
-            # Stamp unique request_id suffixes ONCE, before the retry loop.
-            # Upstream providers may reuse short request IDs (e.g. chatcmpl-424).
-            # Since request_id is the primary key, duplicates are silently dropped
-            # by skip_duplicates=True. Appending a suffix preserves every log.
-            #
-            # The suffix is a deterministic hash of the entry's content (not a
-            # random UUID) so that:
-            # 1. Retries after a partial batch failure regenerate the SAME ids,
-            #    letting skip_duplicates=True dedupe already-committed rows.
-            # 2. If the same log entry is ever re-enqueued, it cannot create a
-            #    second row under a different random suffix.
-            # Two entries with the same upstream request_id but different
-            # content (the provider-reuse bug) hash differently and are both
-            # preserved. This stamping MUST stay outside the retry loop.
-            for entry in logs_to_process:
-                original_id = entry.get("request_id", "")
-                entry_hash = hashlib.sha256(
-                    json.dumps(entry, sort_keys=True, default=str).encode()
-                ).hexdigest()
-                if original_id:
-                    entry["request_id"] = f"{original_id}-{entry_hash[:8]}"
-                else:
-                    entry["request_id"] = entry_hash
+            # Resolve request_id collisions ONCE, before the retry loop, so
+            # that retries reuse the same stable ids and skip_duplicates=True
+            # correctly dedupes batches that were already committed.
+            ProxyUpdateSpend._ensure_unique_request_ids(logs_to_process=logs_to_process)
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
