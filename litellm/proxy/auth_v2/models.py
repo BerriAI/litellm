@@ -2,10 +2,20 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .rbac import Role
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def require_secure_url(value: str) -> str:
+    host = urlparse(value).hostname or ""
+    if value.startswith("https://") or host in _LOOPBACK_HOSTS:
+        return value
+    raise ValueError(f"insecure URL, https is required (loopback excepted): {value}")
 
 
 class SecuritySchemeType(str, Enum):

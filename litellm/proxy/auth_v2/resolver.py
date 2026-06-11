@@ -52,13 +52,6 @@ def _public_claims(claims: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in claims.items() if not key.startswith("_")}
 
 
-def _teams_from_claims(claims: Dict[str, Any]) -> List[TeamIdentity]:
-    groups = claims.get("groups", [])
-    if not isinstance(groups, list):
-        return []
-    return [TeamIdentity(id=str(group), name=str(group)) for group in groups]
-
-
 class InMemoryIdentityStore(IdentityResolver, ProvisioningStore):
     def __init__(
         self,
@@ -84,6 +77,28 @@ class InMemoryIdentityStore(IdentityResolver, ProvisioningStore):
         user = self._lookup_scim_user(principal)
         if user is not None and user.active is False:
             raise errors.account_disabled()
+
+    def _resolve_teams(self, claims: Dict[str, Any]) -> List[TeamIdentity]:
+        groups = claims.get("groups", [])
+        if not isinstance(groups, list):
+            return []
+        teams: List[TeamIdentity] = []
+        for group in groups:
+            scim_group = self._find_group(str(group))
+            if scim_group is not None:
+                teams.append(
+                    TeamIdentity(
+                        id=scim_group.id or str(group),
+                        name=scim_group.display_name or str(group),
+                    )
+                )
+        return teams
+
+    def _find_group(self, value: str) -> Optional[ScimGroup]:
+        for group in self._groups.values():
+            if group.id == value or group.display_name == value:
+                return group
+        return None
 
     def _lookup_scim_user(self, principal: Principal) -> Optional[ScimUser]:
         if principal.user is None:
@@ -138,7 +153,7 @@ class InMemoryIdentityStore(IdentityResolver, ProvisioningStore):
                 user_name=claims.get("preferred_username"),
                 display_name=claims.get("name"),
             ),
-            teams=_teams_from_claims(claims),
+            teams=self._resolve_teams(claims),
             roles=_roles_from_claims(claims),
             scopes=list(credential.scopes),
             auth_method=credential.method,

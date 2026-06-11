@@ -1,8 +1,8 @@
 from typing import List, Optional
 
-from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr
+from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr, field_validator
 
-from .models import SecuritySchemeType
+from .models import SecuritySchemeType, require_secure_url
 from .oidc.config import OIDCProviderConfig
 from .saml.config import SAMLConfig
 from .session import SessionConfig
@@ -23,6 +23,13 @@ class OAuth2IntrospectionConfig(BaseModel):
     client_secret: SecretStr
     subject_field: str = "sub"
     audience: List[str] = Field(default_factory=list)
+    issuer: Optional[str] = None
+
+    @field_validator("introspection_endpoint")
+    @classmethod
+    def _endpoint_https(cls, value: AnyHttpUrl) -> AnyHttpUrl:
+        require_secure_url(str(value))
+        return value
 
 
 class MutualTLSConfig(BaseModel):

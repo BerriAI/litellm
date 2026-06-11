@@ -23,7 +23,6 @@ from .config import (
     OAuth2IntrospectionConfig,
     TrustedProxyConfig,
 )
-from .oidc.config import OIDCProviderConfig
 from .models import (
     AuthMethod,
     ClientCertificate,
@@ -32,8 +31,23 @@ from .models import (
     SecuritySchemeType,
 )
 from .network import ip_in_trusted_proxies
+from .oidc.config import OIDCProviderConfig
+from .rbac import Role
 
 AT_JWT_TYPES = {"at+jwt", "application/at+jwt"}
+_PLATFORM_ROLE_VALUES = {Role.PLATFORM_ADMIN.value, Role.PLATFORM_VIEWER.value}
+
+
+def _apply_role_policy(claims: Dict[str, Any], provider: OIDCProviderConfig) -> None:
+    raw = claims.get("roles")
+    if not isinstance(raw, list):
+        claims["roles"] = []
+        return
+    allowed = set(provider.allowed_roles)
+    filtered = [role for role in raw if role in allowed]
+    if not provider.allow_platform_roles:
+        filtered = [role for role in filtered if role not in _PLATFORM_ROLE_VALUES]
+    claims["roles"] = filtered
 
 
 @runtime_checkable
@@ -48,10 +62,15 @@ class BasicAuthVerifier(Protocol):
     def verify(self, username: str, password: str) -> bool: ...
 
 
+_PBKDF2_ITERATIONS = 600_000
+
+
 def hash_basic_password(password: str, salt: Optional[str] = None) -> str:
     salt = salt or secrets.token_hex(16)
-    digest = hashlib.sha256(bytes.fromhex(salt) + password.encode()).hexdigest()
-    return f"{salt}${digest}"
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), bytes.fromhex(salt), _PBKDF2_ITERATIONS
+    ).hex()
+    return f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${salt}${digest}"
 
 
 class InMemoryBasicAuthStore:
@@ -62,11 +81,11 @@ class InMemoryBasicAuthStore:
         stored = self._credentials.get(username)
         if stored is None:
             return False
-        salt, _, expected = stored.partition("$")
         try:
-            candidate = hashlib.sha256(
-                bytes.fromhex(salt) + password.encode()
-            ).hexdigest()
+            _algorithm, iterations, salt, expected = stored.split("$")
+            candidate = hashlib.pbkdf2_hmac(
+                "sha256", password.encode(), bytes.fromhex(salt), int(iterations)
+            ).hex()
         except ValueError:
             return False
         return hmac.compare_digest(candidate, expected)
@@ -132,7 +151,13 @@ class JWTVerifier:
         jwks_uri = (
             str(provider.jwks_uri) if provider.jwks_uri else self._discover_jwks()
         )
-        self._jwks_client = PyJWKClient(jwks_uri, cache_keys=True)
+        self._jwks_client = PyJWKClient(
+            jwks_uri,
+            cache_keys=True,
+            cache_jwk_set=True,
+            lifespan=300,
+            timeout=10,
+        )
 
     def _discover_jwks(self) -> str:
         import httpx
@@ -166,7 +191,7 @@ class JWTVerifier:
                 options={"verify_exp": True, "require": ["exp", "iss", "aud"]},
             )
         except jwt.PyJWTError as exc:
-            raise errors.invalid_token(str(exc)) from exc
+            raise errors.invalid_token("token verification failed") from exc
 
 
 async def _verify_jwt_off_loop(
@@ -202,6 +227,7 @@ async def _authenticate_bearer_jwt(
     if verifier is None:
         raise errors.invalid_token("no issuer match")
     claims = await _verify_jwt_off_loop(verifier, token, require_at_jwt=require_at_jwt)
+    _apply_role_policy(claims, verifier.provider)
     return _credential_from_claims(scheme, method, token, claims)
 
 
@@ -326,12 +352,18 @@ class OAuth2Authenticator:
         )
         if response.status_code != 200:
             raise errors.invalid_token("introspection failed")
-        body = response.json()
-        if not body.get("active"):
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise errors.invalid_token("introspection failed") from exc
+        if not isinstance(body, dict) or body.get("active") is not True:
             raise errors.invalid_token("token inactive")
         token_audience = _normalize_audience(body.get("aud"))
         if config.audience and not set(token_audience) & set(config.audience):
             raise errors.invalid_token("audience mismatch")
+        if config.issuer is not None and body.get("iss") != config.issuer:
+            raise errors.invalid_token("issuer mismatch")
+        claims = {key: value for key, value in body.items() if key != "roles"}
         return Credential(
             scheme=SecuritySchemeType.OAUTH2,
             method=AuthMethod.OAUTH2_INTROSPECTION,
@@ -339,7 +371,7 @@ class OAuth2Authenticator:
             issuer=body.get("iss"),
             audience=token_audience,
             scopes=_split_scope(body.get("scope")),
-            claims=body,
+            claims=claims,
         )
 
     def challenge(self) -> str:

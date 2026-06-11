@@ -1,6 +1,8 @@
 from typing import List, Optional
 
-from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr
+from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr, field_validator
+
+from ..models import require_secure_url
 
 
 class OIDCProviderConfig(BaseModel):
@@ -14,3 +16,17 @@ class OIDCProviderConfig(BaseModel):
     login_scopes: List[str] = Field(
         default_factory=lambda: ["openid", "email", "profile"]
     )
+    allowed_roles: List[str] = Field(default_factory=list)
+    allow_platform_roles: bool = False
+
+    @field_validator("issuer")
+    @classmethod
+    def _issuer_https(cls, value: str) -> str:
+        return require_secure_url(value)
+
+    @field_validator("jwks_uri")
+    @classmethod
+    def _jwks_https(cls, value: Optional[AnyHttpUrl]) -> Optional[AnyHttpUrl]:
+        if value is not None:
+            require_secure_url(str(value))
+        return value
