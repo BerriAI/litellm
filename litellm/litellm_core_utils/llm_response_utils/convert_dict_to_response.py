@@ -268,7 +268,7 @@ async def convert_to_streaming_response_async(  # noqa: PLR0915
         if i > 0:
             slice_chunk.choices[0].delta.role = None
         slice_chunk.choices[0].finish_reason = (
-            original_finish_reason if i == last_idx else None
+            original_finish_reason if i == last_idx else None  # type: ignore[assignment]
         )
         if i == last_idx and original_usage is not None:
             setattr(slice_chunk, "usage", original_usage)
@@ -362,7 +362,7 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
         if i > 0:
             slice_chunk.choices[0].delta.role = None
         slice_chunk.choices[0].finish_reason = (
-            original_finish_reason if i == last_idx else None
+            original_finish_reason if i == last_idx else None  # type: ignore[assignment]
         )
         if i == last_idx and original_usage is not None:
             setattr(slice_chunk, "usage", original_usage)
