@@ -13,7 +13,7 @@ import pytest
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo  # noqa: E402
-from litellm.utils import get_max_tokens  # noqa: E402
+from litellm.utils import get_max_tokens, token_counter  # noqa: E402
 
 from litellm.translation import TranslationDeps  # noqa: E402
 
@@ -34,6 +34,9 @@ def build_real_deps(
         max_tokens_for_model=_max_tokens_for_model,
         supports_capability=AnthropicModelInfo._supports_model_capability,
         capability_flag=AnthropicModelInfo._get_model_capability,
+        count_response_tokens=lambda text: token_counter(
+            text=text, count_response_tokens=True
+        ),
         drop_params=drop_params,
         drop_params_global=drop_params_global,
         modify_params=modify_params,

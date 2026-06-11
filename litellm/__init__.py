@@ -234,6 +234,13 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
+translation_v2_providers: List[str] = [
+    entry.strip()
+    for entry in os.getenv("LITELLM_TRANSLATION_V2_PROVIDERS", "").split(",")
+    if entry.strip()
+]  # Per-provider opt-in allowlist for the translation v2 rewrite (litellm/translation).
+# Off by default; e.g. "anthropic" or "anthropic,bedrock_converse". Any request whose
+# shape is outside v2's proven surface transparently falls back to v1.
 # When True, Gemini/Vertex Live setup is deferred until client `session.update`.
 # Default False preserves historical behavior (auto-send setup on connect).
 gemini_live_defer_setup: bool = (
@@ -1355,16 +1362,6 @@ from .interactions.agents.main import (
     delete as delete_agent,
     alist_versions as alist_agent_versions,
     list_versions as list_agent_versions,
-)
-from .skills.main import (
-    create_skill,
-    acreate_skill,
-    list_skills,
-    alist_skills,
-    get_skill,
-    aget_skill,
-    delete_skill,
-    adelete_skill,
 )
 from .containers.main import *
 from .ocr.main import *

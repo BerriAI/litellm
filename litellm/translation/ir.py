@@ -357,3 +357,161 @@ def has_tool_blocks(messages: Block[Message]) -> bool:
         for message in messages
         for block in message.content
     )
+
+
+# --------------------------------------------------------------------------
+# Response IR: what a provider's parse_response yields and an inbound
+# serialize_response consumes. Content reuses ContentBlock (text, tool_use,
+# thinking, redacted_thinking are the cases a v2-sent request can produce;
+# anything else fails parse loudly because the fail-closed request surface
+# cannot trigger it).
+# --------------------------------------------------------------------------
+
+FinishReason = Literal["stop", "length", "tool_calls", "content_filter"]
+
+
+@dataclass(frozen=True)
+class CacheCreationDetails:
+    five_minute: Option[int]
+    one_hour: Option[int]
+
+
+@dataclass(frozen=True)
+class ResponseUsage:
+    """Provider-reported token counts, provider-neutral."""
+
+    input_tokens: int
+    output_tokens: int
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
+    cache_creation: Option[CacheCreationDetails]
+
+
+@dataclass(frozen=True)
+class ChatResponse:
+    id: str
+    model: str
+    content: Block[ContentBlock]
+    finish: FinishReason
+    usage: ResponseUsage
+    synthesized_json_content: bool
+    """True when the provider rewrote a forced json_tool_call into plain
+    content (v1 then emits a bare message: no provider fields, no thinking)."""
+
+
+# --------------------------------------------------------------------------
+# Stream IR: provider stream parsers map wire events onto these; the inbound
+# stream serializer folds them into outbound chunks. One event per provider
+# wire event that carries information; keep-alives map to nothing.
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StreamStart:
+    id: str
+    model: str
+    usage: ResponseUsage
+
+
+@dataclass(frozen=True)
+class TextDelta:
+    index: int
+    text: str
+
+
+@dataclass(frozen=True)
+class ToolUseStart:
+    index: int
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class ToolArgsDelta:
+    index: int
+    partial_json: str
+
+
+@dataclass(frozen=True)
+class ThinkingDelta:
+    index: int
+    thinking: str
+
+
+@dataclass(frozen=True)
+class SignatureDelta:
+    index: int
+    signature: str
+
+
+@dataclass(frozen=True)
+class StreamFinish:
+    """Anthropic message_delta: the final stop reason plus output usage."""
+
+    finish: FinishReason
+    output_tokens: int
+
+
+@tagged_union(frozen=True)
+class StreamEvent:
+    tag: Literal[
+        "start",
+        "text_delta",
+        "tool_use_start",
+        "tool_args_delta",
+        "thinking_delta",
+        "signature_delta",
+        "finish",
+        "stop",
+    ] = tag()
+
+    start: StreamStart = case()
+    text_delta: TextDelta = case()
+    tool_use_start: ToolUseStart = case()
+    tool_args_delta: ToolArgsDelta = case()
+    thinking_delta: ThinkingDelta = case()
+    signature_delta: SignatureDelta = case()
+    finish: StreamFinish = case()
+    stop: Unit = case()
+
+    @staticmethod
+    def of_start(value: StreamStart) -> StreamEvent:
+        return _stream_start(value)
+
+    @staticmethod
+    def of_text_delta(value: TextDelta) -> StreamEvent:
+        return _stream_text_delta(value)
+
+    @staticmethod
+    def of_tool_use_start(value: ToolUseStart) -> StreamEvent:
+        return _stream_tool_use_start(value)
+
+    @staticmethod
+    def of_tool_args_delta(value: ToolArgsDelta) -> StreamEvent:
+        return _stream_tool_args_delta(value)
+
+    @staticmethod
+    def of_thinking_delta(value: ThinkingDelta) -> StreamEvent:
+        return _stream_thinking_delta(value)
+
+    @staticmethod
+    def of_signature_delta(value: SignatureDelta) -> StreamEvent:
+        return _stream_signature_delta(value)
+
+    @staticmethod
+    def of_finish(value: StreamFinish) -> StreamEvent:
+        return _stream_finish(value)
+
+    @staticmethod
+    def of_stop() -> StreamEvent:
+        return _stream_stop(UNIT)
+
+
+_stream_start = _case_maker(StreamEvent, "start")
+_stream_text_delta = _case_maker(StreamEvent, "text_delta")
+_stream_tool_use_start = _case_maker(StreamEvent, "tool_use_start")
+_stream_tool_args_delta = _case_maker(StreamEvent, "tool_args_delta")
+_stream_thinking_delta = _case_maker(StreamEvent, "thinking_delta")
+_stream_signature_delta = _case_maker(StreamEvent, "signature_delta")
+_stream_finish = _case_maker(StreamEvent, "finish")
+_stream_stop = _case_maker(StreamEvent, "stop")

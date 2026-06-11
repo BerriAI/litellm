@@ -9,8 +9,8 @@ free of upward imports.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 
 @dataclass(frozen=True)
@@ -34,9 +34,10 @@ class TranslationDeps:
       the contract.
     """
 
-    max_tokens_for_model: Callable[[str], Optional[int]]
+    max_tokens_for_model: Callable[[str], int | None]
     supports_capability: Callable[[str, str], bool]
-    capability_flag: Callable[[str, str], Optional[bool]]
+    capability_flag: Callable[[str, str], bool | None]
+    count_response_tokens: Callable[[str], int]
     drop_params: bool
     drop_params_global: bool
     modify_params: bool
