@@ -1049,3 +1049,24 @@ def test_token_counter_with_tool_reference_block():
         model="anthropic/claude-sonnet-4-5-20250929", messages=messages_empty
     )
     assert tokens_empty >= 0
+
+
+def test_count_content_list_rejects_unknown_type():
+    """
+    An unrecognized content block type must raise, and the error message must
+    enumerate the supported types (including `tool_reference`). This pins the
+    catch-all contract so a future block type isn't silently dropped.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    with pytest.raises(ValueError) as exc_info:
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "totally_unknown_block"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+
+    message = str(exc_info.value)
+    assert "Invalid content item type: totally_unknown_block" in message
+    assert "tool_reference" in message
