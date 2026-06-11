@@ -10063,6 +10063,7 @@ class Router:
     def _is_model_fully_blocked(self, model: str) -> bool:
         deployments = self.get_model_list(model_name=model) or []
         return self._are_all_deployments_blocked(deployments=deployments)
+
     async def async_get_fully_unhealthy_model_names(self) -> Set[str]:
         """
         Returns the set of model names where every backing deployment is currently
