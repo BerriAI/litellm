@@ -136,3 +136,26 @@ def test_act_matcher_is_anchored(tmp_path):
     viewer = _principal(roles=[Role.PLATFORM_VIEWER])
     assert engine.enforce(viewer, "/x", "GET")
     assert not engine.enforce(viewer, "/x", "GETX")
+
+
+# --------------------------------------------------------------------------- #
+# filter_claim_roles: the shared allowlist gate for JWT, OIDC-login and SAML
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "roles,allowed,allow_platform,expected",
+    [
+        # default deny: a self-asserted role grants nothing
+        (["platform_admin", "org_admin"], [], False, []),
+        # allowlist filters; platform role excluded even if listed without the gate
+        (["platform_admin", "org_admin"], ["org_admin"], False, ["org_admin"]),
+        (["platform_admin"], ["platform_admin"], False, []),
+        # platform role only survives with the explicit gate
+        (["platform_admin"], ["platform_admin"], True, ["platform_admin"]),
+    ],
+)
+def test_filter_claim_roles(roles, allowed, allow_platform, expected):
+    from litellm.proxy.auth_v2.rbac import filter_claim_roles
+
+    assert filter_claim_roles(roles, allowed, allow_platform) == expected

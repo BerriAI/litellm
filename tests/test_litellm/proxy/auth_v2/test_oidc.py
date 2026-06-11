@@ -48,3 +48,48 @@ async def test_callback_seam_upserts_userinfo_into_store():
     assert fetched is not None
     assert fetched.external_id == "idp-subject-123"
     assert fetched.user_name == "dana"
+
+
+async def _oidc_login_session_roles(userinfo, provider):
+    # mirror the callback's identity build: map userinfo, gate roles, store a session,
+    # then authenticate + resolve through the same seam a request would
+    from litellm.proxy.auth_v2.authenticators import _apply_role_policy
+    from litellm.proxy.auth_v2.oidc.router import _mapped_claims
+    from litellm.proxy.auth_v2.session import SessionAuthenticator, SessionStore
+
+    from auth_v2_helpers import make_request
+
+    claims = _mapped_claims(userinfo)
+    _apply_role_policy(claims, provider)
+    store = SessionStore()
+    sid = store.create_session(
+        {"method": "oidc", "subject": userinfo["sub"], "claims": claims}
+    )
+    authenticator = SessionAuthenticator("litellm_session", store)
+    credential = await authenticator.authenticate(
+        make_request(cookies={"litellm_session": sid})
+    )
+    principal = await InMemoryIdentityStore().resolve(credential)
+    return [role.value for role in principal.roles]
+
+
+async def test_oidc_login_platform_role_denied_by_default():
+    provider = OIDCProviderConfig(issuer="https://idp.example.com", audience=["x"])
+    userinfo = {
+        "sub": "u",
+        "email": "e@x.com",
+        "roles": ["platform_admin", "org_admin"],
+    }
+    assert await _oidc_login_session_roles(userinfo, provider) == []
+
+
+async def test_oidc_login_roles_filtered_to_allowlist():
+    provider = OIDCProviderConfig(
+        issuer="https://idp.example.com", audience=["x"], allowed_roles=["org_admin"]
+    )
+    userinfo = {
+        "sub": "u",
+        "email": "e@x.com",
+        "roles": ["platform_admin", "org_admin"],
+    }
+    assert await _oidc_login_session_roles(userinfo, provider) == ["org_admin"]

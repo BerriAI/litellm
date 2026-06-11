@@ -177,9 +177,43 @@ def _build_app(saml_env: SamlEnv):
             "subject": principal.subject,
             "auth_method": principal.auth_method.value,
             "email": principal.user.email if principal.user else None,
+            "roles": [role.value for role in principal.roles],
         }
 
     return app, store
+
+
+def _saml_session_roles(env, *, asserted_roles):
+    app, _ = _build_app(env)
+    client = TestClient(app)
+    acs = client.post(
+        "/auth/saml/acs",
+        data={
+            "SAMLResponse": env.mint_response(
+                identity={"email": ["alice@example.com"], "roles": asserted_roles}
+            )
+        },
+        follow_redirects=False,
+    )
+    client.cookies.set("litellm_session", acs.cookies["litellm_session"])
+    return client.get("/whoami").json()["roles"]
+
+
+def test_saml_sso_platform_role_denied_by_default(saml_env):
+    # H1 on the SSO path: an IdP-asserted platform_admin grants nothing by default
+    roles = _saml_session_roles(
+        saml_env, asserted_roles=["platform_admin", "org_admin"]
+    )
+    assert roles == []
+
+
+def test_saml_sso_roles_filtered_to_allowlist(saml_env):
+    env = SamlEnv(
+        config=saml_env.config.model_copy(update={"allowed_roles": ["org_admin"]}),
+        idp=saml_env.idp,
+    )
+    roles = _saml_session_roles(env, asserted_roles=["platform_admin", "org_admin"])
+    assert roles == ["org_admin"]
 
 
 # --------------------------------------------------------------------------- #
