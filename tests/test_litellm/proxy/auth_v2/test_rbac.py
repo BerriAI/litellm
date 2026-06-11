@@ -126,3 +126,13 @@ def test_csv_policy_overrides_defaults(tmp_path):
     assert not engine.enforce(
         _principal(roles=[Role.PLATFORM_ADMIN]), "/anything", "GET"
     )
+
+
+def test_act_matcher_is_anchored(tmp_path):
+    # a "GET" policy must not grant a superstring act like "GETX" (regexMatch ^(...)$)
+    policy = tmp_path / "policy.csv"
+    policy.write_text("p, platform_viewer, /x, GET\n")
+    engine = RBACEngine(policy_path=str(policy))
+    viewer = _principal(roles=[Role.PLATFORM_VIEWER])
+    assert engine.enforce(viewer, "/x", "GET")
+    assert not engine.enforce(viewer, "/x", "GETX")

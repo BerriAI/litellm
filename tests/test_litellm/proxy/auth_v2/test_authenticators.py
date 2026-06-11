@@ -483,3 +483,63 @@ def test_build_authenticators_includes_mtls_when_enabled():
     config = AuthConfig(mutual_tls=MutualTLSConfig(enabled=True))
     types = [type(a) for a in build_authenticators(config)]
     assert types[-1] is MutualTLSAuthenticator
+
+
+# --------------------------------------------------------------------------- #
+# H1: token role claims are gated by the provider allowlist (privilege escalation)
+# --------------------------------------------------------------------------- #
+
+
+def _bearer_roles(public_key, token_factory, roles, **provider_kwargs):
+    provider = OIDCProviderConfig(
+        issuer=TEST_ISSUER, audience=[TEST_AUDIENCE], **provider_kwargs
+    )
+    auth = HttpAuthenticator(
+        HttpBasicConfig(),
+        [JWTVerifier(provider, jwks_client=FakeJwksClient(public_key))],
+    )
+    token = token_factory.mint(roles=roles)
+    return auth, make_request(headers={"authorization": f"Bearer {token}"})
+
+
+async def test_token_roles_are_dropped_without_allowlist(rsa_keypair, token_factory):
+    _, public_key = rsa_keypair
+    auth, request = _bearer_roles(
+        public_key, token_factory, ["platform_admin", "org_admin"]
+    )
+    credential = await auth.authenticate(request)
+    # default allowed_roles=[] -> a self-asserted role grants nothing
+    assert credential.claims["roles"] == []
+
+
+async def test_token_roles_filtered_to_allowlist(rsa_keypair, token_factory):
+    _, public_key = rsa_keypair
+    auth, request = _bearer_roles(
+        public_key,
+        token_factory,
+        ["platform_admin", "org_admin"],
+        allowed_roles=["org_admin"],
+    )
+    credential = await auth.authenticate(request)
+    # org_admin is allowed; platform_admin is dropped (and not in the allowlist anyway)
+    assert credential.claims["roles"] == ["org_admin"]
+
+
+async def test_platform_role_requires_explicit_gate(rsa_keypair, token_factory):
+    _, public_key = rsa_keypair
+    gated_auth, gated_req = _bearer_roles(
+        public_key, token_factory, ["platform_admin"], allowed_roles=["platform_admin"]
+    )
+    # allowed but platform gate off -> still dropped
+    assert (await gated_auth.authenticate(gated_req)).claims["roles"] == []
+
+    open_auth, open_req = _bearer_roles(
+        public_key,
+        token_factory,
+        ["platform_admin"],
+        allowed_roles=["platform_admin"],
+        allow_platform_roles=True,
+    )
+    assert (await open_auth.authenticate(open_req)).claims["roles"] == [
+        "platform_admin"
+    ]

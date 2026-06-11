@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from scim2_models import Group as ScimGroup
+from scim2_models import User as ScimUser
 
 from litellm.proxy.auth_v2.errors import AuthError
 from litellm.proxy.auth_v2.models import (
@@ -11,6 +12,7 @@ from litellm.proxy.auth_v2.models import (
     Principal,
     PrincipalType,
     SecuritySchemeType,
+    UserIdentity,
 )
 from litellm.proxy.auth_v2.rbac import Role
 from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
@@ -137,3 +139,56 @@ async def test_mtls_credential_resolves_to_service_account():
     assert principal.principal_type == PrincipalType.SERVICE_ACCOUNT
     assert principal.user is None
     assert principal.subject == "CN=svc-a,O=Co"
+
+
+# --------------------------------------------------------------------------- #
+# Deactivated users (M1) and claims scrubbing
+# --------------------------------------------------------------------------- #
+
+
+async def test_deactivated_user_is_rejected():
+    principal = Principal(
+        principal_type=PrincipalType.HUMAN,
+        subject="u-1",
+        auth_method=AuthMethod.API_KEY,
+        user=UserIdentity(id="u-1", email="u@example.com"),
+    )
+    store = InMemoryIdentityStore(
+        api_keys={_hash_api_key("sk-deact"): principal},
+        users={"u-1": ScimUser(id="u-1", user_name="u@example.com", active=False)},
+    )
+    with pytest.raises(AuthError) as exc:
+        await store.resolve(_api_key_credential("sk-deact"))
+    assert exc.value.status_code == 403
+
+
+async def test_active_user_is_allowed():
+    principal = Principal(
+        principal_type=PrincipalType.HUMAN,
+        subject="u-2",
+        auth_method=AuthMethod.API_KEY,
+        user=UserIdentity(id="u-2", email="ok@example.com"),
+    )
+    store = InMemoryIdentityStore(
+        api_keys={_hash_api_key("sk-ok"): principal},
+        users={"u-2": ScimUser(id="u-2", user_name="ok@example.com", active=True)},
+    )
+    resolved = await store.resolve(_api_key_credential("sk-ok"))
+    assert resolved.subject == "u-2"
+
+
+async def test_principal_claims_scrub_underscore_keys():
+    # internal underscore-prefixed claims (e.g. _raw_api_key) must never surface
+    # on the Principal built from a self-describing credential
+    store = InMemoryIdentityStore()
+    credential = Credential(
+        scheme=SecuritySchemeType.OPENID_CONNECT,
+        method=AuthMethod.OIDC,
+        subject="sub-x",
+        issuer="https://idp",
+        claims={"_raw_api_key": "leak", "_basic_password": "leak", "email": "e@x.com"},
+    )
+    principal = await store.resolve(credential)
+    assert "_raw_api_key" not in principal.claims
+    assert "_basic_password" not in principal.claims
+    assert principal.claims.get("email") == "e@x.com"

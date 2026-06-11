@@ -162,7 +162,11 @@ def test_resource_types_lists_user_and_group(client):
 def test_schemas_endpoint_returns_user_and_group(client):
     response = client.get("/scim/v2/Schemas")
     assert response.status_code == 200
-    assert response.json()["totalResults"] == 2
+    body = response.json()
+    assert body["totalResults"] == 2
+    # a ListResponse envelope, not a bare dict (regression for the envelope fix)
+    assert body["schemas"][0].endswith(":ListResponse")
+    assert len(body["Resources"]) == 2
 
 
 # --------------------------------------------------------------------------- #
@@ -178,6 +182,10 @@ def test_scim_requires_authentication():
     )
     assert response.status_code == 401
     assert "WWW-Authenticate" in response.headers
+    # S7: auth failures are rendered as a SCIM Error, not the generic body
+    body = response.json()
+    assert body["schemas"] == [ERROR_SCHEMA]
+    assert body["status"] == "401"
 
 
 def test_scim_requires_scim_write_scope():
@@ -185,6 +193,38 @@ def test_scim_requires_scim_write_scope():
     response = underscoped.get("/scim/v2/Users")
     assert response.status_code == 403
     assert "insufficient_scope" in response.headers.get("WWW-Authenticate", "")
+    body = response.json()
+    assert body["schemas"] == [ERROR_SCHEMA]
+    assert body["status"] == "403"
+
+
+# --------------------------------------------------------------------------- #
+# id is read-only: PATCH attempting to mutate it is rejected (RFC 7643)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        {"op": "replace", "path": "id", "value": "evil"},
+        {"op": "remove", "path": "id"},
+        {"op": "replace", "value": {"id": "evil", "displayName": "X"}},
+    ],
+)
+def test_patch_id_mutation_is_rejected(client, operation):
+    user_id = _create_user(client).json()["id"]
+    response = client.patch(
+        f"/scim/v2/Users/{user_id}",
+        json={
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [operation],
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["schemas"] == [ERROR_SCHEMA]
+    # the record keeps its id; the attacker id never materializes
+    assert client.get(f"/scim/v2/Users/{user_id}").status_code == 200
+    assert client.get("/scim/v2/Users/evil").status_code == 404
 
 
 # --------------------------------------------------------------------------- #

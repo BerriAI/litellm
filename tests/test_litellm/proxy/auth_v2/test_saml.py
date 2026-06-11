@@ -278,6 +278,36 @@ def test_acs_rejects_unsigned_assertion(saml_env):
     assert store._users == {}
 
 
+def test_acs_rejects_replayed_assertion(saml_env):
+    # a signed assertion is single-use; replaying it is rejected
+    app, _ = _build_app(saml_env)
+    client = TestClient(app)
+    response = saml_env.mint_response()
+    first = client.post(
+        "/auth/saml/acs", data={"SAMLResponse": response}, follow_redirects=False
+    )
+    assert first.status_code == 303
+    second = client.post(
+        "/auth/saml/acs", data={"SAMLResponse": response}, follow_redirects=False
+    )
+    assert second.status_code == 401
+
+
+def test_acs_rejects_unsolicited_when_disabled(saml_env):
+    # default-secure: an IdP-initiated (no InResponseTo) response is rejected
+    disabled = saml_env.config.model_copy(update={"allow_unsolicited": False})
+    env = SamlEnv(config=disabled, idp=saml_env.idp)
+    app, store = _build_app(env)
+    client = TestClient(app)
+    response = client.post(
+        "/auth/saml/acs",
+        data={"SAMLResponse": env.mint_response()},
+        follow_redirects=False,
+    )
+    assert response.status_code == 401
+    assert store._users == {}
+
+
 def test_acs_missing_response_is_rejected(saml_env):
     app, _ = _build_app(saml_env)
     client = TestClient(app)
