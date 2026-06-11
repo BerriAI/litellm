@@ -239,6 +239,43 @@ class TestAlertingHangingRequestCheck:
         hanging_request_checker.slack_alerting_object.send_alert.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_send_alerts_for_hanging_requests_alerts_once_per_hang(
+        self, hanging_request_checker
+    ):
+        """
+        A single hanging request must alert exactly once even though the
+        checker tick revisits it on every run within the cache TTL.
+        """
+        hanging_data = HangingRequestData(
+            request_id="hanging_once_555",
+            model="gpt-4",
+            api_base="https://api.openai.com/v1",
+            created_at=time.time() - 301,
+        )
+        await hanging_request_checker.hanging_request_cache.async_set_cache(
+            key="hanging_once_555", value=hanging_data, ttl=300
+        )
+
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy:
+            mock_internal_cache = AsyncMock()
+            mock_internal_cache.async_get_cache.return_value = None
+            mock_proxy.internal_usage_cache = mock_internal_cache
+
+            hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = (
+                AsyncMock(return_value=["hanging_once_555"])
+            )
+
+            for _ in range(3):
+                await hanging_request_checker.send_alerts_for_hanging_requests()
+
+        assert hanging_request_checker.slack_alerting_object.send_alert.call_count == 1
+        cached = await hanging_request_checker.hanging_request_cache.async_get_cache(
+            key="hanging_once_555"
+        )
+        assert cached is not None
+        assert cached.alerted is True
+
+    @pytest.mark.asyncio
     async def test_send_alerts_for_hanging_requests_skips_request_younger_than_threshold(
         self, hanging_request_checker
     ):

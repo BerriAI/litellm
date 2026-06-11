@@ -113,6 +113,9 @@ class AlertingHangingRequestCheck:
             if hanging_request_data is None:
                 continue
 
+            if hanging_request_data.alerted:
+                continue
+
             request_status = (
                 await proxy_logging_obj.internal_usage_cache.async_get_cache(
                     key="request_status:{}".format(hanging_request_data.request_id),
@@ -141,6 +144,9 @@ class AlertingHangingRequestCheck:
             await self.send_hanging_request_alert(
                 hanging_request_data=hanging_request_data
             )
+            # flag so the entry is skipped on later ticks; one alert per hang,
+            # with the existing TTL still handling cleanup
+            hanging_request_data.alerted = True
 
         return
 
