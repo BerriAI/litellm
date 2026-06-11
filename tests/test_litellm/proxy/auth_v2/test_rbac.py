@@ -87,9 +87,12 @@ def test_has_role_false_without_roles(engine):
 
 def test_platform_admin_enforces_any_object_and_action(engine):
     assert engine.enforce(_principal(roles=[Role.PLATFORM_ADMIN]), "/anything", "POST")
-    # keyMatch2: /scim/v2/* covers /scim/v2/Users
+    # keyMatch: "/*" / "/scim/v2/*" span path separators, so deep paths are covered
     assert engine.enforce(
         _principal(roles=[Role.PLATFORM_ADMIN]), "/scim/v2/Users", "DELETE"
+    )
+    assert engine.enforce(
+        _principal(roles=[Role.PLATFORM_ADMIN]), "/scim/v2/Groups", "POST"
     )
 
 
