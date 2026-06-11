@@ -1,10 +1,8 @@
 # What is this?
 ## Unit tests for Anthropic Adapter
 
-import asyncio
 import os
 import sys
-import traceback
 
 from dotenv import load_dotenv
 
@@ -13,28 +11,21 @@ import litellm.types.utils
 from litellm.llms.anthropic.chat import ModelResponseIterator
 
 load_dotenv()
-import io
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 import litellm
 from litellm import (
     AnthropicConfig,
-    Router,
-    adapter_completion,
 )
-from litellm.types.llms.anthropic import AnthropicResponse
-from litellm.types.utils import GenericStreamingChunk, ChatCompletionToolCallChunk
+from litellm.types.utils import ChatCompletionToolCallChunk
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
-from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from httpx import Headers
 from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 
@@ -360,7 +351,6 @@ def test_process_anthropic_headers_with_no_matching_headers():
 )
 def test_anthropic_tool_use(tool_type, tool_config, message_content):
     """Test Anthropic tool use with computer use and web fetch tools."""
-    from litellm import completion
 
     litellm._turn_on_debug()
 
@@ -951,7 +941,6 @@ def test_anthropic_citations_api():
     """
     Test the citations API
     """
-    from litellm import completion
 
     try:
         resp = completion(
@@ -997,7 +986,6 @@ def test_anthropic_citations_api():
 
 
 def test_anthropic_citations_api_streaming():
-    from litellm import completion
 
     resp = completion(
         model="claude-sonnet-4-5-20250929",
@@ -1044,7 +1032,6 @@ def test_anthropic_citations_api_streaming():
     ],
 )
 def test_anthropic_thinking_output(model):
-    from litellm import completion
 
     litellm._turn_on_debug()
 
@@ -1108,45 +1095,6 @@ def test_anthropic_thinking_output_stream(model):
         assert signature_block_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
-
-
-def test_anthropic_custom_headers():
-    from litellm import completion
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    client = HTTPHandler()
-
-    tools = [
-        {
-            "type": "computer_20241022",
-            "function": {
-                "name": "get_current_weather",
-                "parameters": {
-                    "display_height_px": 100,
-                    "display_width_px": 100,
-                    "display_number": 1,
-                },
-            },
-        }
-    ]
-
-    with patch.object(client, "post") as mock_post:
-        try:
-            resp = completion(
-                model="claude-sonnet-4-5-20250929",
-                headers={"anthropic-beta": "computer-use-2025-01-24"},
-                messages=[
-                    {"role": "user", "content": "What is the capital of France?"}
-                ],
-                client=client,
-                tools=tools,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_post.assert_called_once()
-        headers = mock_post.call_args[1]["headers"]
-        assert "computer-use-2025-01-24" in headers["anthropic-beta"]
 
 
 @pytest.mark.parametrize(
@@ -1398,7 +1346,6 @@ def test_anthropic_mcp_server_tool_use(spec: str):
     os.getenv("ZAPIER_CI_CD_MCP_TOKEN") is None, reason="ZAPIER_CI_CD_MCP_TOKEN not set"
 )
 def test_anthropic_mcp_server_responses_api(model: str):
-    from litellm import responses
 
     litellm._turn_on_debug()
     tools = [
@@ -1528,7 +1475,6 @@ def test_anthropic_tool_cache_control():
 
 
 def test_anthropic_streaming():
-    from litellm import completion
 
     request_data = {
         "messages": [

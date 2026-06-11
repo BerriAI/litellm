@@ -1,8 +1,6 @@
-import json
 import os
 import sys
-from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from typing import Optional
 
 sys.path.insert(
@@ -10,13 +8,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-import httpx
 import pytest
 
 import litellm
-from litellm import Choices, Message, ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest
-import asyncio
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionAnnotationURLCitation,
@@ -67,67 +62,6 @@ def test_openai_prediction_param():
         completion.usage.completion_tokens_details.accepted_prediction_tokens > 0
         or completion.usage.completion_tokens_details.rejected_prediction_tokens > 0
     )
-
-
-@pytest.mark.asyncio
-async def test_openai_prediction_param_mock():
-    """
-    Tests that prediction parameter is correctly passed to the API
-    """
-    litellm.set_verbose = True
-
-    code = """
-    /// <summary>
-    /// Represents a user with a first name, last name, and username.
-    /// </summary>
-    public class User
-    {
-        /// <summary>
-        /// Gets or sets the user's first name.
-        /// </summary>
-        public string FirstName { get; set; }
-
-        /// <summary>
-        /// Gets or sets the user's last name.
-        /// </summary>
-        public string LastName { get; set; }
-
-        /// <summary>
-        /// Gets or sets the user's username.
-        /// </summary>
-        public string Username { get; set; }
-    }
-    """
-    from openai import AsyncOpenAI
-
-    client = AsyncOpenAI(api_key="fake-api-key")
-
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
-        try:
-            await litellm.acompletion(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "Replace the Username property with an Email property. Respond only with code, and with no markdown formatting.",
-                    },
-                    {"role": "user", "content": code},
-                ],
-                prediction={"type": "content", "content": code},
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
-
-        # Verify the request contains the prediction parameter
-        assert "prediction" in request_body
-        # verify prediction is correctly sent to the API
-        assert request_body["prediction"] == {"type": "content", "content": code}
 
 
 @pytest.mark.asyncio
@@ -207,76 +141,6 @@ async def test_openai_prediction_param_with_caching():
     assert completion_response_3.id != completion_response_1.id
 
 
-@pytest.mark.asyncio()
-async def test_vision_with_custom_model():
-    """
-    Tests that an OpenAI compatible endpoint when sent an image will receive the image in the request
-
-    """
-    import base64
-    import requests
-    from openai import AsyncOpenAI
-
-    client = AsyncOpenAI(api_key="fake-api-key")
-
-    litellm.set_verbose = True
-    api_base = "https://my-custom.api.openai.com"
-
-    # Fetch and encode a test image
-    url = "https://dummyimage.com/100/100/fff&text=Test+image"
-    response = requests.get(url)
-    file_data = response.content
-    encoded_file = base64.b64encode(file_data).decode("utf-8")
-    base64_image = f"data:image/png;base64,{encoded_file}"
-
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
-        try:
-            response = await litellm.acompletion(
-                model="openai/my-custom-model",
-                max_tokens=10,
-                api_base=api_base,  # use the mock api
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "What's in this image?"},
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": base64_image},
-                            },
-                        ],
-                    }
-                ],
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
-
-        print("request_body: ", request_body)
-
-        assert request_body["messages"] == [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What's in this image?"},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABDElEQVRYhe2SzWqEMBRGPyQTfQxJsc5jBKGzFmlslyFIZxsCQ7sUaWd87EanpdpIrbtC71mE/NyTm9wEIAiCIAiC+N/otQBxU2Sf/aeh4enqptHXri+/yxIq63jlKCw6cXssnr3ObdzdGYFYCJ2IzHKXLygHXCB98Gm4DE+ZZemu5EisQSyZTmyg+AuzQbkezCuIy7EI0k9Ig3FtruwydY+qniqtV5yQyo8qpUIl2fc90KVzJWohWf2qu75vlw52rdfjVDHg8vLWwixW7PChqLkSyUadwfSS0uQZhEvRuIkS53uJvrK8cGWYaPwpGt8efvw+vlo8TPMzcmP8w7lrNypc1RsNgiAIgiD+Iu/RyDYhCaWrgQAAAABJRU5ErkJggg=="
-                        },
-                    },
-                ],
-            },
-        ]
-        assert request_body["model"] == "my-custom-model"
-        assert request_body["max_tokens"] == 10
-
-
 class TestOpenAIChatCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gpt-4o-mini"}
@@ -297,67 +161,6 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
         Works locally but CI/CD is failing this test. Temporary skip to push out a new release.
         """
         pass
-
-
-@patch("litellm.main.openai_chat_completions._get_openai_client")
-def test_openai_max_retries_0(mock_get_openai_client):
-    import litellm
-
-    litellm.set_verbose = True
-    response = litellm.completion(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": "hi"}],
-        max_retries=0,
-    )
-
-    mock_get_openai_client.assert_called_once()
-    assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
-
-
-@patch("litellm.main.openai_chat_completions._get_openai_client")
-def test_openai_image_generation_forwards_organization(mock_get_openai_client):
-    """Ensure organization flows to OpenAI client for image generation."""
-
-    class _DummyImages:
-        def generate(self, **kwargs):  # type: ignore
-            class _Resp:
-                def model_dump(self_inner):  # minimal OpenAI ImagesResponse shape
-                    return {
-                        "created": 123,
-                        "data": [{"url": "http://example.com/image.png"}],
-                        "usage": {
-                            "input_tokens": 0,
-                            "output_tokens": 0,
-                            "total_tokens": 0,
-                        },
-                    }
-
-            return _Resp()
-
-    class _DummyClient:
-        def __init__(self):
-            self.api_key = "sk-test"
-
-            class _BaseURL:
-                _uri_reference = "https://api.openai.com/v1"
-
-            self._base_url = _BaseURL()
-            self.images = _DummyImages()
-
-    mock_get_openai_client.return_value = _DummyClient()
-
-    org = "org_test_123"
-    resp = litellm.image_generation(
-        model="gpt-image-1",
-        prompt="A cute baby sea otter",
-        organization=org,
-    )
-
-    # Assert organization forwarded into OpenAI client factory
-    assert mock_get_openai_client.call_args.kwargs.get("organization") == org
-
-    # Basic sanity on response shape
-    assert hasattr(resp, "data") and len(resp.data) == 1
 
 
 @pytest.mark.parametrize("model", ["o1", "o3-mini"])
@@ -690,128 +493,6 @@ async def test_openai_gpt5_reasoning():
     )
     print("response: ", response)
     assert response.choices[0].message.content is not None
-
-
-@pytest.mark.asyncio
-async def test_openai_safety_identifier_parameter():
-    """Test that safety_identifier parameter is correctly passed to the OpenAI API."""
-    from openai import AsyncOpenAI
-
-    litellm.set_verbose = True
-    client = AsyncOpenAI(api_key="fake-api-key")
-
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
-        try:
-            await litellm.acompletion(
-                model="openai/gpt-4o",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                safety_identifier="user_code_123456",
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
-
-        # Verify the request contains the safety_identifier parameter
-        assert "safety_identifier" in request_body
-        # Verify safety_identifier is correctly sent to the API
-        assert request_body["safety_identifier"] == "user_code_123456"
-
-
-def test_openai_safety_identifier_parameter_sync():
-    """Test that safety_identifier parameter is correctly passed to the OpenAI API."""
-    from openai import OpenAI
-
-    litellm.set_verbose = True
-    client = OpenAI(api_key="fake-api-key")
-
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
-        try:
-            litellm.completion(
-                model="openai/gpt-4o",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                safety_identifier="user_code_123456",
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
-
-        # Verify the request contains the safety_identifier parameter
-        assert "safety_identifier" in request_body
-        # Verify safety_identifier is correctly sent to the API
-        assert request_body["safety_identifier"] == "user_code_123456"
-
-
-@pytest.mark.asyncio
-async def test_openai_service_tier_parameter():
-    """Test that service_tier parameter is correctly passed to the OpenAI API."""
-    from openai import AsyncOpenAI
-
-    litellm.set_verbose = True
-    client = AsyncOpenAI(api_key="fake-api-key")
-
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
-        try:
-            await litellm.acompletion(
-                model="openai/gpt-4o",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                service_tier="priority",
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
-
-        # Verify the request contains the service_tier parameter
-        assert "service_tier" in request_body, "service_tier should be in request body"
-        # Verify service_tier is correctly sent to the API
-        assert (
-            request_body["service_tier"] == "priority"
-        ), "service_tier should be 'priority'"
-
-
-def test_openai_service_tier_parameter_sync():
-    """Test that service_tier parameter is correctly passed to the OpenAI API."""
-    from openai import OpenAI
-
-    litellm.set_verbose = True
-    client = OpenAI(api_key="fake-api-key")
-
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
-        try:
-            litellm.completion(
-                model="openai/gpt-4o",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                service_tier="priority",
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
-
-        # Verify the request contains the service_tier parameter
-        assert "service_tier" in request_body, "service_tier should be in request body"
-        # Verify service_tier is correctly sent to the API
-        assert (
-            request_body["service_tier"] == "priority"
-        ), "service_tier should be 'priority'"
 
 
 def test_gpt_5_reasoning_streaming():

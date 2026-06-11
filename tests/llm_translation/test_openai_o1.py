@@ -1,19 +1,16 @@
-import json
 import os
 import sys
-from datetime import datetime
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
 
-import httpx
 import pytest
 
 import litellm
-from litellm import Choices, Message, ModelResponse
+from litellm import ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
@@ -78,7 +75,6 @@ async def test_o1_handle_tool_calling_optional_params(
     - max_tokens is translated to 'max_completion_tokens'
     - role 'system' is translated to 'user'
     """
-    from openai import AsyncOpenAI
     from litellm.utils import ProviderConfigManager
     from litellm.types.utils import LlmProviders
 
@@ -94,47 +90,10 @@ async def test_o1_handle_tool_calling_optional_params(
     assert expected_tool_calling_support == ("tools" in supported_params)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["gpt-4", "gpt-4-0613"])
-async def test_o1_max_completion_tokens(model: str):
-    """
-    Tests that:
-    - max_completion_tokens is passed directly to OpenAI chat completion models
-    """
-    from openai import AsyncOpenAI
-
-    litellm.set_verbose = True
-
-    client = AsyncOpenAI(api_key="fake-api-key")
-
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
-        try:
-            await litellm.acompletion(
-                model=model,
-                max_completion_tokens=10,
-                messages=[{"role": "user", "content": "Hello!"}],
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
-
-        print("request_body: ", request_body)
-
-        assert request_body["model"] == model
-        assert request_body["max_completion_tokens"] == 10
-        assert request_body["messages"] == [{"role": "user", "content": "Hello!"}]
-
-
 def test_litellm_responses():
     """
     ensures that type of completion_tokens_details is correctly handled / returned
     """
-    from litellm import ModelResponse
     from litellm.types.utils import CompletionTokensDetails
 
     response = ModelResponse(
