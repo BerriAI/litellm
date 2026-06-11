@@ -171,6 +171,8 @@ class ResponsesToCompletionBridgeHandler:
         model_response = validated_kwargs["model_response"]
         logging_obj = validated_kwargs["logging_obj"]
         custom_llm_provider = validated_kwargs["custom_llm_provider"]
+        if kwargs.get("stream") is True and "stream" not in optional_params:
+            optional_params = {**optional_params, "stream": True}
 
         request_data = self.transformation_handler.transform_request(
             model=model,
@@ -263,6 +265,8 @@ class ResponsesToCompletionBridgeHandler:
         model_response = validated_kwargs["model_response"]
         logging_obj = validated_kwargs["logging_obj"]
         custom_llm_provider = validated_kwargs["custom_llm_provider"]
+        if kwargs.get("stream") is True and "stream" not in optional_params:
+            optional_params = {**optional_params, "stream": True}
 
         try:
             request_data = self.transformation_handler.transform_request(

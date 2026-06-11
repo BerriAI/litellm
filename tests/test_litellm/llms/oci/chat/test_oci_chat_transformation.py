@@ -11,6 +11,7 @@ import litellm
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import ModelResponse
+from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.llms.oci.chat.transformation import (
     OCIChatConfig,
     OCIRequestWrapper,
@@ -104,6 +105,7 @@ class TestOCIChatConfig:
             "chatRequest": {
                 "apiFormat": "GENERIC",
                 "isStream": False,
+                "maxTokens": DEFAULT_OCI_CHAT_MAX_TOKENS,
                 "messages": [
                     {
                         "role": "USER",
@@ -1085,6 +1087,44 @@ class TestOCICohereParamMapping:
         )
         assert result.get("maxTokens") == 200
         assert result.get("temperature") == 0.5
+
+
+class TestOCIDefaultMaxTokens:
+    """Regression for OCI's tiny server-side token cap (~20 tokens), which
+    silently truncated responses mid-string whenever the caller omitted
+    max_tokens (MLflow judges never send it, so their JSON came back cut off).
+    transform_request injects DEFAULT_OCI_CHAT_MAX_TOKENS when no limit is
+    supplied, and leaves an explicit limit untouched."""
+
+    def _chat_request(self, model: str, optional_params: dict) -> dict:
+        config = OCIChatConfig()
+        body = config.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={**BASE_OCI_PARAMS, **optional_params},
+            litellm_params={},
+            headers={},
+        )
+        return body["chatRequest"]
+
+    @pytest.mark.parametrize(
+        "model", ["cohere.command-latest", "meta.llama-3.3-70b-instruct"]
+    )
+    def test_default_injected_when_max_tokens_omitted(self, model):
+        chat_request = self._chat_request(model, {})
+        assert chat_request["maxTokens"] == DEFAULT_OCI_CHAT_MAX_TOKENS
+
+    @pytest.mark.parametrize(
+        "model", ["cohere.command-latest", "meta.llama-3.3-70b-instruct"]
+    )
+    def test_explicit_max_tokens_not_overridden(self, model):
+        chat_request = self._chat_request(model, {"max_tokens": 256})
+        assert chat_request["maxTokens"] == 256
+
+    def test_reasoning_model_defaults_max_completion_tokens(self):
+        chat_request = self._chat_request("openai.gpt-5", {})
+        assert chat_request["maxCompletionTokens"] == DEFAULT_OCI_CHAT_MAX_TOKENS
+        assert "maxTokens" not in chat_request
 
 
 class TestOCIReasoningEffort:

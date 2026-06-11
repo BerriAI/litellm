@@ -16,9 +16,7 @@ function PublicModelHubTableContent() {
     setAccessToken(key);
   }, [key]);
 
-  return (
-    <ModelHubTable accessToken={accessToken} publicPage={true} premiumUser={false} userRole={null} />
-  );
+  return <ModelHubTable accessToken={accessToken} publicPage={true} premiumUser={false} userRole={null} />;
 }
 
 export default function PublicModelHubTable() {

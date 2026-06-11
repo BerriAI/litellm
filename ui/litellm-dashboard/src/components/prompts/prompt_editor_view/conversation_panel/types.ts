@@ -13,4 +13,3 @@ export interface ConversationPanelProps {
   prompt: any;
   accessToken: string | null;
 }
-

@@ -10,7 +10,7 @@ export interface UseCodeInterpreterReturn {
   // State
   enabled: boolean;
   result: CodeInterpreterResult | null;
-  
+
   // Actions
   setEnabled: (enabled: boolean) => void;
   setResult: (result: CodeInterpreterResult | null) => void;

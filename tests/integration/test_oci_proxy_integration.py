@@ -271,16 +271,13 @@ def test_model_list_advertises_oci_models(proxy_url: str) -> None:
     assert r.status_code == 200, r.text
     advertised = {row["id"] for row in r.json()["data"]}
     for expected in CHAT_MODELS + ["oci-embed"]:
-        assert (
-            expected in advertised
-        ), f"{expected} missing from /v1/models: {advertised}"
+        assert expected in advertised, f"{expected} missing from /v1/models: {advertised}"
 
 
 @pytest.mark.parametrize("model", ["oci-cohere-command", "oci-llama"])
 def test_response_format_json_schema_via_proxy(proxy_url: str, model: str) -> None:
     """A response_format json_schema succeeds through the gateway for both a
     Cohere and a generic OCI model.
-
     Regression for the HTTP 400 ``Please pass in correct format of request``
     that rejected every json_schema request (which MLflow LLM judges always
     send): generic models choke on OpenAI's ``strict`` key, and Cohere has no
@@ -321,3 +318,39 @@ def test_response_format_json_schema_via_proxy(proxy_url: str, model: str) -> No
     content = r.json()["choices"][0]["message"]["content"]
     assert content is not None
     assert "score" in json.loads(content)
+
+
+def test_omitted_max_tokens_not_truncated(proxy_url: str) -> None:
+    """A request that omits max_tokens completes instead of being cut off.
+    Regression for OCI's tiny server-side maxTokens default (~20 tokens): without
+    an injected default, a request that doesn't set max_tokens came back with
+    finish_reason "length" after ~19 tokens, so structured outputs (e.g. MLflow
+    judge JSON) arrived as unterminated strings. The OCI provider now injects a
+    sane default when the caller omits one.
+    """
+    r = httpx.post(
+        f"{proxy_url}/v1/chat/completions",
+        headers=_auth_headers(),
+        json={
+            "model": "oci-cohere-command",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "In four or five complete sentences, explain why the sky appears blue.",
+                }
+            ],
+        },
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    assert r.status_code == 200, f"omitted max_tokens -> {r.status_code}: {r.text}"
+    body = r.json()
+    choice = body["choices"][0]
+    assert (
+        choice["finish_reason"] != "length"
+    ), f"response truncated by token cap: {choice}"
+    assert choice["finish_reason"] == "stop"
+    content = choice["message"].get("content") or ""
+    assert content.strip(), f"empty content: {choice}"
+    # The ~20-token server default truncated well before this; a complete
+    # four-to-five sentence answer comfortably exceeds it.
+    assert body["usage"]["completion_tokens"] > 50, body["usage"]

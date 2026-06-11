@@ -219,6 +219,275 @@ async def test_pre_call_rejects_unauthorized_model_in_batch_file():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_allows_all_team_models_key_when_model_in_team_allowlist():
+    """Keys with ``all-team-models`` must inherit the team allowlist when
+    validating models embedded in batch JSONL."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    proxy_alias = "openai/openai/gpt-5.5-batch"
+    file_dict = [
+        {
+            "body": {
+                "model": proxy_alias,
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        }
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk-team",
+        user_id="alice",
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[proxy_alias],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", None):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+        )
+
+
+@pytest.mark.asyncio
+async def test_pre_call_uses_current_team_allowlist_for_all_team_models_key():
+    from litellm.proxy._types import LiteLLM_TeamTable, SpecialModelNames
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    stale_model = "stale-model"
+    current_model = "current-model"
+    file_dict = [
+        {
+            "body": {
+                "model": stale_model,
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        }
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk-team",
+        user_id="alice",
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[stale_model],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        models=[current_model],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new=AsyncMock(return_value=team_object),
+        ) as mock_get_team_object,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+        )
+
+    assert exc_info.value.status_code == 403
+    mock_get_team_object.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pre_call_allows_all_team_models_key_via_current_team_object():
+    """Happy path for the team_object branch: with a DB client present, an
+    ``all-team-models`` key whose batch model is on the *current* team
+    allowlist must be authorized through the freshly-fetched team object,
+    not the cached-``team_models`` fallback."""
+    from litellm.proxy._types import LiteLLM_TeamTable, SpecialModelNames
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    current_model = "current-model"
+    file_dict = [
+        {
+            "body": {
+                "model": current_model,
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        }
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk-team",
+        user_id="alice",
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=["stale-model"],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        models=[current_model],
+    )
+    can_key_call_model = AsyncMock(return_value=True)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new=AsyncMock(return_value=team_object),
+        ) as mock_get_team_object,
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=can_key_call_model,
+        ),
+    ):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+        )
+
+    mock_get_team_object.assert_awaited_once()
+    can_key_call_model.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pre_call_denies_all_team_models_key_via_member_scope():
+    """The team_object branch must also apply the per-member model scope: a
+    model on the team allowlist but outside the member's ``allowed_models``
+    must be rejected with a 403."""
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTable,
+        SpecialModelNames,
+    )
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    team_model = "team-model"
+    file_dict = [
+        {
+            "body": {
+                "model": team_model,
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        }
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk-team",
+        user_id="alice",
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[team_model],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    team_object = LiteLLM_TeamTable(team_id="team-123", models=[team_model])
+    membership = LiteLLM_TeamMembership(
+        user_id="alice",
+        team_id="team-123",
+        litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["other-model"]),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new=AsyncMock(return_value=team_object),
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new=AsyncMock(return_value=membership),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert team_model in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
+    ("team_fetch_error", "expected_status"),
+    [
+        (HTTPException(status_code=404, detail="team not found"), 404),
+        (Exception("team fetch failed"), 403),
+    ],
+)
+@pytest.mark.asyncio
+async def test_pre_call_fails_closed_when_current_team_fetch_fails_for_all_team_models_key(
+    team_fetch_error, expected_status
+):
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    stale_model = "stale-model"
+    file_dict = [
+        {
+            "body": {
+                "model": stale_model,
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        }
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk-team",
+        user_id="alice",
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[stale_model],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new=AsyncMock(side_effect=team_fetch_error),
+        ) as mock_get_team_object,
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ) as mock_can_key_call_model,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+        )
+
+    assert exc_info.value.status_code == expected_status
+    mock_get_team_object.assert_awaited_once()
+    mock_can_key_call_model.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_pre_call_allows_authorized_model_in_batch_file():
     """If every model in the JSONL is on the caller's allowlist, the hook
     must not raise."""
@@ -444,7 +713,8 @@ async def test_count_input_file_usage_decodes_model_embedded_file_id():
 @pytest.mark.asyncio
 async def test_pre_call_allows_stripped_provider_model_when_key_has_proxy_alias():
     """After replace_model_in_jsonl, body.model is the provider id (e.g. gpt-5.5).
-    Auth must check the proxy model_name the key was granted, not the stripped id."""
+    Auth must check target_model_names from the unified file id, not reverse-map
+    the stripped id."""
     from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
 
     rate_limiter = _PROXY_BatchRateLimiter(
@@ -463,7 +733,6 @@ async def test_pre_call_allows_stripped_provider_model_when_key_has_proxy_alias(
     )
     mock_router = MagicMock()
     mock_router.model_list = []
-    mock_router.resolve_model_name_from_model_id.return_value = proxy_alias
     can_key_call_model = AsyncMock(return_value=True)
 
     with (
@@ -476,10 +745,105 @@ async def test_pre_call_allows_stripped_provider_model_when_key_has_proxy_alias(
         await rate_limiter._enforce_batch_file_model_access(
             user_api_key_dict=user,
             file_content_as_dict=file_dict,
+            target_model_names=[proxy_alias],
         )
 
     can_key_call_model.assert_awaited_once()
     assert can_key_call_model.await_args.kwargs["model"] == proxy_alias
+    mock_router.resolve_model_name_from_model_id.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_list_order",
+    [
+        [
+            "openai/openai/gpt-5.5",
+            "openai/openai/gpt-5.5-batch",
+            "us/azure/openai/gpt-5.5",
+        ],
+        [
+            "us/azure/openai/gpt-5.5",
+            "openai/openai/gpt-5.5",
+            "openai/openai/gpt-5.5-batch",
+        ],
+        [
+            "openai/openai/gpt-5.5-batch",
+            "us/azure/openai/gpt-5.5",
+            "openai/openai/gpt-5.5",
+        ],
+    ],
+)
+async def test_pre_call_uses_target_model_names_not_stripped_reverse_lookup(
+    model_list_order,
+):
+    """LIT-3593: three deployments strip to gpt-5.5; auth must use the upload
+    target alias from target_model_names, not first-match reverse lookup."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    batch_alias = "openai/openai/gpt-5.5-batch"
+    deployment_templates = {
+        "openai/openai/gpt-5.5": {
+            "model_name": "openai/openai/gpt-5.5",
+            "litellm_params": {"model": "openai/gpt-5.5"},
+            "model_info": {"id": "openai/openai/gpt-5.5", "mode": "chat"},
+        },
+        "openai/openai/gpt-5.5-batch": {
+            "model_name": "openai/openai/gpt-5.5-batch",
+            "litellm_params": {"model": "openai/gpt-5.5"},
+            "model_info": {"id": "openai/openai/gpt-5.5-batch", "mode": "batch"},
+        },
+        "us/azure/openai/gpt-5.5": {
+            "model_name": "us/azure/openai/gpt-5.5",
+            "litellm_params": {"model": "azure/gpt-5.5"},
+            "model_info": {"id": "openai/openai/gpt-5.5", "mode": "chat"},
+        },
+    }
+    mock_router = MagicMock()
+    mock_router.model_list = [deployment_templates[name] for name in model_list_order]
+
+    def _resolve(model_id):
+        for deployment in mock_router.model_list:
+            actual_model = deployment.get("litellm_params", {}).get("model")
+            if actual_model == model_id or (
+                actual_model and actual_model.endswith(f"/{model_id}")
+            ):
+                return deployment.get("model_name")
+        return None
+
+    mock_router.resolve_model_name_from_model_id.side_effect = _resolve
+
+    file_dict = [
+        {"body": {"model": "gpt-5.5", "messages": [{"role": "user", "content": "x"}]}}
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk-ok",
+        user_id="alice",
+        models=[batch_alias],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    can_key_call_model = AsyncMock(return_value=True)
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=can_key_call_model,
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+    ):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+            target_model_names=[batch_alias],
+        )
+
+    can_key_call_model.assert_awaited_once()
+    assert can_key_call_model.await_args.kwargs["model"] == batch_alias
+    mock_router.resolve_model_name_from_model_id.assert_not_called()
 
 
 @pytest.mark.asyncio

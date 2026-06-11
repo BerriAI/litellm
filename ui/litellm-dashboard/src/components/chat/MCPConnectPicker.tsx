@@ -25,7 +25,7 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
         const data = await fetchMCPServers(accessToken);
         if (cancelled) return;
         // API returns { data: MCPServer[] } or MCPServer[]
-        const list: MCPServer[] = Array.isArray(data) ? data : (data?.data ?? []);
+        const list: MCPServer[] = Array.isArray(data) ? data : data?.data ?? [];
         setServers(list);
       } catch {
         if (!cancelled) {
@@ -58,17 +58,13 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
       const result = await listMCPTools(accessToken, serverName);
       // listMCPTools never throws; it returns { tools, error, message } on failure
       if (result?.error) {
-        MessageManager.warning(
-          `Could not load tools for ${serverName} — it will be excluded from this message.`
-        );
+        MessageManager.warning(`Could not load tools for ${serverName} — it will be excluded from this message.`);
         // Do not add to selectedServers
         return;
       }
       onChange([...selectedServers, serverName]);
     } catch {
-      MessageManager.warning(
-        `Could not load tools for ${serverName} — it will be excluded from this message.`
-      );
+      MessageManager.warning(`Could not load tools for ${serverName} — it will be excluded from this message.`);
       // Do not add to selectedServers
     } finally {
       setTogglingOn((prev) => {
@@ -118,11 +114,16 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
                   src={server.mcp_info.logo_url}
                   alt={`${name} logo`}
                   style={{
-                    width: 24, height: 24, borderRadius: 6,
-                    objectFit: "contain", flexShrink: 0,
+                    width: 24,
+                    height: 24,
+                    borderRadius: 6,
+                    objectFit: "contain",
+                    flexShrink: 0,
                     marginTop: 1,
                   }}
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = "none";
+                  }}
                 />
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
