@@ -637,7 +637,18 @@ class ChunkProcessor:
                     hasattr(usage_chunk, "server_tool_use")
                     and usage_chunk.server_tool_use is not None
                 ):
-                    server_tool_use = usage_chunk.server_tool_use
+                    # Coerce dict to ServerToolUse so downstream cost-calc code
+                    # (which accesses .web_search_requests as an attribute)
+                    # doesn't raise AttributeError. Some providers / streaming
+                    # paths leave server_tool_use as a plain dict on the chunk.
+                    if isinstance(usage_chunk.server_tool_use, dict):
+                        server_tool_use = ServerToolUse(**usage_chunk.server_tool_use)
+                    elif isinstance(usage_chunk.server_tool_use, ServerToolUse):
+                        server_tool_use = usage_chunk.server_tool_use
+                    else:
+                        server_tool_use = ServerToolUse.model_validate(
+                            usage_chunk.server_tool_use
+                        )
                 if (
                     usage_chunk_dict["prompt_tokens_details"] is not None
                     and getattr(

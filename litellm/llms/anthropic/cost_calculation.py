@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional, Tuple
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_token_base_cost,
+    _get_web_search_requests,
     _parse_prompt_tokens_details,
     calculate_cache_writing_cost,
     generic_cost_per_token,
@@ -110,11 +111,12 @@ def get_cost_for_anthropic_web_search(
     if model_info is None:
         return 0.0
 
-    if (
-        usage is None
-        or usage.server_tool_use is None
-        or usage.server_tool_use.web_search_requests is None
-    ):
+    if usage is None:
+        return 0.0
+    web_search_requests = _get_web_search_requests(
+        getattr(usage, "server_tool_use", None)
+    )
+    if web_search_requests is None:
         return 0.0
 
     ## Get the cost per web search request
@@ -128,5 +130,5 @@ def get_cost_for_anthropic_web_search(
         return 0.0
 
     ## Calculate the total cost
-    total_cost = cost_per_web_search_request * usage.server_tool_use.web_search_requests
+    total_cost = cost_per_web_search_request * web_search_requests
     return total_cost
