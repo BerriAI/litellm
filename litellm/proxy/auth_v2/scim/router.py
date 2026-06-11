@@ -1,9 +1,20 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Type, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Dict,
+    Optional,
+    Type,
+    TypeVar,
+    cast,
+)
 
-from fastapi import APIRouter, Query, Request, Response, Security, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, Security, status
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from pydantic import ValidationError
 from scim2_models import (
     Bulk,
@@ -38,6 +49,29 @@ def _error(status_code: int, detail: str) -> JSONResponse:
     )
 
 
+class _ScimRoute(APIRoute):
+    """Render authentication failures with the SCIM Error schema (RFC 7644)."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def scim_handler(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except HTTPException as exc:
+                if exc.status_code not in (
+                    status.HTTP_401_UNAUTHORIZED,
+                    status.HTTP_403_FORBIDDEN,
+                ):
+                    raise
+                response = _error(exc.status_code, str(exc.detail))
+                if exc.headers:
+                    response.headers.update(exc.headers)
+                return response
+
+        return scim_handler
+
+
 async def _parse(request: Request, model: Type[R]) -> R:
     body = await request.json()
     return model.model_validate(body, scim_ctx=Context.RESOURCE_CREATION_REQUEST)
@@ -66,12 +100,20 @@ def _remove_path(data: Dict[str, Any], path: str) -> None:
     node.pop(keys[-1], None)
 
 
+def _targets_read_only_id(op: Any) -> bool:
+    if op.path is not None:
+        return op.path.split(".")[0].strip().lower() == "id"
+    return isinstance(op.value, dict) and any(str(k).lower() == "id" for k in op.value)
+
+
 def _apply_patch(resource: R, patch: PatchOp) -> R:
     data: Dict[str, Any] = resource.model_dump()
     for op in patch.operations:
         action = op.op.value if hasattr(op.op, "value") else str(op.op)
         if op.path is not None and ("[" in op.path or "]" in op.path):
             raise ValueError(f"unsupported SCIM patch path filter: {op.path}")
+        if _targets_read_only_id(op):
+            raise ValueError("the SCIM id attribute is read-only")
         if action == "remove":
             if op.path:
                 _remove_path(data, op.path)
@@ -90,6 +132,7 @@ def _dump(resource: Resource, ctx: Context) -> Dict[str, Any]:
 def _build_protected_router(auth: AuthSecurity) -> APIRouter:
     store = cast(ProvisioningStore, auth.resolver)
     protected = APIRouter(
+        route_class=_ScimRoute,
         dependencies=[Security(auth.principal, scopes=["scim:write"])],
     )
 
