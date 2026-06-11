@@ -65,6 +65,7 @@ def _assert_legacy_prefill(result):
         "anthropic/claude-sonnet-4-6",
         "vertex_ai/claude-sonnet-4-6",
         "claude-opus-4-6",
+        "openrouter/anthropic/claude-sonnet-4.6",  # dot-variant registry key
     ],
 )
 def test_prefill_rejecting_models_get_user_continuation(model):
