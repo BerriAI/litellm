@@ -3187,3 +3187,111 @@ def test_get_key_mcp_rpm_limit_precedence():
     none_set = UserAPIKeyAuth(api_key=hash_token("sk-mcp-key"))
     assert get_key_mcp_rpm_limit(none_set) is None
     assert get_team_mcp_rpm_limit(none_set) is None
+
+
+def test_tpm_reservation_enabled_by_default(monkeypatch):
+    """Upfront TPM reservation is on unless explicitly disabled via env."""
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    assert handler.tpm_reservation_enabled is True
+
+
+@pytest.mark.parametrize("value", ["false", "False", "FALSE"])
+def test_tpm_reservation_disabled_via_env(monkeypatch, value):
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", value)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    assert handler.tpm_reservation_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_reserves_tpm_when_enabled(monkeypatch):
+    """
+    With reservation enabled, the pre-call hook reserves the estimated token
+    budget upfront and tells should_rate_limit to skip the :tokens counter so
+    only the reservation path owns it.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-tpm"), tpm_limit=10_000)
+
+    should_rate_limit_calls: List[Dict[str, Any]] = []
+    original_should_rate_limit = handler.should_rate_limit
+
+    async def spy_should_rate_limit(*args, **kwargs):
+        should_rate_limit_calls.append(kwargs)
+        return await original_should_rate_limit(*args, **kwargs)
+
+    reserve_calls: List[int] = []
+    original_reserve = handler.reserve_tpm_tokens
+
+    async def spy_reserve(*args, **kwargs):
+        reserve_calls.append(kwargs.get("estimated_tokens"))
+        return await original_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(handler, "should_rate_limit", spy_should_rate_limit)
+    monkeypatch.setattr(handler, "reserve_tpm_tokens", spy_reserve)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=handler.internal_usage_cache.dual_cache,
+        data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="completion",
+    )
+
+    assert len(reserve_calls) == 1, "reservation must run when enabled"
+    assert should_rate_limit_calls[0]["skip_tpm_check"] is True
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_skips_reservation_when_disabled(monkeypatch):
+    """
+    With reservation disabled, the pre-call hook never calls reserve_tpm_tokens
+    and enforces TPM directly in should_rate_limit (skip_tpm_check=False), the
+    pre-v1.82 post-call accounting behavior.
+    """
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-tpm"), tpm_limit=10_000)
+
+    should_rate_limit_calls: List[Dict[str, Any]] = []
+    original_should_rate_limit = handler.should_rate_limit
+
+    async def spy_should_rate_limit(*args, **kwargs):
+        should_rate_limit_calls.append(kwargs)
+        return await original_should_rate_limit(*args, **kwargs)
+
+    reserve_calls: List[Any] = []
+
+    async def spy_reserve(*args, **kwargs):
+        reserve_calls.append(kwargs)
+        raise AssertionError("reserve_tpm_tokens must not run when disabled")
+
+    monkeypatch.setattr(handler, "should_rate_limit", spy_should_rate_limit)
+    monkeypatch.setattr(handler, "reserve_tpm_tokens", spy_reserve)
+
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=handler.internal_usage_cache.dual_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    assert reserve_calls == [], "reservation must be skipped when disabled"
+    assert should_rate_limit_calls[0]["skip_tpm_check"] is False
+    # No reservation stash leaks into the request metadata.
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        TPM_RESERVED_TOKENS_KEY,
+    )
+
+    assert TPM_RESERVED_TOKENS_KEY not in (data.get("metadata") or {})

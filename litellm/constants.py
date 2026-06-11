@@ -398,6 +398,9 @@ REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(
 REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(
     os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60)
 )
+REDIS_CIRCUIT_BREAKER_ENABLED = (
+    os.getenv("REDIS_CIRCUIT_BREAKER_ENABLED", "true").lower() == "true"
+)
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))

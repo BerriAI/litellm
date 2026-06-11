@@ -313,6 +313,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
 
+        # When disabled, TPM is enforced post-call from actual usage (pre-v1.82
+        # behavior) instead of reserving an estimated budget upfront, shedding
+        # the extra per-request Redis Lua round-trip and the global-lock
+        # in-memory fallback that the reservation path incurs.
+        self.tpm_reservation_enabled = (
+            os.getenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "true").lower() == "true"
+        )
+
         # Batch rate limiter (lazy loaded)
         self._batch_rate_limiter: Optional[Any] = None
 
@@ -2113,17 +2121,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
             # First pass: RPM and max_parallel_requests sliding-window check.
-            # `skip_tpm_check=True` tells should_rate_limit to ignore each
-            # descriptor's tokens_per_unit so its +1-per-key Lua / in-memory
-            # increment never touches the :tokens counters — those are owned
-            # exclusively by the atomic reserve_tpm_tokens path below. Without
-            # this, every concurrent in-flight request would pre-inflate the
-            # :tokens counter by 1, shrinking the effective TPM budget by N
-            # and causing false-positive 429s under bursts.
+            # When reservation is enabled, `skip_tpm_check=True` tells
+            # should_rate_limit to ignore each descriptor's tokens_per_unit so
+            # its +1-per-key Lua / in-memory increment never touches the
+            # :tokens counters — those are owned exclusively by the atomic
+            # reserve_tpm_tokens path below. Without this, every concurrent
+            # in-flight request would pre-inflate the :tokens counter by 1,
+            # shrinking the effective TPM budget by N and causing
+            # false-positive 429s under bursts. When reservation is disabled,
+            # this pass enforces TPM directly from the post-call counters.
             response = await self.should_rate_limit(
                 descriptors=descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
-                skip_tpm_check=True,
+                skip_tpm_check=self.tpm_reservation_enabled,
             )
 
             if response["overall_code"] == "OVER_LIMIT":
@@ -2153,7 +2163,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ]
             has_tpm_limits = bool(configured_tpm_limits)
 
-            if has_tpm_limits:
+            if has_tpm_limits and self.tpm_reservation_enabled:
                 min_configured_tpm_limit = min(configured_tpm_limits)
 
                 # When the configured TPM cap is small enough to constrain the
