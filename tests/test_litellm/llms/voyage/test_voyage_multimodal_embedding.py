@@ -187,6 +187,30 @@ class TestVoyageMultimodalEmbeddings:
         )
         assert headers == {"Authorization": "Bearer secret-key"}
 
+    def test_validate_environment_raises_without_api_key(self, monkeypatch):
+        import litellm.llms.voyage.embedding.transformation_multimodal as module
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        monkeypatch.setattr(module, "get_secret_str", lambda name: None)
+        config = VoyageMultimodalEmbeddingConfig()
+        with pytest.raises(ValueError) as exc_info:
+            config.validate_environment(
+                {}, "voyage-multimodal-3.5", [], {}, {}, api_key=None
+            )
+        assert "VOYAGE_API_KEY" in str(exc_info.value)
+
+    def test_normalize_image_url_dict_missing_url_raises(self):
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        with pytest.raises(ValueError) as exc_info:
+            config._normalize_content_item({"type": "image_url", "image_url": {}})
+        assert "image_url" in str(exc_info.value)
+
     def test_passthrough_non_content_input(self):
         from litellm.llms.voyage.embedding.transformation_multimodal import (
             VoyageMultimodalEmbeddingConfig,

@@ -92,6 +92,12 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                 or get_secret_str("VOYAGE_AI_API_KEY")
                 or get_secret_str("VOYAGE_AI_TOKEN")
             )
+        if not api_key:
+            raise ValueError(
+                "Voyage API key is required for multimodal embeddings. "
+                "Set VOYAGE_API_KEY / VOYAGE_AI_API_KEY / VOYAGE_AI_TOKEN "
+                "or pass `api_key` explicitly."
+            )
         return {"Authorization": f"Bearer {api_key}"}
 
     def _normalize_content_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
@@ -100,6 +106,11 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             image_url = item.get("image_url")
             if isinstance(image_url, dict):
                 image_url = image_url.get("url")
+            if image_url is None:
+                raise ValueError(
+                    "Voyage multimodal embeddings require a non-empty `image_url`. "
+                    "Got an image content block without a `url`."
+                )
             if isinstance(image_url, str) and image_url.startswith("data:image/"):
                 _, _, encoded = image_url.partition(",")
                 return {"type": "image_base64", "image_base64": encoded}
