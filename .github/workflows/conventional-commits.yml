@@ -9,7 +9,7 @@ name: Conventional PR Title
 
 on:
   pull_request:
-    types: [opened, edited, reopened, synchronize]
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
 
 permissions:
   pull-requests: read

@@ -38,7 +38,7 @@ Before contributing code to LiteLLM, you must sign our [Contributor License Agre
 git clone https://github.com/YOUR_USERNAME/litellm.git
 cd litellm
 
-# Create a new branch for your feature (see "Branch naming" below)
+# Create a new branch for your feature (see "Commit and Branch Conventions" below)
 git checkout -b feature/your-feature
 
 # Install development dependencies
@@ -74,11 +74,11 @@ make lint
 # Run unit tests to ensure nothing is broken
 make test-unit
 
-# Commit your changes (must follow Conventional Commits — see below)
+# Commit your changes (must follow Conventional Commits — see above)
 git add .
 git commit -m "feat(scope): your descriptive commit message"
 
-# Push and create a PR (branch must follow Conventional Branches — see below)
+# Push and create a PR (branch must follow Conventional Branches — see above)
 git push origin feature/your-feature
 ```
 
