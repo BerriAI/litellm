@@ -7574,6 +7574,45 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "azure_ai/deepseek-v3.1": {
+        "input_cost_per_token": 1.23e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.94e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "azure_ai/deepseek-v4-pro": {
+        "input_cost_per_token": 1.74e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 3.48e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "azure_ai/deepseek-v4-flash": {
+        "input_cost_per_token": 1.9e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 5.1e-07,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "azure_ai/embed-v-4-0": {
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "azure_ai",
