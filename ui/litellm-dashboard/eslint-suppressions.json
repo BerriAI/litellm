@@ -472,22 +472,22 @@
       "count": 4
     }
   },
-  "src/components/Projects/ProjectDetailsPage.tsx": {
+  "src/app/(dashboard)/projects/components/ProjectDetailsPage.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/Projects/ProjectKeysSection.tsx": {
+  "src/app/(dashboard)/projects/components/ProjectKeysSection.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
-  "src/components/Projects/ProjectModals/ProjectBaseForm.tsx": {
+  "src/app/(dashboard)/projects/components/ProjectModals/ProjectBaseForm.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
   },
-  "src/components/Projects/ProjectsPage.tsx": {
+  "src/app/(dashboard)/projects/components/ProjectsPage.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { renderWithProviders, screen } from "../../../../../tests/test-utils";
 import { ProjectKeysTable } from "./ProjectKeysTable";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 

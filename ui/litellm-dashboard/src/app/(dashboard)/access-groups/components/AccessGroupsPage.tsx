@@ -13,12 +13,12 @@ import {
 import { Button, Card, Flex, Input, Layout, Pagination, Space, Table, Tag, theme, Tooltip, Typography } from "antd";
 import { BotIcon, LayersIcon, SearchIcon, ServerIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import DeleteResourceModal from "../common_components/DeleteResourceModal";
-import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import {
   SortState,
   TableHeaderSortDropdown,
-} from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
+} from "@/components/common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
 import { AccessGroupCreateModal } from "./AccessGroupsModal/AccessGroupCreateModal";
 import { AccessGroup } from "./types";

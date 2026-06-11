@@ -1,10 +1,25 @@
-import { chromium, expect } from "@playwright/test";
+import { chromium, expect, request } from "@playwright/test";
 import { users, Role, STORAGE_PATHS } from "./fixtures/users";
 import * as fs from "fs";
 
 async function globalSetup() {
   const browser = await chromium.launch();
   const rootPath = process.env.SERVER_ROOT_PATH ?? "";
+
+  // The Projects sidebar item is hidden unless the enterprise-gated
+  // enable_projects_ui setting is on, and the seeded DB starts with it off.
+  // The proxy runs with LITELLM_LICENSE in CI, so enable it the same way
+  // the admin UI toggle does; the projects migration smoke needs the link.
+  const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
+  const api = await request.newContext();
+  const settingsRes = await api.patch(`http://localhost:4000${rootPath}/update/ui_settings`, {
+    headers: { Authorization: `Bearer ${masterKey}` },
+    data: { enable_projects_ui: true },
+  });
+  if (!settingsRes.ok()) {
+    throw new Error(`Enabling enable_projects_ui failed (${settingsRes.status()}): ${await settingsRes.text()}`);
+  }
+  await api.dispose();
 
   for (const role of Object.values(Role)) {
     const { email, password } = users[role];

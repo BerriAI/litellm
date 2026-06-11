@@ -19,7 +19,7 @@ import { LoadingOutlined } from "@ant-design/icons";
 import { BarChart } from "@tremor/react";
 import { ArrowLeftIcon, DollarSignIcon, EditIcon, KeyIcon, UsersIcon } from "lucide-react";
 import { useMemo, useState } from "react";
-import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
+import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
 import { EditProjectModal } from "./ProjectModals/EditProjectModal";
 
 const { Title, Text } = Typography;
