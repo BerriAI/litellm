@@ -1571,7 +1571,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
-        server_tool_use: Optional[ServerToolUse] = None,
+        server_tool_use: Optional[Union[ServerToolUse, dict]] = None,
         cost: Optional[float] = None,
         **params,
     ):
@@ -1671,6 +1671,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
             completion_tokens_details=_completion_tokens_details or None,
             prompt_tokens_details=_prompt_tokens_details or None,
         )
+
+        if isinstance(server_tool_use, dict):
+            server_tool_use = ServerToolUse(**server_tool_use)
 
         if server_tool_use is not None:
             self.server_tool_use = server_tool_use
@@ -3025,6 +3028,12 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Weave (W&B) dynamic params
     wandb_api_key: Optional[str]
     weave_project_id: Optional[str]
+
+    # Datadog dynamic params
+    dd_api_key: Optional[str]
+    dd_site: Optional[str]
+    dd_agent_host: Optional[str]
+    dd_agent_port: Optional[str]
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
