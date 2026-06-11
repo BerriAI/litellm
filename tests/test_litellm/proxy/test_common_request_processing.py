@@ -2427,6 +2427,24 @@ class TestCancelOnDisconnect:
         assert not disconnect_event.is_set()
         monitor.cancel()
 
+    async def test_monitor_survives_receive_failure_without_cancelling(self):
+        """If request.receive() fails (e.g. transport reset) the watcher must
+        degrade to a no-op instead of crashing or cancelling the LLM call."""
+
+        async def receive():
+            raise RuntimeError("transport reset")
+
+        request = Request(scope={"type": "http", "headers": []}, receive=receive)
+        llm_call = asyncio.get_running_loop().create_future()
+        disconnect_event = asyncio.Event()
+
+        await _cancel_llm_call_on_client_disconnect(
+            request, llm_call, disconnect_event
+        )
+
+        assert not llm_call.cancelled()
+        assert not disconnect_event.is_set()
+
     async def test_cancellation_without_disconnect_reraises_cancelled_error(self):
         """A CancelledError that is NOT client-initiated (e.g. server shutdown)
         must propagate as-is instead of being masked as a 499."""

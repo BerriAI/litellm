@@ -556,8 +556,14 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
     return False
 
 
+_CLIENT_DISCONNECT_DETAIL = "Client disconnected the request"
+
+
 def _log_llm_api_exception(e: Exception) -> None:
-    if getattr(e, "status_code", None) == 499:
+    if (
+        getattr(e, "status_code", None) == 499
+        and getattr(e, "detail", None) == _CLIENT_DISCONNECT_DETAIL
+    ):
         verbose_proxy_logger.info(
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, upstream LLM request cancelled"
         )
@@ -572,12 +578,19 @@ async def _cancel_llm_call_on_client_disconnect(
     llm_api_call: "asyncio.Future[Any]",
     disconnect_event: asyncio.Event,
 ) -> None:
-    while True:
-        message = await request.receive()
-        if message["type"] == "http.disconnect":
-            disconnect_event.set()
-            llm_api_call.cancel()
-            return
+    try:
+        while True:
+            message = await request.receive()
+            if message["type"] == "http.disconnect":
+                disconnect_event.set()
+                llm_api_call.cancel()
+                return
+    except Exception as exc:
+        verbose_proxy_logger.warning(
+            "cancel_on_disconnect: request.receive() raised %s; "
+            "upstream LLM call will not be cancelled on disconnect",
+            exc,
+        )
 
 
 async def _await_llm_call_cancelling_on_disconnect(
@@ -594,7 +607,7 @@ async def _await_llm_call_cancelling_on_disconnect(
         if disconnect_event.is_set():
             raise HTTPException(
                 status_code=499,
-                detail="Client disconnected the request",
+                detail=_CLIENT_DISCONNECT_DETAIL,
             )
         raise
     finally:
