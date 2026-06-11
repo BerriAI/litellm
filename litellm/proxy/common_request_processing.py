@@ -1828,6 +1828,10 @@ class ProxyBaseLLMRequestProcessing:
                     e,
                 )
 
+    def _apply_router_cooldown_retry_after(self, headers: dict, e: Exception) -> None:
+        if isinstance(e, RouterRateLimitError) and e.cooldown_time > 0:
+            headers["retry-after"] = str(math.ceil(e.cooldown_time))
+
     async def _handle_llm_api_exception(
         self,
         e: Exception,
@@ -1894,9 +1898,6 @@ class ProxyBaseLLMRequestProcessing:
                     headers = get_response_headers(dict(_response_headers))
         headers.update(custom_headers)
 
-        if isinstance(e, RouterRateLimitError) and e.cooldown_time > 0:
-            headers["retry-after"] = str(math.ceil(e.cooldown_time))
-
         # Call response headers hook for failure
         try:
             callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
@@ -1911,6 +1912,8 @@ class ProxyBaseLLMRequestProcessing:
                 headers.update(callback_headers)
         except Exception:
             pass
+
+        self._apply_router_cooldown_retry_after(headers, e)
 
         if isinstance(e, HTTPException):
             raw_detail = getattr(e, "detail", str(e))
