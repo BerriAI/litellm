@@ -119,3 +119,26 @@ def test_unrelated_fallback_groups_do_not_affect_prefill():
         fallbacks=[{"some-other-model": ["claude-sonnet-4-6"]}],
     )
     _assert_legacy_prefill(result)
+
+
+def test_fallbacks_list_is_not_mutated_by_capability_check():
+    """get_fallback_model_group pops a matching entry from flat string-format
+    fallback lists — the capability check must operate on a copy, or the actual
+    fallback execution silently loses one destination per mid-stream retry."""
+    string_format_fallbacks = ["gpt-4", "claude-sonnet-4-6"]
+    build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="gpt-4",
+        fallbacks=string_format_fallbacks,
+    )
+    assert string_format_fallbacks == ["gpt-4", "claude-sonnet-4-6"]
+
+    dict_format_fallbacks = [{"gpt-4": ["claude-sonnet-4-6"]}]
+    build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="gpt-4",
+        fallbacks=dict_format_fallbacks,
+    )
+    assert dict_format_fallbacks == [{"gpt-4": ["claude-sonnet-4-6"]}]

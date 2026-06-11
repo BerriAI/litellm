@@ -66,8 +66,12 @@ def build_mid_stream_continuation_messages(
     candidate_models: List[Optional[str]] = [model_group]
     if fallbacks is not None and model_group is not None:
         try:
+            # Shallow copy: get_fallback_model_group POPS a matching entry from
+            # flat string-format fallback lists — mutating the live list here
+            # would silently drop one fallback target before the actual
+            # fallback execution runs.
             fallback_model_group, _ = get_fallback_model_group(
-                fallbacks=fallbacks, model_group=model_group
+                fallbacks=list(fallbacks), model_group=model_group
             )
             if fallback_model_group:
                 candidate_models.extend(fallback_model_group)
