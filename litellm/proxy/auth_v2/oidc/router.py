@@ -36,7 +36,7 @@ def _mapped_claims(userinfo: Dict[str, Any]) -> Dict[str, Any]:
 
 def build_oidc_router(auth: AuthSecurity) -> APIRouter:
     session = auth.config.session
-    issuers = {_provider_key(p): p.issuer for p in auth.config.oidc_providers}
+    providers = {_provider_key(p): p for p in auth.config.oidc_providers}
     oauth = OAuth()
     for provider in auth.config.oidc_providers:
         oauth.register(
@@ -118,17 +118,22 @@ def build_oidc_router(auth: AuthSecurity) -> APIRouter:
             userinfo = await client.parse_id_token(token, nonce=txn.get("nonce"))
         else:
             userinfo = await client.userinfo(token=token)
+        from ..authenticators import _apply_role_policy
+
         info = dict(userinfo)
+        provider_config = providers[provider]
 
         store = cast(ProvisioningStore, auth.resolver)
         await store.upsert_user(_user_from_userinfo(info))
 
+        claims = _mapped_claims(info)
+        _apply_role_policy(claims, provider_config)
         session_id = auth.session_store.create_session(
             {
                 "method": "oidc",
                 "subject": info.get("sub"),
-                "issuer": info.get("iss") or issuers.get(provider),
-                "claims": _mapped_claims(info),
+                "issuer": info.get("iss") or provider_config.issuer,
+                "claims": claims,
             }
         )
         target = safe_relay_state(txn.get("relay"), session.default_redirect_path)
