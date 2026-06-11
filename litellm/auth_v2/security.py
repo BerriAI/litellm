@@ -31,6 +31,15 @@ def install_auth(
     mount_oidc: bool = True,
     mount_saml: bool = True,
 ) -> AuthContext:
+    """Wire the authenticators, resolver and optional routers onto the app.
+
+    Deployment requirement for trusted-proxy IP resolution: uvicorn's
+    ``--proxy-headers`` (enabled by default) overwrites ``request.client`` from
+    ``X-Forwarded-For`` before this module's ``trusted_proxy_cidrs`` check runs,
+    which silently bypasses it. Run uvicorn with ``--no-proxy-headers`` and let
+    this module resolve the client IP, or leave ``trusted_proxy_cidrs`` empty and
+    rely on uvicorn's own ``--forwarded-allow-ips``. Do not enable both.
+    """
     ctx = AuthContext(config, build_authenticators(config), resolver)
     app.state.auth_v2 = ctx
     if mount_scim:

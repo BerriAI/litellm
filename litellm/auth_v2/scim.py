@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Type, TypeVar
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Request, Response, Security, status
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from scim2_models import (
@@ -23,6 +23,7 @@ from scim2_models import (
 )
 
 from .resolver import ProvisioningStore
+from .security import get_current_principal
 
 R = TypeVar("R", bound=Resource)
 
@@ -63,7 +64,11 @@ def _dump(resource: Resource, ctx: Context) -> Dict[str, Any]:
 
 
 def build_scim_router() -> APIRouter:
-    router = APIRouter(prefix="/scim/v2", tags=["scim"])
+    router = APIRouter(
+        prefix="/scim/v2",
+        tags=["scim"],
+        dependencies=[Security(get_current_principal, scopes=["scim:write"])],
+    )
 
     @router.post("/Users", status_code=status.HTTP_201_CREATED)
     async def create_user(request: Request) -> Response:

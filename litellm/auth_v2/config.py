@@ -84,6 +84,10 @@ class SamlConfig(BaseModel):
 
 
 class AuthConfig(BaseModel):
+    # First-match-wins precedence. HTTP precedes OPENID_CONNECT, so a bearer JWT
+    # is claimed by HttpAuthenticator (auth_method=bearer_jwt) and OidcAuthenticator
+    # never runs; both share the same JwtVerifiers and verify identically, so this
+    # only changes the auth_method label. Reorder if openIdConnect labeling matters.
     scheme_order: List[SecuritySchemeType] = Field(
         default_factory=lambda: [
             SecuritySchemeType.API_KEY,
