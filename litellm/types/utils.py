@@ -533,6 +533,7 @@ CallTypesLiteral = Literal[
     "acreate_skill",
     "acreate_realtime_client_secret",
     "arealtime_calls",
+    "acreate_realtime_transcription_session",
 ]
 
 # Mapping of API routes to their corresponding call types
