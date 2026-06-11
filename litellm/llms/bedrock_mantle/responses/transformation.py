@@ -115,6 +115,8 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        if litellm_params.aws_bedrock_project_id:
+            headers["OpenAI-Project"] = litellm_params.aws_bedrock_project_id
         return headers
 
     def supports_native_file_search(self) -> bool:

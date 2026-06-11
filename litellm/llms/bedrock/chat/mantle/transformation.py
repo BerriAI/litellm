@@ -48,6 +48,30 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         region = self._get_aws_region_name(optional_params=optional_params, model=model)
         return MANTLE_ENDPOINT_TEMPLATE.format(region=region)
 
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        headers = super().validate_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        project_id = litellm_params.get("aws_bedrock_project_id")
+        if project_id:
+            headers["anthropic-workspace"] = project_id
+        return headers
+
     def transform_request(
         self,
         model: str,

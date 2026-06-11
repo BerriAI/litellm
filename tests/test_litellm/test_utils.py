@@ -4198,3 +4198,21 @@ class TestBedrockBaseModelLabelKeepsTools:
         )
 
         assert "tools" not in result
+
+
+def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
+    """`aws_bedrock_project_id` is sent as a bedrock-mantle request header, so it
+    must never reach optional_params (and from there the request body), while
+    other aws_* params keep flowing for boto3 auth."""
+    from litellm.utils import get_optional_params
+
+    result = get_optional_params(
+        model="mantle/anthropic.claude-mythos-preview",
+        custom_llm_provider="bedrock",
+        max_tokens=10,
+        aws_bedrock_project_id="proj_abc123def456",
+        aws_region_name="us-east-1",
+    )
+
+    assert "aws_bedrock_project_id" not in result
+    assert result["aws_region_name"] == "us-east-1"

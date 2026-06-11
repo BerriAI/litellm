@@ -1639,6 +1639,7 @@ def completion(  # type: ignore # noqa: PLR0915
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
+            aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,

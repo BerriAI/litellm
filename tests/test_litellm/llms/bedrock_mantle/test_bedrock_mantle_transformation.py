@@ -5,11 +5,14 @@ Bedrock Mantle is Amazon Bedrock's OpenAI-compatible inference engine (Project M
 API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 """
 
+import json
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+import httpx
 import pytest
 
 import litellm
@@ -94,6 +97,79 @@ class TestBedrockMantleConfig:
         assert "temperature" in params
         assert "stream" in params
         assert "max_tokens" in params
+
+
+class TestBedrockMantleProjectHeader:
+    def test_validate_environment_sets_openai_project_header(self):
+        cfg = BedrockMantleChatConfig()
+        headers = cfg.validate_environment(
+            headers={},
+            model="openai.gpt-oss-120b",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={"aws_bedrock_project_id": "proj_abc123def456"},
+            api_key="fake-key",
+        )
+        assert headers["OpenAI-Project"] == "proj_abc123def456"
+        assert headers["Authorization"] == "Bearer fake-key"
+
+    def test_validate_environment_without_project_id(self):
+        cfg = BedrockMantleChatConfig()
+        headers = cfg.validate_environment(
+            headers={},
+            model="openai.gpt-oss-120b",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            api_key="fake-key",
+        )
+        assert "OpenAI-Project" not in headers
+
+    def test_completion_sends_openai_project_header_and_clean_body(self):
+        requests = []
+
+        def mock_post(self, url, data=None, headers=None, **kwargs):
+            raw_body = data.decode("utf-8") if isinstance(data, bytes) else data
+            requests.append(
+                {"headers": headers or {}, "body": json.loads(raw_body or "{}")}
+            )
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1733529600,
+                    "model": "openai.gpt-oss-120b",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", mock_post
+        ):
+            response = litellm.completion(
+                model="bedrock_mantle/openai.gpt-oss-120b",
+                messages=[{"role": "user", "content": "hello"}],
+                api_key="fake-key",
+                aws_bedrock_project_id="proj_abc123def456",
+            )
+
+        assert response.choices[0].message.content == "ok"
+        assert len(requests) == 1
+        assert requests[0]["headers"]["OpenAI-Project"] == "proj_abc123def456"
+        assert "aws_bedrock_project_id" not in requests[0]["body"]
 
 
 class TestBedrockMantleProviderResolution:

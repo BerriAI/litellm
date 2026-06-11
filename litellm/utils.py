@@ -3837,6 +3837,10 @@ class PreProcessNonDefaultParams:
         additional_endpoint_specific_params: List[str],
     ) -> dict:
         for k, v in special_params.items():
+            if k == "aws_bedrock_project_id":
+                # sent as a request header (read from litellm_params by the
+                # bedrock-mantle configs), never as a request body field
+                continue
             if k.startswith("aws_") and (
                 custom_llm_provider != "bedrock"
                 and not custom_llm_provider.startswith("sagemaker")

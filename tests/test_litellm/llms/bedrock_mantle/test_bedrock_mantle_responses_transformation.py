@@ -167,6 +167,26 @@ class TestBedrockMantleResponsesAuth:
         )
         assert "Authorization" not in headers
 
+    def test_project_id_sets_openai_project_header(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        headers = cfg.validate_environment(
+            headers={},
+            model="openai.gpt-5.5",
+            litellm_params=GenericLiteLLMParams(
+                api_key="fake-key", aws_bedrock_project_id="proj_abc123def456"
+            ),
+        )
+        assert headers["OpenAI-Project"] == "proj_abc123def456"
+
+    def test_no_project_id_no_openai_project_header(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        headers = cfg.validate_environment(
+            headers={},
+            model="openai.gpt-5.5",
+            litellm_params=GenericLiteLLMParams(api_key="fake-key"),
+        )
+        assert "OpenAI-Project" not in headers
+
     def test_custom_llm_provider(self):
         cfg = BedrockMantleResponsesAPIConfig()
         assert cfg.custom_llm_provider == LlmProviders.BEDROCK_MANTLE
