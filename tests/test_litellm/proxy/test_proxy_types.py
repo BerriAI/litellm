@@ -69,3 +69,30 @@ def test_internal_jobs_user_has_proxy_admin_role():
     assert system_user.user_id == "system"
     assert system_user.team_id == "system"
     assert system_user.team_alias == "system"
+
+
+def test_litellm_usertable_validate_from_pydantic_model():
+    """
+    LiteLLM_UserTable.model_validate must accept another BaseModel instance, not
+    only a dict.
+
+    Regression test for the SSO first-login 500. On the first login the user does
+    not exist yet, so new_user() returns a NewUserResponse object which is then
+    cached with model_type=LiteLLM_UserTable (see _sync_user_role_from_jwt_role_map
+    in litellm/proxy/management_endpoints/ui_sso.py). Pydantic runs the
+    set_model_info (mode="before") validator with that model instance, which used
+    to call .get() on it and raise `AttributeError: 'NewUserResponse' object has
+    no attribute 'get'`. The second login worked only because the user was then
+    fetched from the DB as a real LiteLLM_UserTable, which Pydantic returns as-is
+    (revalidate_instances="never"), skipping the validator.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
+
+    new_user_response = NewUserResponse(user_id="test-user-id", key="sk-test")
+
+    validated = LiteLLM_UserTable.model_validate(new_user_response)
+
+    assert validated.user_id == "test-user-id"
+    assert validated.spend == 0.0
+    assert validated.models == []
+    assert validated.teams == []
