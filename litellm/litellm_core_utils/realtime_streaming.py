@@ -489,16 +489,14 @@ class RealTimeStreaming:
         if sent:
             self._guardrail_turn_detection_update_sent = True
 
-    def _has_realtime_guardrails(self) -> bool:
-        """Return True if any callback is registered for realtime guardrail event types."""
+    def _has_realtime_guardrails_for_event_hooks(
+        self,
+        event_hooks: List[Any],
+    ) -> bool:
+        """Return True if any callback would run for one of ``event_hooks``."""
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
-        _realtime_event_types = [
-            GuardrailEventHooks.realtime_input_transcription,
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-        ]
         return any(
             isinstance(cb, CustomGuardrail)
             and any(
@@ -506,31 +504,45 @@ class RealTimeStreaming:
                     data=self.request_data,
                     event_type=et,
                 )
-                for et in _realtime_event_types
+                for et in event_hooks
             )
             for cb in litellm.callbacks
         )
 
+    def _has_realtime_guardrails(self) -> bool:
+        """Return True if any callback is registered for realtime guardrail event types."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return self._has_realtime_guardrails_for_event_hooks(
+            [
+                GuardrailEventHooks.realtime_input_transcription,
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.post_call,
+            ]
+        )
+
     def _has_audio_transcription_guardrails(self) -> bool:
-        """Return True if any callback needs to run on audio transcriptions (VAD path).
+        """Return True when a guardrail is configured for the audio/VAD transcript path.
 
-        When this returns True, we inject a session.update to disable the LLM's
-        auto-response so the guardrail can gate it first.
-
-        Must match the same hook criteria as run_realtime_guardrails() so that
-        any guardrail that would actually check the transcript also disables
-        auto-response before the transcript arrives.
+        Only ``realtime_input_transcription`` hooks disable ``server_vad`` auto-response.
+        ``pre_call`` / ``post_call`` guardrails (e.g. Model Armor on chat completions)
+        must not override ``turn_detection.create_response`` on realtime sessions.
         """
-        return self._has_realtime_guardrails()
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return self._has_realtime_guardrails_for_event_hooks(
+            [GuardrailEventHooks.realtime_input_transcription]
+        )
 
     async def run_realtime_guardrails(
         self,
         transcript: str,
         item_id: Optional[str] = None,
         pre_block_backend_message: Optional[str] = None,
+        event_hooks: Optional[List[Any]] = None,
     ) -> bool:
         """
-        Run registered guardrails on a completed speech transcription.
+        Run registered guardrails on realtime text (transcript, user message, tool output).
 
         Returns True if blocked (synthetic warning already sent to client).
         Returns False if clean (caller should send response.create to the backend).
@@ -541,15 +553,17 @@ class RealTimeStreaming:
         specific message to be sent first — e.g. Gemini Live requires a
         matching ``toolResponse`` immediately after a ``toolCall`` before any
         other client messages can be accepted.
+
+        ``event_hooks`` selects which guardrail modes to evaluate. Audio/VAD
+        transcript completion uses ``realtime_input_transcription`` only;
+        typed user messages and tool outputs use ``pre_call``.
         """
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
-        _realtime_event_types = [
-            GuardrailEventHooks.realtime_input_transcription,
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-        ]
+        if event_hooks is None:
+            event_hooks = [GuardrailEventHooks.realtime_input_transcription]
+        _realtime_event_types = event_hooks
         _check_data = {**self.request_data, "transcript": transcript}
         _already_run: set = set()
 
@@ -1054,6 +1068,8 @@ class RealTimeStreaming:
                 guardrail_turn_detection_injected = False
                 msg_type: Optional[str] = None
                 try:
+                    from litellm.types.guardrails import GuardrailEventHooks
+
                     msg_obj = json.loads(message)
                     msg_type = msg_obj.get("type")
 
@@ -1106,6 +1122,7 @@ class RealTimeStreaming:
                                 blocked = await self.run_realtime_guardrails(
                                     output_text,
                                     pre_block_backend_message=sanitized_msg,
+                                    event_hooks=[GuardrailEventHooks.pre_call],
                                 )
                                 if blocked:
                                     # ``_pending_guardrail_message`` is
@@ -1131,7 +1148,8 @@ class RealTimeStreaming:
                             combined_text = " ".join(texts)
                             if combined_text:
                                 blocked = await self.run_realtime_guardrails(
-                                    combined_text
+                                    combined_text,
+                                    event_hooks=[GuardrailEventHooks.pre_call],
                                 )
                                 if blocked:
                                     # Store the guardrail reason so the next response.create
