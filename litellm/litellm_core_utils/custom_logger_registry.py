@@ -25,6 +25,7 @@ from litellm.integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
 from litellm.integrations.dotprompt import DotpromptManager
 from litellm.integrations.focus.focus_logger import FocusLogger
+from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import MavvrikFocusLogger
 from litellm.integrations.vantage.vantage_logger import VantageLogger
 from litellm.integrations.galileo import GalileoObserve
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
@@ -102,6 +103,7 @@ class CustomLoggerRegistry:
         "gitlab": GitLabPromptManager,
         "cloudzero": CloudZeroLogger,
         "focus": FocusLogger,
+        "mavvrik": MavvrikFocusLogger,
         "vantage": VantageLogger,
         "posthog": PostHogLogger,
     }

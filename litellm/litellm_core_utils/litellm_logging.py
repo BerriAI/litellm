@@ -4124,6 +4124,17 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             focus_logger = FocusLogger()
             _in_memory_loggers.append(focus_logger)
             return focus_logger  # type: ignore
+        elif logging_integration == "mavvrik":
+            from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import (
+                MavvrikFocusLogger,
+            )
+
+            for callback in _in_memory_loggers:
+                if type(callback) is MavvrikFocusLogger:
+                    return callback  # type: ignore
+            mavvrik_focus_logger = MavvrikFocusLogger()
+            _in_memory_loggers.append(mavvrik_focus_logger)
+            return mavvrik_focus_logger  # type: ignore
         elif logging_integration == "vantage":
             from litellm.integrations.vantage.vantage_logger import VantageLogger
 

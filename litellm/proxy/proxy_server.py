@@ -7841,6 +7841,15 @@ class ProxyStartupEvent:
             await VantageLogger.init_vantage_background_job(scheduler=scheduler)
 
         ########################################################
+        # Mavvrik FOCUS Background Job
+        ########################################################
+        from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import (  # noqa: PLC0415
+            MavvrikFocusLogger,
+        )
+
+        await MavvrikFocusLogger.init_mavvrik_focus_background_job(scheduler=scheduler)
+
+        ########################################################
         # Prometheus Background Job
         ########################################################
         if litellm.prometheus_initialize_budget_metrics is True:
@@ -9504,9 +9513,7 @@ async def realtime_websocket_endpoint(
         if intent == "transcription":
             route_model = "gpt-realtime-whisper"
         else:
-            await websocket.close(
-                code=1008, reason="model query parameter is required"
-            )
+            await websocket.close(code=1008, reason="model query parameter is required")
             return
     assert route_model is not None
     try:
