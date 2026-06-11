@@ -1,8 +1,8 @@
 """
-Test TogetherAI LLM
+TogetherAI supported-params goldens. The live BaseLLMChatTest subclass moved
+to tests/harness_suites/chat_live_longtail/.
 """
 
-from base_llm_unit_tests import BaseLLMChatTest
 import os
 import sys
 
@@ -14,11 +14,7 @@ import litellm
 import pytest
 
 
-class TestTogetherAI(BaseLLMChatTest):
-    def get_base_completion_call_args(self) -> dict:
-        litellm.set_verbose = True
-        return {"model": "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo"}
-
+class TestTogetherAIParams:
     @pytest.mark.parametrize(
         "model, expected_bool",
         [
