@@ -4620,21 +4620,24 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "user_agent, request_drop_params, expected_drop_params",
+    "user_agent, request_drop_params, operator_drop_params, expected_drop_params",
     [
-        ("claude-cli/2.0.69 (external, cli)", None, True),
-        ("claude-cli/1.0.44 (external, sdk-py)", None, True),
-        ("claude-cli/2.0.69 (external, cli)", False, False),
-        ("PostmanRuntime/7.53.0", None, None),
-        (None, None, None),
+        ("claude-cli/2.0.69 (external, cli)", None, None, True),
+        ("claude-cli/1.0.44 (external, sdk-py)", None, None, True),
+        ("claude-cli/2.0.69 (external, cli)", False, None, False),
+        ("claude-cli/2.0.69 (external, cli)", None, False, None),
+        ("claude-cli/2.0.69 (external, cli)", None, True, None),
+        ("PostmanRuntime/7.53.0", None, None, None),
+        (None, None, None, None),
     ],
 )
 async def test_add_litellm_data_to_request_claude_code_drop_params(
-    user_agent, request_drop_params, expected_drop_params
+    user_agent, request_drop_params, operator_drop_params, expected_drop_params
 ):
     """Claude Code sends Anthropic-specific params that fail on non-Anthropic
     providers, so its user agent must turn on drop_params automatically,
-    without overriding an explicit caller value or affecting other clients.
+    without overriding an explicit caller value, an explicit operator-level
+    litellm_settings value, or affecting other clients.
     """
     headers = {"Content-Type": "application/json"}
     if user_agent is not None:
@@ -4645,11 +4648,18 @@ async def test_add_litellm_data_to_request_claude_code_drop_params(
     if request_drop_params is not None:
         data["drop_params"] = request_drop_params
 
+    proxy_config = MagicMock()
+    proxy_config.config = (
+        {"litellm_settings": {"drop_params": operator_drop_params}}
+        if operator_drop_params is not None
+        else {"litellm_settings": {}}
+    )
+
     updated = await add_litellm_data_to_request(
         data=data,
         request=request_mock,
         user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
-        proxy_config=MagicMock(),
+        proxy_config=proxy_config,
         general_settings={},
         version="test-version",
     )
