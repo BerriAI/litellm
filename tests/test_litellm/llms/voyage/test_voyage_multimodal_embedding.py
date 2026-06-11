@@ -59,6 +59,7 @@ class TestVoyageMultimodalEmbeddings:
                     "content": [
                         {"type": "text", "text": "Describe this"},
                         {"type": "image_url", "image_url": {"url": data_uri}},
+                        {"type": "image_url", "image_url": "https://example.com/a.png"},
                     ]
                 }
             ],
@@ -74,6 +75,10 @@ class TestVoyageMultimodalEmbeddings:
         assert request["inputs"][0]["content"][1] == {
             "type": "image_base64",
             "image_base64": "AAAA",
+        }
+        assert request["inputs"][0]["content"][2] == {
+            "type": "image_url",
+            "image_url": "https://example.com/a.png",
         }
 
     def test_multimodal_embedding_string_input_transformation(self):
@@ -137,3 +142,67 @@ class TestVoyageMultimodalEmbeddings:
         )
 
         assert isinstance(config, VoyageMultimodalEmbeddingConfig)
+
+    def test_map_openai_params_dimensions(self):
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        assert config.get_supported_openai_params("voyage-multimodal-3.5") == [
+            "dimensions"
+        ]
+        optional_params = config.map_openai_params(
+            {"dimensions": 512}, {}, "voyage-multimodal-3.5", False
+        )
+        assert optional_params == {"output_dimension": 512}
+        assert (
+            config.map_openai_params({}, {}, "voyage-multimodal-3.5", False) == {}
+        )
+
+    def test_validate_environment_uses_api_key(self):
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        headers = config.validate_environment(
+            {}, "voyage-multimodal-3.5", [], {}, {}, api_key="test-key"
+        )
+        assert headers == {"Authorization": "Bearer test-key"}
+
+    def test_passthrough_non_content_input(self):
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        request = config.transform_embedding_request(
+            "voyage-multimodal-3.5", [{"foo": "bar"}], {}, {}
+        )
+        assert request["inputs"] == [{"foo": "bar"}]
+
+    def test_error_response_transformation_and_error_class(self):
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+            VoyageMultimodalEmbeddingError,
+        )
+        from litellm.types.utils import EmbeddingResponse
+
+        config = VoyageMultimodalEmbeddingConfig()
+        raw_response = MagicMock()
+        raw_response.json.side_effect = ValueError("not json")
+        raw_response.status_code = 400
+        raw_response.text = "bad request"
+
+        with pytest.raises(VoyageMultimodalEmbeddingError) as exc_info:
+            config.transform_embedding_response(
+                "voyage-multimodal-3.5", raw_response, EmbeddingResponse(), MagicMock()
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.message == "bad request"
+
+        error = config.get_error_class("rate limited", 429, {"x-test": "1"})
+        assert isinstance(error, VoyageMultimodalEmbeddingError)
+        assert error.status_code == 429
+        assert error.message == "rate limited"
