@@ -316,3 +316,170 @@ async def test_json_logs_calls_turn_on_json():
         # Cleanup
         os.unlink(temp_file_path)
         litellm.json_logs = False
+
+
+@pytest.mark.asyncio
+async def test_general_settings_url_validation_wired_to_litellm():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/26599
+
+    user_url_validation and user_url_allowed_hosts set in general_settings must be
+    propagated to litellm module globals so that url_utils.validate_url /
+    safe_get / async_safe_get honour them at runtime.
+    """
+    import tempfile
+
+    import yaml
+
+    config_content = {
+        "model_list": [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test-key"},
+            }
+        ],
+        "general_settings": {
+            "user_url_validation": False,
+            "user_url_allowed_hosts": ["10.80.1.20", "internal.corp"],
+        },
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    original_validation = litellm.user_url_validation
+    original_hosts = litellm.user_url_allowed_hosts
+
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=None,
+            config_file_path=temp_file_path,
+        )
+
+        assert (
+            litellm.user_url_validation is False
+        ), "user_url_validation from general_settings should set litellm.user_url_validation"
+        assert litellm.user_url_allowed_hosts == [
+            "10.80.1.20",
+            "internal.corp",
+        ], "user_url_allowed_hosts from general_settings should set litellm.user_url_allowed_hosts"
+    finally:
+        os.unlink(temp_file_path)
+        litellm.user_url_validation = original_validation
+        litellm.user_url_allowed_hosts = original_hosts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_value,expected",
+    [
+        ("false", False),
+        ("False", False),
+        ("FALSE", False),
+        ("0", False),
+        ("no", False),
+        ("off", False),
+        ("true", True),
+        ("True", True),
+        ("1", True),
+        ("yes", True),
+    ],
+)
+async def test_general_settings_url_validation_string_value(raw_value, expected):
+    """
+    A quoted string value for user_url_validation in YAML must be interpreted
+    as a boolean rather than always coerced to True via bool(str). Otherwise
+    operators who write `user_url_validation: "false"` silently keep
+    validation enabled.
+    """
+    import tempfile
+
+    import yaml
+
+    config_content = {
+        "model_list": [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test-key"},
+            }
+        ],
+        "general_settings": {
+            "user_url_validation": raw_value,
+        },
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    original_validation = litellm.user_url_validation
+
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=None,
+            config_file_path=temp_file_path,
+        )
+
+        assert litellm.user_url_validation is expected, (
+            f"user_url_validation={raw_value!r} should resolve to {expected}, "
+            f"got {litellm.user_url_validation!r}"
+        )
+    finally:
+        os.unlink(temp_file_path)
+        litellm.user_url_validation = original_validation
+
+
+@pytest.mark.asyncio
+async def test_general_settings_url_allowed_hosts_bare_string():
+    """
+    A bare string value for user_url_allowed_hosts in YAML must be wrapped in
+    a one-element list rather than passed through list(...), which would split
+    it into characters. Operators following the SSRFError hint may write
+    `user_url_allowed_hosts: internal.corp` and reasonably expect that single
+    host to be allowlisted.
+    """
+    import tempfile
+
+    import yaml
+
+    config_content = {
+        "model_list": [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test-key"},
+            }
+        ],
+        "general_settings": {
+            "user_url_allowed_hosts": "internal.corp",
+        },
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    original_hosts = litellm.user_url_allowed_hosts
+
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=None,
+            config_file_path=temp_file_path,
+        )
+
+        assert litellm.user_url_allowed_hosts == ["internal.corp"], (
+            "Bare-string user_url_allowed_hosts must be wrapped as a one-element "
+            f"list, not split into characters. Got {litellm.user_url_allowed_hosts!r}"
+        )
+    finally:
+        os.unlink(temp_file_path)
+        litellm.user_url_allowed_hosts = original_hosts
