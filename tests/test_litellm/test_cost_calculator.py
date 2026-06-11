@@ -2913,6 +2913,64 @@ def test_custom_pricing_applies_cache_creation_input_cost_via_cache_write_tokens
 # ---------------------------------------------------------------------------
 
 
+def test_custom_pricing_above_200k_cache_creation_tokens_uses_tiered_rate():
+    """
+    Custom deployment pricing should apply above-200k cache write rates when
+    Anthropic-style usage reports cache creation tokens outside prompt_tokens.
+    """
+
+    model_id = "tiered-custom-pricing-deploy-test"
+    model_info = {
+        "litellm_provider": "vertex_ai",
+        "mode": "chat",
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000025,
+        "cache_creation_input_token_cost": 0.00000625,
+        "cache_read_input_token_cost": 0.0000005,
+        "input_cost_per_token_above_200k_tokens": 0.00001,
+        "output_cost_per_token_above_200k_tokens": 0.0000375,
+        "cache_creation_input_token_cost_above_200k_tokens": 0.0000125,
+        "cache_read_input_token_cost_above_200k_tokens": 0.000001,
+    }
+    cache_creation_tokens = 585659
+
+    litellm.register_model(model_cost={model_id: model_info})
+    try:
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="vertex_ai/claude-opus-4-6",
+            object="chat.completion",
+            choices=[],
+            usage=Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=cache_creation_tokens,
+                cache_creation_input_tokens=cache_creation_tokens,
+                cache_read_input_tokens=0,
+            ),
+        )
+
+        cost = completion_cost(
+            completion_response=response,
+            model="vertex_ai/claude-opus-4-6",
+            custom_llm_provider="vertex_ai",
+            custom_pricing=True,
+            router_model_id=model_id,
+        )
+
+        assert cost == pytest.approx(
+            cache_creation_tokens
+            * model_info["cache_creation_input_token_cost_above_200k_tokens"]
+        )
+        assert cost != pytest.approx(
+            cache_creation_tokens * model_info["cache_creation_input_token_cost"]
+        )
+    finally:
+        litellm.model_cost.pop(model_id, None)
+        litellm.model_cost.pop(f"vertex_ai/{model_id}", None)
+
+
 def test_extract_cache_read_tokens_anthropic_top_level():
     from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
 
