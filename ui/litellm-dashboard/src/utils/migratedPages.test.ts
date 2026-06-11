@@ -3,6 +3,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 describe("migratedHref / legacyPageHref", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.stubEnv("NODE_ENV", "test");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("builds a /ui-rooted path when serverRootPath is /", async () => {
@@ -74,6 +79,11 @@ describe("dev server (NODE_ENV=development)", () => {
 describe("legacyKeyForPathname", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.stubEnv("NODE_ENV", "test");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("maps a migrated path back to its legacy sidebar key (including trailing slash)", async () => {
