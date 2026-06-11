@@ -63,108 +63,8 @@ def _dump(resource: Resource, ctx: Context) -> Dict[str, Any]:
     return resource.model_dump(scim_ctx=ctx)
 
 
-def build_scim_router() -> APIRouter:
-    router = APIRouter(
-        prefix="/scim/v2",
-        tags=["scim"],
-        dependencies=[Security(get_current_principal, scopes=["scim:write"])],
-    )
-
-    @router.post("/Users", status_code=status.HTTP_201_CREATED)
-    async def create_user(request: Request) -> Response:
-        try:
-            user = await _parse(request, User)
-        except ValidationError as exc:
-            return _error(status.HTTP_400_BAD_REQUEST, str(exc))
-        stored = await _store(request).upsert_user(user)
-        return JSONResponse(
-            status_code=status.HTTP_201_CREATED,
-            content=_dump(stored, Context.RESOURCE_CREATION_RESPONSE),
-        )
-
-    @router.get("/Users/{resource_id}")
-    async def get_user(resource_id: str, request: Request) -> Response:
-        user = await _store(request).get_user(resource_id)
-        if user is None:
-            return _error(status.HTTP_404_NOT_FOUND, f"User {resource_id} not found")
-        return JSONResponse(content=_dump(user, Context.RESOURCE_QUERY_RESPONSE))
-
-    @router.patch("/Users/{resource_id}")
-    async def patch_user(resource_id: str, request: Request) -> Response:
-        store = _store(request)
-        user = await store.get_user(resource_id)
-        if user is None:
-            return _error(status.HTTP_404_NOT_FOUND, f"User {resource_id} not found")
-        try:
-            patch = PatchOp[User].model_validate(await request.json())
-        except ValidationError as exc:
-            return _error(status.HTTP_400_BAD_REQUEST, str(exc))
-        updated = await store.upsert_user(_apply_patch(user, patch))
-        return JSONResponse(content=_dump(updated, Context.RESOURCE_PATCH_RESPONSE))
-
-    @router.delete("/Users/{resource_id}", status_code=status.HTTP_204_NO_CONTENT)
-    async def deactivate_user(resource_id: str, request: Request) -> Response:
-        await _store(request).deactivate_user(resource_id)
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-    @router.get("/Users")
-    async def list_users(request: Request, filter: Optional[str] = None) -> Response:
-        users = await _store(request).list_users(filter)
-        listing: ListResponse[User] = ListResponse[User](
-            total_results=len(users),
-            start_index=1,
-            items_per_page=len(users),
-            resources=users or None,
-        )
-        return JSONResponse(content=_dump(listing, Context.RESOURCE_QUERY_RESPONSE))
-
-    @router.post("/Groups", status_code=status.HTTP_201_CREATED)
-    async def create_group(request: Request) -> Response:
-        try:
-            group = await _parse(request, Group)
-        except ValidationError as exc:
-            return _error(status.HTTP_400_BAD_REQUEST, str(exc))
-        stored = await _store(request).upsert_group(group)
-        return JSONResponse(
-            status_code=status.HTTP_201_CREATED,
-            content=_dump(stored, Context.RESOURCE_CREATION_RESPONSE),
-        )
-
-    @router.get("/Groups/{resource_id}")
-    async def get_group(resource_id: str, request: Request) -> Response:
-        group = await _store(request).get_group(resource_id)
-        if group is None:
-            return _error(status.HTTP_404_NOT_FOUND, f"Group {resource_id} not found")
-        return JSONResponse(content=_dump(group, Context.RESOURCE_QUERY_RESPONSE))
-
-    @router.patch("/Groups/{resource_id}")
-    async def patch_group(resource_id: str, request: Request) -> Response:
-        store = _store(request)
-        group = await store.get_group(resource_id)
-        if group is None:
-            return _error(status.HTTP_404_NOT_FOUND, f"Group {resource_id} not found")
-        try:
-            patch = PatchOp[Group].model_validate(await request.json())
-        except ValidationError as exc:
-            return _error(status.HTTP_400_BAD_REQUEST, str(exc))
-        updated = await store.upsert_group(_apply_patch(group, patch))
-        return JSONResponse(content=_dump(updated, Context.RESOURCE_PATCH_RESPONSE))
-
-    @router.delete("/Groups/{resource_id}", status_code=status.HTTP_204_NO_CONTENT)
-    async def delete_group(resource_id: str, request: Request) -> Response:
-        await _store(request).delete_group(resource_id)
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-    @router.get("/Groups")
-    async def list_groups(request: Request, filter: Optional[str] = None) -> Response:
-        groups = await _store(request).list_groups(filter)
-        listing: ListResponse[Group] = ListResponse[Group](
-            total_results=len(groups),
-            start_index=1,
-            items_per_page=len(groups),
-            resources=groups or None,
-        )
-        return JSONResponse(content=_dump(listing, Context.RESOURCE_QUERY_RESPONSE))
+def _build_discovery_router() -> APIRouter:
+    router = APIRouter()
 
     @router.get("/ServiceProviderConfig")
     async def service_provider_config() -> Response:
@@ -218,4 +118,117 @@ def build_scim_router() -> APIRouter:
             }
         )
 
+    return router
+
+
+def build_scim_router() -> APIRouter:
+    router = APIRouter(prefix="/scim/v2", tags=["scim"])
+    protected = APIRouter(
+        dependencies=[Security(get_current_principal, scopes=["scim:write"])],
+    )
+
+    @protected.post("/Users", status_code=status.HTTP_201_CREATED)
+    async def create_user(request: Request) -> Response:
+        try:
+            user = await _parse(request, User)
+        except ValidationError as exc:
+            return _error(status.HTTP_400_BAD_REQUEST, str(exc))
+        stored = await _store(request).upsert_user(user)
+        return JSONResponse(
+            status_code=status.HTTP_201_CREATED,
+            content=_dump(stored, Context.RESOURCE_CREATION_RESPONSE),
+        )
+
+    @protected.get("/Users/{resource_id}")
+    async def get_user(resource_id: str, request: Request) -> Response:
+        user = await _store(request).get_user(resource_id)
+        if user is None:
+            return _error(status.HTTP_404_NOT_FOUND, f"User {resource_id} not found")
+        return JSONResponse(content=_dump(user, Context.RESOURCE_QUERY_RESPONSE))
+
+    @protected.patch("/Users/{resource_id}")
+    async def patch_user(resource_id: str, request: Request) -> Response:
+        store = _store(request)
+        user = await store.get_user(resource_id)
+        if user is None:
+            return _error(status.HTTP_404_NOT_FOUND, f"User {resource_id} not found")
+        try:
+            patch = PatchOp[User].model_validate(await request.json())
+        except ValidationError as exc:
+            return _error(status.HTTP_400_BAD_REQUEST, str(exc))
+        updated = await store.upsert_user(_apply_patch(user, patch))
+        return JSONResponse(content=_dump(updated, Context.RESOURCE_PATCH_RESPONSE))
+
+    @protected.delete("/Users/{resource_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def deactivate_user(resource_id: str, request: Request) -> Response:
+        store = _store(request)
+        if await store.get_user(resource_id) is None:
+            return _error(status.HTTP_404_NOT_FOUND, f"User {resource_id} not found")
+        await store.deactivate_user(resource_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @protected.get("/Users")
+    async def list_users(request: Request, filter: Optional[str] = None) -> Response:
+        users = await _store(request).list_users(filter)
+        listing: ListResponse[User] = ListResponse[User](
+            total_results=len(users),
+            start_index=1,
+            items_per_page=len(users),
+            resources=users or None,
+        )
+        return JSONResponse(content=_dump(listing, Context.RESOURCE_QUERY_RESPONSE))
+
+    @protected.post("/Groups", status_code=status.HTTP_201_CREATED)
+    async def create_group(request: Request) -> Response:
+        try:
+            group = await _parse(request, Group)
+        except ValidationError as exc:
+            return _error(status.HTTP_400_BAD_REQUEST, str(exc))
+        stored = await _store(request).upsert_group(group)
+        return JSONResponse(
+            status_code=status.HTTP_201_CREATED,
+            content=_dump(stored, Context.RESOURCE_CREATION_RESPONSE),
+        )
+
+    @protected.get("/Groups/{resource_id}")
+    async def get_group(resource_id: str, request: Request) -> Response:
+        group = await _store(request).get_group(resource_id)
+        if group is None:
+            return _error(status.HTTP_404_NOT_FOUND, f"Group {resource_id} not found")
+        return JSONResponse(content=_dump(group, Context.RESOURCE_QUERY_RESPONSE))
+
+    @protected.patch("/Groups/{resource_id}")
+    async def patch_group(resource_id: str, request: Request) -> Response:
+        store = _store(request)
+        group = await store.get_group(resource_id)
+        if group is None:
+            return _error(status.HTTP_404_NOT_FOUND, f"Group {resource_id} not found")
+        try:
+            patch = PatchOp[Group].model_validate(await request.json())
+        except ValidationError as exc:
+            return _error(status.HTTP_400_BAD_REQUEST, str(exc))
+        updated = await store.upsert_group(_apply_patch(group, patch))
+        return JSONResponse(content=_dump(updated, Context.RESOURCE_PATCH_RESPONSE))
+
+    @protected.delete("/Groups/{resource_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_group(resource_id: str, request: Request) -> Response:
+        store = _store(request)
+        if await store.get_group(resource_id) is None:
+            return _error(status.HTTP_404_NOT_FOUND, f"Group {resource_id} not found")
+        await store.delete_group(resource_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @protected.get("/Groups")
+    async def list_groups(request: Request, filter: Optional[str] = None) -> Response:
+        groups = await _store(request).list_groups(filter)
+        listing: ListResponse[Group] = ListResponse[Group](
+            total_results=len(groups),
+            start_index=1,
+            items_per_page=len(groups),
+            resources=groups or None,
+        )
+        return JSONResponse(content=_dump(listing, Context.RESOURCE_QUERY_RESPONSE))
+
+    router.include_router(protected)
+    router.include_router(_build_discovery_router())
     return router
