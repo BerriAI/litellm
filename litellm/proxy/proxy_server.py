@@ -6071,21 +6071,80 @@ class ProxyConfig:
                 str(e),
             )
 
-    async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
+    async def _get_model_cost_map_reload_config(
+        self, prisma_client: PrismaClient
+    ) -> Optional[dict]:
         """
-        Check if model cost map needs to be reloaded based on database configuration.
-        This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
+        Get model cost map reload configuration from either the database or config.yaml.
+        
+        The database configuration takes precedence over config.yaml (allows runtime updates via API).
+        If neither is configured, returns None.
+        
+        Returns:
+            dict with keys:
+                - interval_hours: int | None - hours between reloads
+                - force_reload: bool - whether to force a reload now
+            or None if no configuration is found anywhere.
         """
+        global general_settings
+        
+        # 1. Check database first (runtime/API-managed config takes precedence)
         try:
-            # Get model cost map reload configuration from database
             config_record = await get_config_param(
                 prisma_client, "model_cost_map_reload_config"
             )
+            if config_record is not None and config_record.param_value is not None:
+                db_config = config_record.param_value
+                if isinstance(db_config, str):
+                    import json
+                    db_config = json.loads(db_config)
+                verbose_proxy_logger.debug(
+                    "Using model_cost_map_reload_config from database: %s", db_config
+                )
+                return db_config
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Could not read model_cost_map_reload_config from database: %s", str(e)
+            )
+        
+        # 2. Fall back to config.yaml (general_settings.model_cost_map_reload_config)
+        if general_settings is not None:
+            yaml_config = general_settings.get("model_cost_map_reload_config")
+            if yaml_config is not None:
+                try:
+                    if isinstance(yaml_config, str):
+                        import json
+                        yaml_config = json.loads(yaml_config)
+                    verbose_proxy_logger.debug(
+                        "Using model_cost_map_reload_config from config.yaml: %s", yaml_config
+                    )
+                    return yaml_config
+                except Exception as e:
+                    verbose_proxy_logger.warning(
+                        "Failed to parse model_cost_map_reload_config from config.yaml: %s. "
+                        "Please ensure it is a valid dict or JSON string. Skipping.",
+                        str(e),
+                    )
+        
+        return None
 
-            if config_record is None or config_record.param_value is None:
+    async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
+        """
+        Check if model cost map needs to be reloaded based on configuration.
+        
+        Configuration is read from (in order of precedence):
+        1. Database (set via API endpoints like /schedule/model_cost_map_reload)
+        2. config.yaml (general_settings.model_cost_map_reload_config)
+        
+        This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
+        """
+        try:
+            # Get model cost map reload configuration from database or config.yaml
+            config = await self._get_model_cost_map_reload_config(prisma_client)
+
+            if config is None:
                 return  # No configuration found, skip reload
 
-            config = config_record.param_value
             interval_hours = config.get("interval_hours")
             force_reload = config.get("force_reload", False)
 
@@ -6151,30 +6210,42 @@ class ProxyConfig:
                 # Update pod's in-memory last reload time
                 last_model_cost_map_reload = current_time.isoformat()
 
-                # Clear force reload flag in database
-                await ConfigRepository(prisma_client).table.upsert(
-                    where={"param_name": "model_cost_map_reload_config"},
-                    data={
-                        "create": {
-                            "param_name": "model_cost_map_reload_config",
-                            "param_value": safe_dumps(
-                                {
-                                    "interval_hours": interval_hours,
-                                    "force_reload": False,
-                                }
-                            ),
-                        },
-                        "update": {
-                            "param_value": safe_dumps(
-                                {
-                                    "interval_hours": interval_hours,
-                                    "force_reload": False,
-                                }
-                            )
-                        },
-                    },
+                # Only write back to database if a DB record exists (not if config came from YAML)
+                db_config_record = await get_config_param(
+                    prisma_client, "model_cost_map_reload_config"
                 )
-                await invalidate_config_param("model_cost_map_reload_config")
+                if db_config_record is not None and db_config_record.param_value is not None:
+                    # Clear force reload flag in database
+                    await ConfigRepository(prisma_client).table.upsert(
+                        where={"param_name": "model_cost_map_reload_config"},
+                        data={
+                            "create": {
+                                "param_name": "model_cost_map_reload_config",
+                                "param_value": safe_dumps(
+                                    {
+                                        "interval_hours": interval_hours,
+                                        "force_reload": False,
+                                    }
+                                ),
+                            },
+                            "update": {
+                                "param_value": safe_dumps(
+                                    {
+                                        "interval_hours": interval_hours,
+                                        "force_reload": False,
+                                    }
+                                )
+                            },
+                        },
+                    )
+                    await invalidate_config_param("model_cost_map_reload_config")
+                    verbose_proxy_logger.info(
+                        "Model cost map reload config updated in database (force_reload cleared)."
+                    )
+                else:
+                    verbose_proxy_logger.debug(
+                        "Config came from config.yaml; not writing back to database."
+                    )
 
                 verbose_proxy_logger.info(
                     f"Model cost map reloaded successfully. Models count: {len(new_model_cost_map) if new_model_cost_map else 0}"

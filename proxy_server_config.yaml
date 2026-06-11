@@ -232,6 +232,23 @@ general_settings:
   # health_check_interval: 30
   # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
 
+  # Model Cost Map Reload Configuration
+  # Controls how often the proxy automatically fetches updated model pricing
+  # from the remote source (https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json).
+  # 
+  # This can also be configured via API:
+  #   POST /schedule/model_cost_map_reload?hours=24   # schedule periodic reload
+  #   DELETE /schedule/model_cost_map_reload           # cancel scheduled reload
+  #   POST /reload/model_cost_map                      # manual one-time reload
+  #
+  # API-managed config (stored in database) takes precedence over this YAML setting.
+  # If you want to disable remote pricing entirely, use the environment variable:
+  #   LITELLM_LOCAL_MODEL_COST_MAP=True
+  #
+  # model_cost_map_reload_config:
+  #   interval_hours: 24      # Reload prices every 24 hours (set to null to disable)
+  #   force_reload: false     # Set to true to trigger a one-time reload on next cycle
+
   pass_through_endpoints:
     - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
       target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
