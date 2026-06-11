@@ -174,9 +174,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
 
         data["adapter_id"] = adapter_id
 
-        verbose_proxy_logger.debug(
-            "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
-        )
+        verbose_proxy_logger.debug("Request received by LiteLLM:\n%s", data)
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
