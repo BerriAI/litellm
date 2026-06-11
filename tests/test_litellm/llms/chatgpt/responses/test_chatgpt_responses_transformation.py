@@ -14,11 +14,12 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+from litellm.llms.chatgpt.common_utils import CHATGPT_DEFAULT_INSTRUCTIONS
+from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
-from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 
 
 class TestChatGPTResponsesAPITransformation:
@@ -106,6 +107,77 @@ class TestChatGPTResponsesAPITransformation:
         assert request["stream"] is True
         assert "reasoning.encrypted_content" in request["include"]
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
+
+    def test_chatgpt_default_instructions_are_minimal(self):
+        assert (
+            CHATGPT_DEFAULT_INSTRUCTIONS
+            == "You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user's computer."
+        )
+
+    def test_chatgpt_prepends_default_instructions_to_request_instructions(self):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input="hi",
+            response_api_optional_request_params={
+                "instructions": "Follow the user request."
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert (
+            request["instructions"]
+            == f"{CHATGPT_DEFAULT_INSTRUCTIONS}\n\nFollow the user request."
+        )
+
+    def test_chatgpt_does_not_duplicate_default_instruction_prefix(self):
+        existing_instructions = (
+            f"{CHATGPT_DEFAULT_INSTRUCTIONS}\n\nFollow the user request."
+        )
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input="hi",
+            response_api_optional_request_params={
+                "instructions": existing_instructions
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["instructions"] == existing_instructions
+
+    def test_chatgpt_does_not_duplicate_env_override_instruction_prefix(self):
+        existing_instructions = "custom default\n\nFollow the user request."
+        with patch.dict(os.environ, {"CHATGPT_DEFAULT_INSTRUCTIONS": "custom default"}):
+            config = ChatGPTResponsesAPIConfig()
+            request = config.transform_responses_api_request(
+                model="chatgpt/gpt-5.3-codex",
+                input="hi",
+                response_api_optional_request_params={
+                    "instructions": existing_instructions
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+
+        assert request["instructions"] == existing_instructions
+
+    def test_chatgpt_prepends_env_override_when_missing_from_request(self):
+        with patch.dict(os.environ, {"CHATGPT_DEFAULT_INSTRUCTIONS": "custom default"}):
+            config = ChatGPTResponsesAPIConfig()
+            request = config.transform_responses_api_request(
+                model="chatgpt/gpt-5.3-codex",
+                input="hi",
+                response_api_optional_request_params={
+                    "instructions": "Follow the user request."
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+
+        assert request["instructions"] == "custom default\n\nFollow the user request."
 
     @pytest.mark.parametrize(
         "model_name",
