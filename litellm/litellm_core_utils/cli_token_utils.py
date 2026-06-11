@@ -31,6 +31,17 @@ def load_cli_token() -> Optional[dict]:
         return None
 
 
+def get_stored_base_url() -> Optional[str]:
+    """Return the proxy base URL recorded by the last `lite login`, if any."""
+    token_data = load_cli_token()
+    if not token_data:
+        return None
+    base_url = token_data.get("base_url")
+    if isinstance(base_url, str) and base_url:
+        return base_url
+    return None
+
+
 def get_litellm_gateway_api_key(
     expected_base_url: Optional[str] = None,
 ) -> Optional[str]:

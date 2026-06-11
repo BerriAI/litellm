@@ -393,6 +393,65 @@ class TestAgentCommands:
         assert "LITELLM_PROXY_API_KEY" in result.output
         mock_run.assert_not_called()
 
+    def test_non_interactive_without_key_mentions_url_knobs_when_url_defaulted(self):
+        with (
+            patch(f"{AGENTS_MODULE}._is_interactive", return_value=False),
+            patch(f"{AGENTS_MODULE}.run_agent") as mock_run,
+        ):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                [],
+                obj={
+                    "base_url": "http://localhost:4000",
+                    "base_url_is_default": True,
+                    "api_key": None,
+                },
+            )
+        assert result.exit_code != 0
+        assert "LITELLM_PROXY_API_KEY" in result.output
+        assert "LITELLM_PROXY_URL" in result.output
+        assert "http://localhost:4000" in result.output
+        mock_run.assert_not_called()
+
+    def test_base_url_chosen_during_login_is_used_for_launch(self):
+        captured = {}
+
+        @click.command()
+        @click.pass_context
+        def fake_login(ctx):
+            ctx.obj["base_url"] = "https://llm.acme.com"
+            ctx.obj["base_url_is_default"] = False
+
+        with (
+            patch(f"{AGENTS_MODULE}._is_interactive", return_value=True),
+            patch(f"{AGENTS_MODULE}.login", fake_login),
+            patch(
+                f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login"
+            ) as mock_get,
+            patch(
+                f"{AGENTS_MODULE}.run_agent",
+                side_effect=lambda base_url, api_key, command, **k: captured.update(
+                    base_url=base_url
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                [],
+                obj={
+                    "base_url": "http://localhost:4000",
+                    "base_url_is_default": True,
+                    "api_key": None,
+                },
+            )
+
+        assert result.exit_code == 0, result.output
+        assert captured["base_url"] == "https://llm.acme.com"
+        assert "routing Claude Code through proxy at https://llm.acme.com" in (
+            result.output
+        )
+        mock_get.assert_called_once_with(expected_base_url="https://llm.acme.com")
+
     def test_interactive_without_key_logs_in_then_launches(self):
         captured = {}
 

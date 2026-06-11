@@ -213,20 +213,25 @@ def _is_interactive() -> bool:
 
 
 def _resolve_api_key(ctx: click.Context) -> str:
-    base_url = ctx.obj["base_url"]
     api_key = ctx.obj.get("api_key")
     if api_key:
         return api_key
 
     if not _is_interactive():
-        raise click.ClickException(
+        message = (
             "No LiteLLM key found. Set LITELLM_PROXY_API_KEY (or pass --api-key) for "
             "non-interactive use, or run `lite login` from a terminal."
         )
+        if ctx.obj.get("base_url_is_default"):
+            message += (
+                f" If your proxy is not at {ctx.obj['base_url']}, also set "
+                "LITELLM_PROXY_URL (or pass --base-url)."
+            )
+        raise click.ClickException(message)
 
     click.echo("No LiteLLM credentials found; starting login...")
     ctx.invoke(login)
-    api_key = get_stored_api_key(expected_base_url=base_url)
+    api_key = get_stored_api_key(expected_base_url=ctx.obj["base_url"])
     if not api_key:
         raise click.ClickException(
             "Login did not produce an API key; cannot start the agent."
@@ -240,9 +245,9 @@ _SKIP_VERIFY_HELP = "Skip the pre-launch key check against the proxy."
 def _launch(
     ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool
 ) -> None:
-    base_url = ctx.obj["base_url"]
     started_interactive = _is_interactive()
     api_key = _resolve_api_key(ctx)
+    base_url = ctx.obj["base_url"]
 
     display_name, _ = agent_profile(binary)
     click.echo(

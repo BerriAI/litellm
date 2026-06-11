@@ -463,6 +463,114 @@ class TestLoginCommand:
             assert "❌ Authentication failed: Invalid value" in result.output
 
 
+class TestLoginBaseUrlPrompt:
+    """Login prompts for the proxy URL when it was never chosen by the user"""
+
+    AUTH = "litellm.proxy.client.cli.commands.auth"
+
+    def setup_method(self):
+        self.runner = CliRunner()
+
+    def _ready_response(self):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "ready",
+            "key": "test.jwt",
+            "user_id": "test-user",
+            "team_id": None,
+            "teams": [],
+        }
+        return mock_response
+
+    def _invoke_login(self, obj, input=None, can_prompt=True, post_side_effect=None):
+        post_kwargs = (
+            {"side_effect": post_side_effect}
+            if post_side_effect
+            else {"return_value": _mock_cli_sso_start_response()}
+        )
+        with (
+            patch(f"{self.AUTH}._can_prompt_for_input", return_value=can_prompt),
+            patch("webbrowser.open") as mock_browser,
+            patch("requests.post", **post_kwargs),
+            patch("requests.get", return_value=self._ready_response()),
+            patch(f"{self.AUTH}.save_token") as mock_save,
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(login, obj=obj, input=input)
+        return result, mock_browser, mock_save
+
+    def test_prompts_and_uses_entered_url(self):
+        obj = {"base_url": "http://localhost:4000", "base_url_is_default": True}
+        result, mock_browser, mock_save = self._invoke_login(
+            obj, input="https://llm.acme.com\n"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "LiteLLM proxy URL [http://localhost:4000]:" in result.output
+        assert "https://llm.acme.com/sso/key/generate" in mock_browser.call_args[0][0]
+        assert mock_save.call_args[0][0]["base_url"] == "https://llm.acme.com"
+        assert obj["base_url"] == "https://llm.acme.com"
+        assert obj["base_url_is_default"] is False
+
+    def test_prompt_accepting_default_keeps_localhost(self):
+        obj = {"base_url": "http://localhost:4000", "base_url_is_default": True}
+        result, mock_browser, _ = self._invoke_login(obj, input="\n")
+
+        assert result.exit_code == 0, result.output
+        assert "http://localhost:4000/sso/key/generate" in mock_browser.call_args[0][0]
+
+    def test_entered_url_trailing_slash_is_stripped(self):
+        obj = {"base_url": "http://localhost:4000", "base_url_is_default": True}
+        result, mock_browser, _ = self._invoke_login(
+            obj, input="https://llm.acme.com/\n"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert obj["base_url"] == "https://llm.acme.com"
+        assert "https://llm.acme.com/sso/key/generate" in mock_browser.call_args[0][0]
+
+    def test_url_without_scheme_reprompts(self):
+        obj = {"base_url": "http://localhost:4000", "base_url_is_default": True}
+        result, mock_browser, _ = self._invoke_login(
+            obj, input="llm.acme.com\nhttps://llm.acme.com\n"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "must start with http:// or https://" in result.output
+        assert "https://llm.acme.com/sso/key/generate" in mock_browser.call_args[0][0]
+
+    def test_no_prompt_when_url_was_configured(self):
+        obj = {"base_url": "https://llm.acme.com", "base_url_is_default": False}
+        result, mock_browser, _ = self._invoke_login(obj)
+
+        assert result.exit_code == 0, result.output
+        assert "LiteLLM proxy URL" not in result.output
+        assert "https://llm.acme.com/sso/key/generate" in mock_browser.call_args[0][0]
+
+    def test_no_prompt_when_not_interactive(self):
+        obj = {"base_url": "http://localhost:4000", "base_url_is_default": True}
+        result, mock_browser, _ = self._invoke_login(obj, can_prompt=False)
+
+        assert result.exit_code == 0, result.output
+        assert "LiteLLM proxy URL" not in result.output
+        assert "http://localhost:4000/sso/key/generate" in mock_browser.call_args[0][0]
+
+    def test_unreachable_proxy_names_url_and_override_knobs(self):
+        import requests
+
+        obj = {"base_url": "http://localhost:4000", "base_url_is_default": False}
+        result, _, mock_save = self._invoke_login(
+            obj, post_side_effect=requests.ConnectionError("connection refused")
+        )
+
+        assert result.exit_code != 0
+        assert "http://localhost:4000" in result.output
+        assert "--base-url" in result.output
+        assert "LITELLM_PROXY_URL" in result.output
+        mock_save.assert_not_called()
+
+
 class TestLogoutCommand:
     """Test logout CLI command"""
 
