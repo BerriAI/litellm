@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
 import { Form } from "antd";
 import { ProjectBaseForm, ProjectFormValues } from "./ProjectBaseForm";
 

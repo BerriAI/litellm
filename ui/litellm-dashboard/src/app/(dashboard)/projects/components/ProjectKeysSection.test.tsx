@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { renderWithProviders, screen } from "../../../../../tests/test-utils";
 import { ProjectKeysSection } from "./ProjectKeysSection";
 
 const mockUseKeys = vi.fn();
