@@ -5,7 +5,7 @@
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
-	install-dev install-proxy-dev install-test-deps \
+	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
 # Default target
@@ -17,6 +17,7 @@ help:
 	@echo "  make install-proxy-dev-ci - Install proxy dev dependencies (CI-compatible)"
 	@echo "  make install-test-deps  - Install the full local test environment"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
+	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
 	@echo "  make format             - Apply Black code formatting"
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
 	@echo "  make lint               - Run all linting (Ruff, MyPy, Black check, circular imports, import safety)"
@@ -67,6 +68,11 @@ install-test-deps: install-proxy-dev
 
 install-helm-unittest:
 	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"
+
+# Install git hooks that enforce Conventional Commits and Conventional Branches.
+# Opt-in: not chained into install-dev.
+install-hooks:
+	./scripts/install_git_hooks.sh
 
 # Formatting
 format: install-dev
