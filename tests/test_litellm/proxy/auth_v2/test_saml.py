@@ -150,6 +150,9 @@ def saml_env(tmp_path: Path) -> SamlEnv:
         sp_key_file=sp_key,
         sp_cert_file=sp_cert,
         xmlsec_binary=xmlsec1,
+        # this harness mints IdP-initiated (unsolicited) responses; pin the config
+        # explicitly so the suite is independent of the allow_unsolicited default
+        allow_unsolicited=True,
     )
     return SamlEnv(config=config, idp=idp)
 
@@ -299,7 +302,10 @@ def test_acs_rejects_garbage_response(saml_env):
     assert store._users == {}
 
 
-def test_acs_redirects_to_safe_relay_state(saml_env):
+def test_acs_ignores_untrusted_form_relay_state(saml_env):
+    # the redirect target is bound server-side to the originating AuthnRequest, so a
+    # client-supplied form RelayState on an (unsolicited) response is NOT trusted and
+    # the ACS falls back to default_redirect_path
     app, _ = _build_app(saml_env)
     client = TestClient(app)
     acs = client.post(
@@ -308,10 +314,10 @@ def test_acs_redirects_to_safe_relay_state(saml_env):
         follow_redirects=False,
     )
     assert acs.status_code == 303
-    assert acs.headers["location"] == "/dashboard"
+    assert acs.headers["location"] == "/"
 
 
-def test_acs_rejects_open_redirect_relay_state(saml_env):
+def test_acs_never_redirects_to_attacker_relay_state(saml_env):
     app, _ = _build_app(saml_env)
     client = TestClient(app)
     acs = client.post(
@@ -323,7 +329,7 @@ def test_acs_rejects_open_redirect_relay_state(saml_env):
         follow_redirects=False,
     )
     assert acs.status_code == 303
-    # unsafe RelayState falls back to default_redirect_path, never the attacker URL
+    assert "evil.example.com" not in acs.headers["location"]
     assert acs.headers["location"] == "/"
 
 
@@ -415,3 +421,38 @@ def test_metadata_source_classifies_input(metadata, expected_key):
     from litellm.proxy.auth_v2.saml import _metadata_source
 
     assert expected_key in _metadata_source(metadata)
+
+
+def test_acs_session_cookie_is_secure(saml_env):
+    app, _ = _build_app(saml_env)
+    client = TestClient(app)
+    acs = client.post(
+        "/auth/saml/acs",
+        data={"SAMLResponse": saml_env.mint_response()},
+        follow_redirects=False,
+    )
+    assert "saml_session" in acs.cookies
+    assert "secure" in acs.headers["set-cookie"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# SamlSessionStore TTL + size eviction (no xmlsec1 needed)
+# --------------------------------------------------------------------------- #
+
+
+def test_session_store_expires_entries():
+    from litellm.proxy.auth_v2.saml import SamlSessionStore
+
+    store = SamlSessionStore(ttl_seconds=0)
+    session_id = store.create_session({"name_id": "alice@example.com"})
+    # ttl of 0 means the entry is already past its expiry on the next read
+    assert store.get(session_id) is None
+
+
+def test_session_store_evicts_when_over_capacity():
+    from litellm.proxy.auth_v2.saml import SamlSessionStore
+
+    store = SamlSessionStore(max_size=3)
+    ids = [store.create_session({"name_id": f"user-{i}"}) for i in range(5)]
+    live = [sid for sid in ids if store.get(sid) is not None]
+    assert len(live) <= 3

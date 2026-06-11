@@ -189,3 +189,86 @@ def test_scim_requires_scim_write_scope():
     response = underscoped.get("/scim/v2/Users")
     assert response.status_code == 403
     assert "insufficient_scope" in response.headers.get("WWW-Authenticate", "")
+
+
+# --------------------------------------------------------------------------- #
+# Discovery endpoints are public (RFC 7644); Users/Groups stay guarded
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "path", ["/ServiceProviderConfig", "/ResourceTypes", "/Schemas"]
+)
+def test_discovery_endpoints_are_public(path):
+    # no credential at all -> still 200 (provisioning clients negotiate before auth)
+    unauth = TestClient(_app())
+    assert unauth.get(f"/scim/v2{path}").status_code == 200
+
+
+def test_users_endpoint_is_not_public():
+    unauth = TestClient(_app())
+    assert unauth.get("/scim/v2/Users").status_code == 401
+
+
+# --------------------------------------------------------------------------- #
+# DELETE on a missing resource returns a SCIM 404 Error, not 204
+# --------------------------------------------------------------------------- #
+
+
+def test_delete_missing_user_returns_scim_404(client):
+    response = client.delete("/scim/v2/Users/no-such-user")
+    assert response.status_code == 404
+    body = response.json()
+    assert body["schemas"] == [ERROR_SCHEMA]
+    assert body["status"] == "404"
+
+
+def test_delete_missing_group_returns_scim_404(client):
+    response = client.delete("/scim/v2/Groups/no-such-group")
+    assert response.status_code == 404
+    body = response.json()
+    assert body["schemas"] == [ERROR_SCHEMA]
+    assert body["status"] == "404"
+
+
+def test_second_delete_of_group_returns_404(client):
+    group_id = client.post(
+        "/scim/v2/Groups",
+        json={"schemas": [GROUP_SCHEMA], "displayName": "Temp"},
+    ).json()["id"]
+    assert client.delete(f"/scim/v2/Groups/{group_id}").status_code == 204
+    assert client.delete(f"/scim/v2/Groups/{group_id}").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# PATCH supports nested dotted paths; filter paths are rejected
+# --------------------------------------------------------------------------- #
+
+
+def test_patch_nested_path_sets_subattribute(client):
+    user_id = _create_user(client).json()["id"]
+    response = client.patch(
+        f"/scim/v2/Users/{user_id}",
+        json={
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "replace", "path": "name.givenName", "value": "Ada"}],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["name"]["givenName"] == "Ada"
+    assert client.get(f"/scim/v2/Users/{user_id}").json()["name"]["givenName"] == "Ada"
+
+
+def test_patch_filter_path_is_rejected(client):
+    user_id = _create_user(client).json()["id"]
+    response = client.patch(
+        f"/scim/v2/Users/{user_id}",
+        json={
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [
+                {"op": "replace", "path": 'emails[type eq "work"].value', "value": "x"}
+            ],
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["schemas"] == [ERROR_SCHEMA]

@@ -9,11 +9,13 @@ import pytest
 from litellm.proxy.auth_v2.authenticators import (
     ApiKeyAuthenticator,
     HttpAuthenticator,
+    InMemoryBasicAuthStore,
     JwtVerifier,
     MutualTlsAuthenticator,
     OAuth2Authenticator,
     OidcAuthenticator,
     build_authenticators,
+    hash_basic_password,
 )
 from litellm.proxy.auth_v2.config import (
     ApiKeySchemeConfig,
@@ -22,6 +24,7 @@ from litellm.proxy.auth_v2.config import (
     MutualTlsConfig,
     OAuth2IntrospectionConfig,
     OidcProviderConfig,
+    TrustedProxyConfig,
 )
 from litellm.proxy.auth_v2.errors import AuthError
 from litellm.proxy.auth_v2.models import AuthMethod, SecuritySchemeType
@@ -121,12 +124,16 @@ async def test_api_key_authenticator_returns_none_when_absent():
 # --------------------------------------------------------------------------- #
 
 
-def _http_auth(public_key: Any, *, basic: HttpBasicConfig = None) -> HttpAuthenticator:
+def _http_auth(
+    public_key: Any, *, basic: HttpBasicConfig = None, basic_verifier=None
+) -> HttpAuthenticator:
     verifier = JwtVerifier(
         OidcProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
         jwks_client=FakeJwksClient(public_key),
     )
-    return HttpAuthenticator(basic or HttpBasicConfig(), [verifier])
+    return HttpAuthenticator(
+        basic or HttpBasicConfig(), [verifier], basic_verifier=basic_verifier
+    )
 
 
 async def test_http_bearer_valid_token_resolves_credential(rsa_keypair, token_factory):
@@ -167,15 +174,59 @@ async def test_http_basic_disabled_ignores_basic_scheme(rsa_keypair):
     assert await auth.authenticate(request) is None
 
 
-async def test_http_basic_enabled_decodes_username(rsa_keypair):
+def _basic_store() -> InMemoryBasicAuthStore:
+    return InMemoryBasicAuthStore({"alice": hash_basic_password("supersecret")})
+
+
+async def test_http_basic_verifies_correct_credentials(rsa_keypair):
     _, public_key = rsa_keypair
-    auth = _http_auth(public_key, basic=HttpBasicConfig(enabled=True))
+    auth = _http_auth(
+        public_key, basic=HttpBasicConfig(enabled=True), basic_verifier=_basic_store()
+    )
     creds = base64.b64encode(b"alice:supersecret").decode()
     request = make_request(headers={"authorization": f"Basic {creds}"})
     credential = await auth.authenticate(request)
     assert credential is not None
     assert credential.method == AuthMethod.HTTP_BASIC
     assert credential.subject == "alice"
+    # the password must never be carried on the credential (leak regression)
+    assert "_basic_password" not in credential.claims
+    assert "supersecret" not in str(credential.claims)
+
+
+async def test_http_basic_wrong_password_rejected(rsa_keypair):
+    _, public_key = rsa_keypair
+    auth = _http_auth(
+        public_key, basic=HttpBasicConfig(enabled=True), basic_verifier=_basic_store()
+    )
+    creds = base64.b64encode(b"alice:WRONG").decode()
+    request = make_request(headers={"authorization": f"Basic {creds}"})
+    with pytest.raises(AuthError) as exc:
+        await auth.authenticate(request)
+    assert exc.value.status_code == 401
+
+
+async def test_http_basic_unknown_user_rejected(rsa_keypair):
+    _, public_key = rsa_keypair
+    auth = _http_auth(
+        public_key, basic=HttpBasicConfig(enabled=True), basic_verifier=_basic_store()
+    )
+    creds = base64.b64encode(b"mallory:supersecret").decode()
+    request = make_request(headers={"authorization": f"Basic {creds}"})
+    with pytest.raises(AuthError) as exc:
+        await auth.authenticate(request)
+    assert exc.value.status_code == 401
+
+
+async def test_http_basic_without_verifier_fails_closed(rsa_keypair):
+    # basic enabled but no verifier wired -> must never accept (fail closed)
+    _, public_key = rsa_keypair
+    auth = _http_auth(public_key, basic=HttpBasicConfig(enabled=True))
+    creds = base64.b64encode(b"alice:supersecret").decode()
+    request = make_request(headers={"authorization": f"Basic {creds}"})
+    with pytest.raises(AuthError) as exc:
+        await auth.authenticate(request)
+    assert exc.value.status_code == 401
 
 
 async def test_http_basic_malformed_payload_raises(rsa_keypair):
@@ -193,6 +244,19 @@ def test_http_challenge_advertises_basic_only_when_enabled(rsa_keypair):
     enabled = _http_auth(public_key, basic=HttpBasicConfig(enabled=True))
     assert "Basic" in enabled.challenge()
     assert "Bearer" in enabled.challenge()
+
+
+def test_hash_basic_password_is_salted_and_verifiable():
+    # the stored hash is never the plaintext, and re-hashing yields a fresh salt
+    first = hash_basic_password("supersecret")
+    second = hash_basic_password("supersecret")
+    assert "supersecret" not in first
+    assert first != second  # random salt per call
+
+    store = InMemoryBasicAuthStore({"alice": first})
+    assert store.verify("alice", "supersecret")
+    assert not store.verify("alice", "supersecre")
+    assert not store.verify("unknown", "supersecret")
 
 
 # --------------------------------------------------------------------------- #
@@ -345,10 +409,16 @@ async def test_oidc_unknown_issuer_raises(rsa_keypair, token_factory):
 # --------------------------------------------------------------------------- #
 
 
-async def test_mtls_reads_forwarded_subject_header():
-    auth = MutualTlsAuthenticator(
-        MutualTlsConfig(enabled=True, forwarded_subject_header="x-client-dn")
-    )
+# make_request's default peer is 203.0.113.7; trust that /24 for the proxy path
+_TRUSTED_NET = TrustedProxyConfig(trusted_proxy_cidrs=["203.0.113.0/24"])
+
+
+def _mtls(config: MutualTlsConfig, network: TrustedProxyConfig = None):
+    return MutualTlsAuthenticator(config, network or _TRUSTED_NET)
+
+
+async def test_mtls_reads_forwarded_subject_header_from_trusted_peer():
+    auth = _mtls(MutualTlsConfig(enabled=True, forwarded_subject_header="x-client-dn"))
     request = make_request(headers={"x-client-dn": "CN=svc-a,O=Co,C=US"})
     credential = await auth.authenticate(request)
     assert credential is not None
@@ -357,15 +427,22 @@ async def test_mtls_reads_forwarded_subject_header():
     assert credential.client_certificate.subject_dn == "CN=svc-a,O=Co,C=US"
 
 
-async def test_mtls_forwarded_header_absent_returns_none():
-    auth = MutualTlsAuthenticator(
-        MutualTlsConfig(enabled=True, forwarded_subject_header="x-client-dn")
+async def test_mtls_forwarded_header_from_untrusted_peer_is_ignored():
+    # spoofing guard: a client that is not a trusted proxy cannot forge the DN header
+    auth = _mtls(MutualTlsConfig(enabled=True, forwarded_subject_header="x-client-dn"))
+    request = make_request(
+        headers={"x-client-dn": "CN=attacker"}, client=("8.8.8.8", 4444)
     )
+    assert await auth.authenticate(request) is None
+
+
+async def test_mtls_forwarded_header_absent_returns_none():
+    auth = _mtls(MutualTlsConfig(enabled=True, forwarded_subject_header="x-client-dn"))
     assert await auth.authenticate(make_request()) is None
 
 
 async def test_mtls_reads_asgi_tls_extension():
-    auth = MutualTlsAuthenticator(MutualTlsConfig(enabled=True))
+    auth = _mtls(MutualTlsConfig(enabled=True))
     request = make_request(
         scope_extra={"extensions": {"tls": {"client_cert_name": "CN=from-asgi"}}}
     )
@@ -375,7 +452,7 @@ async def test_mtls_reads_asgi_tls_extension():
 
 
 async def test_mtls_no_cert_returns_none():
-    auth = MutualTlsAuthenticator(MutualTlsConfig(enabled=True))
+    auth = _mtls(MutualTlsConfig(enabled=True))
     assert await auth.authenticate(make_request()) is None
 
 
