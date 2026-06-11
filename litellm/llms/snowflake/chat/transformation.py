@@ -1,23 +1,25 @@
 """
 Snowflake Cortex REST API — Chat Transformation
 
-Routes to the native OpenAI-compatible endpoint:
-  POST /api/v2/cortex/v1/chat/completions
-
-Previously used the legacy endpoint /api/v2/cortex/inference:complete which
-required Snowflake-specific payload transformations and did not support the
-full OpenAI parameter surface. This version uses the native endpoint which
-accepts standard OpenAI chat completions format directly.
+Routes to native Cortex REST API endpoints based on model:
+  - Claude models → POST /api/v2/cortex/v1/messages (Anthropic format)
+  - All other models → POST /api/v2/cortex/v1/chat/completions (OpenAI format)
 
 Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+import json
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import (
+    Choices,
+    Message,
+    ModelResponse,
+    Usage,
+)
 
 from ...openai_like.chat.transformation import OpenAIGPTConfig
 from ..utils import SnowflakeBaseConfig
@@ -29,18 +31,27 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+ANTHROPIC_VERSION = "2023-06-01"
+
+_CLAUDE_MODEL_PREFIXES = (
+    "claude-",
+    "claude_",
+)
+
+
+def _is_claude_model(model: str) -> bool:
+    """Return True if model name (after stripping snowflake/ prefix) is a Claude model."""
+    name = model.lower().removeprefix("snowflake/")
+    return any(name.startswith(p) for p in _CLAUDE_MODEL_PREFIXES)
+
 
 class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     """
-    Snowflake Cortex REST API — OpenAI-compatible endpoint.
+    Snowflake Cortex REST API — unified provider.
 
-    Endpoint: POST /api/v2/cortex/v1/chat/completions
-
-    Supports all Snowflake Cortex models (Llama, Mistral, DeepSeek, Snowflake
-    Arctic, and Claude series) via the OpenAI-compatible interface.
-
-    For Claude-specific features (thinking, cache_control, extended context),
-    use SnowflakeCortexAnthropicConfig which routes to /api/v2/cortex/v1/messages.
+    Auto-routes based on model name:
+      - Claude models → /api/v2/cortex/v1/messages (Anthropic Messages format)
+      - All others   → /api/v2/cortex/v1/chat/completions (OpenAI format)
 
     Auth:
         PAT:  api_key="pat/<token>"  →  X-Snowflake-Authorization-Token-Type: PROGRAMMATIC_ACCESS_TOKEN
@@ -52,16 +63,18 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
+        params = [
             "temperature",
             "max_tokens",
             "max_completion_tokens",
             "top_p",
             "stream",
-            "response_format",
             "tools",
             "tool_choice",
         ]
+        if _is_claude_model(model):
+            params.append("thinking")
+        return params
 
     def get_complete_url(
         self,
@@ -72,20 +85,162 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        """
-        Returns the native OpenAI-compatible Cortex REST API endpoint.
-
-        _get_api_base normalizes api_base to:
-            https://{account}.snowflakecomputing.com/api/v2
-
-        We append:
-            /cortex/v1/chat/completions
-
-        Resulting in:
-            https://{account}.snowflakecomputing.com/api/v2/cortex/v1/chat/completions
-        """
         api_base = self._get_api_base(api_base, optional_params)
+        if _is_claude_model(model):
+            return f"{api_base}/cortex/v1/messages"
         return f"{api_base}/cortex/v1/chat/completions"
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        headers = super().validate_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        if _is_claude_model(model):
+            headers["anthropic-version"] = ANTHROPIC_VERSION
+        return headers
+
+    def _transform_tools_to_anthropic(self, tools: List[Dict]) -> List[Dict]:
+        """
+        Convert tools from OpenAI format to Anthropic format.
+
+        OpenAI: {"type": "function", "function": {"name": ..., "parameters": {...}}}
+        Anthropic: {"name": ..., "description": ..., "input_schema": {...}}
+        """
+        anthropic_tools = []
+        for tool in tools:
+            if tool.get("type") == "function" and "function" in tool:
+                func = tool["function"]
+                anthropic_tool: Dict[str, Any] = {
+                    "name": func.get("name", ""),
+                }
+                if "description" in func:
+                    anthropic_tool["description"] = func["description"]
+                if "parameters" in func:
+                    anthropic_tool["input_schema"] = func["parameters"]
+                else:
+                    anthropic_tool["input_schema"] = {
+                        "type": "object",
+                        "properties": {},
+                    }
+                anthropic_tools.append(anthropic_tool)
+            else:
+                anthropic_tools.append(tool)
+        return anthropic_tools
+
+    def _extract_system_and_messages(
+        self, messages: List[AllMessageValues]
+    ) -> tuple[Optional[Union[str, List[Dict]]], List[Dict]]:
+        """
+        Split messages into system prompt and conversation turns for Anthropic format.
+
+        - system messages → top-level system param
+        - assistant messages with tool_calls → tool_use content blocks
+        - tool role messages → user role with tool_result content blocks
+        """
+        system: Optional[Union[str, List[Dict]]] = None
+        conversation: List[Dict] = []
+
+        for msg in messages:
+            if isinstance(msg, dict):
+                role = msg.get("role", "")
+                content: Any = msg.get("content", "")
+            else:
+                role = getattr(msg, "role", "")
+                content = getattr(msg, "content", "")
+
+            if role == "system":
+                system = content
+            elif role == "assistant":
+                tool_calls = (
+                    msg.get("tool_calls")
+                    if isinstance(msg, dict)
+                    else getattr(msg, "tool_calls", None)
+                )
+                if tool_calls:  # type: ignore[truthy-bool]
+                    content_blocks: List[Dict[str, Any]] = []
+                    if content:
+                        content_blocks.append({"type": "text", "text": content})
+                    for tc in tool_calls:  # type: ignore[attr-defined]
+                        func = (
+                            tc.get("function", {})
+                            if isinstance(tc, dict)
+                            else getattr(tc, "function", {})
+                        )
+                        tc_id = (
+                            tc.get("id", "")
+                            if isinstance(tc, dict)
+                            else getattr(tc, "id", "")
+                        )
+                        func_name = (
+                            func.get("name", "")
+                            if isinstance(func, dict)
+                            else getattr(func, "name", "")
+                        )
+                        func_args = (
+                            func.get("arguments", "{}")
+                            if isinstance(func, dict)
+                            else getattr(func, "arguments", "{}")
+                        )
+                        try:
+                            input_data = (
+                                json.loads(func_args)
+                                if isinstance(func_args, str)
+                                else func_args
+                            )
+                        except (json.JSONDecodeError, TypeError):
+                            input_data = {}
+                        content_blocks.append(
+                            {
+                                "type": "tool_use",
+                                "id": tc_id,
+                                "name": func_name,
+                                "input": input_data,
+                            }
+                        )
+                    conversation.append(
+                        {"role": "assistant", "content": content_blocks}
+                    )
+                else:
+                    conversation.append({"role": "assistant", "content": content})
+            elif role == "tool":
+                tool_call_id = (
+                    msg.get("tool_call_id", "")
+                    if isinstance(msg, dict)
+                    else getattr(msg, "tool_call_id", "")
+                )
+                tool_content = (
+                    content if isinstance(content, str) else json.dumps(content)
+                )
+                conversation.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_call_id,
+                                "content": tool_content,
+                            }
+                        ],
+                    }
+                )
+            else:
+                conversation.append({"role": role, "content": content})
+
+        return system, conversation
 
     def transform_request(
         self,
@@ -95,15 +250,26 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        """
-        Transform to OpenAI chat completions format.
-
-        The native /chat/completions endpoint accepts standard OpenAI format
-        directly — no Snowflake-specific tool_spec transformation required.
-        """
         stream: bool = optional_params.pop("stream", False) or False
         extra_body = optional_params.pop("extra_body", {})
 
+        if _is_claude_model(model):
+            return self._transform_request_anthropic(
+                model, messages, optional_params, stream, extra_body
+            )
+        return self._transform_request_openai(
+            model, messages, optional_params, stream, extra_body
+        )
+
+    def _transform_request_openai(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        stream: bool,
+        extra_body: dict,
+    ) -> dict:
+        """OpenAI format for /chat/completions endpoint."""
         max_tokens = optional_params.pop("max_tokens", None)
         max_completion_tokens = optional_params.pop("max_completion_tokens", None)
         resolved_max = max_completion_tokens or max_tokens
@@ -121,6 +287,42 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         return body
 
+    def _transform_request_anthropic(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        stream: bool,
+        extra_body: dict,
+    ) -> dict:
+        """Anthropic Messages format for /messages endpoint."""
+        system, conversation = self._extract_system_and_messages(messages)
+
+        if "tools" in optional_params:
+            optional_params["tools"] = self._transform_tools_to_anthropic(
+                optional_params["tools"]
+            )
+
+        optional_params.pop("max_completion_tokens", None)
+
+        model_name = model.removeprefix("snowflake/")
+
+        body: Dict[str, Any] = {
+            "model": model_name,
+            "messages": conversation,
+            "stream": stream,
+            **optional_params,
+            **extra_body,
+        }
+
+        if system is not None:
+            body["system"] = system
+
+        if "max_tokens" not in body:
+            body["max_tokens"] = 1024
+
+        return body
+
     def transform_response(
         self,
         model: str,
@@ -135,12 +337,24 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        """
-        Transform from standard OpenAI chat completions response.
+        if _is_claude_model(model):
+            return self._transform_response_anthropic(
+                model, raw_response, model_response, logging_obj, request_data, messages
+            )
+        return self._transform_response_openai(
+            model, raw_response, model_response, logging_obj, request_data, messages
+        )
 
-        The native endpoint returns standard OpenAI format — no content_list
-        transformation required.
-        """
+    def _transform_response_openai(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+    ) -> ModelResponse:
+        """Parse standard OpenAI chat completions response."""
         response_json = raw_response.json()
 
         logging_obj.post_call(
@@ -157,3 +371,78 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             returned_response._hidden_params["model"] = model
 
         return returned_response
+
+    def _transform_response_anthropic(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+    ) -> ModelResponse:
+        """Parse Anthropic Messages response into OpenAI format."""
+        response_json = raw_response.json()
+
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response=response_json,
+            additional_args={"complete_input_dict": request_data},
+        )
+
+        text_content = ""
+        tool_calls = []
+
+        for block in response_json.get("content", []):
+            if block.get("type") == "text":
+                text_content += block.get("text", "")
+            elif block.get("type") == "tool_use":
+                tool_calls.append(
+                    {
+                        "id": block.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name", ""),
+                            "arguments": json.dumps(block.get("input", {})),
+                        },
+                    }
+                )
+
+        _stop_reason_map = {
+            "end_turn": "stop",
+            "max_tokens": "length",
+            "tool_use": "tool_calls",
+            "stop_sequence": "stop",
+        }
+        finish_reason = _stop_reason_map.get(
+            response_json.get("stop_reason", "end_turn"), "stop"
+        )
+
+        message = Message(content=text_content or None, role="assistant")
+        if tool_calls:
+            message.tool_calls = tool_calls  # type: ignore
+
+        choice = Choices(
+            finish_reason=finish_reason,
+            index=0,
+            message=message,
+        )
+
+        usage_data = response_json.get("usage", {})
+        usage = Usage(
+            prompt_tokens=usage_data.get("input_tokens", 0),
+            completion_tokens=usage_data.get("output_tokens", 0),
+            total_tokens=usage_data.get("input_tokens", 0)
+            + usage_data.get("output_tokens", 0),
+        )
+
+        model_response.choices = [choice]
+        model_response.usage = usage  # type: ignore[attr-defined]
+        model_response.model = "snowflake/" + response_json.get("model", model)
+        model_response.id = response_json.get("id", "")
+
+        if model is not None:
+            model_response._hidden_params["model"] = model
+
+        return model_response

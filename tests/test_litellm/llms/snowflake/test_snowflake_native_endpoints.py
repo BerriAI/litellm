@@ -2,8 +2,9 @@
 Tests for Snowflake Cortex native endpoint migration.
 
 Covers:
-  - SnowflakeConfig (OpenAI-compatible /chat/completions)
-  - SnowflakeCortexAnthropicConfig (Anthropic-compatible /messages)
+  - SnowflakeConfig with auto-routing:
+    - Non-Claude models → /chat/completions (OpenAI format)
+    - Claude models → /messages (Anthropic format)
 
 Run:
     pytest tests/test_litellm/llms/snowflake/test_snowflake_native_endpoints.py -v
@@ -15,9 +16,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
-from litellm.llms.snowflake.anthropic.transformation import (
-    SnowflakeCortexAnthropicConfig,
+from litellm.llms.snowflake.chat.transformation import (
+    SnowflakeConfig,
     _is_claude_model,
 )
 from litellm.types.utils import ModelResponse
@@ -264,11 +264,11 @@ class TestSnowflakeConfigResponse:
         assert result.model.startswith("snowflake/")
 
 
-# ─── SnowflakeCortexAnthropicConfig ────────────────────────────────────────
+# ─── SnowflakeConfig ────────────────────────────────────────
 
 class TestAnthropicConfigURL:
     def setup_method(self):
-        self.cfg = SnowflakeCortexAnthropicConfig()
+        self.cfg = SnowflakeConfig()
 
     def test_url_routes_to_messages_endpoint(self):
         url = self.cfg.get_complete_url(
@@ -295,7 +295,7 @@ class TestAnthropicConfigURL:
 
 class TestAnthropicConfigAuth:
     def setup_method(self):
-        self.cfg = SnowflakeCortexAnthropicConfig()
+        self.cfg = SnowflakeConfig()
 
     def test_anthropic_version_header_set(self):
         headers = self.cfg.validate_environment(
@@ -324,7 +324,7 @@ class TestAnthropicConfigAuth:
 
 class TestAnthropicConfigRequest:
     def setup_method(self):
-        self.cfg = SnowflakeCortexAnthropicConfig()
+        self.cfg = SnowflakeConfig()
 
     def test_system_message_extracted_to_top_level(self):
         messages = [
@@ -387,7 +387,7 @@ class TestAnthropicConfigRequest:
 
 class TestAnthropicConfigResponse:
     def setup_method(self):
-        self.cfg = SnowflakeCortexAnthropicConfig()
+        self.cfg = SnowflakeConfig()
 
     def test_anthropic_response_to_openai_format(self):
         raw = _make_anthropic_response("Hi there!")
@@ -492,7 +492,7 @@ class TestIsClaudeModel:
 
 class TestAnthropicToolTransformation:
     def setup_method(self):
-        self.cfg = SnowflakeCortexAnthropicConfig()
+        self.cfg = SnowflakeConfig()
 
     def test_openai_tools_converted_to_anthropic_format(self):
         messages = [{"role": "user", "content": "What's the weather?"}]
@@ -541,7 +541,7 @@ class TestAnthropicToolTransformation:
 
 class TestAnthropicMultiTurnToolMessages:
     def setup_method(self):
-        self.cfg = SnowflakeCortexAnthropicConfig()
+        self.cfg = SnowflakeConfig()
 
     def test_assistant_tool_calls_converted_to_tool_use_blocks(self):
         messages = [
