@@ -1,8 +1,10 @@
+import os
 from typing import Annotated, Callable, List, Optional
 
 from fastapi import Request, Security
 from fastapi.security import SecurityScopes
 
+from litellm._redis import get_redis_async_client
 from litellm.proxy.auth_v2 import errors
 from litellm.proxy.auth_v2.authenticators import (
     Authenticator,
@@ -20,8 +22,34 @@ from litellm.proxy.auth_v2.authorization import (
 )
 from litellm.proxy.auth_v2.authenticators.session import SessionAuthenticator
 from litellm.proxy.auth_v2.resolvers import IdentityResolver
-from litellm.proxy.auth_v2.sessions import StateBackend, StateStore
-from litellm.proxy.auth_v2.sessions.schemas import OAuthTransaction, SessionState
+from litellm.proxy.auth_v2.sessions import (
+    InMemorySessionStore,
+    RedisSessionStore,
+    SessionStore,
+    SessionValue,
+)
+from litellm.proxy.auth_v2.sessions.types import OAuthTransaction, SessionState
+
+_REDIS_ENV_SIGNALS = (
+    "REDIS_URL",
+    "REDIS_HOST",
+    "REDIS_CLUSTER_NODES",
+    "REDIS_SENTINEL_NODES",
+)
+
+
+def _open_session_store(namespace: str, *, default_ttl: int) -> SessionStore[SessionValue]:
+    """Build the session/login-state store for ``namespace``.
+
+    Uses Redis when configured via the environment (required so state is shared
+    across pods in a multi-pod deployment); otherwise a process-local in-memory
+    store for single-process/dev. Chosen from the environment, not by probing
+    Redis, so a configured-but-unreachable Redis fails loudly on use rather than
+    silently stranding state on one pod.
+    """
+    if any(os.getenv(signal) for signal in _REDIS_ENV_SIGNALS):
+        return RedisSessionStore(get_redis_async_client(), namespace, default_ttl)
+    return InMemorySessionStore(namespace, default_ttl)
 
 
 def _combined_challenge(authenticators: List[Authenticator]) -> str:
@@ -56,16 +84,14 @@ class AuthSecurity:
         authorizer: Optional[Authorizer] = None,
         authenticators: Optional[List[Authenticator]] = None,
         basic_verifier: Optional[BasicAuthVerifier] = None,
-        state_backend: Optional[StateBackend] = None,
     ) -> None:
         self.config = config
         self.resolver = resolver
         self.authorizer = authorizer or RBACEngine(config.casbin_policy_path)
-        self._state = state_backend or StateBackend(None)
-        self.session_store: StateStore[SessionState] = self._state.store(
+        self.session_store: SessionStore[SessionState] = _open_session_store(
             "sessions", default_ttl=config.session.ttl_seconds
         )
-        self.oauth_txn_store: StateStore[OAuthTransaction] = self._state.store(
+        self.oauth_txn_store: SessionStore[OAuthTransaction] = _open_session_store(
             "oauth_txn", default_ttl=config.session.login_state_ttl
         )
         chain = (

@@ -11,12 +11,12 @@ from litellm.proxy.auth_v2.models import (
     CredentialRef,
     SecuritySchemeType,
 )
-from litellm.proxy.auth_v2.sessions import StateStore
-from litellm.proxy.auth_v2.sessions.schemas import SessionState
+from litellm.proxy.auth_v2.sessions import SessionStore
+from litellm.proxy.auth_v2.sessions.types import SessionState
 
 
 class SessionAuthenticator(Authenticator):
-    def __init__(self, cookie_name: str, store: "StateStore[SessionState]") -> None:
+    def __init__(self, cookie_name: str, store: "SessionStore[SessionState]") -> None:
         self._cookie_name = cookie_name
         self._store = store
 

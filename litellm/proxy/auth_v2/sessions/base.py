@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Protocol, TypeVar, runtime_checkable
 
-StateValue = TypeVar("StateValue", bound=Mapping[str, Any])
+SessionValue = TypeVar("SessionValue", bound=Mapping[str, Any])
 
 
 @runtime_checkable
-class StateStore(Protocol[StateValue]):
+class SessionStore(Protocol[SessionValue]):
     """Async key/value store with per-key TTL, generic over its value schema.
 
     Backs short-lived auth state. Each store is parameterized by the typed
@@ -14,11 +14,11 @@ class StateStore(Protocol[StateValue]):
     it out, so several stores can share one Redis instance without colliding.
     """
 
-    async def get(self, key: str) -> Optional[StateValue]: ...
+    async def get(self, key: str) -> Optional[SessionValue]: ...
 
-    async def set(self, key: str, value: StateValue, ttl_seconds: Optional[int] = None) -> None: ...
+    async def set(self, key: str, value: SessionValue, ttl_seconds: Optional[int] = None) -> None: ...
 
-    async def pop(self, key: str) -> Optional[StateValue]: ...
+    async def pop(self, key: str) -> Optional[SessionValue]: ...
 
     async def delete(self, key: str) -> None: ...
 

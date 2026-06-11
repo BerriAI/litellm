@@ -13,7 +13,7 @@ from litellm.proxy.auth_v2.models import AuthMethod
 from ..services.redirects import safe_relay_state
 from litellm.proxy.auth_v2.resolvers import ProvisioningStore
 from litellm.proxy.auth_v2.security import AuthSecurity
-from litellm.proxy.auth_v2.sessions.schemas import OAuthTransaction, SessionState
+from litellm.proxy.auth_v2.sessions.types import OAuthTransaction, SessionState
 
 from ..services.oidc import mapped_claims, providers_by_key, user_from_userinfo
 from .dependencies import get_auth, get_oauth_registry

@@ -3,17 +3,17 @@ from __future__ import annotations
 import time
 from typing import Dict, Generic, Optional, Tuple
 
-from litellm.proxy.auth_v2.sessions.base import StateValue
+from litellm.proxy.auth_v2.sessions.base import SessionValue
 
 
-class InMemoryStateStore(Generic[StateValue]):
+class InMemorySessionStore(Generic[SessionValue]):
     """Process-local fallback when Redis is unavailable. Single-process only."""
 
     def __init__(self, namespace: str, default_ttl: int, max_size: int = 10000) -> None:
         self._namespace = namespace
         self._default_ttl = default_ttl
         self._max_size = max_size
-        self._entries: Dict[str, Tuple[float, Optional[StateValue]]] = {}
+        self._entries: Dict[str, Tuple[float, Optional[SessionValue]]] = {}
 
     def _key(self, key: str) -> str:
         return f"{self._namespace}:{key}"
@@ -21,7 +21,7 @@ class InMemoryStateStore(Generic[StateValue]):
     def _expiry(self, ttl_seconds: Optional[int]) -> float:
         return time.time() + (self._default_ttl if ttl_seconds is None else ttl_seconds)
 
-    def _live(self, key: str, now: float) -> Optional[Tuple[float, Optional[StateValue]]]:
+    def _live(self, key: str, now: float) -> Optional[Tuple[float, Optional[SessionValue]]]:
         entry = self._entries.get(key)
         if entry is None:
             return None
@@ -30,15 +30,15 @@ class InMemoryStateStore(Generic[StateValue]):
             return None
         return entry
 
-    async def get(self, key: str) -> Optional[StateValue]:
+    async def get(self, key: str) -> Optional[SessionValue]:
         entry = self._live(self._key(key), time.time())
         return entry[1] if entry is not None else None
 
-    async def set(self, key: str, value: StateValue, ttl_seconds: Optional[int] = None) -> None:
+    async def set(self, key: str, value: SessionValue, ttl_seconds: Optional[int] = None) -> None:
         self._evict(time.time())
         self._entries[self._key(key)] = (self._expiry(ttl_seconds), value)
 
-    async def pop(self, key: str) -> Optional[StateValue]:
+    async def pop(self, key: str) -> Optional[SessionValue]:
         entry = self._entries.pop(self._key(key), None)
         if entry is None or entry[0] < time.time():
             return None

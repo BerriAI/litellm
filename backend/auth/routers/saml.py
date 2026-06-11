@@ -15,7 +15,7 @@ from litellm.proxy.auth_v2.authorization import filter_claim_roles
 from ..services.redirects import safe_relay_state
 from litellm.proxy.auth_v2.resolvers import ProvisioningStore
 from litellm.proxy.auth_v2.security import AuthSecurity
-from litellm.proxy.auth_v2.sessions.schemas import SessionState
+from litellm.proxy.auth_v2.sessions.types import SessionState
 
 from ..services.saml import (
     SAMLProtocolStore,
