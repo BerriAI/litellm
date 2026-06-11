@@ -37,3 +37,8 @@ body {
 .custom-border {
   border: 1px solid var(--neutral-border);
 }
+
+.model-select-multi .ant-select-selector {
+  max-height: 132px;
+  overflow-y: auto;
+}

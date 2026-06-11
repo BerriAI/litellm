@@ -2,7 +2,7 @@ import { ProxyModel, useAllProxyModels } from "@/app/(dashboard)/hooks/models/us
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
-import { Select, Skeleton, Tooltip, type SelectProps } from "antd";
+import { Select, Skeleton, type SelectProps } from "antd";
 import { Organization, Team } from "../networking";
 import { splitWildcardModels } from "./modelUtils";
 
@@ -208,15 +208,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
       mode="multiple"
       placeholder="Select Models"
       allowClear
-      maxTagCount="responsive"
-      maxTagPlaceholder={(omittedValues) => (
-        <Tooltip
-          styles={{ root: { pointerEvents: "none" } }}
-          title={omittedValues.map(({ value }) => value).join(", ")}
-        >
-          <span>+{omittedValues.length} more</span>
-        </Tooltip>
-      )}
+      className="model-select-multi"
     />
   );
 };
