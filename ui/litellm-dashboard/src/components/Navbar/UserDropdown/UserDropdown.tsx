@@ -216,7 +216,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
   const seed = userEmail || userId || "user";
   const initials = initialsFromIdentity(userEmail, userId);
   const hue = hueFromString(seed);
-  const displayName = navAccountDisplayName(userEmail, userId);
+  const displayName = navAccountDisplayName(userEmail, userId, t("user.accountFallback"));
 
   return (
     <Dropdown

@@ -83,6 +83,7 @@
     "hideBlogPosts": "Hide Blog Posts",
     "hideBouncingIcon": "Hide Bouncing Icon",
     "accountMenuAriaLabel": "Account menu — {{role}} — signed in as {{identity}}",
+    "accountFallback": "Account",
     "toggleHideNewFeatureIndicators": "Toggle hide new feature indicators",
     "toggleHideAllPrompts": "Toggle hide all prompts",
     "toggleHideUsageIndicator": "Toggle hide usage indicator",
@@ -2991,6 +2992,10 @@
       "cost": "Cost: ${{amount}}",
       "turns": "Turns: {{count}}",
       "copy": "Copy"
+    },
+    "table": {
+      "loadingLogs": "🚅 Loading logs...",
+      "noLogsFound": "No logs found"
     },
     "tokenFlow": {
       "breakdown": "{{total}} ({{prompt}} prompt tokens + {{completion}} completion tokens)"

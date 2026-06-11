@@ -83,6 +83,7 @@
     "hideBlogPosts": "隐藏博客文章",
     "hideBouncingIcon": "隐藏跳动图标",
     "accountMenuAriaLabel": "账号菜单 — {{role}} — 已登录为 {{identity}}",
+    "accountFallback": "账号",
     "toggleHideNewFeatureIndicators": "切换隐藏新功能标记",
     "toggleHideAllPrompts": "切换隐藏所有提示",
     "toggleHideUsageIndicator": "切换隐藏用量指示器",
@@ -2991,6 +2992,10 @@
       "cost": "费用：${{amount}}",
       "turns": "轮次：{{count}}",
       "copy": "复制"
+    },
+    "table": {
+      "loadingLogs": "🚅 正在加载日志...",
+      "noLogsFound": "未找到日志"
     },
     "tokenFlow": {
       "breakdown": "{{total}}（{{prompt}} 提示词 Token + {{completion}} 补全 Token）"

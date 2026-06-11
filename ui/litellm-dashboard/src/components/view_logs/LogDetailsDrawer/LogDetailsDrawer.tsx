@@ -241,6 +241,8 @@ export function LogDetailsDrawer({
     },
   });
 
+  const { t } = useTranslation();
+
   // Lazy-load log details (messages/response) only when drawer is open.
   // This fetches data for a single log on-demand instead of prefetching all 50.
   const logDetails = useLogDetails(currentLog?.request_id, startTime, open && !!currentLog?.request_id);
@@ -263,7 +265,8 @@ export function LogDetailsDrawer({
   const metadata = currentLog?.metadata || {};
 
   // Status display values
-  const statusLabel = metadata.status === "failure" ? "Failure" : "Success";
+  const statusLabel =
+    metadata.status === "failure" ? t("viewLogs.columns.statusFailure") : t("viewLogs.columns.statusSuccess");
   const statusColor = metadata.status === "failure" ? ("error" as const) : ("success" as const);
   const environment = metadata?.user_api_key_team_alias || "default";
 
@@ -293,8 +296,6 @@ export function LogDetailsDrawer({
       /* clipboard unavailable in non-secure contexts */
     }
   };
-
-  const { t } = useTranslation();
 
   if (!currentLog || !enrichedLog) return null;
 
