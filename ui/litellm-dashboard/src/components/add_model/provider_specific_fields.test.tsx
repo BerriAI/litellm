@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Form } from "antd";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
@@ -213,6 +213,31 @@ describe("ProviderSpecificFields", () => {
 
       const baseModelInput = screen.getByPlaceholderText("azure/gpt-3.5-turbo");
       expect(baseModelInput).toBeInTheDocument();
+    });
+  });
+
+  it("sets Azure API version from the API base query parameter", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.Azure} />
+        </Form>
+      </QueryClientProvider>,
+    );
+
+    const apiBaseInput = await screen.findByPlaceholderText("https://...");
+    const apiVersionInput = await screen.findByPlaceholderText("2023-07-01-preview");
+
+    fireEvent.change(apiBaseInput, {
+      target: {
+        value:
+          "https://test-resource.openai.azure.com/openai/deployments/gpt-4/chat/completions?api_version=2024-10-21",
+      },
+    });
+
+    await waitFor(() => {
+      expect(apiVersionInput).toHaveValue("2024-10-21");
     });
   });
 });
