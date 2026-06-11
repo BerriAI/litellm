@@ -10,7 +10,7 @@ image:
   repository: ghcr.io/berriai/litellm-database
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
-  # tag: "main-latest"
+  # tag: "latest"
   tag: ""
 
 imagePullSecrets: []
@@ -296,6 +296,13 @@ lifecycle: {}
 #  otherwise)
 postgresql:
   architecture: standalone
+  # NOTE: bitnamilegacy images are frozen (no security patches or new releases).
+  #   Override with a current bitnami/postgresql tag for production use.
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: "16.2.0-debian-12-r6"
+    pullPolicy: IfNotPresent
   auth:
     username: litellm
     database: litellm
@@ -317,6 +324,13 @@ postgresql:
 redis:
   enabled: false
   architecture: standalone
+  # NOTE: bitnamilegacy images are frozen (no security patches or new releases).
+  #   Override with a current bitnami/redis tag for production use.
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+    tag: "7.2.4-debian-12-r9"
+    pullPolicy: IfNotPresent
 
 # Prisma migration job settings
 migrationJob:
