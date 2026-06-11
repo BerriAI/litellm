@@ -1,0 +1,5 @@
+{
+  "model": "gpt-4o",
+  "max_tokens": 512,
+  "messages": [{"role": "user", "content": "What is the capital of France?"}]
+}

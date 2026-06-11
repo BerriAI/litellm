@@ -1,0 +1,108 @@
+{
+  "additionalModelRequestFields": {
+    "stream": false
+  },
+  "inferenceConfig": {
+    "maxTokens": 256
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Weather and time in Paris?"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "toolUse": {
+            "input": {
+              "city": "Paris"
+            },
+            "name": "get_weather",
+            "toolUseId": "call_char_001"
+          }
+        },
+        {
+          "toolUse": {
+            "input": {
+              "tz": "Europe/Paris"
+            },
+            "name": "get_time",
+            "toolUseId": "call_char_002"
+          }
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "toolResult": {
+            "content": [
+              {
+                "text": "18C, clear"
+              }
+            ],
+            "toolUseId": "call_char_001"
+          }
+        },
+        {
+          "toolResult": {
+            "content": [
+              {
+                "text": "14:05"
+              }
+            ],
+            "toolUseId": "call_char_002"
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "toolConfig": {
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "Get current weather for a city.",
+          "inputSchema": {
+            "json": {
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ],
+              "type": "object"
+            }
+          },
+          "name": "get_weather"
+        }
+      },
+      {
+        "toolSpec": {
+          "description": "Get current time for a timezone.",
+          "inputSchema": {
+            "json": {
+              "properties": {
+                "tz": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tz"
+              ],
+              "type": "object"
+            }
+          },
+          "name": "get_time"
+        }
+      }
+    ]
+  }
+}

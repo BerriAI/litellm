@@ -1,0 +1,46 @@
+{
+  "additionalModelRequestFields": {
+    "stream": false,
+    "thinking": {
+      "budget_tokens": 1024,
+      "type": "enabled"
+    }
+  },
+  "inferenceConfig": {
+    "maxTokens": 2048
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "reasoningContent": {
+            "reasoningText": {
+              "signature": "sig-char-deadbeef",
+              "text": "The user asks about France; the capital is Paris."
+            }
+          }
+        },
+        {
+          "text": "Paris."
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "text": "And of Italy?"
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}

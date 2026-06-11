@@ -1,0 +1,22 @@
+{
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Describe this image.",
+          "type": "text"
+        },
+        {
+          "source": {
+            "type": "url",
+            "url": "https://example.com/cat.png"
+          },
+          "type": "image"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-20250514"
+}

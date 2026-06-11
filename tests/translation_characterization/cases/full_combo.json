@@ -1,0 +1,73 @@
+{
+  "id": "full_combo",
+  "messages": [
+    {
+      "content": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "You are a terse geographer.",
+          "type": "text"
+        }
+      ],
+      "role": "system"
+    },
+    {
+      "content": "Weather in Paris?",
+      "role": "user"
+    },
+    {
+      "content": null,
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{\"city\": \"Paris\"}",
+            "name": "get_weather"
+          },
+          "id": "call_char_001",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "content": "18C, clear",
+      "role": "tool",
+      "tool_call_id": "call_char_001"
+    },
+    {
+      "content": "Summarize, then check the weather again.",
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 2048,
+    "temperature": 1,
+    "thinking": {
+      "budget_tokens": 1024,
+      "type": "enabled"
+    },
+    "tools": [
+      {
+        "function": {
+          "description": "Get current weather for a city.",
+          "name": "get_weather",
+          "parameters": {
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "skip": {}
+}

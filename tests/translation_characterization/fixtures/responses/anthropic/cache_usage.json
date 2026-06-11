@@ -1,0 +1,16 @@
+{
+  "id": "msg_01CharCacheUsage000001",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-20250514",
+  "content": [{"type": "text", "text": "Paris."}],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 6,
+    "output_tokens": 4,
+    "cache_creation_input_tokens": 1024,
+    "cache_read_input_tokens": 2048,
+    "cache_creation": {"ephemeral_5m_input_tokens": 1024, "ephemeral_1h_input_tokens": 0}
+  }
+}

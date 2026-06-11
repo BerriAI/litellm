@@ -29,6 +29,19 @@ jobs:
       reruns: 2
       artifact-name: llm-vertex-ai
 
+  translation-characterization:
+    name: Translation Characterization (v1 snapshot corpus)
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: "tests/translation_characterization"
+      workers: 1
+      reruns: 0
+      artifact-name: translation-characterization
+
   other-providers:
     name: All Other Providers
     permissions:

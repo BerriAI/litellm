@@ -1,0 +1,10 @@
+{
+  "id": "msg_01CharStopSeq00000001",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-20250514",
+  "content": [{"type": "text", "text": "Paris"}],
+  "stop_reason": "stop_sequence",
+  "stop_sequence": "END",
+  "usage": {"input_tokens": 12, "output_tokens": 2}
+}

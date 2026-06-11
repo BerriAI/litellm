@@ -1,0 +1,33 @@
+{
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "text": "Paris.",
+          "type": "text"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "text": "And of Italy?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-20250514"
+}

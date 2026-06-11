@@ -1,0 +1,24 @@
+{
+  "additionalModelRequestFields": {
+    "stream": false
+  },
+  "inferenceConfig": {
+    "maxTokens": 128,
+    "stopSequences": [
+      "\n\n",
+      "END"
+    ],
+    "temperature": 0.2,
+    "topP": 0.9
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?"
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Weather and time in Paris?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "id": "call_char_001",
+          "input": {
+            "city": "Paris"
+          },
+          "name": "get_weather",
+          "type": "tool_use"
+        },
+        {
+          "id": "call_char_002",
+          "input": {
+            "tz": "Europe/Paris"
+          },
+          "name": "get_time",
+          "type": "tool_use"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "content": "18C, clear",
+          "tool_use_id": "call_char_001",
+          "type": "tool_result"
+        },
+        {
+          "content": "14:05",
+          "tool_use_id": "call_char_002",
+          "type": "tool_result"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-20250514",
+  "tools": [
+    {
+      "description": "Get current weather for a city.",
+      "input_schema": {
+        "properties": {
+          "city": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "city"
+        ],
+        "type": "object"
+      },
+      "name": "get_weather",
+      "type": "custom"
+    },
+    {
+      "description": "Get current time for a timezone.",
+      "input_schema": {
+        "properties": {
+          "tz": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tz"
+        ],
+        "type": "object"
+      },
+      "name": "get_time",
+      "type": "custom"
+    }
+  ]
+}

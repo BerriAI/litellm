@@ -1,0 +1,52 @@
+{
+  "anthropic_version": "bedrock-2023-05-31",
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "tools": [
+    {
+      "description": "Get current weather for a city.",
+      "input_schema": {
+        "properties": {
+          "city": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "city"
+        ],
+        "type": "object"
+      },
+      "name": "get_weather",
+      "type": "custom"
+    },
+    {
+      "cache_control": {
+        "type": "ephemeral"
+      },
+      "description": "Get current time for a timezone.",
+      "input_schema": {
+        "properties": {
+          "tz": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tz"
+        ],
+        "type": "object"
+      },
+      "name": "get_time",
+      "type": "custom"
+    }
+  ]
+}

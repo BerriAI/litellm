@@ -1,0 +1,6 @@
+{
+  "model": "gpt-oss-120b",
+  "max_tokens": 2048,
+  "thinking": {"type": "enabled", "budget_tokens": 1024},
+  "messages": [{"role": "user", "content": "What is the capital of France?"}]
+}
