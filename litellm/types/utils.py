@@ -3409,6 +3409,7 @@ class LlmProviders(str, Enum):
     CHUTES = "chutes"
     NEOSANTARA = "neosantara"
     PARASAIL = "parasail"
+    UOMI = "uomi"
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LITELLM_AGENT = "litellm_agent"
