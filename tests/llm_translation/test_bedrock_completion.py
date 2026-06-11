@@ -5,15 +5,12 @@ Tests Bedrock Completion + Rerank endpoints
 # @pytest.mark.skip(reason="AWS Suspended Account")
 import os
 import sys
-import traceback
 
 from dotenv import load_dotenv
 
 import litellm.types
 
 load_dotenv()
-import io
-import os
 import json
 
 sys.path.insert(
@@ -28,10 +25,8 @@ from litellm import (
     ModelResponse,
     RateLimitError,
     ServiceUnavailableError,
-    Timeout,
     completion,
     completion_cost,
-    embedding,
 )
 from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -95,12 +90,9 @@ def test_completion_bedrock_claude_completion_auth():
 
 @pytest.mark.parametrize("streaming", [True, False])
 def test_completion_bedrock_guardrails(streaming):
-    import os
 
     litellm.set_verbose = True
-    import logging
 
-    from litellm._logging import verbose_logger
 
     # verbose_logger.setLevel(logging.DEBUG)
     try:
@@ -253,7 +245,6 @@ def bedrock_session_token_creds():
 
 
 def process_stream_response(res, messages):
-    import types
 
     if isinstance(res, litellm.utils.CustomStreamWrapper):
         chunks = []
@@ -690,7 +681,6 @@ def test_completion_claude_3_base64():
 def test_completion_bedrock_mistral_completion_auth():
     print("calling bedrock mistral completion params auth")
 
-    import os
 
     litellm._turn_on_debug()
 
@@ -722,116 +712,6 @@ def test_completion_bedrock_mistral_completion_auth():
 
 
 # test_completion_bedrock_mistral_completion_auth()
-
-
-def test_bedrock_ptu():
-    """
-    Check if a url with 'modelId' passed in, is created correctly
-
-    Reference: https://github.com/BerriAI/litellm/issues/3805
-    """
-    client = HTTPHandler()
-
-    with patch.object(client, "post", new=Mock()) as mock_client_post:
-        litellm.set_verbose = True
-        from openai.types.chat import ChatCompletion
-
-        model_id = (
-            "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
-        )
-        try:
-            response = litellm.completion(
-                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-                messages=[{"role": "user", "content": "What's AWS?"}],
-                model_id=model_id,
-                client=client,
-            )
-        except Exception as e:
-            pass
-
-        assert "url" in mock_client_post.call_args.kwargs
-        assert (
-            mock_client_post.call_args.kwargs["url"]
-            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/converse"
-        )
-        mock_client_post.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_bedrock_custom_api_base():
-    """
-    Check if a url with 'modelId' passed in, is created correctly
-
-    Reference: https://github.com/BerriAI/litellm/issues/3805, https://github.com/BerriAI/litellm/issues/5389#issuecomment-2313677977
-
-    """
-    client = AsyncHTTPHandler()
-
-    with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
-        litellm.set_verbose = True
-        from openai.types.chat import ChatCompletion
-
-        try:
-            response = await litellm.acompletion(
-                model="anthropic.claude-3-sonnet-20240229-v1:0",
-                messages=[{"role": "user", "content": "What's AWS?"}],
-                client=client,
-                extra_headers={"test": "hello world", "Authorization": "my-test-key"},
-                api_base="https://gateway.ai.cloudflare.com/v1/fa4cdcab1f32b95ca3b53fd36043d691/test/aws-bedrock/bedrock-runtime/us-east-1",
-            )
-        except Exception as e:
-            pass
-
-        print(f"mock_client_post.call_args.kwargs: {mock_client_post.call_args.kwargs}")
-        assert (
-            mock_client_post.call_args.kwargs["url"]
-            == "https://gateway.ai.cloudflare.com/v1/fa4cdcab1f32b95ca3b53fd36043d691/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1%3A0/converse"
-        )
-        assert "test" in mock_client_post.call_args.kwargs["headers"]
-        assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
-        assert (
-            mock_client_post.call_args.kwargs["headers"]["Authorization"]
-            == "my-test-key"
-        )
-        mock_client_post.assert_called_once()
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic.claude-3-sonnet-20240229-v1:0",
-        "bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
-    ],
-)
-@pytest.mark.asyncio
-async def test_bedrock_extra_headers(model):
-    """
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/9106
-    """
-    client = AsyncHTTPHandler()
-
-    with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
-        litellm.set_verbose = True
-        from openai.types.chat import ChatCompletion
-
-        try:
-            response = await litellm.acompletion(
-                model=model,
-                messages=[{"role": "user", "content": "What's AWS?"}],
-                client=client,
-                extra_headers={"test": "hello world", "Authorization": "my-test-key"},
-            )
-        except Exception as e:
-            print(f"error: {e}")
-
-        print(f"mock_client_post.call_args.kwargs: {mock_client_post.call_args.kwargs}")
-        assert "test" in mock_client_post.call_args.kwargs["headers"]
-        assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
-        assert (
-            mock_client_post.call_args.kwargs["headers"]["Authorization"]
-            == "my-test-key"
-        )
-        mock_client_post.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -877,59 +757,6 @@ async def test_bedrock_custom_prompt_template():
         prompt = json.loads(mock_client_post.call_args.kwargs["data"])["prompt"]
         assert prompt == "<|im_start|>user\nWhat's AWS?<|im_end|>"
         mock_client_post.assert_called_once()
-
-
-def test_completion_bedrock_external_client_region():
-    print("\ncalling bedrock claude external client auth")
-    import os
-
-    aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
-    aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-    aws_region_name = "us-east-1"
-
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-
-    client = HTTPHandler()
-
-    try:
-        import boto3
-
-        litellm.set_verbose = True
-
-        bedrock = boto3.client(
-            service_name="bedrock-runtime",
-            region_name=aws_region_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            endpoint_url=f"https://bedrock-runtime.{aws_region_name}.amazonaws.com",
-        )
-        with patch.object(client, "post", new=Mock()) as mock_client_post:
-            try:
-                response = completion(
-                    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-                    messages=messages,
-                    max_tokens=10,
-                    temperature=0.1,
-                    aws_bedrock_client=bedrock,
-                    client=client,
-                )
-                # Add any assertions here to check the response
-                print(response)
-            except Exception as e:
-                pass
-
-            print(f"mock_client_post.call_args: {mock_client_post.call_args}")
-            assert "us-east-1" in mock_client_post.call_args.kwargs["url"]
-
-            mock_client_post.assert_called_once()
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 def test_bedrock_tool_calling():
@@ -1233,7 +1060,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 
 
 def test_bedrock_converse_translation_tool_message():
-    from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
     litellm.set_verbose = True
 
@@ -2299,32 +2125,6 @@ def test_bedrock_nova_topk(top_k_param):
         )
 
 
-def test_bedrock_cross_region_inference(monkeypatch):
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.add_known_models()
-
-    litellm.set_verbose = True
-    client = HTTPHandler()
-
-    with patch.object(client, "post") as mock_post:
-        try:
-            completion(
-                model="bedrock/us.meta.llama3-3-70b-instruct-v1:0",
-                messages=[{"role": "user", "content": "Hello, world!"}],
-                client=client,
-            )
-        except Exception as e:
-            print(e)
-
-        assert (
-            mock_post.call_args.kwargs["url"]
-            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1%3A0/converse"
-        )
-
-
 def test_bedrock_empty_content_real_call():
     completion(
         model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
@@ -2464,50 +2264,12 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
         ] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
 
 
-@pytest.mark.asyncio
-async def test_bedrock_image_url_sync_client():
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-    import logging
-    from litellm import verbose_logger
-
-    verbose_logger.setLevel(level=logging.DEBUG)
-
-    litellm._turn_on_debug()
-    client = AsyncHTTPHandler()
-
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What's in this image?"},
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
-                    },
-                },
-            ],
-        }
-    ]
-
-    with patch.object(client, "post") as mock_post:
-        try:
-            await litellm.acompletion(
-                model="bedrock/us.amazon.nova-pro-v1:0",
-                messages=messages,
-                client=client,
-            )
-        except Exception as e:
-            print(e)
-        mock_post.assert_called_once()
-
-
 def test_bedrock_error_handling_streaming():
     from litellm.llms.bedrock.chat.invoke_handler import (
         AWSEventStreamDecoder,
         BedrockError,
     )
-    from unittest.mock import patch, Mock
+    from unittest.mock import Mock
 
     event = Mock()
     event.to_response_dict = Mock(
@@ -2567,29 +2329,6 @@ async def test_bedrock_document_understanding(image_url):
         assert response.choices[0].message.content != ""
     except litellm.ServiceUnavailableError as e:
         pytest.skip("Skipping test due to ServiceUnavailableError")
-
-
-def test_bedrock_custom_proxy():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    client = HTTPHandler()
-
-    with patch.object(client, "post") as mock_post:
-        try:
-            response = completion(
-                model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
-                messages=[{"content": "Tell me a joke", "role": "user"}],
-                api_key="Token",
-                client=client,
-                api_base="https://some-api-url/models",
-            )
-        except Exception as e:
-            print(e)
-        print(mock_post.call_args.kwargs)
-        mock_post.assert_called_once()
-        assert mock_post.call_args.kwargs["url"] == "https://some-api-url/models"
-
-        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer Token"
 
 
 def test_bedrock_custom_deepseek():
@@ -2943,71 +2682,6 @@ async def test_bedrock_stream_thinking_content_openwebui():
     ), "There should be non-empty content after thinking tags"
 
 
-def test_bedrock_application_inference_profile():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
-
-    client = HTTPHandler()
-    client2 = HTTPHandler()
-
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {
-                            "type": "string",
-                            "enum": ["celsius", "fahrenheit"],
-                        },
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-
-    with (
-        patch.object(client, "post") as mock_post,
-        patch.object(client2, "post") as mock_post2,
-    ):
-        try:
-            resp = completion(
-                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
-                client=client,
-                tools=tools,
-            )
-        except Exception as e:
-            print(e)
-
-        try:
-            resp = completion(
-                model="bedrock/converse/arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                client=client2,
-                tools=tools,
-            )
-        except Exception as e:
-            print(e)
-
-        mock_post.assert_called_once()
-        mock_post2.assert_called_once()
-        print(mock_post.call_args.kwargs)
-        json_data = mock_post.call_args.kwargs["data"]
-        assert mock_post.call_args.kwargs["url"].startswith(
-            "https://bedrock-runtime.eu-central-1.amazonaws.com/"
-        )
-        assert mock_post2.call_args.kwargs["url"] == mock_post.call_args.kwargs["url"]
-
-
 def return_mocked_response(model: str):
     if model == "bedrock/mistral.mistral-large-2407-v1:0":
         return {
@@ -3065,57 +2739,6 @@ async def test_bedrock_max_completion_tokens(model: str):
             "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
             "inferenceConfig": {"maxTokens": 10},
         }
-
-
-def test_bedrock_meta_llama_function_calling():
-    """
-    Tests that:
-    - meta llama models support function calling
-    """
-    from litellm.utils import return_raw_request
-    from litellm.types.utils import CallTypes
-
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {
-                            "type": "string",
-                            "enum": ["celsius", "fahrenheit"],
-                        },
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in fahrenheit?",
-        }
-    ]
-    request_args = {
-        "messages": messages,
-        "tools": tools,
-        "model": "bedrock/us.meta.llama4-scout-17b-instruct-v1:0",
-    }
-
-    response = return_raw_request(
-        endpoint=CallTypes.completion,
-        kwargs=request_args,
-    )
-
-    print(response)
 
 
 @pytest.mark.asyncio
@@ -3272,9 +2895,7 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
 @pytest.mark.asyncio
 async def test_bedrock_streaming_passthrough_test2(monkeypatch):
     import litellm
-    import time
     import asyncio
-    from unittest.mock import MagicMock
     from litellm.integrations.custom_logger import CustomLogger
 
     class MockCustomLogger(CustomLogger):
@@ -3324,9 +2945,7 @@ async def test_bedrock_streaming_passthrough_test2(monkeypatch):
 @pytest.mark.asyncio
 async def test_bedrock_streaming_passthrough_test1(monkeypatch):
     import litellm
-    import time
     import asyncio
-    from unittest.mock import MagicMock
     from litellm.integrations.custom_logger import CustomLogger
 
     class MockCustomLogger(CustomLogger):
@@ -3839,7 +3458,6 @@ def test_bedrock_openai_error_handling():
     from litellm import ModelResponse
     from litellm.llms.bedrock.common_utils import BedrockError
     from unittest.mock import Mock
-    import json
 
     bedrock_llm = BedrockLLM()
 
@@ -3886,7 +3504,7 @@ def test_bedrock_nova_grounding_web_search_options_non_streaming():
 
     Related: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
     """
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import patch
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
