@@ -1,6 +1,5 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
-import copy
 import json
 import traceback
 from collections import deque
@@ -24,102 +23,10 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
-from litellm.types.utils import AdapterCompletionStreamWrapper
+from litellm.types.utils import AdapterCompletionStreamWrapper, StreamingChoices
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelResponseStream
-
-
-class _CombinedChunkSplitter:
-    """
-    Splits a streaming chunk that carries BOTH response content and a
-    ``finish_reason`` into two chunks: a content-only chunk followed by a
-    finish-only chunk.
-
-    ``AnthropicStreamWrapper`` (via ``translate_streaming_openai_response_to_anthropic``)
-    assumes content and ``finish_reason`` never arrive in the same chunk — true for
-    real provider streams, but false for fake-streamed providers (e.g. Vertex AI
-    Gemma ``:predict``) where ``MockResponseIterator`` collapses the entire response
-    into a single chunk. Without this split the assumption causes all content to be
-    silently dropped (only the ``message_delta`` stop event is emitted).
-
-    Supports both sync and async iteration, since ``AnthropicStreamWrapper`` exposes
-    both ``__next__`` and ``__anext__``. An instance is single-mode: callers must
-    iterate it either synchronously or asynchronously, never both — the two modes
-    hold independent iterator references on the upstream stream and mixing them
-    would advance them out of sync.
-    """
-
-    def __init__(self, completion_stream: Any):
-        self._stream = completion_stream
-        self._sync_iter: Optional[Iterator[Any]] = None
-        self._async_iter: Optional[AsyncIterator[Any]] = None
-        self._buffer: deque = deque()
-
-    @staticmethod
-    def _is_combined(chunk: Any) -> bool:
-        """True if ``chunk`` carries response content AND a finish_reason."""
-        choices = getattr(chunk, "choices", None)
-        if not choices:
-            return False
-        choice = choices[0]
-        if getattr(choice, "finish_reason", None) is None:
-            return False
-        delta = getattr(choice, "delta", None)
-        if delta is None:
-            return False
-        return bool(
-            getattr(delta, "content", None)
-            or getattr(delta, "tool_calls", None)
-            or getattr(delta, "reasoning_content", None)
-            or getattr(delta, "thinking_blocks", None)
-        )
-
-    @staticmethod
-    def _split(chunk: Any) -> List[Any]:
-        """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
-        if not _CombinedChunkSplitter._is_combined(chunk):
-            return [chunk]
-
-        # Content chunk: keep the delta payload, clear the finish_reason.
-        content_chunk = copy.deepcopy(chunk)
-        content_chunk.choices[0].finish_reason = None
-
-        # Finish chunk: keep finish_reason (and usage), clear the delta payload.
-        finish_chunk = copy.deepcopy(chunk)
-        finish_delta = finish_chunk.choices[0].delta
-        finish_delta.content = None
-        if hasattr(finish_delta, "tool_calls"):
-            finish_delta.tool_calls = None
-        if hasattr(finish_delta, "reasoning_content"):
-            finish_delta.reasoning_content = None
-        if hasattr(finish_delta, "thinking_blocks"):
-            finish_delta.thinking_blocks = None
-        return [content_chunk, finish_chunk]
-
-    def __iter__(self) -> "Iterator[Any]":
-        return self
-
-    def __next__(self) -> Any:
-        if self._buffer:
-            return self._buffer.popleft()
-        if self._sync_iter is None:
-            self._sync_iter = iter(self._stream)
-        chunk = next(self._sync_iter)  # propagates StopIteration when exhausted
-        self._buffer.extend(self._split(chunk))
-        return self._buffer.popleft()
-
-    def __aiter__(self) -> "AsyncIterator[Any]":
-        return self
-
-    async def __anext__(self) -> Any:
-        if self._buffer:
-            return self._buffer.popleft()
-        if self._async_iter is None:
-            self._async_iter = self._stream.__aiter__()
-        chunk = await self._async_iter.__anext__()  # propagates StopAsyncIteration
-        self._buffer.extend(self._split(chunk))
-        return self._buffer.popleft()
 
 
 class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
@@ -155,10 +62,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         compaction_block: Optional[CompactionBlock] = None,
         iterations_usage: Optional[List[UsageIteration]] = None,
     ):
-        # Wrap the upstream stream so chunks that carry both content and a
-        # finish_reason (fake-streamed providers) are split into two — see
-        # _CombinedChunkSplitter.
-        super().__init__(_CombinedChunkSplitter(completion_stream))
+        super().__init__(completion_stream)
         self.model = model
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
@@ -409,24 +313,29 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     return compaction_event
 
             if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.sent_content_block_finish = False
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
+                pass
 
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+                if should_start_new_block and self.sent_content_block_start is True:
                     self._increment_content_block_index()
+
+                if self.sent_content_block_start is False:
+                    if not self._chunk_has_substantial_content(chunk):
+                        continue
+                    self.sent_content_block_start = True
+                    self.sent_content_block_finish = False
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                    return self.chunk_queue.popleft()
 
                 # applied_edits only needs to flow to the final message_delta
                 # (when finish_reason is set); skip threading it through every
@@ -656,16 +565,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     return compaction_event
 
             if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.sent_content_block_finish = False
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
+                pass
 
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
@@ -673,8 +573,22 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 # Check if we need to start a new content block
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+                if should_start_new_block and self.sent_content_block_start is True:
                     self._increment_content_block_index()
+
+                if self.sent_content_block_start is False:
+                    if not self._chunk_has_substantial_content(chunk):
+                        continue
+                    self.sent_content_block_start = True
+                    self.sent_content_block_finish = False
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                    return self.chunk_queue.popleft()
 
                 # applied_edits only needs to flow to the final message_delta
                 # (when finish_reason is set); skip threading it through every
@@ -939,6 +853,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 tool_block["name"] = original_name
 
         if block_type != self.current_content_block_type:
+            if (
+                block_type == "text"
+                and self.current_content_block_type == "thinking"
+                and not self._chunk_has_substantial_content(chunk)
+            ):
+                return False
             self.current_content_block_type = block_type
             self.current_content_block_start = content_block_start
             return True
@@ -956,4 +876,24 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 self.current_content_block_start = content_block_start
                 return True
 
+        return False
+
+    @staticmethod
+    def _chunk_has_substantial_content(chunk: "ModelResponseStream") -> bool:
+        """Return True when the chunk carries content that should determine
+        the initial content block type (non-empty text, tool_calls,
+        thinking_blocks, or reasoning_content).  Role-only chunks and empty
+        deltas return False."""
+        for choice in chunk.choices:
+            if not hasattr(choice, "delta"):
+                continue
+            if choice.delta.tool_calls is not None and len(choice.delta.tool_calls) > 0:
+                return True
+            if getattr(choice.delta, "content", None) and len(choice.delta.content) > 0:
+                return True
+            if isinstance(choice, StreamingChoices):
+                if hasattr(choice.delta, "thinking_blocks") and choice.delta.thinking_blocks:
+                    return True
+                if getattr(choice.delta, "reasoning_content", None):
+                    return True
         return False
