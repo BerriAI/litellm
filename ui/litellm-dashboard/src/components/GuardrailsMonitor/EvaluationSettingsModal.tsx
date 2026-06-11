@@ -1,7 +1,7 @@
 import { CloseOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { Button, Modal, Select, Input } from "antd";
 import React, { useEffect, useState } from "react";
-import { fetchAvailableModels, type ModelGroup } from "@/components/playground/llm_calls/fetch_models";
+import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
 
 const DEFAULT_PROMPT = `Evaluate whether this guardrail's decision was correct.
 Analyze the user input, the guardrail action taken, and determine if it was appropriate.
