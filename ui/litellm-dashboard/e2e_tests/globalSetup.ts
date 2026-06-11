@@ -1,4 +1,4 @@
-import { chromium, expect } from "@playwright/test";
+import { chromium, expect, request } from "@playwright/test";
 import { users, Role, STORAGE_PATHS } from "./fixtures/users";
 import * as fs from "fs";
 
@@ -11,14 +11,15 @@ async function globalSetup() {
   // The proxy runs with LITELLM_LICENSE in CI, so enable it the same way
   // the admin UI toggle does; the projects migration smoke needs the link.
   const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
-  const settingsRes = await fetch(`http://localhost:4000${rootPath}/update/ui_settings`, {
-    method: "PATCH",
-    headers: { Authorization: `Bearer ${masterKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ enable_projects_ui: true }),
+  const api = await request.newContext();
+  const settingsRes = await api.patch(`http://localhost:4000${rootPath}/update/ui_settings`, {
+    headers: { Authorization: `Bearer ${masterKey}` },
+    data: { enable_projects_ui: true },
   });
-  if (!settingsRes.ok) {
-    throw new Error(`Enabling enable_projects_ui failed (${settingsRes.status}): ${await settingsRes.text()}`);
+  if (!settingsRes.ok()) {
+    throw new Error(`Enabling enable_projects_ui failed (${settingsRes.status()}): ${await settingsRes.text()}`);
   }
+  await api.dispose();
 
   for (const role of Object.values(Role)) {
     const { email, password } = users[role];
