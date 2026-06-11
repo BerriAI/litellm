@@ -737,6 +737,10 @@ router_settings:
 | FOCUS_S3_ACCESS_KEY | AWS access key ID used by the Focus export S3 client.
 | FOCUS_S3_SECRET_KEY | AWS secret access key used by the Focus export S3 client.
 | FOCUS_S3_SESSION_TOKEN | AWS session token used by the Focus export S3 client (optional).
+| MAVVRIK_API_KEY | API key for the Mavvrik FOCUS export integration.
+| MAVVRIK_API_ENDPOINT | Tenant API endpoint for the Mavvrik FOCUS export, e.g. `https://api.mavvrik.ai/<tenant_id>`.
+| MAVVRIK_CONNECTION_ID | AI cost connection ID for the Mavvrik FOCUS export.
+| MAVVRIK_FOCUS_MAX_ROWS | Maximum rows per export window for the Mavvrik FOCUS destination. Default is 500000.
 | FOCUS_GCS_BUCKET_NAME | GCS bucket to upload Focus export files when using the GCS destination.
 | FOCUS_GCS_PATH_SERVICE_ACCOUNT | Path to a service account JSON key file for the Focus export GCS client. Falls back to Application Default Credentials if unset.
 | FUNCTION_DEFINITION_TOKEN_COUNT | Token count for function definitions. Default is 9
