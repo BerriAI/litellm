@@ -752,7 +752,7 @@ def _count_content_list(
                 # token_counter raises on tool-search traffic; on the streaming
                 # anthropic_messages path that nulls response_cost and causes the
                 # proxy to drop the SpendLogs row entirely (silent cost undercount).
-                tool_name = str(c.get("tool_name", ""))
+                tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
             else:
