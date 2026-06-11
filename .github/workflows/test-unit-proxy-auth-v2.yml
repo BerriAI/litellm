@@ -1,4 +1,4 @@
-name: "Unit Tests: Proxy Auth & Key Management"
+name: "Unit Tests: Proxy auth_v2"
 
 on:
   pull_request:
@@ -18,10 +18,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  proxy-auth:
+  proxy-auth-v2:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
-      test-path: "tests/test_litellm/proxy/auth tests/test_litellm/proxy/hooks tests/test_litellm/proxy/policy_engine tests/test_litellm/proxy/client"
+      test-path: "tests/test_litellm/proxy/auth_v2"
+      apt-packages: "xmlsec1 libxmlsec1-dev"
       workers: 2
       reruns: 2
-      artifact-name: proxy-auth
+      artifact-name: proxy-auth-v2
