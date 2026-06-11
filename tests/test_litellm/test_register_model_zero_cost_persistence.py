@@ -171,16 +171,12 @@ def test_router_double_init_keeps_db_model_entry_sparse():
     Router(model_list=model_list)
     after_second = dict(litellm.model_cost.get(deployment_id, {}))
 
-    # Neither pass should write cost = 0 into the deployment entry.
+    # Cost keys must not appear AT ALL on a sparse db_model deployment
+    # (matches the pre-bug shape) — the bug rewrites them as 0.
     for snapshot, label in (
         (after_first, "first Router()"),
         (after_second, "second Router()"),
     ):
-        assert snapshot.get("input_cost_per_token") in (None, 0) or (
-            "input_cost_per_token" not in snapshot
-        ), f"{label} wrote unexpected cost: {snapshot}"
-        # The strong assertion: cost keys must not appear AT ALL on a
-        # sparse db_model deployment (matches the pre-bug shape).
         assert "input_cost_per_token" not in snapshot, (
             f"{label} persisted input_cost_per_token={snapshot.get('input_cost_per_token')!r} "
             f"on a sparse db_model entry; this disables budget enforcement"

@@ -3022,9 +3022,11 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         # to "cost keys = 0" (free), which makes
         # ``_is_cost_explicitly_configured`` return True and silently
         # disables budget enforcement on the next re-registration.
-        _raw_entry = (
-            litellm.model_cost.get(model_cost_key) or litellm.model_cost.get(key) or {}
-        )
+        _raw_entry = litellm.model_cost.get(model_cost_key)
+        if _raw_entry is None:
+            _raw_entry = litellm.model_cost.get(key)
+        if _raw_entry is None:
+            _raw_entry = {}
         for _cost_field in ("input_cost_per_token", "output_cost_per_token"):
             if _cost_field not in _raw_entry and _cost_field not in value:
                 existing_model.pop(_cost_field, None)
