@@ -30,12 +30,16 @@ from ...ir import (
 # Config" step when the caller omits it (AnthropicConfig.get_config()).
 _DEFAULT_MAX_TOKENS = 4096
 
-_DUMMY_TOOL: PlainJson = {
-    "name": "dummy_tool",
-    "input_schema": {"type": "object", "properties": {}},
-    "type": "custom",
-    "description": "This is a dummy tool call",
-}
+def _dummy_tool() -> PlainJson:
+    """Built fresh per request: the returned body is a plain mutable dict that
+    downstream v1-era code may mutate, so sharing one module-level dict would
+    bleed state across requests."""
+    return {
+        "name": "dummy_tool",
+        "input_schema": {"type": "object", "properties": {}},
+        "type": "custom",
+        "description": "This is a dummy tool call",
+    }
 
 
 def serialize_request(request: ChatRequest) -> Body:
@@ -118,7 +122,7 @@ def _tools(request: ChatRequest) -> Option[Tuple[str, PlainJson]]:
     if len(request.tools) > 0:
         return Some(("tools", [_tool(tool) for tool in request.tools]))
     if has_tool_blocks(request.messages):
-        return Some(("tools", [_DUMMY_TOOL]))
+        return Some(("tools", [_dummy_tool()]))
     return Nothing
 
 

@@ -8,7 +8,8 @@ the whole pipeline returns one ``Result`` and never raises.
 
 from __future__ import annotations
 
-from typing import Callable, Dict
+from types import MappingProxyType
+from typing import Callable, Dict, Mapping
 
 from expression import Error
 
@@ -18,9 +19,11 @@ from ..inbound.openai_chat import parse_request
 from ..ir import Body, ChatRequest
 from ..providers.anthropic import serialize_request
 
-_SERIALIZERS: Dict[Provider, Callable[[ChatRequest], Body]] = {
-    "anthropic": serialize_request,
-}
+_SERIALIZERS: Mapping[Provider, Callable[[ChatRequest], Body]] = MappingProxyType(
+    {
+        "anthropic": serialize_request,
+    }
+)
 
 
 def translate_chat_request(
