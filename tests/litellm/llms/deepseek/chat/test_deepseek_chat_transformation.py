@@ -166,3 +166,136 @@ class TestDeepSeekThinkingParams:
         )
 
         assert "thinking" not in result
+
+    def test_map_thinking_disabled_passed_through(self):
+        """thinking={"type": "disabled"} must be forwarded so users can opt out
+        of DeepSeek V4's default-on thinking mode."""
+        result = self.config.map_openai_params(
+            non_default_params={"thinking": {"type": "disabled"}},
+            optional_params={},
+            model="deepseek-v4-flash",
+            drop_params=False,
+        )
+
+        assert result["thinking"] == {"type": "disabled"}
+
+
+class TestDeepSeekV4DefaultThinkingMode:
+    """
+    DeepSeek V4 models run in thinking mode BY DEFAULT and require
+    `reasoning_content` to be passed back on assistant messages
+    (https://github.com/BerriAI/litellm/issues/26395).
+    """
+
+    def setup_method(self):
+        self.config = DeepSeekChatConfig()
+
+    # --- registry ---
+
+    @pytest.mark.parametrize(
+        "model",
+        ["deepseek-v4-flash", "deepseek-v4-pro"],
+    )
+    def test_v4_models_registered_with_reasoning(self, model):
+        from litellm.utils import supports_reasoning
+
+        assert supports_reasoning(model=model, custom_llm_provider="deepseek")
+        assert supports_reasoning(model=f"deepseek/{model}")
+
+    # --- _thinking_mode_active guard ---
+
+    @pytest.mark.parametrize("model", ["deepseek-v4-flash", "deepseek-v4-pro"])
+    def test_thinking_active_by_default_for_v4(self, model):
+        assert self.config._thinking_mode_active(model=model, optional_params={})
+
+    @pytest.mark.parametrize("model", ["deepseek-v4-flash", "deepseek-v4-pro"])
+    def test_thinking_inactive_when_explicitly_disabled(self, model):
+        assert not self.config._thinking_mode_active(
+            model=model, optional_params={"thinking": {"type": "disabled"}}
+        )
+
+    @pytest.mark.parametrize("model", ["deepseek-v4-flash", "deepseek-v4-pro"])
+    def test_thinking_active_when_explicitly_enabled(self, model):
+        assert self.config._thinking_mode_active(
+            model=model, optional_params={"thinking": {"type": "enabled"}}
+        )
+
+    def test_opt_in_models_unaffected_by_default(self):
+        """deepseek-v3.2 supports reasoning but thinking is opt-in: no thinking
+        param -> guard must stay off (no spurious injection)."""
+        assert not self.config._thinking_mode_active(
+            model="deepseek-v3.2", optional_params={}
+        )
+        assert self.config._thinking_mode_active(
+            model="deepseek-v3.2", optional_params={"thinking": {"type": "enabled"}}
+        )
+
+    def test_non_reasoning_model_unaffected(self):
+        assert not self.config._thinking_mode_active(
+            model="deepseek-chat", optional_params={}
+        )
+
+    # --- end-to-end transform_request ---
+
+    def _tool_call_history(self):
+        return [
+            {"role": "user", "content": "What's the weather in Tokyo?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_client_generated_id",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "Tokyo"}',
+                        },
+                    }
+                ],
+                # reasoning_content stripped, tool_call id rewritten:
+                # standard behavior of frontends/agent frameworks, and the
+                # exact request shape DeepSeek rejects with
+                # "The `reasoning_content` in the thinking mode must be passed back to the API."
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_client_generated_id",
+                "content": '{"weather": "Sunny", "temp_c": 28}',
+            },
+        ]
+
+    def test_transform_request_injects_reasoning_content_for_v4_by_default(self):
+        body = self.config.transform_request(
+            model="deepseek-v4-flash",
+            messages=self._tool_call_history(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assistant_msg = body["messages"][1]
+        assert assistant_msg["reasoning_content"] == " "
+
+    def test_transform_request_no_injection_when_thinking_disabled(self):
+        body = self.config.transform_request(
+            model="deepseek-v4-flash",
+            messages=self._tool_call_history(),
+            optional_params={"thinking": {"type": "disabled"}},
+            litellm_params={},
+            headers={},
+        )
+        assistant_msg = body["messages"][1]
+        assert "reasoning_content" not in assistant_msg
+
+    def test_transform_request_preserves_existing_reasoning_content(self):
+        messages = self._tool_call_history()
+        messages[1]["reasoning_content"] = "I should check the weather tool."
+        body = self.config.transform_request(
+            model="deepseek-v4-pro",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assistant_msg = body["messages"][1]
+        assert assistant_msg["reasoning_content"] == "I should check the weather tool."

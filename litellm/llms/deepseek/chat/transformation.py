@@ -49,14 +49,15 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         thinking_value = optional_params.pop("thinking", None)
         reasoning_effort = optional_params.pop("reasoning_effort", None)
 
-        # Handle thinking parameter - only accept {"type": "enabled"}
+        # Handle thinking parameter - accept {"type": "enabled"} and
+        # {"type": "disabled"} (the latter opts out of V4's default-on thinking)
         if thinking_value is not None:
-            if (
-                isinstance(thinking_value, dict)
-                and thinking_value.get("type") == "enabled"
+            if isinstance(thinking_value, dict) and thinking_value.get("type") in (
+                "enabled",
+                "disabled",
             ):
-                # DeepSeek only accepts {"type": "enabled"}, ignore budget_tokens
-                optional_params["thinking"] = {"type": "enabled"}
+                # DeepSeek only accepts the `type` key, ignore budget_tokens
+                optional_params["thinking"] = {"type": thinking_value["type"]}
 
         # Handle reasoning_effort - map to thinking enabled
         elif reasoning_effort is not None and reasoning_effort != "none":
@@ -135,16 +136,33 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 messages=messages, model=model, is_async=False
             )
 
+    # Model families where DeepSeek enables thinking mode BY DEFAULT (no
+    # `thinking` param required). Reference:
+    # https://api-docs.deepseek.com/guides/thinking_mode
+    DEFAULT_THINKING_MODEL_PREFIXES = ("deepseek-v4",)
+
+    def _is_default_thinking_model(self, model: str) -> bool:
+        return any(
+            prefix in model for prefix in self.DEFAULT_THINKING_MODEL_PREFIXES
+        )
+
     def _thinking_mode_active(self, model: str, optional_params: dict) -> bool:
         """
-        Returns True only when thinking mode is actually active for this request:
-          - model supports reasoning (capability check)
-          - user explicitly passed thinking={"type": "enabled"} (opt-in check)
+        Returns True when thinking mode is active for this request:
+          - user explicitly passed thinking={"type": "enabled"} on a model that
+            supports reasoning, OR
+          - the model runs in thinking mode by default (DeepSeek V4 family) and
+            the user did not explicitly disable it.
+
+        Models like deepseek-v3.2 (supports_reasoning but opt-in thinking)
+        remain untouched unless thinking is explicitly enabled.
         """
-        return (
-            supports_reasoning(model=model, custom_llm_provider="deepseek")
-            and (optional_params.get("thinking") or {}).get("type") == "enabled"
-        )
+        thinking_type = (optional_params.get("thinking") or {}).get("type")
+        if thinking_type == "disabled":
+            return False
+        if thinking_type == "enabled":
+            return supports_reasoning(model=model, custom_llm_provider="deepseek")
+        return self._is_default_thinking_model(model)
 
     def transform_request(
         self,
