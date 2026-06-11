@@ -198,6 +198,74 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         assert response_cost_value == pytest.approx(0.0005, abs=1e-10)
 
 
+class TestCursorChatCompletionsSpendTracking:
+    @patch("litellm.proxy.proxy_server.llm_router")
+    def test_proxy_auth_metadata_forwarded_as_litellm_metadata(self, mock_router):
+        """
+        /cursor/chat/completions runs through the Responses API pipeline, so
+        proxy auth metadata (user_api_key etc.) must be sent as
+        `litellm_metadata`. If it lands in the user-facing `metadata` param
+        instead, the spend tracking callback sees user_api_key=None and
+        silently skips the SpendLogs write. Regression test for #30126.
+        """
+        from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        mock_router.aresponses = AsyncMock(
+            return_value=ResponsesAPIResponse(
+                id="resp_cursor123",
+                created_at=1234567890,
+                model="gpt-4o",
+                object="response",
+                output=[
+                    ResponseOutputMessage(
+                        id="msg_cursor123",
+                        type="message",
+                        role="assistant",
+                        status="completed",
+                        content=[
+                            ResponseOutputText(
+                                type="output_text",
+                                text="Hello from Cursor!",
+                                annotations=[],
+                            )
+                        ],
+                    )
+                ],
+            )
+        )
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            user_id="test-user",
+            request_route="/cursor/chat/completions",
+        )
+        try:
+            client = TestClient(app)
+            response = client.post(
+                "/cursor/chat/completions",
+                json={
+                    "model": "gpt-4o",
+                    "input": [{"role": "user", "content": "Hello"}],
+                },
+                headers={"Authorization": "Bearer sk-1234"},
+            )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200
+        mock_router.aresponses.assert_called_once()
+        request_kwargs = mock_router.aresponses.call_args.kwargs
+        litellm_metadata = request_kwargs.get("litellm_metadata") or {}
+        assert litellm_metadata.get("user_api_key") == "hashed-test-key"
+        assert litellm_metadata.get("user_api_key_user_id") == "test-user"
+        # proxy internals must not leak into the user-facing metadata param
+        assert "user_api_key" not in (request_kwargs.get("metadata") or {})
+
+
 import json
 
 

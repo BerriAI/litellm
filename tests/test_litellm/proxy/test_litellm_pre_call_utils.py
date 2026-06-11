@@ -84,6 +84,10 @@ class TestGetMetadataVariableName:
         request = self._make_request("/v1/files")
         assert _get_metadata_variable_name(request) == "litellm_metadata"
 
+    def test_returns_litellm_metadata_for_cursor_chat_completions(self):
+        request = self._make_request("/cursor/chat/completions")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
     def test_returns_metadata_for_chat_completions(self):
         request = self._make_request("/chat/completions")
         assert _get_metadata_variable_name(request) == "metadata"
