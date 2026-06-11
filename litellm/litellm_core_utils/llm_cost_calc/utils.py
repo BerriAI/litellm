@@ -609,6 +609,13 @@ def _apply_off_peak_to_base_costs(
     )
 
 
+def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
+    prompt_tokens = float(getattr(usage, "prompt_tokens", 0) or 0)
+    cache_read_tokens = float(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    cache_creation_tokens = float(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    return prompt_tokens + cache_read_tokens + cache_creation_tokens
+
+
 def _get_token_base_cost(
     model_info: ModelInfo,
     usage: Usage,
@@ -671,6 +678,8 @@ def _get_token_base_cost(
         if k.startswith("input_cost_per_token_above_") and not k.endswith(_NON_STANDARD_THRESHOLD_SUFFIXES)
     ]
 
+    effective_prompt_tokens = _get_effective_prompt_tokens_for_tiered_pricing(usage)
+
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
     threshold: float | None = None
     for key in sorted(threshold_keys, key=_parse_above_token_threshold, reverse=True):
@@ -680,7 +689,7 @@ def _get_token_base_cost(
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
                 threshold_str = key.split("_above_")[1].split("_tokens")[0]
                 threshold = _parse_above_token_threshold(key)
-                if _prompt_exceeds_threshold(usage.prompt_tokens, threshold, threshold_is_inclusive):
+                if _prompt_exceeds_threshold(effective_prompt_tokens, threshold, threshold_is_inclusive):
                     # Prefer a service_tier-specific above-threshold key when available,
                     # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
                     # ON_DEMAND_PRIORITY.  Falls back to the standard key automatically
