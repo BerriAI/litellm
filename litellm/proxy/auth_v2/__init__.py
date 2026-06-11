@@ -10,9 +10,11 @@ from .config import (
     TrustedProxyConfig,
 )
 from .models import Principal
+from .oidc import build_oidc_router
 from .rbac import Role
 from .resolver import IdentityResolver, InMemoryIdentityStore, ProvisioningStore
 from .saml import build_saml_router
+from .scim import build_scim_router
 from .security import AuthSecurity
 
 __all__ = [
@@ -32,4 +34,6 @@ __all__ = [
     "SessionConfig",
     "SAMLConfig",
     "build_saml_router",
+    "build_scim_router",
+    "build_oidc_router",
 ]
