@@ -1,0 +1,33 @@
+# 4h-harness suite manifest -- stub.
+#
+# Mirrors the conventions of tests/claude_code/manifest.yaml (the compat
+# matrix, suite #1 on the harness): `id` MUST match the suite directory name
+# on disk; the harness infers the suite for each test from its file path.
+# The harness-engineer owns the schema; entries here register the suites
+# created by the chat-scope CircleCI keep/drop migration (audit 8c).
+#
+# Every test in these suites is live provider truth: env API keys, no
+# patching of the asserted layer. The harness owns retry policy and
+# per-provider rate limiting; the @pytest.mark.flaky markers these tests
+# carried in CircleCI were stripped at migration time.
+
+schema_version: "1"
+
+suites:
+  - id: chat_live_anthropic
+    name: Chat live (Anthropic)
+    # Largely overlaps the compat matrix feature rows (tools, json mode,
+    # pdf, images, caching, streaming); dedupe against
+    # tests/claude_code/manifest.yaml before adding cells.
+  - id: chat_live_bedrock
+    name: Chat live (Bedrock converse + invoke)
+  - id: chat_live_azure
+    name: Chat live (Azure OpenAI + Azure AI)
+  - id: chat_live_openai
+    name: Chat live (OpenAI)
+  - id: chat_live_gemini
+    name: Chat live (Google AI Studio)
+  - id: chat_live_longtail
+    name: Chat live (long-tail providers, env-gated cells)
+  - id: responses_api_live
+    name: Responses API live (OpenAI, Anthropic, Azure, Gemini)
