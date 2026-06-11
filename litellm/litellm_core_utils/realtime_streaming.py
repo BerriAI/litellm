@@ -47,6 +47,7 @@ class RealTimeStreaming:
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[Dict] = None,
         backend_uses_beta_protocol: Optional[bool] = None,
+        force_transcription_model: Optional[str] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -100,6 +101,11 @@ class RealTimeStreaming:
         self._flushing_pending_messages_until_setup: bool = False
         self._pending_messages_until_setup: List[str] = []
         self._pending_messages_byte_total: int = 0
+        # Whether this is a transcription-only session (session.type == "transcription",
+        # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
+        # their input_audio_transcription.completed usage drives duration-based cost.
+        self._force_transcription_model = force_transcription_model
+        self._is_transcription_session: bool = force_transcription_model is not None
 
     # Per-connection caps for pre-setup audio frames (message count + total bytes).
     _MAX_BUFFERED_MESSAGES: int = 200
@@ -144,7 +150,7 @@ class RealTimeStreaming:
             return True
         return False
 
-    def store_message(self, message: Union[str, bytes, OpenAIRealtimeEvents]):
+    def store_message(self, message: Union[str, bytes, dict, OpenAIRealtimeEvents]):
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
@@ -154,22 +160,20 @@ class RealTimeStreaming:
         else:
             message_obj = cast(Dict[str, Any], json.loads(cast(str, message)))
         self._collect_tool_calls_from_response_done(cast(dict, message_obj))
+        if not self._should_store_message(message_obj):
+            return
         try:
             event_type = message_obj.get("type", "")
             if event_type in self._SESSION_EVENT_TYPES:
-                typed_obj = OpenAIRealtimeStreamSessionEvents(**message_obj)  # type: ignore
+                typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(**message_obj)  # type: ignore
             else:
-                # Use the base object as a safe catch-all for all other event types
-                # (both beta and GA), so unknown/new event names never raise here.
+                # Catch-all base object so unknown/new event names never raise.
                 typed_obj = OpenAIRealtimeStreamResponseBaseObject(**message_obj)  # type: ignore
         except Exception as e:
             verbose_logger.debug(f"Error parsing message for logging: {e}")
-            # Don't re-raise — a parse failure must not drop or delay the message
-            if self._should_store_message(message_obj):
-                self.messages.append(message_obj)  # type: ignore[arg-type]
+            self.messages.append(message_obj)  # type: ignore[arg-type]
             return
-        if self._should_store_message(typed_obj):
-            self.messages.append(typed_obj)
+        self.messages.append(typed_obj)
 
     def _collect_user_input_from_client_event(self, message: Union[str, dict]) -> None:
         """Extract user text content from client WebSocket events for spend logging."""
@@ -209,6 +213,8 @@ class RealTimeStreaming:
                     self.session_tools = tools
                 # GA: session.type is required; log it for traceability but no action needed
                 verbose_logger.debug(f"Realtime session.type: {session.get('type')}")
+                if session.get("type") == "transcription":
+                    self._is_transcription_session = True
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
@@ -222,6 +228,55 @@ class RealTimeStreaming:
                 transcript = cast(str, event_obj.get("transcript", ""))
                 if transcript:
                     self.input_messages.append({"role": "user", "content": transcript})
+        except (AttributeError, TypeError):
+            pass
+
+    def _detect_transcription_session_from_backend(
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
+    ) -> None:
+        """Flag transcription-only sessions from backend session events."""
+        try:
+            event_type = event_obj.get("type", "")
+            if event_type in (
+                "transcription_session.created",
+                "transcription_session.updated",
+            ):
+                self._is_transcription_session = True
+            elif event_type in ("session.created", "session.updated"):
+                session = cast(dict, event_obj).get("session", {}) or {}
+                if session.get("type") == "transcription":
+                    self._is_transcription_session = True
+        except (AttributeError, TypeError):
+            pass
+
+    def _capture_transcription_usage(
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
+    ) -> None:
+        """
+        Append a usage-only transcription completed event to the logged results so
+        the cost calculator can bill it by audio duration. The default logged event
+        types exclude this event, so it is captured here directly for transcription
+        sessions rather than widening logging for every realtime session. Only the
+        type and usage are kept — the transcript is already captured separately in
+        input_messages, so it is not duplicated into the response log here.
+        """
+        try:
+            usage = event_obj.get("usage")
+            if usage is None:
+                return
+            # If this event type is already captured by store_message (e.g. the user
+            # logs all realtime events), don't append a second copy.
+            if self._should_store_message(event_obj):
+                return
+            self.messages.append(
+                cast(
+                    OpenAIRealtimeEvents,
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "usage": usage,
+                    },
+                )
+            )
         except (AttributeError, TypeError):
             pass
 
@@ -285,6 +340,7 @@ class RealTimeStreaming:
         backend, False if the provider transformation produced no output and
         the message was effectively dropped.
         """
+        message = self._enforce_transcription_session_model(message)
         if self.provider_config:
             transformed = self.provider_config.transform_realtime_request(
                 message, self.model, self.session_configuration_request
@@ -303,6 +359,80 @@ class RealTimeStreaming:
             return sent
         await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
         return True
+
+    def _enforce_transcription_session_model(self, message: str) -> str:
+        """Force client transcription session updates to the authorized model.
+
+        `/v1/realtime?intent=transcription` may intentionally omit `model` from
+        the upstream URL for Azure compatibility, but the proxy still authorizes
+        a resolved LiteLLM model before opening the backend websocket. If a
+        client later sends a transcription `session.update`, any model embedded
+        in that update must be rewritten to the same authorized model instead of
+        allowing a post-auth model/deployment switch.
+
+        Normal realtime sessions keep their independent nested transcription
+        model behavior because `_force_transcription_model` is only set for
+        transcription-intent websocket routes.
+        """
+        if self._force_transcription_model is None:
+            return message
+
+        try:
+            message_obj = json.loads(message)
+        except (json.JSONDecodeError, TypeError):
+            return message
+
+        if message_obj.get("type") not in (
+            "session.update",
+            "transcription_session.update",
+        ):
+            return message
+
+        session = message_obj.get("session")
+        if not isinstance(session, dict):
+            return message
+
+        if session.get("type") == "transcription":
+            self._is_transcription_session = True
+
+        authorized_model = self._force_transcription_model
+        changed = False
+
+        transcription = session.get("input_audio_transcription")
+        if (
+            isinstance(transcription, dict)
+            and transcription.get("model") != authorized_model
+        ):
+            session["input_audio_transcription"] = {
+                **transcription,
+                "model": authorized_model,
+            }
+            changed = True
+
+        audio = session.get("audio")
+        if isinstance(audio, dict):
+            audio_input = audio.get("input")
+            if isinstance(audio_input, dict):
+                nested_transcription = audio_input.get("transcription")
+                if (
+                    isinstance(nested_transcription, dict)
+                    and nested_transcription.get("model") != authorized_model
+                ):
+                    session["audio"] = {
+                        **audio,
+                        "input": {
+                            **audio_input,
+                            "transcription": {
+                                **nested_transcription,
+                                "model": authorized_model,
+                            },
+                        },
+                    }
+                    changed = True
+
+        if not changed:
+            return message
+        return json.dumps(message_obj)
 
     def _uses_deferred_backend_setup(self) -> bool:
         """True when setup is deferred until the client's first session.update."""
@@ -358,8 +488,7 @@ class RealTimeStreaming:
                     for msg in self._pending_messages_until_setup
                 )
                 verbose_logger.debug(
-                    "Failed to flush buffered client message after setup: %s "
-                    "(%d buffered message(s) retained)",
+                    "Failed to flush buffered client message after setup: %s (%d buffered message(s) retained)",
                     e,
                     len(unsent),
                 )
@@ -376,8 +505,7 @@ class RealTimeStreaming:
                 return True
             except Exception as e:
                 verbose_logger.warning(
-                    "Failed to translate %s to beta protocol, forwarding "
-                    "untranslated event to client: %s",
+                    "Failed to translate %s to beta protocol, forwarding untranslated event to client: %s",
                     event.get("type"),
                     e,
                 )
@@ -705,48 +833,58 @@ class RealTimeStreaming:
             self.store_message(event_str)
             await self._send_event_to_client(event, event_str)
 
-    async def _handle_raw_backend_message(self, raw_response) -> bool:
+    @staticmethod
+    def _parse_backend_event(raw_response: str) -> Optional[dict]:
+        """Parse a backend frame once. Returns None for non-JSON or non-object frames."""
+        try:
+            event = json.loads(raw_response)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return event if isinstance(event, dict) else None
+
+    async def _handle_raw_backend_message(
+        self, event_obj: dict, raw_response: str
+    ) -> bool:
         """Process a backend message without provider_config (raw path).
 
         Returns True if the caller should skip the default store+forward (i.e. continue the loop).
         """
-        try:
-            event_obj = json.loads(raw_response)
+        event_type = event_obj.get("type")
 
-            # For audio/VAD guardrail path: once the session is ready, tell the backend
-            # not to auto-respond after VAD detects end-of-speech.  We send the
-            # session.created to the client FIRST so the client is always in sync, then
-            # inject the session.update so a potential error from the backend doesn't
-            # arrive before the client sees session.created.
-            if (
-                event_obj.get("type") == "session.created"
-                and self._has_audio_transcription_guardrails()
-            ):
-                self.store_message(raw_response)
-                await self.websocket.send_text(raw_response)
-                await self._send_to_backend(self._make_disable_auto_response_message())
+        self._detect_transcription_session_from_backend(event_obj)
+
+        # Send session.created to the client FIRST so it stays in sync, then inject
+        # the disable-auto-response session.update; otherwise a backend error could
+        # reach the client before it sees session.created.
+        if (
+            event_type == "session.created"
+            and self._has_audio_transcription_guardrails()
+        ):
+            self.store_message(event_obj)
+            await self.websocket.send_text(raw_response)
+            await self._send_to_backend(self._make_disable_auto_response_message())
+            return True
+
+        if event_type == "conversation.item.input_audio_transcription.completed":
+            transcript = event_obj.get("transcript", "")
+            self._collect_user_input_from_backend_event(event_obj)
+            self.store_message(event_obj)
+            await self.websocket.send_text(raw_response)
+
+            # Transcription-only sessions (e.g. gpt-realtime-whisper) have no
+            # assistant turn: capture audio-duration usage for cost and never
+            # trigger response.create.
+            if self._is_transcription_session:
+                self._capture_transcription_usage(event_obj)
                 return True
 
-            if (
-                event_obj.get("type")
-                == "conversation.item.input_audio_transcription.completed"
-            ):
-                transcript = event_obj.get("transcript", "")
-                self._collect_user_input_from_backend_event(event_obj)
-                ## LOGGING — must happen before continue below
-                self.store_message(raw_response)
-                # Forward transcript to client so user sees what they said
-                await self.websocket.send_text(raw_response)
-                blocked = await self.run_realtime_guardrails(
-                    transcript,
-                    item_id=event_obj.get("item_id"),
-                )
-                if not blocked:
-                    # Clean — trigger LLM response
-                    await self._send_to_backend(json.dumps({"type": "response.create"}))
-                return True
-        except (json.JSONDecodeError, AttributeError):
-            pass
+            blocked = await self.run_realtime_guardrails(
+                transcript,
+                item_id=event_obj.get("item_id"),
+            )
+            if not blocked:
+                await self._send_to_backend(json.dumps({"type": "response.create"}))
+            return True
         return False
 
     async def backend_to_client_send_messages(self):
@@ -779,25 +917,25 @@ class RealTimeStreaming:
                         )
                         continue
                 else:
-                    handled = await self._handle_raw_backend_message(raw_response)
-                    if handled:
-                        continue
-                    ## LOGGING
-                    self.store_message(raw_response)
-
-                    # If the client opted into beta protocol, translate GA event
-                    # names/shapes back to the beta equivalents before forwarding.
-                    if self._client_wants_beta:
-                        try:
-                            event_dict = json.loads(raw_response)
-                            translated = self._translate_event_to_beta(event_dict)
-                            if translated is None:
-                                continue  # drop GA-only events (e.g. conversation.item.done)
-                            await self.websocket.send_text(json.dumps(translated))
-                        except Exception:
-                            await self.websocket.send_text(raw_response)
-                    else:
+                    event = self._parse_backend_event(raw_response)
+                    if event is None:
                         await self.websocket.send_text(raw_response)
+                        continue
+
+                    if await self._handle_raw_backend_message(event, raw_response):
+                        continue
+                    self.store_message(event)
+
+                    if not self._client_wants_beta:
+                        await self.websocket.send_text(raw_response)
+                        continue
+
+                    translated = self._translate_event_to_beta(event)
+                    if translated is None:
+                        continue
+                    await self.websocket.send_text(
+                        raw_response if translated is event else json.dumps(translated)
+                    )
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
             verbose_logger.exception(
@@ -927,41 +1065,43 @@ class RealTimeStreaming:
     def _translate_event_to_beta(event: dict) -> Optional[dict]:
         """Translate a single GA event dict to its beta equivalent.
 
-        Returns None if the event should be dropped entirely (e.g. the GA-only
-        conversation.item.done has no beta counterpart).
-        Returns the (possibly mutated copy of the) event otherwise.
+        Returns None when the event must be dropped (the GA-only
+        conversation.item.done has no beta counterpart). Returns the original
+        event object unchanged when no translation applies, so the caller can
+        forward the raw frame without re-serializing; otherwise returns a
+        translated copy.
         """
         event_type = event.get("type", "")
 
-        # conversation.item.done has no beta equivalent — the client already
-        # received conversation.item.created (translated from .added).
         if event_type == "conversation.item.done":
             return None
 
-        # Shallow-copy so we don't mutate the stored message
+        renamed_type = RealTimeStreaming._GA_TO_BETA_EVENT_TYPES.get(event_type)
+        has_item = isinstance(event.get("item"), dict)
+        response = event.get("response")
+        has_response_output = isinstance(response, dict) and isinstance(
+            response.get("output"), list
+        )
+        if renamed_type is None and not has_item and not has_response_output:
+            return event
+
         translated = dict(event)
-
-        # Rename the type field
-        if event_type in RealTimeStreaming._GA_TO_BETA_EVENT_TYPES:
-            translated["type"] = RealTimeStreaming._GA_TO_BETA_EVENT_TYPES[event_type]
-
-        # Fix content block types inside items (response.done output list,
-        # conversation.item.created item content, etc.)
-        if "item" in translated and isinstance(translated["item"], dict):
+        if renamed_type is not None:
+            translated["type"] = renamed_type
+        if has_item:
             translated["item"] = RealTimeStreaming._translate_item_content_types(
                 dict(translated["item"])
             )
-        if "response" in translated and isinstance(translated["response"], dict):
+        if has_response_output:
             resp = dict(translated["response"])
-            if "output" in resp and isinstance(resp["output"], list):
-                resp["output"] = [
-                    (
-                        RealTimeStreaming._translate_item_content_types(dict(o))
-                        if isinstance(o, dict)
-                        else o
-                    )
-                    for o in resp["output"]
-                ]
+            resp["output"] = [
+                (
+                    RealTimeStreaming._translate_item_content_types(dict(o))
+                    if isinstance(o, dict)
+                    else o
+                )
+                for o in resp["output"]
+            ]
             translated["response"] = resp
 
         return translated

@@ -957,6 +957,9 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  
                             return_value={"test": "data"}
                         )
                         mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                            return_value={"x-callback-test": "value"}
+                        )
 
                         # Setup mock for http response
                         mock_response = MagicMock()
@@ -1069,6 +1072,9 @@ async def test_pass_through_request_streaming_marks_logging_obj_as_stream():
                     return_value={"model": "claude-3", "stream": True}
                 )
                 mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                    return_value={"x-callback-test": "value"}
+                )
 
                 upstream_response = MagicMock()
                 upstream_response.status_code = 200
@@ -1134,6 +1140,9 @@ async def test_pass_through_request_sse_response_marks_logging_obj_as_stream():
                     return_value={"model": "claude-3"}
                 )
                 mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                    return_value={"x-callback-test": "value"}
+                )
 
                 upstream_response = MagicMock()
                 upstream_response.status_code = 200
@@ -1975,6 +1984,9 @@ async def test_pass_through_request_query_params_forwarding():
                         mock_proxy_logging.pre_call_hook = AsyncMock(
                             return_value=test_body
                         )
+                        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                            return_value={"x-callback-test": "value"}
+                        )
 
                         # Setup mock for http response
                         mock_response = MagicMock()
@@ -2704,6 +2716,10 @@ async def test_pass_through_request_non_streaming_uses_content_for_state_raw_bod
             new=AsyncMock(side_effect=_hook_mutates_body),
         ),
         patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_response_headers_hook",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler",
             new=AsyncMock(),
         ),
@@ -2762,6 +2778,10 @@ async def test_pass_through_request_streaming_uses_content_for_state_raw_body():
         patch(
             "litellm.proxy.proxy_server.proxy_logging_obj.pre_call_hook",
             new=AsyncMock(side_effect=lambda **kw: kw["data"]),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_response_headers_hook",
+            new=AsyncMock(return_value={}),
         ),
         patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler",

@@ -47,12 +47,14 @@ from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
+    _mcp_gateway_server_name,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
+    MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
     get_server_prefix,
     iter_known_server_prefixes,
@@ -322,10 +324,14 @@ if MCP_AVAILABLE:
             notification_options=notification_options,
             experimental_capabilities=experimental_capabilities or {},
         )
+        updates: Dict[str, Any] = {}
         merged = _mcp_gateway_initialize_instructions.get()
         if merged is not None:
-            return opts.model_copy(update={"instructions": merged})
-        return opts
+            updates["instructions"] = merged
+        scoped_server_name = _mcp_gateway_server_name.get()
+        if scoped_server_name is not None:
+            updates["server_name"] = scoped_server_name
+        return opts.model_copy(update=updates) if updates else opts
 
     ########################################################
     ############ Initialize the MCP Server #################
@@ -719,6 +725,16 @@ if MCP_AVAILABLE:
                     raw_headers=raw_headers,
                     host_progress_callback=host_progress_callback,
                     **data,  # for logging
+                )
+            except MCPMissingUserEnvVarsError as e:
+                verbose_logger.info(
+                    "MCP mcp_server_tool_call missing per-user env vars: server_id=%s missing=%s",
+                    e.server_id,
+                    e.missing,
+                )
+                return CallToolResult(
+                    content=[TextContent(text=str(e), type="text")],
+                    isError=True,
                 )
             except BlockedPiiEntityError as e:
                 verbose_logger.error(
@@ -1311,8 +1327,7 @@ if MCP_AVAILABLE:
         try:
             from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
                 get_user_oauth_credential,
-                is_oauth_credential_expired,
-                refresh_user_oauth_token,
+                resolve_valid_user_oauth_token,
             )
             from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (  # noqa: PLC0415
                 _compute_per_user_token_ttl,
@@ -1332,6 +1347,7 @@ if MCP_AVAILABLE:
                     return {"Authorization": f"Bearer {cached_token}"}
 
             # ── Slow path: DB lookup ──────────────────────────────────────────
+            prisma_client = None
             if prefetched_creds is not None:
                 cred = prefetched_creds.get(server_id)
             else:
@@ -1349,43 +1365,17 @@ if MCP_AVAILABLE:
             if not cred or not cred.get("access_token"):
                 return None
 
-            if is_oauth_credential_expired(cred):
-                verbose_logger.debug(
-                    "_get_user_oauth_extra_headers_from_db: token expired for user=%s server=%s — attempting refresh",
-                    user_id,
-                    server_id,
-                )
-                # Attempt token refresh; requires a DB client (not available from prefetch)
-                if cred.get("refresh_token"):
-                    try:
-                        from litellm.proxy.utils import (  # noqa: PLC0415
-                            get_prisma_client_or_throw,
-                        )
-
-                        prisma_client = get_prisma_client_or_throw(
-                            "Database not connected. Cannot refresh OAuth token."
-                        )
-                        cred = await refresh_user_oauth_token(
-                            prisma_client=prisma_client,
-                            user_id=user_id,
-                            server=server,
-                            cred=cred,
-                        )
-                    except Exception as refresh_exc:
-                        verbose_logger.warning(
-                            "_get_user_oauth_extra_headers_from_db: refresh failed for user=%s server=%s: %s",
-                            user_id,
-                            server_id,
-                            refresh_exc,
-                        )
-                        cred = None
-
-                if not cred or not cred.get("access_token"):
-                    # Clear stale Redis/cache entry so we don't serve it again.
-                    # Do this for both the individual and prefetch paths so the
-                    # next request doesn't get a stale cache hit.
-                    await mcp_per_user_token_cache.delete(user_id, server_id)
-                    return None
+            cred = await resolve_valid_user_oauth_token(
+                user_id=user_id,
+                server=server,
+                cred=cred,
+                prisma_client=prisma_client,
+            )
+            if cred is None:
+                # Refresh failed or token expired with no usable refresh_token —
+                # clear the stale Redis entry so the next request doesn't reuse it.
+                await mcp_per_user_token_cache.delete(user_id, server_id)
+                return None
 
             access_token: str = cred["access_token"]
 
@@ -1559,6 +1549,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_servers: Optional[List[str]],
         client_ip: Optional[str],
+        scoped_server_endpoint: bool = False,
     ) -> AsyncIterator[None]:
         allowed = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
@@ -1580,11 +1571,22 @@ if MCP_AVAILABLE:
                 return_exceptions=True,
             )
         merged = _merge_gateway_initialize_instructions(allowed_mcp_servers=allowed)
-        tok = _mcp_gateway_initialize_instructions.set(merged)
+        scoped_server_name = None
+        if scoped_server_endpoint and len(allowed) == 1:
+            scoped_server = allowed[0]
+            scoped_server_name = (
+                scoped_server.alias
+                or scoped_server.server_name
+                or scoped_server.name
+                or scoped_server.server_id
+            )
+        instructions_token = _mcp_gateway_initialize_instructions.set(merged)
+        server_name_token = _mcp_gateway_server_name.set(scoped_server_name)
         try:
             yield
         finally:
-            _mcp_gateway_initialize_instructions.reset(tok)
+            _mcp_gateway_initialize_instructions.reset(instructions_token)
+            _mcp_gateway_server_name.reset(server_name_token)
 
     async def _get_tools_from_mcp_servers(  # noqa: PLR0915
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -3635,6 +3637,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+            scoped_server_endpoint = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
             _client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
@@ -3911,6 +3914,7 @@ if MCP_AVAILABLE:
                     user_api_key_auth,
                     mcp_servers,
                     _client_ip,
+                    scoped_server_endpoint=scoped_server_endpoint,
                 ):
                     await target_manager.handle_request(scope, receive, local_send)
                     if use_stateful and session_id and scope.get("method") == "DELETE":
@@ -3995,6 +3999,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+            scoped_server_endpoint = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
             _sse_client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
@@ -4067,6 +4072,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth,
                 mcp_servers,
                 _sse_client_ip,
+                scoped_server_endpoint=scoped_server_endpoint,
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
         except MCPUpstreamAuthError as e:

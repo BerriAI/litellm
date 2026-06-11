@@ -697,6 +697,33 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,error_message",
+    [
+        ("healthy", ""),
+        ("unhealthy", "Galileo authentication failed"),
+    ],
+)
+async def test_health_services_endpoint_galileo(status, error_message):
+    with patch("litellm.integrations.galileo.GalileoObserve") as MockGalileoObserve:
+        mock_instance = MagicMock()
+        mock_instance.async_health_check = AsyncMock(
+            return_value={"status": status, "error_message": error_message}
+        )
+        MockGalileoObserve.return_value = mock_instance
+
+        result = await health_services_endpoint(service="galileo")
+
+        if status == "healthy":
+            assert result["status"] == "healthy"
+            assert result["message"] == "Galileo is healthy"
+        else:
+            assert result["status"] == "unhealthy"
+            assert result["message"] == error_message
+        mock_instance.async_health_check.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_health_services_endpoint_datadog_llm_observability():
     """
     Verify that 'datadog_llm_observability' is accepted as a valid service

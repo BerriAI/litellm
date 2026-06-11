@@ -164,11 +164,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/layout.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -228,11 +223,6 @@
       "count": 1
     }
   },
-  "src/app/page.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 2
-    }
-  },
   "src/components/AIHub/AgentHubTableColumns.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 1
@@ -240,14 +230,6 @@
   },
   "src/components/AIHub/AgentHubTableColumns.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/AIHub/ClaudeCodeMarketplaceTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
       "count": 1
     }
   },
@@ -300,11 +282,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/AIHub/marketplace_table_columns.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -816,11 +793,6 @@
       "count": 1
     }
   },
-  "src/components/agents/agent_table.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/alerting/dynamic_form.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -953,14 +925,6 @@
   },
   "src/components/claude_code_plugins/helpers.test.ts": {
     "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/components/claude_code_plugins/plugin_info.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
       "count": 1
     }
   },
@@ -1333,14 +1297,6 @@
       "count": 2
     }
   },
-  "src/components/mcp_tools/mcp_server_columns.tsx": {
-    "max-params": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/mcp_tools/mcp_server_cost_config.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1348,11 +1304,6 @@
   },
   "src/components/mcp_tools/mcp_server_cost_display.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/mcp_tools/mcp_server_edit.test.tsx": {
-    "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
@@ -1494,17 +1445,12 @@
       "count": 1
     }
   },
-  "src/components/navbar.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/components/networking.tsx": {
     "max-params": {
       "count": 23
     },
     "no-restricted-syntax": {
-      "count": 270
+      "count": 154
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -1514,11 +1460,6 @@
   },
   "src/components/onboarding_link.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/organisms/RegenerateKeyModal.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },

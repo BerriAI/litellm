@@ -418,6 +418,7 @@ REPLICATE_POLLING_DELAY_SECONDS = float(
 DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS = int(
     os.getenv("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 4096)
 )
+DEFAULT_OCI_CHAT_MAX_TOKENS = 4096
 TOGETHER_AI_4_B = int(os.getenv("TOGETHER_AI_4_B", 4))
 TOGETHER_AI_8_B = int(os.getenv("TOGETHER_AI_8_B", 8))
 TOGETHER_AI_21_B = int(os.getenv("TOGETHER_AI_21_B", 21))
@@ -831,6 +832,7 @@ openai_compatible_providers: List = [
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
+    "parasail",  # Parasail - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
@@ -1157,6 +1159,7 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5",
     "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
@@ -1478,6 +1481,7 @@ DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
 DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME = "db_daily_tag_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME = "cloudzero_export_usage_data"
+MAVVRIK_FOCUS_EXPORT_JOB_NAME = "mavvrik_focus_export_usage_data"
 CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
     os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000)
 )

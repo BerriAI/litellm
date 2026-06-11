@@ -60,12 +60,13 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import normalize_route_for_root_path
+from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    EndpointType,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    EndpointType,
     PassthroughStandardLoggingPayload,
 )
 
@@ -173,9 +174,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
 
         data["adapter_id"] = adapter_id
 
-        verbose_proxy_logger.debug(
-            "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
-        )
+        verbose_proxy_logger.debug("Request received by LiteLLM:\n%s", data)
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
@@ -297,7 +296,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
             )
         )
 
-        verbose_proxy_logger.debug("\nResponse from Litellm:\n{}".format(response))
+        verbose_proxy_logger.debug("\nResponse from Litellm:\n%s", response)
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -810,9 +809,10 @@ async def pass_through_request(  # noqa: PLR0915
         else:
             _parsed_body = await _read_request_body(request)
         verbose_proxy_logger.debug(
-            "Pass through endpoint sending request to \nURL {}\nheaders: {}\nbody: {}\n".format(
-                url, headers, _parsed_body
-            )
+            "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
+            url,
+            headers,
+            _parsed_body,
         )
 
         ### COLLECT GUARDRAILS FOR PASSTHROUGH ENDPOINT ###
@@ -1002,9 +1002,7 @@ async def pass_through_request(  # noqa: PLR0915
                 is_passthrough_list_route,
                 list_passthrough_ids_from_db,
             )
-            from litellm.proxy.proxy_server import (
-                prisma_client as _list_prisma,
-            )
+            from litellm.proxy.proxy_server import prisma_client as _list_prisma
 
             if (
                 is_passthrough_list_route(
@@ -1100,6 +1098,20 @@ async def pass_through_request(  # noqa: PLR0915
                     status_code=e.response.status_code, detail=await e.response.aread()
                 )
 
+            # Call response headers hook for streaming pass-through
+            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=response.headers,
+                litellm_call_id=litellm_call_id,
+            )
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=_parsed_body or {},
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+            if callback_headers:
+                _response_headers.update(callback_headers)
+
             return StreamingResponse(
                 PassThroughStreamingHandler.chunk_processor(
                     response=response,
@@ -1110,10 +1122,7 @@ async def pass_through_request(  # noqa: PLR0915
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
                 ),
-                headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                    headers=response.headers,
-                    litellm_call_id=litellm_call_id,
-                ),
+                headers=_response_headers,
                 status_code=response.status_code,
             )
 
@@ -1152,6 +1161,20 @@ async def pass_through_request(  # noqa: PLR0915
                     status_code=e.response.status_code, detail=await e.response.aread()
                 )
 
+            # Call response headers hook for detected streaming pass-through
+            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=response.headers,
+                litellm_call_id=litellm_call_id,
+            )
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=_parsed_body or {},
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+            if callback_headers:
+                _response_headers.update(callback_headers)
+
             return StreamingResponse(
                 PassThroughStreamingHandler.chunk_processor(
                     response=response,
@@ -1162,10 +1185,7 @@ async def pass_through_request(  # noqa: PLR0915
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
                 ),
-                headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                    headers=response.headers,
-                    litellm_call_id=litellm_call_id,
-                ),
+                headers=_response_headers,
                 status_code=response.status_code,
             )
 
@@ -1303,6 +1323,16 @@ async def pass_through_request(  # noqa: PLR0915
             cache_key=None,
             api_base=str(url._uri_reference),
         )
+
+        # Call response headers hook
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=_parsed_body or {},
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=dict(request.headers),
+        )
+        if callback_headers:
+            custom_headers.update(callback_headers)
 
         response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
             headers=response.headers,
@@ -2875,7 +2905,7 @@ async def _filter_endpoints_by_team_allowed_routes(
         HTTPException: If team is not found
     """
     # retrieve team from db
-    team = await prisma_client.db.litellm_teamtable.find_unique(
+    team = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id},
     )
     if team is None:

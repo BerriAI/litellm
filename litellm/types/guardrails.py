@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Required, TypedDict
 
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
@@ -771,6 +771,58 @@ class BaseLitellmParams(
         ),
     )
 
+    on_sensitive_data: Optional[Literal["block", "route"]] = Field(
+        default=None,
+        description=(
+            "Action to take when sensitive data is detected. "
+            "'block' raises an exception (default behavior). "
+            "'route' reroutes the request to the model specified in sensitive_data_route_to_model."
+        ),
+    )
+
+    sensitive_data_route_to_model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model to route requests to when sensitive data is detected and on_sensitive_data='route'. "
+            "This is typically an on-premise model for data privacy. "
+            "The routing decision persists for the entire session."
+        ),
+    )
+
+    sticky_session_routing: Optional[bool] = Field(
+        default=True,
+        description=(
+            "When True (default), after sensitive data is detected and routed, all subsequent "
+            "requests in the same session will continue routing to the same model."
+        ),
+    )
+
+    @field_validator(
+        "mode",
+        "default_action",
+        "on_disallowed_action",
+        "unreachable_fallback",
+        "on_sensitive_data",
+        mode="before",
+        check_fields=False,
+    )
+    @classmethod
+    def normalize_lowercase(cls, v):
+        """Normalize string and list fields to lowercase for ALL guardrail types."""
+        if isinstance(v, str):
+            return v.lower()
+        if isinstance(v, list):
+            return [x.lower() if isinstance(x, str) else x for x in v]
+        return v
+
+    @model_validator(mode="after")
+    def validate_sensitive_data_routing(self) -> "BaseLitellmParams":
+        if self.on_sensitive_data == "route" and not self.sensitive_data_route_to_model:
+            raise ValueError(
+                "sensitive_data_route_to_model must be set when on_sensitive_data='route'"
+            )
+        return self
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
@@ -810,23 +862,6 @@ class LitellmParams(
     mode: Union[str, List[str], Mode] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
-
-    @field_validator(
-        "mode",
-        "default_action",
-        "on_disallowed_action",
-        "unreachable_fallback",
-        mode="before",
-        check_fields=False,
-    )
-    @classmethod
-    def normalize_lowercase(cls, v):
-        """Normalize string and list fields to lowercase for ALL guardrail types."""
-        if isinstance(v, str):
-            return v.lower()
-        if isinstance(v, list):
-            return [x.lower() if isinstance(x, str) else x for x in v]
-        return v
 
     @field_validator("timeout", mode="before", check_fields=False)
     @classmethod

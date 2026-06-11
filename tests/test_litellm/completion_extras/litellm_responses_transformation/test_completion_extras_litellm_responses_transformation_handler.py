@@ -125,6 +125,33 @@ def test_completion_skips_rewrapping_preformatted_cached_chat_stream():
     assert result is stream
 
 
+def test_completion_preserves_top_level_stream_flag_in_responses_request():
+    stream = MagicMock(spec=CustomStreamWrapper)
+    stream.custom_llm_provider = "cached_response"
+    bridge = ResponsesToCompletionBridgeHandler()
+    kwargs = _bridge_kwargs(stream=False)
+    kwargs["stream"] = True
+    kwargs["optional_params"].pop("stream")
+
+    with (
+        patch.object(
+            bridge.transformation_handler,
+            "transform_request",
+            return_value={"model": "gpt-5.4", "input": "hi"},
+        ) as transform_request,
+        patch("litellm.responses", return_value=stream),
+        patch.object(
+            bridge,
+            "_apply_post_stream_processing",
+            side_effect=lambda s, *a, **kw: s,
+        ),
+    ):
+        result = bridge.completion(**kwargs)
+
+    assert result is stream
+    assert transform_request.call_args.kwargs["optional_params"]["stream"] is True
+
+
 @pytest.mark.asyncio
 async def test_acompletion_skips_rewrapping_preformatted_cached_chat_stream():
     stream = MagicMock(spec=CustomStreamWrapper)
@@ -148,3 +175,31 @@ async def test_acompletion_skips_rewrapping_preformatted_cached_chat_stream():
 
     post.assert_called_once()
     assert result is stream
+
+
+@pytest.mark.asyncio
+async def test_acompletion_preserves_top_level_stream_flag_in_responses_request():
+    stream = MagicMock(spec=CustomStreamWrapper)
+    stream.custom_llm_provider = "cached_response"
+    bridge = ResponsesToCompletionBridgeHandler()
+    kwargs = _bridge_kwargs(stream=False)
+    kwargs["stream"] = True
+    kwargs["optional_params"].pop("stream")
+
+    with (
+        patch.object(
+            bridge.transformation_handler,
+            "transform_request",
+            return_value={"model": "gpt-5.4", "input": "hi"},
+        ) as transform_request,
+        patch("litellm.aresponses", new=AsyncMock(return_value=stream)),
+        patch.object(
+            bridge,
+            "_apply_post_stream_processing",
+            side_effect=lambda s, *a, **kw: s,
+        ),
+    ):
+        result = await bridge.acompletion(**kwargs)
+
+    assert result is stream
+    assert transform_request.call_args.kwargs["optional_params"]["stream"] is True

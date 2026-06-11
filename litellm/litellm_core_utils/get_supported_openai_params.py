@@ -341,6 +341,11 @@ def get_supported_openai_params(  # noqa: PLR0915
             return ElevenLabsAudioTranscriptionConfig().get_supported_openai_params(
                 model=model
             )
+    elif custom_llm_provider == "soniox":
+        if request_type == "transcription":
+            return litellm.SonioxAudioTranscriptionConfig().get_supported_openai_params(
+                model=model
+            )
     elif custom_llm_provider in litellm._custom_providers:
         if request_type == "chat_completion":
             provider_config = litellm.ProviderConfigManager.get_provider_chat_config(

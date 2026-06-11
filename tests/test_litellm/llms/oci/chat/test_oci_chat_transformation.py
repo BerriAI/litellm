@@ -11,6 +11,7 @@ import litellm
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import ModelResponse
+from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.llms.oci.chat.transformation import (
     OCIChatConfig,
     OCIRequestWrapper,
@@ -104,6 +105,7 @@ class TestOCIChatConfig:
             "chatRequest": {
                 "apiFormat": "GENERIC",
                 "isStream": False,
+                "maxTokens": DEFAULT_OCI_CHAT_MAX_TOKENS,
                 "messages": [
                     {
                         "role": "USER",
@@ -361,6 +363,137 @@ class TestOCIChatConfig:
         )
         rf = transformed_request["chatRequest"]["responseFormat"]
         assert rf["type"] == "JSON_OBJECT"
+
+    def test_transform_request_response_format_json_schema_generic(self):
+        """A GENERIC json_schema must become OCI's JSON_SCHEMA shape with the
+        OpenAI ``strict`` key renamed to ``isStrict``.
+
+        OCI's ResponseJsonSchema rejects ``strict`` (and any other extra key)
+        with HTTP 400 "Please pass in correct format of request", so the raw
+        OpenAI body must not be forwarded.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "judgment",
+                    "description": "a score and rationale",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {"score": {"type": "integer"}},
+                        "required": ["score"],
+                    },
+                },
+            },
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,  # xai.grok-4 -> GENERIC
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_SCHEMA"
+        assert "strict" not in rf["jsonSchema"]
+        assert rf["jsonSchema"]["isStrict"] is True
+        assert rf["jsonSchema"]["name"] == "judgment"
+        assert rf["jsonSchema"]["description"] == "a score and rationale"
+        assert rf["jsonSchema"]["schema"]["properties"]["score"]["type"] == "integer"
+
+    def test_transform_request_response_format_json_schema_generic_no_strict(self):
+        """A GENERIC json_schema without ``strict`` must omit ``isStrict``."""
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "j", "schema": {"type": "object"}},
+            },
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_SCHEMA"
+        assert "isStrict" not in rf["jsonSchema"]
+
+    def test_transform_request_response_format_json_schema_cohere(self):
+        """A Cohere json_schema must fold the schema onto JSON_OBJECT.
+
+        OCI Cohere has no JSON_SCHEMA type; sending one yields HTTP 400.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "judgment",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {"score": {"type": "integer"}},
+                    },
+                },
+            },
+        }
+        transformed_request = config.transform_request(
+            model="cohere.command-latest",
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_OBJECT"
+        assert "jsonSchema" not in rf
+        assert rf["schema"]["properties"]["score"]["type"] == "integer"
+
+    def test_transform_request_response_format_cohere_json_object(self):
+        """Cohere json_object without a schema stays a bare JSON_OBJECT."""
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "json_object"},
+        }
+        transformed_request = config.transform_request(
+            model="cohere.command-latest",
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf == {"type": "JSON_OBJECT"}
+
+    def test_transform_request_json_schema_without_body_raises_generic(self):
+        """A GENERIC json_schema with no ``json_schema`` body must raise an early
+        400, not silently emit {"type": "JSON_SCHEMA"} (which OCI rejects)."""
+        from litellm.llms.oci.common_utils import OCIError
+
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "json_schema"},
+        }
+        with pytest.raises(OCIError) as exc_info:
+            config.transform_request(
+                model=TEST_MODEL_NAME,  # GENERIC
+                messages=TEST_MESSAGES,  # type: ignore
+                optional_params=optional_params,
+                litellm_params={},
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert "json_schema" in str(exc_info.value)
 
     def test_transform_response_without_token_details(self):
         """
@@ -954,6 +1087,44 @@ class TestOCICohereParamMapping:
         )
         assert result.get("maxTokens") == 200
         assert result.get("temperature") == 0.5
+
+
+class TestOCIDefaultMaxTokens:
+    """Regression for OCI's tiny server-side token cap (~20 tokens), which
+    silently truncated responses mid-string whenever the caller omitted
+    max_tokens (MLflow judges never send it, so their JSON came back cut off).
+    transform_request injects DEFAULT_OCI_CHAT_MAX_TOKENS when no limit is
+    supplied, and leaves an explicit limit untouched."""
+
+    def _chat_request(self, model: str, optional_params: dict) -> dict:
+        config = OCIChatConfig()
+        body = config.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={**BASE_OCI_PARAMS, **optional_params},
+            litellm_params={},
+            headers={},
+        )
+        return body["chatRequest"]
+
+    @pytest.mark.parametrize(
+        "model", ["cohere.command-latest", "meta.llama-3.3-70b-instruct"]
+    )
+    def test_default_injected_when_max_tokens_omitted(self, model):
+        chat_request = self._chat_request(model, {})
+        assert chat_request["maxTokens"] == DEFAULT_OCI_CHAT_MAX_TOKENS
+
+    @pytest.mark.parametrize(
+        "model", ["cohere.command-latest", "meta.llama-3.3-70b-instruct"]
+    )
+    def test_explicit_max_tokens_not_overridden(self, model):
+        chat_request = self._chat_request(model, {"max_tokens": 256})
+        assert chat_request["maxTokens"] == 256
+
+    def test_reasoning_model_defaults_max_completion_tokens(self):
+        chat_request = self._chat_request("openai.gpt-5", {})
+        assert chat_request["maxCompletionTokens"] == DEFAULT_OCI_CHAT_MAX_TOKENS
+        assert "maxTokens" not in chat_request
 
 
 class TestOCIReasoningEffort:

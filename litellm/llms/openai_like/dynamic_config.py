@@ -187,6 +187,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
     from litellm.llms.openai_like.responses.transformation import (
         OpenAILikeResponsesConfig,
     )
+    from litellm.types.llms.openai import ResponseInputParam
     from litellm.types.router import GenericLiteLLMParams
 
     class JSONProviderResponsesConfig(OpenAILikeResponsesConfig):
@@ -222,6 +223,24 @@ def create_responses_config_class(provider: SimpleProviderConfig):
 
             api_base = api_base.rstrip("/")
             return f"{api_base}/responses"
+
+        def transform_responses_api_request(
+            self,
+            model: str,
+            input: Union[str, ResponseInputParam],
+            response_api_optional_request_params: dict,
+            litellm_params: GenericLiteLLMParams,
+            headers: dict,
+        ) -> dict:
+            if provider.special_handling.get("force_store_false"):
+                response_api_optional_request_params["store"] = False
+            return super().transform_responses_api_request(
+                model=model,
+                input=input,
+                response_api_optional_request_params=response_api_optional_request_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
 
     _responses_config_cache[provider.slug] = JSONProviderResponsesConfig
     return JSONProviderResponsesConfig

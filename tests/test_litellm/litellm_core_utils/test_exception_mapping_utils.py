@@ -286,6 +286,33 @@ def test_lemonade_context_window_error_mapping():
     assert excinfo.value.model == model
 
 
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "AnthropicException - prompt is too long: 250000 tokens > 200000 maximum",
+        "AnthropicException - input length and max_tokens exceed context limit: "
+        "200000 + 8000 > 200000, decrease input length or max_tokens and try again",
+    ],
+)
+def test_anthropic_context_window_error_mapping(error_message):
+    """Anthropic context-window overflows (input too long, or input + max_tokens
+    over the context limit) must map to ContextWindowExceededError (400) even when
+    the upstream exception carries no ``status_code`` attribute. Previously only
+    "prompt is too long" was special-cased, so the "exceed context limit" phrasing
+    fell through to a generic APIConnectionError (500)."""
+    original_exception = Exception(error_message)
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=original_exception,
+            custom_llm_provider="anthropic",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == "anthropic"
+
+
 # Test cases for Vertex AI RateLimitError mapping
 # As per https://github.com/BerriAI/litellm/issues/16189
 vertex_rate_limit_test_cases = [
