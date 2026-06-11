@@ -1905,7 +1905,9 @@ def test_require_managed_files_rejects_missing_target_model_names(
         monkeypatch.setattr("litellm.require_managed_files", False)
 
     assert response.status_code == 400, response.text
-    assert "target_model_names is required" in response.json()["error"]["message"]
+    error_message = response.json()["error"]["message"]
+    assert error_message.startswith("target_model_names is required")
+    assert not error_message.startswith("{")
     mock_acreate_file.assert_not_called()
 
 

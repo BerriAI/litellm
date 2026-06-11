@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
+from starlette.datastructures import UploadFile
+
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
@@ -672,8 +674,6 @@ def _extract_target_model_names_simple(
 
 def _parse_target_model_names_value(value) -> List[str]:
     """Parse a target_model_names value from form or JSON body."""
-    from fastapi import UploadFile
-
     if value is None or isinstance(value, UploadFile):
         return []
     if isinstance(value, list):
@@ -727,13 +727,11 @@ def validate_managed_files_requirement(target_model_names: List[str]) -> None:
     if litellm.require_managed_files is True and not target_model_names:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": (
-                    "target_model_names is required when require_managed_files is enabled "
-                    "in litellm_settings. Provide one or more model aliases via the "
-                    "target_model_names form field (e.g. target_model_names=my-model-alias)."
-                ),
-            },
+            detail=(
+                "target_model_names is required when require_managed_files is enabled "
+                "in litellm_settings. Provide one or more model aliases via the "
+                "target_model_names form field (e.g. target_model_names=my-model-alias)."
+            ),
         )
 
 
