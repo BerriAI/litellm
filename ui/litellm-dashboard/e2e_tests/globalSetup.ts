@@ -6,6 +6,20 @@ async function globalSetup() {
   const browser = await chromium.launch();
   const rootPath = process.env.SERVER_ROOT_PATH ?? "";
 
+  // The Projects sidebar item is hidden unless the enterprise-gated
+  // enable_projects_ui setting is on, and the seeded DB starts with it off.
+  // The proxy runs with LITELLM_LICENSE in CI, so enable it the same way
+  // the admin UI toggle does; the projects migration smoke needs the link.
+  const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
+  const settingsRes = await fetch(`http://localhost:4000${rootPath}/update/ui_settings`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${masterKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ enable_projects_ui: true }),
+  });
+  if (!settingsRes.ok) {
+    throw new Error(`Enabling enable_projects_ui failed (${settingsRes.status}): ${await settingsRes.text()}`);
+  }
+
   for (const role of Object.values(Role)) {
     const { email, password } = users[role];
     const storagePath = STORAGE_PATHS[role];
