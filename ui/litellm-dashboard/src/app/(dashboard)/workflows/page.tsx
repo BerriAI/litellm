@@ -1,6 +1,6 @@
 "use client";
 
-import WorkflowRuns from "@/components/workflow_runs";
+import WorkflowRuns from "./WorkflowRuns";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function Workflows() {

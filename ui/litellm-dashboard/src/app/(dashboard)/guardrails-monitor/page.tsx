@@ -1,6 +1,6 @@
 "use client";
 
-import GuardrailsMonitorView from "@/components/GuardrailsMonitor/GuardrailsMonitorView";
+import GuardrailsMonitorView from "./components/GuardrailsMonitorView";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function GuardrailsMonitor() {

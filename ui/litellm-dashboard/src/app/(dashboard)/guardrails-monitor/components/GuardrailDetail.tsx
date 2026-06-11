@@ -4,9 +4,9 @@ import { Button, Col, Row, Spin, Tabs } from "antd";
 import React, { useMemo, useState } from "react";
 import { getGuardrailsUsageDetail, getGuardrailsUsageLogs } from "@/components/networking";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
-import { LogViewer } from "./LogViewer";
-import { MetricCard } from "./MetricCard";
-import type { LogEntry } from "./mockData";
+import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
+import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
+import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
 
 interface GuardrailDetailProps {
   guardrailId: string;
