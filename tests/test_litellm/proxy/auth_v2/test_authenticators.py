@@ -436,6 +436,30 @@ async def test_mtls_forwarded_header_from_untrusted_peer_is_ignored():
     assert await auth.authenticate(request) is None
 
 
+async def test_mtls_forwarded_header_gate_ignores_spoofed_xff():
+    # the gate keys on the raw socket peer, not X-Forwarded-For: an untrusted peer
+    # cannot claim a trusted address via XFF to smuggle a forged DN header
+    auth = _mtls(MutualTLSConfig(enabled=True, forwarded_subject_header="x-client-dn"))
+    request = make_request(
+        headers={"x-client-dn": "CN=attacker", "x-forwarded-for": "10.0.0.5"},
+        client=("8.8.8.8", 4444),
+    )
+    assert await auth.authenticate(request) is None
+
+
+async def test_mtls_prefers_verified_asgi_cert_over_forwarded_header():
+    # a genuinely verified client cert from the TLS layer wins over a proxy header
+    auth = _mtls(MutualTLSConfig(enabled=True, forwarded_subject_header="x-client-dn"))
+    request = make_request(
+        headers={"x-client-dn": "CN=from-header"},
+        client=("10.0.0.9", 1),
+        scope_extra={"extensions": {"tls": {"client_cert_name": "CN=from-tls"}}},
+    )
+    credential = await auth.authenticate(request)
+    assert credential is not None
+    assert credential.subject == "CN=from-tls"
+
+
 async def test_mtls_forwarded_header_absent_returns_none():
     auth = _mtls(MutualTLSConfig(enabled=True, forwarded_subject_header="x-client-dn"))
     assert await auth.authenticate(make_request()) is None
