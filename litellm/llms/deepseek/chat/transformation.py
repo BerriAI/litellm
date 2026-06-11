@@ -136,33 +136,23 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 messages=messages, model=model, is_async=False
             )
 
-    # Model families where DeepSeek enables thinking mode BY DEFAULT (no
-    # `thinking` param required). Reference:
-    # https://api-docs.deepseek.com/guides/thinking_mode
-    DEFAULT_THINKING_MODEL_PREFIXES = ("deepseek-v4",)
-
-    def _is_default_thinking_model(self, model: str) -> bool:
-        return any(
-            prefix in model for prefix in self.DEFAULT_THINKING_MODEL_PREFIXES
-        )
-
     def _thinking_mode_active(self, model: str, optional_params: dict) -> bool:
         """
-        Returns True when thinking mode is active for this request:
-          - user explicitly passed thinking={"type": "enabled"} on a model that
-            supports reasoning, OR
-          - the model runs in thinking mode by default (DeepSeek V4 family) and
-            the user did not explicitly disable it.
+        Returns True when thinking mode may be active for this request.
 
-        Models like deepseek-v3.2 (supports_reasoning but opt-in thinking)
-        remain untouched unless thinking is explicitly enabled.
+        DeepSeek V4 models enable thinking BY DEFAULT (no `thinking` param
+        required - https://api-docs.deepseek.com/guides/thinking_mode), so any
+        reasoning-capable model counts unless the user explicitly disabled
+        thinking. Same approach as the Moonshot reasoning fix
+        (litellm/llms/moonshot/chat/transformation.py).
+
+        Injecting `reasoning_content` when thinking is NOT active is harmless:
+        the DeepSeek API ignores the field in non-thinking requests (verified
+        against the live API, including thinking={"type": "disabled"}).
         """
-        thinking_type = (optional_params.get("thinking") or {}).get("type")
-        if thinking_type == "disabled":
+        if (optional_params.get("thinking") or {}).get("type") == "disabled":
             return False
-        if thinking_type == "enabled":
-            return supports_reasoning(model=model, custom_llm_provider="deepseek")
-        return self._is_default_thinking_model(model)
+        return supports_reasoning(model=model, custom_llm_provider="deepseek")
 
     def transform_request(
         self,

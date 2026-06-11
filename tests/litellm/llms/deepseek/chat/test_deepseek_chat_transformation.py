@@ -220,10 +220,12 @@ class TestDeepSeekV4DefaultThinkingMode:
             model=model, optional_params={"thinking": {"type": "enabled"}}
         )
 
-    def test_opt_in_models_unaffected_by_default(self):
-        """deepseek-v3.2 supports reasoning but thinking is opt-in: no thinking
-        param -> guard must stay off (no spurious injection)."""
-        assert not self.config._thinking_mode_active(
+    def test_reasoning_capable_models_active_by_default(self):
+        """Any reasoning-capable DeepSeek model counts as potentially
+        thinking-mode (V4 enables thinking by default). Injection is harmless
+        when thinking is not actually active: the live API ignores
+        reasoning_content in non-thinking requests."""
+        assert self.config._thinking_mode_active(
             model="deepseek-v3.2", optional_params={}
         )
         assert self.config._thinking_mode_active(
