@@ -24891,6 +24891,8 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
+            /** Aws Bedrock Project Id */
+            aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
             /** Aws Region Name */
@@ -32495,6 +32497,8 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
+            /** Aws Bedrock Project Id */
+            aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
             /** Aws Region Name */
