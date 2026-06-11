@@ -333,6 +333,11 @@ class OCIChatConfig(BaseConfig):
             if get_vendor_from_model(model) == OCIVendors.COHERE
             else self.openai_to_oci_generic_param_map
         )
+        # `n` is intentionally not advertised for Cohere even though n=1 is
+        # tolerated: Cohere has no numGenerations field, so n>1 cannot be
+        # honoured and advertising it would be misleading. Callers that gate on
+        # this list strip n=1 (a no-op, matching what map_openai_params does);
+        # callers that bypass it have n=1 dropped there. Both paths converge.
         return [key for key, value in param_map.items() if value]
 
     def map_openai_params(
@@ -353,6 +358,13 @@ class OCIChatConfig(BaseConfig):
         for key, value in {**non_default_params, **optional_params}.items():
             alias = param_map.get(key)
             if alias is False:
+                # n=1 (or None) is the OpenAI default: a single generation, which
+                # every OCI model produces anyway. Drop it silently so standard
+                # clients that always send n=1 (e.g. the MLflow gateway) are not
+                # rejected; only n>1 is genuinely unsupported on Cohere, which
+                # has no numGenerations field.
+                if key == "n" and (value is None or value == 1):
+                    continue
                 if drop_params or litellm.drop_params:
                     continue
                 raise OCIError(

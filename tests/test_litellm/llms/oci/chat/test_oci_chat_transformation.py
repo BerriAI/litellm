@@ -1464,6 +1464,53 @@ class TestOCIChatConfigErrorPaths:
         )
         assert "audio" not in result
 
+    def test_map_openai_params_cohere_n_default_dropped(self):
+        """Cohere has no numGenerations field, but n=1 (and None) is the OpenAI
+        default single-generation request. It must be dropped silently rather
+        than raising, so standard clients that always send n=1 (e.g. the MLflow
+        gateway) are not rejected."""
+        config = OCIChatConfig()
+        for n in (1, None):
+            result = config.map_openai_params(
+                non_default_params={"n": n},
+                optional_params={},
+                model="cohere.command-latest",
+                drop_params=False,
+            )
+            assert "n" not in result and "numGenerations" not in result
+
+    def test_map_openai_params_cohere_n_gt_1_raises_without_drop(self):
+        """n>1 is genuinely unsupported on Cohere and must raise without drop."""
+        config = OCIChatConfig()
+        with pytest.raises(Exception, match="not supported on OCI"):
+            config.map_openai_params(
+                non_default_params={"n": 3},
+                optional_params={},
+                model="cohere.command-latest",
+                drop_params=False,
+            )
+
+    def test_map_openai_params_cohere_n_gt_1_dropped_with_drop(self):
+        config = OCIChatConfig()
+        result = config.map_openai_params(
+            non_default_params={"n": 3},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=True,
+        )
+        assert "n" not in result and "numGenerations" not in result
+
+    def test_map_openai_params_generic_n_maps_to_num_generations(self):
+        """Generic models keep numGenerations, including n>1."""
+        config = OCIChatConfig()
+        result = config.map_openai_params(
+            non_default_params={"n": 2},
+            optional_params={},
+            model=TEST_MODEL_NAME,
+            drop_params=False,
+        )
+        assert result["numGenerations"] == 2
+
     def test_transform_request_tool_choice_string_mapped(self):
         config = OCIChatConfig()
         result = config.transform_request(

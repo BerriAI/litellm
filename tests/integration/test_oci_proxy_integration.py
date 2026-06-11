@@ -260,7 +260,6 @@ def test_embedding_via_proxy(proxy_url: str) -> None:
     assert len(embedding) >= 64
     assert all(isinstance(x, (int, float)) for x in embedding)
 
-
 def test_model_list_advertises_oci_models(proxy_url: str) -> None:
     """The /v1/models registry advertises every OCI alias from the config."""
     r = httpx.get(
@@ -272,6 +271,26 @@ def test_model_list_advertises_oci_models(proxy_url: str) -> None:
     advertised = {row["id"] for row in r.json()["data"]}
     for expected in CHAT_MODELS + ["oci-embed"]:
         assert expected in advertised, f"{expected} missing from /v1/models: {advertised}"
+
+
+def test_cohere_default_n_via_proxy(proxy_url: str) -> None:
+    """A Cohere request carrying the default n=1 succeeds through the gateway.
+
+    Regression for the HTTP 500 ``param `n` is not supported on OCI`` that
+    rejected every client which always sends n=1 (e.g. the MLflow gateway),
+    since OCI Cohere has no numGenerations field.
+    """
+    payload = {**_chat_payload("oci-cohere-command"), "n": 1}
+    r = httpx.post(
+        f"{proxy_url}/v1/chat/completions",
+        headers=_auth_headers(),
+        json=payload,
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    assert r.status_code == 200, f"n=1 -> {r.status_code}: {r.text}"
+    body = r.json()
+    assert body["object"] == "chat.completion"
+    assert body["choices"][0]["message"].get("content") is not None
 
 
 @pytest.mark.parametrize("model", ["oci-cohere-command", "oci-llama"])
