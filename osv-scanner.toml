@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "GHSA-w8v5-vhqr-4h9v"
+reason = "diskcache has no fixed release published; remove this entry once one exists"
