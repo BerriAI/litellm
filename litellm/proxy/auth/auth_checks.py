@@ -3182,16 +3182,7 @@ async def can_key_call_resolved_model(
     team_object: Optional[LiteLLM_TeamTableCachedObj] = None
     team_object_from_lookup = False
     if valid_token.team_id is not None:
-        try:
-            team_object = await get_team_object(
-                team_id=valid_token.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=valid_token.parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            team_object_from_lookup = True
-        except Exception:
+        if valid_token.team_models is not None:
             team_object = LiteLLM_TeamTableCachedObj(
                 team_id=valid_token.team_id,
                 models=valid_token.team_models,
@@ -3201,6 +3192,18 @@ async def can_key_call_resolved_model(
                 object_permission_id=valid_token.team_object_permission_id,
                 object_permission=valid_token.team_object_permission,
             )
+        else:
+            try:
+                team_object = await get_team_object(
+                    team_id=valid_token.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=valid_token.parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                team_object_from_lookup = True
+            except Exception:
+                pass
 
     if team_object is not None:
         try:

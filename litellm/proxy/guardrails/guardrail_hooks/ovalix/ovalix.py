@@ -191,7 +191,7 @@ class OvalixGuardrail(CustomGuardrail):
     def _get_session_id(self, data: dict) -> str:
         """Return a unique identifier for the chat/session (actor + date + application_id)."""
         actor_hash = self._get_tracker_actor_id(data)
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         return f"{actor_hash}_{today}_{self._application_id}"
 
     async def _call_checkpoint(

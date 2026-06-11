@@ -2488,6 +2488,11 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
         )
 
 
+_TRANSCRIPTION_COMPLETED_EVENT_TYPE = (
+    "conversation.item.input_audio_transcription.completed"
+)
+
+
 def handle_realtime_stream_cost_calculation(
     results: OpenAIRealtimeStreamList,
     combined_usage_object: Usage,
@@ -2541,11 +2546,6 @@ def handle_realtime_stream_cost_calculation(
         )
 
     return total_cost
-
-
-_TRANSCRIPTION_COMPLETED_EVENT_TYPE = (
-    "conversation.item.input_audio_transcription.completed"
-)
 
 
 def handle_realtime_transcription_cost_calculation(
