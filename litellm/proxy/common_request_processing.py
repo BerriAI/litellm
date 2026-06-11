@@ -117,13 +117,17 @@ def _collect_response_file_search_vector_store_ids(data: Dict[str, Any]) -> set[
         if not isinstance(ids, list):
             raise HTTPException(
                 status_code=400,
-                detail={"error": "file_search.vector_store_ids must be a list of strings"},
+                detail={
+                    "error": "file_search.vector_store_ids must be a list of strings"
+                },
             )
         for vector_store_id in ids:
             if not isinstance(vector_store_id, str) or not vector_store_id:
                 raise HTTPException(
                     status_code=400,
-                    detail={"error": "file_search.vector_store_ids must be a list of strings"},
+                    detail={
+                        "error": "file_search.vector_store_ids must be a list of strings"
+                    },
                 )
             vector_store_ids.add(vector_store_id)
 
@@ -151,14 +155,20 @@ async def _authorize_response_file_search_vector_stores(
 
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
     """Parses an event line and returns an error code if present, else None."""
-    event_line = event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
+    event_line = (
+        event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
+    )
     if event_line.startswith("data: "):
         json_str = event_line[len("data: ") :].strip()
         if not json_str or json_str == "[DONE]":  # handle empty data or [DONE] message
             return None
         try:
             data = orjson.loads(json_str)
-            if isinstance(data, dict) and "error" in data and isinstance(data["error"], dict):
+            if (
+                isinstance(data, dict)
+                and "error" in data
+                and isinstance(data["error"], dict)
+            ):
                 error_code_raw = data["error"].get("code")
                 error_code: Optional[int] = None
 
@@ -177,8 +187,12 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
                 # Ensure error_code is a valid HTTP status code
                 if error_code is not None and 100 <= error_code <= 599:
                     return error_code
-                elif error_code_raw is not None:  # Log if original code was present but not valid
-                    verbose_proxy_logger.warning(f"Error has invalid or non-convertible code: {error_code_raw}")
+                elif (
+                    error_code_raw is not None
+                ):  # Log if original code was present but not valid
+                    verbose_proxy_logger.warning(
+                        f"Error has invalid or non-convertible code: {error_code_raw}"
+                    )
         except (orjson.JSONDecodeError, json.JSONDecodeError):
             # not a known error chunk
             pass
@@ -195,7 +209,9 @@ def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
     Returns:
         Error dictionary in OpenAI API format
     """
-    event_line = event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
+    event_line = (
+        event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
+    )
 
     # Default error format
     default_error = {
@@ -253,7 +269,9 @@ async def create_response(  # noqa: PLR0915
 
         if first_chunk_value is not None:
             try:
-                error_code_from_chunk = await _parse_event_data_for_error(first_chunk_value)
+                error_code_from_chunk = await _parse_event_data_for_error(
+                    first_chunk_value
+                )
                 if error_code_from_chunk is not None:
                     # First chunk is an error, stream hasn't really started yet
                     # Should return standard JSON error response instead of SSE format
@@ -294,7 +312,9 @@ async def create_response(  # noqa: PLR0915
         )
     except Exception as e:
         # Unexpected error consuming first chunk.
-        verbose_proxy_logger.exception(f"Error consuming first chunk from generator: {e}")
+        verbose_proxy_logger.exception(
+            f"Error consuming first chunk from generator: {e}"
+        )
 
         # Preserve status code from HTTPException (e.g., guardrail blocks)
         error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -406,7 +426,9 @@ def _override_openai_response_model(
     if isinstance(hidden_params, dict):
         # Check if a fallback occurred - if so, preserve the actual model used
         fallback_headers = hidden_params.get("additional_headers", {}) or {}
-        attempted_fallbacks = fallback_headers.get("x-litellm-attempted-fallbacks", None)
+        attempted_fallbacks = fallback_headers.get(
+            "x-litellm-attempted-fallbacks", None
+        )
         if attempted_fallbacks is not None and attempted_fallbacks > 0:
             verbose_proxy_logger.debug(
                 "%s: fallback detected (attempted_fallbacks=%d), preserving actual model used instead of overriding to requested model.",
@@ -565,7 +587,9 @@ class ProxyBaseLLMRequestProcessing:
             discount_amount,
             margin_total_amount,
             margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(litellm_logging_obj=litellm_logging_obj)
+        ) = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=litellm_logging_obj
+        )
 
         # Calculate updated spend for header (include current response_cost)
         current_spend = user_api_key_dict.spend or 0.0
@@ -573,7 +597,11 @@ class ProxyBaseLLMRequestProcessing:
         if response_cost is not None:
             try:
                 # Convert response_cost to float if it's a string
-                cost_value = float(response_cost) if isinstance(response_cost, str) else response_cost
+                cost_value = (
+                    float(response_cost)
+                    if isinstance(response_cost, str)
+                    else response_cost
+                )
                 if cost_value > 0:
                     updated_spend = current_spend + cost_value
             except (ValueError, TypeError):
@@ -590,37 +618,61 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
             "x-litellm-response-cost": str(response_cost),
-            "x-litellm-response-cost-original": (str(original_cost) if original_cost is not None else None),
-            "x-litellm-response-cost-discount-amount": (str(discount_amount) if discount_amount is not None else None),
+            "x-litellm-response-cost-original": (
+                str(original_cost) if original_cost is not None else None
+            ),
+            "x-litellm-response-cost-discount-amount": (
+                str(discount_amount) if discount_amount is not None else None
+            ),
             "x-litellm-response-cost-margin-amount": (
                 str(margin_total_amount) if margin_total_amount is not None else None
             ),
-            "x-litellm-response-cost-margin-percent": (str(margin_percent) if margin_percent is not None else None),
+            "x-litellm-response-cost-margin-percent": (
+                str(margin_percent) if margin_percent is not None else None
+            ),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
             "x-litellm-key-spend": str(updated_spend),
-            "x-litellm-response-duration-ms": str(hidden_params.get("_response_ms", None)),
-            "x-litellm-overhead-duration-ms": str(hidden_params.get("litellm_overhead_time_ms", None)),
-            "x-litellm-callback-duration-ms": str(hidden_params.get("callback_duration_ms", None)),
+            "x-litellm-response-duration-ms": str(
+                hidden_params.get("_response_ms", None)
+            ),
+            "x-litellm-overhead-duration-ms": str(
+                hidden_params.get("litellm_overhead_time_ms", None)
+            ),
+            "x-litellm-callback-duration-ms": str(
+                hidden_params.get("callback_duration_ms", None)
+            ),
             **(
                 {
-                    "x-litellm-timing-pre-processing-ms": str(hidden_params.get("timing_pre_processing_ms", None)),
-                    "x-litellm-timing-llm-api-ms": str(hidden_params.get("timing_llm_api_ms", None)),
-                    "x-litellm-timing-post-processing-ms": str(hidden_params.get("timing_post_processing_ms", None)),
-                    "x-litellm-timing-message-copy-ms": str(hidden_params.get("timing_message_copy_ms", None)),
+                    "x-litellm-timing-pre-processing-ms": str(
+                        hidden_params.get("timing_pre_processing_ms", None)
+                    ),
+                    "x-litellm-timing-llm-api-ms": str(
+                        hidden_params.get("timing_llm_api_ms", None)
+                    ),
+                    "x-litellm-timing-post-processing-ms": str(
+                        hidden_params.get("timing_post_processing_ms", None)
+                    ),
+                    "x-litellm-timing-message-copy-ms": str(
+                        hidden_params.get("timing_message_copy_ms", None)
+                    ),
                 }
                 if LITELLM_DETAILED_TIMING
                 else {}
             ),
             "x-litellm-fastest_response_batch_completion": (
-                str(fastest_response_batch_completion) if fastest_response_batch_completion is not None else None
+                str(fastest_response_batch_completion)
+                if fastest_response_batch_completion is not None
+                else None
             ),
             "x-litellm-timeout": str(timeout) if timeout is not None else None,
             **{k: str(v) for k, v in kwargs.items()},
         }
         if request_data:
-            remaining_tokens_header = get_remaining_tokens_and_requests_from_request_data(request_data)
+            remaining_tokens_header = (
+                get_remaining_tokens_and_requests_from_request_data(request_data)
+            )
             headers.update(remaining_tokens_header)
 
             logging_caching_headers = get_logging_caching_headers(request_data)
@@ -628,7 +680,11 @@ class ProxyBaseLLMRequestProcessing:
                 headers.update(logging_caching_headers)
 
         try:
-            return {key: str(value) for key, value in headers.items() if value not in exclude_values}
+            return {
+                key: str(value)
+                for key, value in headers.items()
+                if value not in exclude_values
+            }
         except Exception as e:
             verbose_proxy_logger.error(f"Error setting custom headers: {e}")
             return {}
@@ -655,12 +711,16 @@ class ProxyBaseLLMRequestProcessing:
         if not isinstance(hidden_params, dict):
             hidden_params = {}
 
-        model_id = ProxyBaseLLMRequestProcessing._get_model_id_from_response(hidden_params, request_data)
+        model_id = ProxyBaseLLMRequestProcessing._get_model_id_from_response(
+            hidden_params, request_data
+        )
 
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
         response_cost = hidden_params.get("response_cost", None) or ""
-        fastest_response_batch_completion = hidden_params.get("fastest_response_batch_completion", None)
+        fastest_response_batch_completion = hidden_params.get(
+            "fastest_response_batch_completion", None
+        )
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -831,7 +891,9 @@ class ProxyBaseLLMRequestProcessing:
                 self.data[_metadata_variable_name] = {}
             if not isinstance(self.data[_metadata_variable_name], dict):
                 self.data[_metadata_variable_name] = {}
-            self.data[_metadata_variable_name]["queue_time_seconds"] = queue_time_seconds
+            self.data[_metadata_variable_name][
+                "queue_time_seconds"
+            ] = queue_time_seconds
 
         self.data["model"] = (
             general_settings.get("completion_model", None)  # server default
@@ -853,7 +915,10 @@ class ProxyBaseLLMRequestProcessing:
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
         # get the actual model name
-        if isinstance(self.data["model"], str) and self.data["model"] in litellm.model_alias_map:
+        if (
+            isinstance(self.data["model"], str)
+            and self.data["model"] in litellm.model_alias_map
+        ):
             self.data["model"] = litellm.model_alias_map[self.data["model"]]
 
         # Check key-specific aliases
@@ -865,7 +930,9 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
 
-        self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
+        self.data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
@@ -882,7 +949,10 @@ class ProxyBaseLLMRequestProcessing:
             # Only set if stream_options is not already provided by the client
             if "stream_options" not in self.data:
                 self.data["stream_options"] = {"include_usage": True}
-            elif isinstance(self.data["stream_options"], dict) and "include_usage" not in self.data["stream_options"]:
+            elif (
+                isinstance(self.data["stream_options"], dict)
+                and "include_usage" not in self.data["stream_options"]
+            ):
                 self.data["stream_options"]["include_usage"] = True
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
@@ -945,7 +1015,11 @@ class ProxyBaseLLMRequestProcessing:
                 "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
                 len(_payload_str),
                 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
-                (list(self.data.keys()) if isinstance(self.data, dict) else type(self.data).__name__),
+                (
+                    list(self.data.keys())
+                    if isinstance(self.data, dict)
+                    else type(self.data).__name__
+                ),
             )
         else:
             verbose_proxy_logger.debug(
@@ -1146,7 +1220,9 @@ class ProxyBaseLLMRequestProcessing:
         tasks.append(llm_call)
 
         # wait for call to end
-        llm_responses = asyncio.gather(*tasks)  # run the moderation check in parallel to the actual llm api call
+        llm_responses = asyncio.gather(
+            *tasks
+        )  # run the moderation check in parallel to the actual llm api call
 
         responses = await llm_responses
 
@@ -1178,7 +1254,9 @@ class ProxyBaseLLMRequestProcessing:
             )
             if self._is_streaming_request(
                 data=self.data, is_streaming_request=is_streaming_request
-            ) or self._is_streaming_response(response):  # use generate_responses to stream responses
+            ) or self._is_streaming_response(
+                response
+            ):  # use generate_responses to stream responses
                 custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
                     user_api_key_dict=user_api_key_dict,
                     call_id=logging_obj.litellm_call_id,
@@ -1196,11 +1274,13 @@ class ProxyBaseLLMRequestProcessing:
                 )
 
                 # Call response headers hook for streaming success
-                callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
-                    data=self.data,
-                    user_api_key_dict=user_api_key_dict,
-                    response=response,
-                    request_headers=dict(request.headers),
+                callback_headers = (
+                    await proxy_logging_obj.post_call_response_headers_hook(
+                        data=self.data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                        request_headers=dict(request.headers),
+                    )
                 )
                 if callback_headers:
                     custom_headers.update(callback_headers)
@@ -1210,7 +1290,9 @@ class ProxyBaseLLMRequestProcessing:
                 # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
                 # what the client sent.
                 if requested_model_from_client:
-                    self.data["_litellm_client_requested_model"] = requested_model_from_client
+                    self.data["_litellm_client_requested_model"] = (
+                        requested_model_from_client
+                    )
 
                 # Streaming: attach a closure that fires after all guardrail
                 # end-of-stream blocks complete.  CSW.__anext__ stores the
@@ -1225,7 +1307,9 @@ class ProxyBaseLLMRequestProcessing:
                     CustomStreamWrapper,
                 )
 
-                if _post_call_guardrails_active and isinstance(response, CustomStreamWrapper):
+                if _post_call_guardrails_active and isinstance(
+                    response, CustomStreamWrapper
+                ):
                     # Intentionally a live reference (not a copy) — mirrors
                     # ProxyLogging.post_call_success_hook which also mutates
                     # data["guardrail_to_apply"] during iteration.
@@ -1233,7 +1317,9 @@ class ProxyBaseLLMRequestProcessing:
                     _captured_user_api_key_dict = user_api_key_dict
                     _captured_logging_obj = logging_obj
 
-                    async def _on_deferred_stream_complete(assembled_response, cache_hit):
+                    async def _on_deferred_stream_complete(
+                        assembled_response, cache_hit
+                    ):
                         await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
                             captured_data=_captured_data,
                             captured_user_api_key_dict=_captured_user_api_key_dict,
@@ -1256,13 +1342,17 @@ class ProxyBaseLLMRequestProcessing:
                             body_bytes = b"".join(
                                 [chunk async for chunk in generator]  # type: ignore[union-attr]
                             )
-                            modified_bytes = await self._handle_event_stream_allm_passthrough_route(
-                                body_bytes=body_bytes,
-                                proxy_logging_obj=proxy_logging_obj,
-                                user_api_key_dict=user_api_key_dict,
+                            modified_bytes = (
+                                await self._handle_event_stream_allm_passthrough_route(
+                                    body_bytes=body_bytes,
+                                    proxy_logging_obj=proxy_logging_obj,
+                                    user_api_key_dict=user_api_key_dict,
+                                )
                             )
                             response_headers = {
-                                k: v for k, v in custom_headers.items() if k.lower() != "content-length"
+                                k: v
+                                for k, v in custom_headers.items()
+                                if k.lower() != "content-length"
                             }
                             return Response(
                                 content=modified_bytes,
@@ -1289,13 +1379,17 @@ class ProxyBaseLLMRequestProcessing:
                             import json as _json
 
                             parsed_response = _json.loads(body_bytes)
-                            parsed_response = await proxy_logging_obj.post_call_success_hook(
-                                data=self.data,
-                                user_api_key_dict=user_api_key_dict,
-                                response=parsed_response,
+                            parsed_response = (
+                                await proxy_logging_obj.post_call_success_hook(
+                                    data=self.data,
+                                    user_api_key_dict=user_api_key_dict,
+                                    response=parsed_response,
+                                )
                             )
                             response_headers = {
-                                k: v for k, v in custom_headers.items() if k.lower() != "content-length"
+                                k: v
+                                for k, v in custom_headers.items()
+                                if k.lower() != "content-length"
                             }
                             return Response(
                                 content=_json.dumps(parsed_response).encode(),
@@ -1309,13 +1403,17 @@ class ProxyBaseLLMRequestProcessing:
                             and "vnd.amazon.eventstream" in content_type
                         ):
                             body_bytes = await response.aread()  # type: ignore[union-attr]
-                            modified_bytes = await self._handle_event_stream_allm_passthrough_route(
-                                body_bytes=body_bytes,
-                                proxy_logging_obj=proxy_logging_obj,
-                                user_api_key_dict=user_api_key_dict,
+                            modified_bytes = (
+                                await self._handle_event_stream_allm_passthrough_route(
+                                    body_bytes=body_bytes,
+                                    proxy_logging_obj=proxy_logging_obj,
+                                    user_api_key_dict=user_api_key_dict,
+                                )
                             )
                             response_headers = {
-                                k: v for k, v in custom_headers.items() if k.lower() != "content-length"
+                                k: v
+                                for k, v in custom_headers.items()
+                                if k.lower() != "content-length"
                             }
                             return Response(
                                 content=modified_bytes,
@@ -1334,11 +1432,13 @@ class ProxyBaseLLMRequestProcessing:
                     # This handles cases like websearch_interception agentic loop
                     # which returns a non-streaming dict even for streaming requests
                     if self._is_streaming_response(response):
-                        selected_data_generator = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                            response=response,
-                            user_api_key_dict=user_api_key_dict,
-                            request_data=self.data,
-                            proxy_logging_obj=proxy_logging_obj,
+                        selected_data_generator = (
+                            ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                                response=response,
+                                user_api_key_dict=user_api_key_dict,
+                                request_data=self.data,
+                                proxy_logging_obj=proxy_logging_obj,
+                            )
                         )
                         return await create_response(
                             generator=selected_data_generator,
@@ -1362,12 +1462,10 @@ class ProxyBaseLLMRequestProcessing:
                         # stream stay unregistered and follow-up file API
                         # calls 403. Covers the background-polling path
                         # too, which loops ``body_iterator`` end-to-end.
-                        selected_data_generator = (
-                            ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
-                                original_stream_response=response,
-                                wrapped_generator=selected_data_generator,
-                                user_api_key_dict=user_api_key_dict,
-                            )
+                        selected_data_generator = ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
+                            original_stream_response=response,
+                            wrapped_generator=selected_data_generator,
+                            user_api_key_dict=user_api_key_dict,
                         )
                     return await create_response(
                         generator=selected_data_generator,
@@ -1431,7 +1529,9 @@ class ProxyBaseLLMRequestProcessing:
             # it at stream end.  _exception_raised is function-scoped and
             # immune to outer exception context, avoiding false positives.
             if _exception_raised:
-                _deferred_fn = getattr(logging_obj, "_on_deferred_stream_complete", None)
+                _deferred_fn = getattr(
+                    logging_obj, "_on_deferred_stream_complete", None
+                )
                 if _deferred_fn is not None:
                     logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
                     try:
@@ -1445,7 +1545,9 @@ class ProxyBaseLLMRequestProcessing:
                             )
                         )
                     except Exception as e:
-                        verbose_proxy_logger.exception("Error in orphaned streaming async logging: %s", e)
+                        verbose_proxy_logger.exception(
+                            "Error in orphaned streaming async logging: %s", e
+                        )
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
@@ -1456,7 +1558,9 @@ class ProxyBaseLLMRequestProcessing:
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
             )
 
-        hidden_params = getattr(response, "_hidden_params", {}) or {}  # get any updated response headers
+        hidden_params = (
+            getattr(response, "_hidden_params", {}) or {}
+        )  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
         fastapi_response.headers.update(
@@ -1560,8 +1664,10 @@ class ProxyBaseLLMRequestProcessing:
                 yield chunk
         finally:
             try:
-                completed_obj = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
-                    original_stream_response
+                completed_obj = (
+                    ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+                        original_stream_response
+                    )
                 )
                 if completed_obj is not None:
                     await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
@@ -1654,7 +1760,9 @@ class ProxyBaseLLMRequestProcessing:
 
         return False
 
-    def _is_streaming_request(self, data: dict, is_streaming_request: Optional[bool] = False) -> bool:
+    def _is_streaming_request(
+        self, data: dict, is_streaming_request: Optional[bool] = False
+    ) -> bool:
         """
         Check if the request is a streaming request.
 
@@ -1704,7 +1812,9 @@ class ProxyBaseLLMRequestProcessing:
         if response_status >= 300:
             return None
 
-        response_headers = {k: v for k, v in custom_headers.items() if k.lower() != "content-length"}
+        response_headers = {
+            k: v for k, v in custom_headers.items() if k.lower() != "content-length"
+        }
 
         if "vnd.amazon.eventstream" in content_type:
             body_bytes = await response.aread()  # type: ignore[union-attr]
@@ -1825,7 +1935,9 @@ class ProxyBaseLLMRequestProcessing:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
             from litellm.proxy.utils import _check_and_merge_model_level_guardrails
 
-            guardrail_data = _check_and_merge_model_level_guardrails(data=captured_data, llm_router=_global_llm_router)
+            guardrail_data = _check_and_merge_model_level_guardrails(
+                data=captured_data, llm_router=_global_llm_router
+            )
             for cb in litellm.callbacks:
                 if not isinstance(cb, CustomGuardrail):
                     continue
@@ -1863,8 +1975,12 @@ class ProxyBaseLLMRequestProcessing:
                         getattr(cb, "guardrail_name", type(cb).__name__),
                         e,
                     )
-                    if isinstance(e, HTTPException) and hasattr(captured_logging_obj, "model_call_details"):
-                        captured_logging_obj.model_call_details.setdefault("metadata", {})["guardrail_blocked"] = True
+                    if isinstance(e, HTTPException) and hasattr(
+                        captured_logging_obj, "model_call_details"
+                    ):
+                        captured_logging_obj.model_call_details.setdefault(
+                            "metadata", {}
+                        )["guardrail_blocked"] = True
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error in deferred streaming guardrail initialization: %s",
@@ -1922,7 +2038,9 @@ class ProxyBaseLLMRequestProcessing:
         timeout = getattr(
             e, "timeout", None
         )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
-        _litellm_logging_obj: Optional[LiteLLMLoggingObj] = self.data.get("litellm_logging_obj", None)
+        _litellm_logging_obj: Optional[LiteLLMLoggingObj] = self.data.get(
+            "litellm_logging_obj", None
+        )
 
         # Attempt to get model_id from logging object
         #
@@ -1933,7 +2051,9 @@ class ProxyBaseLLMRequestProcessing:
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=(
-                _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else self.data.get("litellm_call_id")
+                _litellm_logging_obj.litellm_call_id
+                if _litellm_logging_obj
+                else self.data.get("litellm_call_id")
             ),
             model_id=model_id,
             version=version,
@@ -1960,7 +2080,9 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=None,
-                request_headers=(self.data.get("proxy_server_request") or {}).get("headers", {}),
+                request_headers=(self.data.get("proxy_server_request") or {}).get(
+                    "headers", {}
+                ),
             )
             if callback_headers:
                 headers.update(callback_headers)
@@ -2015,7 +2137,11 @@ class ProxyBaseLLMRequestProcessing:
         # the upstream API response. Use it to return the correct HTTP code
         # instead of defaulting to 500.
         _exc_status_code = getattr(e, "status_code", None)
-        if _exc_status_code is not None and isinstance(_exc_status_code, int) and 400 <= _exc_status_code <= 599:
+        if (
+            _exc_status_code is not None
+            and isinstance(_exc_status_code, int)
+            and 400 <= _exc_status_code <= 599
+        ):
             _code = _exc_status_code
         else:
             _code = status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -2075,12 +2201,20 @@ class ProxyBaseLLMRequestProcessing:
         # await, response-string materialization, and cost-injection call are
         # pure overhead on the streaming hot path (the default config).
         caps = ProxyLogging._callback_capabilities()
-        cost_injection_enabled = bool(getattr(litellm, "include_cost_in_streaming_usage", False))
-        fast_path = not caps.has_streaming_chunk_override and not caps.has_guardrail and not cost_injection_enabled
+        cost_injection_enabled = bool(
+            getattr(litellm, "include_cost_in_streaming_usage", False)
+        )
+        fast_path = (
+            not caps.has_streaming_chunk_override
+            and not caps.has_guardrail
+            and not cost_injection_enabled
+        )
         debug_enabled = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
                 request_data=request_data,
@@ -2088,7 +2222,9 @@ class ProxyBaseLLMRequestProcessing:
                 # ``.format(chunk)`` was previously evaluated for every chunk
                 # regardless of log level; gate it behind the level check.
                 if debug_enabled:
-                    verbose_proxy_logger.debug("async_data_generator: received streaming chunk - %s", chunk)
+                    verbose_proxy_logger.debug(
+                        "async_data_generator: received streaming chunk - %s", chunk
+                    )
 
                 if fast_path:
                     yield serialize_chunk(chunk)
@@ -2115,11 +2251,17 @@ class ProxyBaseLLMRequestProcessing:
                     str_so_far += str(chunk.get("content", ""))
 
                 model_name = request_data.get("model", "")
-                chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, model_name)
+                chunk = (
+                    ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                        chunk, model_name
+                    )
+                )
                 yield serialize_chunk(chunk)
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(str(e))
+                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
+                    str(e)
+                )
             )
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -2187,24 +2329,42 @@ class ProxyBaseLLMRequestProcessing:
 
         try:
             if isinstance(chunk, dict):
-                maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(chunk, model_name)
+                maybe_modified = (
+                    ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+                        chunk, model_name
+                    )
+                )
                 if maybe_modified is not None:
                     return maybe_modified
             elif isinstance(chunk, (bytes, bytearray)):
                 # Decode to str, inject, and rebuild as bytes
                 try:
                     s = chunk.decode("utf-8", errors="ignore")
-                    maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(s, model_name)
+                    maybe_mod = (
+                        ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(
+                            s, model_name
+                        )
+                    )
                     if maybe_mod is not None:
-                        return (maybe_mod + ("" if maybe_mod.endswith("\n\n") else "\n\n")).encode("utf-8")
+                        return (
+                            maybe_mod + ("" if maybe_mod.endswith("\n\n") else "\n\n")
+                        ).encode("utf-8")
                 except Exception:
                     pass
             elif isinstance(chunk, str):
                 # Try to parse SSE frame and inject cost into the data line
-                maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(chunk, model_name)
+                maybe_mod = (
+                    ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(
+                        chunk, model_name
+                    )
+                )
                 if maybe_mod is not None:
                     # Ensure trailing frame separator
-                    return maybe_mod if maybe_mod.endswith("\n\n") else (maybe_mod + "\n\n")
+                    return (
+                        maybe_mod
+                        if maybe_mod.endswith("\n\n")
+                        else (maybe_mod + "\n\n")
+                    )
         except Exception:
             # Never break streaming on optional cost injection
             pass
@@ -2212,7 +2372,9 @@ class ProxyBaseLLMRequestProcessing:
         return chunk
 
     @staticmethod
-    def _inject_cost_into_sse_frame_str(frame_str: str, model_name: str) -> Optional[str]:
+    def _inject_cost_into_sse_frame_str(
+        frame_str: str, model_name: str
+    ) -> Optional[str]:
         """
         Inject cost information into an SSE frame string by modifying the JSON in the 'data:' line.
 
@@ -2232,7 +2394,11 @@ class ProxyBaseLLMRequestProcessing:
                     json_part = stripped_ln.split("data:", 1)[1].strip()
                     if json_part and json_part != "[DONE]":
                         obj = json.loads(json_part)
-                        maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(obj, model_name)
+                        maybe_modified = (
+                            ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+                                obj, model_name
+                            )
+                        )
                         if maybe_modified is not None:
                             # Replace just this line with updated JSON using safe_dumps
                             lines[idx] = f"data: {safe_dumps(maybe_modified)}"
@@ -2258,7 +2424,8 @@ class ProxyBaseLLMRequestProcessing:
             prompt_tokens = int(_usage.get("input_tokens", 0) or 0)
             completion_tokens = int(_usage.get("output_tokens", 0) or 0)
             total_tokens = int(
-                _usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
+                _usage.get("total_tokens", prompt_tokens + completion_tokens)
+                or (prompt_tokens + completion_tokens)
             )
 
             # Extract additional usage fields
@@ -2282,11 +2449,15 @@ class ProxyBaseLLMRequestProcessing:
 
             # Handle web_search_requests by wrapping in ServerToolUse
             if web_search_requests is not None:
-                usage_kwargs["server_tool_use"] = ServerToolUse(web_search_requests=web_search_requests)
+                usage_kwargs["server_tool_use"] = ServerToolUse(
+                    web_search_requests=web_search_requests
+                )
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = cache_creation_input_tokens
+                usage_kwargs["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens
+                )
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 
@@ -2305,7 +2476,9 @@ class ProxyBaseLLMRequestProcessing:
                 return obj
         return None
 
-    def maybe_get_model_id(self, _logging_obj: Optional[LiteLLMLoggingObj]) -> Optional[str]:
+    def maybe_get_model_id(
+        self, _logging_obj: Optional[LiteLLMLoggingObj]
+    ) -> Optional[str]:
         """
         Get model_id from logging object or request metadata.
 

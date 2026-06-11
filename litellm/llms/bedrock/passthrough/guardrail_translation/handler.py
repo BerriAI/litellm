@@ -74,7 +74,9 @@ def _write_back_texts(
                 system[outer_idx]["text"] = guardrailed_texts[idx]
         else:
             messages = body.get("messages")
-            if not (messages and isinstance(messages, list) and outer_idx < len(messages)):
+            if not (
+                messages and isinstance(messages, list) and outer_idx < len(messages)
+            ):
                 continue
             content = messages[outer_idx].get("content")
             if content and isinstance(content, list) and inner_idx < len(content):
@@ -130,7 +132,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
             if is_text_delta:
                 text_delta_indices.append(len(frames))
-            frames.append({"raw": frame_raw, "is_text_delta": is_text_delta, "text": text})
+            frames.append(
+                {"raw": frame_raw, "is_text_delta": is_text_delta, "text": text}
+            )
 
         if not text_delta_indices:
             return body_bytes
@@ -188,7 +192,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             headers_bytes = frame_raw[12 : 12 + orig_hdrs_len]
 
             try:
-                payload_dict = _json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
+                payload_dict = _json.loads(
+                    frame_raw[12 + orig_hdrs_len : orig_total - 4]
+                )
                 payload_dict["delta"]["text"] = new_text
                 new_payload = _json.dumps(payload_dict, separators=(",", ":")).encode()
             except Exception:
@@ -203,7 +209,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             msg_crc_val = esm_crc32(part_for_msg_crc, prelude_crc_val) & 0xFFFFFFFF
             msg_crc_b = struct.pack("!I", msg_crc_val)
 
-            result_parts.append(prelude + prelude_crc_b + headers_bytes + new_payload + msg_crc_b)
+            result_parts.append(
+                prelude + prelude_crc_b + headers_bytes + new_payload + msg_crc_b
+            )
 
         return b"".join(result_parts)
 
@@ -264,9 +272,13 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             return response
 
         output_message = (
-            response.get("output", {}).get("message", {}) if isinstance(response.get("output"), dict) else {}
+            response.get("output", {}).get("message", {})
+            if isinstance(response.get("output"), dict)
+            else {}
         )
-        content_blocks = output_message.get("content") if isinstance(output_message, dict) else None
+        content_blocks = (
+            output_message.get("content") if isinstance(output_message, dict) else None
+        )
 
         if not isinstance(content_blocks, list):
             return response
@@ -282,8 +294,13 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             return response
 
         effective_request_data = request_data or {}
-        if "litellm_metadata" not in effective_request_data and user_api_key_dict is not None:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+        if (
+            "litellm_metadata" not in effective_request_data
+            and user_api_key_dict is not None
+        ):
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
             if user_metadata:
                 effective_request_data = {
                     **effective_request_data,
