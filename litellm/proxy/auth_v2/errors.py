@@ -3,9 +3,6 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import HTTPException
-from fastapi.responses import JSONResponse
-
-SCIM_ERROR_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:Error"
 
 
 class AuthError(HTTPException):
@@ -55,16 +52,3 @@ def forbidden_permission() -> AuthError:
 
 def account_disabled() -> AuthError:
     return AuthError(403, "Account disabled")
-
-
-def scim_error_response(exc: Exception) -> JSONResponse:
-    status_code = exc.status_code if isinstance(exc, HTTPException) else 500
-    detail = exc.detail if isinstance(exc, HTTPException) else "Internal server error"
-    return JSONResponse(
-        status_code=status_code,
-        content={
-            "schemas": [SCIM_ERROR_SCHEMA],
-            "status": str(status_code),
-            "detail": str(detail),
-        },
-    )
