@@ -2,7 +2,7 @@ import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { Empty, Table, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { SpinProps } from "antd";
-import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
+import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
 
 interface ProjectKeysTableProps {
   keys: KeyResponse[];

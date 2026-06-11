@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
 import { ProjectsPage } from "./ProjectsPage";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 
