@@ -3381,7 +3381,10 @@ class Router:
                     # Request Number X, Model Number Y
                     _tasks.append(
                         _async_completion_no_exceptions_return_idx(
-                            model=model, idx=idx, messages=message, **kwargs  # type: ignore
+                            model=model,
+                            idx=idx,
+                            messages=message,  # type: ignore[arg-type]
+                            **kwargs,
                         )
                     )
             responses = await asyncio.gather(*_tasks)
@@ -3544,7 +3547,7 @@ class Router:
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[False] = False, **kwargs
     ) -> ModelResponse: 
         ...
-    
+
     @overload
     async def schedule_acompletion(
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[True], **kwargs
@@ -7937,8 +7940,7 @@ class Router:
                     re.compile(pattern)
                 except re.error as exc:
                     raise ValueError(
-                        f"Invalid regex in tag_regex for model '{deployment.model_name}': "
-                        f"{pattern!r} — {exc}"
+                        f"Invalid regex in tag_regex for model '{deployment.model_name}': {pattern!r} — {exc}"
                     ) from exc
 
             deployment = self._add_deployment(deployment=deployment)
@@ -8196,8 +8198,7 @@ class Router:
 
         if deployment.model_name in self.adaptive_routers:
             raise ValueError(
-                f"Adaptive-router deployment {deployment.model_name} already exists. "
-                "Please use a different model name."
+                f"Adaptive-router deployment {deployment.model_name} already exists. Please use a different model name."
             )
 
         adaptive_router = AdaptiveRouter(
@@ -9407,8 +9408,7 @@ class Router:
                 ):
                     model_group_info.supports_parallel_function_calling = True
                 if (
-                    model_info.get("supports_vision", None) is not None
-                    and model_info["supports_vision"] is True  # type: ignore
+                    model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True  # type: ignore
                 ):
                     model_group_info.supports_vision = True
                 if (
@@ -9428,8 +9428,7 @@ class Router:
                     model_group_info.supports_url_context = True
 
                 if (
-                    model_info.get("supports_reasoning", None) is not None
-                    and model_info["supports_reasoning"] is True  # type: ignore
+                    model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True  # type: ignore
                 ):
                     model_group_info.supports_reasoning = True
                 if (
@@ -10052,6 +10051,18 @@ class Router:
             name for name, fully_blocked in blocked_by_name.items() if fully_blocked
         }
 
+    @staticmethod
+    def _are_all_deployments_blocked(
+        deployments: List[DeploymentTypedDict],
+    ) -> bool:
+        return len(deployments) > 0 and all(
+            (deployment.get("model_info") or {}).get("blocked") is True
+            for deployment in deployments
+        )
+
+    def _is_model_fully_blocked(self, model: str) -> bool:
+        deployments = self.get_model_list(model_name=model) or []
+        return self._are_all_deployments_blocked(deployments=deployments)
     async def async_get_fully_unhealthy_model_names(self) -> Set[str]:
         """
         Returns the set of model names where every backing deployment is currently

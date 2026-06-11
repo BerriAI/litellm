@@ -1,6 +1,7 @@
 import asyncio
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
+import httpx
 from fastapi import HTTPException, status
 
 import litellm
@@ -44,6 +45,30 @@ def _route_user_config_request(data: dict, route_type: str):
 def _is_a2a_agent_model(model_name: Any) -> bool:
     """Check if the model name is for an A2A agent (a2a/ prefix)."""
     return isinstance(model_name, str) and model_name.startswith("a2a/")
+
+
+def _raise_if_model_fully_blocked(
+    llm_router: LitellmRouter, model_name: Any, team_id: Optional[str]
+) -> None:
+    if not isinstance(model_name, str) or not model_name:
+        return
+    if not isinstance(llm_router, litellm.Router):
+        return
+    deployments = (
+        llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
+    )
+    if llm_router._are_all_deployments_blocked(deployments):
+        raise litellm.PermissionDeniedError(
+            message="Model is blocked",
+            model=model_name,
+            llm_provider="",
+            response=httpx.Response(
+                status_code=403,
+                request=httpx.Request(
+                    method="POST", url="https://github.com/BerriAI/litellm"
+                ),
+            ),
+        )
 
 
 ROUTE_ENDPOINT_MAPPING = {
@@ -413,6 +438,9 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         else:
             return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
+        _raise_if_model_fully_blocked(
+            llm_router=llm_router, model_name=data.get("model"), team_id=team_id
+        )
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
         if route_type in [
