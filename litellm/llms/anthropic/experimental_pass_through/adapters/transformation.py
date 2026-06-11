@@ -1495,7 +1495,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 thinking_blocks = choice.delta.thinking_blocks or []
                 if len(thinking_blocks) > 0:
                     thinking_block = thinking_blocks[0]
-                    if thinking_block["type"] == "thinking":
+                    if thinking_block["type"] in ("thinking", "redacted_thinking"):
                         thinking = thinking_block.get("thinking") or ""
                         signature = thinking_block.get("signature") or ""
 
@@ -1556,7 +1556,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 thinking_blocks = choice.delta.thinking_blocks or []
                 if len(thinking_blocks) > 0:
                     for thinking_block in thinking_blocks:
-                        if thinking_block["type"] == "thinking":
+                        if thinking_block["type"] in ("thinking", "redacted_thinking"):
                             thinking = thinking_block.get("thinking") or ""
                             signature = thinking_block.get("signature") or ""
 
