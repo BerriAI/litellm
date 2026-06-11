@@ -7219,7 +7219,8 @@ def get_standard_logging_object_payload(
             custom_llm_provider=kwargs.get("custom_llm_provider"),
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
-            router_model_id=logging_obj.get_router_model_id(),
+            router_model_id=logging_obj.get_router_model_id()
+            or (_model_id if isinstance(_model_id, str) and _model_id else None),
         )
 
         error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(

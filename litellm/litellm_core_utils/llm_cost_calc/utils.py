@@ -288,7 +288,7 @@ def _parse_above_token_threshold(key: str) -> float:
     return _parse_token_threshold(key.rsplit("_above_", 1)[1].split("_tokens")[0])
 
 
-def _prompt_exceeds_threshold(prompt_tokens: int, threshold: float, inclusive: bool) -> bool:
+def _prompt_exceeds_threshold(prompt_tokens: float, threshold: float, inclusive: bool) -> bool:
     return prompt_tokens > threshold or (inclusive and prompt_tokens == threshold)
 
 
@@ -689,6 +689,23 @@ def _apply_off_peak_to_base_costs(
     )
 
 
+def _loose_model_extra_token(usage: Usage, field_name: str) -> float:
+    extra: Final = usage.model_extra
+    if not isinstance(extra, dict) or field_name not in extra:
+        return 0.0
+    token: Final = extra.get(field_name)
+    if isinstance(token, bool) or not isinstance(token, (int, float)):
+        return 0.0
+    return float(token)
+
+
+def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
+    prompt_tokens: Final = float(usage.prompt_tokens or 0)
+    cache_read_tokens: Final = _loose_model_extra_token(usage, "cache_read_input_tokens")
+    cache_creation_tokens: Final = _loose_model_extra_token(usage, "cache_creation_input_tokens")
+    return prompt_tokens + cache_read_tokens + cache_creation_tokens
+
+
 def _get_token_base_cost(
     model_info: ModelInfo,
     usage: Usage,
@@ -761,6 +778,7 @@ def _get_token_base_cost(
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
     threshold: float | None = None
+    effective_prompt_tokens: Final = _get_effective_prompt_tokens_for_tiered_pricing(usage)
     for key in sorted(threshold_keys, key=_parse_above_token_threshold):
         value = model_info.get(key)
         if value is not None:
@@ -768,7 +786,7 @@ def _get_token_base_cost(
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
                 threshold_str = key.rsplit("_above_", 1)[1].split("_tokens")[0]
                 threshold = _parse_above_token_threshold(key)
-                if _prompt_exceeds_threshold(usage.prompt_tokens, threshold, threshold_is_inclusive):
+                if _prompt_exceeds_threshold(effective_prompt_tokens, threshold, threshold_is_inclusive):
                     # Prefer a service_tier-specific above-threshold key when available,
                     # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
                     # ON_DEMAND_PRIORITY.  Falls back to the standard key automatically
