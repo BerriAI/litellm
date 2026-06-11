@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "../networking";
@@ -771,5 +771,129 @@ describe("CreateMCPServer", () => {
 
       expect(onBackToDiscovery).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+const BYOK_LABEL = "BYOK (Bring Your Own Key)";
+
+function getByokSwitch(): HTMLButtonElement | null {
+  const label = screen.queryByText(BYOK_LABEL);
+  const formItem = label?.closest(".ant-form-item");
+  return (formItem?.querySelector('button[role="switch"]') as HTMLButtonElement) ?? null;
+}
+
+describe("CreateMCPServer BYOK toggle", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    oauthHook.tokenResponse = null;
+    oauthHook.onTokenReceived = null;
+  });
+
+  async function selectHttpTransport() {
+    render(<CreateMCPServer {...defaultProps} />);
+    await selectAntOption("Transport Type", "Streamable HTTP");
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+    });
+  }
+
+  it("shows the BYOK toggle for each static-credential auth type", async () => {
+    for (const authLabel of ["API Key", "Bearer Token", "Token", "Basic Auth"]) {
+      await selectHttpTransport();
+      await selectAntOption("Authentication", authLabel);
+      await waitFor(() => {
+        expect(screen.getByText(BYOK_LABEL)).toBeInTheDocument();
+      });
+      cleanup();
+    }
+  });
+
+  it("hides the BYOK toggle for non-static auth types (none, oauth, sigv4)", async () => {
+    for (const authLabel of ["None", "OAuth", "AWS SigV4 (Bedrock AgentCore MCPs)"]) {
+      await selectHttpTransport();
+      await selectAntOption("Authentication", authLabel);
+      await waitFor(() => {
+        expect(screen.queryByText(BYOK_LABEL)).not.toBeInTheDocument();
+      });
+      cleanup();
+    }
+  });
+
+  it("swaps the shared Authentication Value field for per-user fields when BYOK is on", async () => {
+    await selectHttpTransport();
+    await selectAntOption("Authentication", "Bearer Token");
+
+    await waitFor(() => {
+      expect(screen.getByText("Authentication Value")).toBeInTheDocument();
+    });
+
+    const byokSwitch = getByokSwitch();
+    expect(byokSwitch).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(byokSwitch!);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Authentication Value")).not.toBeInTheDocument();
+      expect(screen.getByText("Access Description")).toBeInTheDocument();
+    });
+  });
+
+  it("sends is_byok=true and omits the shared credential when BYOK is enabled", async () => {
+    await selectHttpTransport();
+
+    const user = userEvent.setup({ delay: null });
+    await user.type(getServerNameInput(), "Byok_Server");
+    await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+    await selectAntOption("Authentication", "Bearer Token");
+    await waitFor(() => expect(screen.getByText(BYOK_LABEL)).toBeInTheDocument());
+
+    await act(async () => {
+      fireEvent.click(getByokSwitch()!);
+    });
+    await waitFor(() => expect(screen.queryByText("Authentication Value")).not.toBeInTheDocument());
+
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ server_id: "byok-1" } as any);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+    });
+
+    await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+
+    const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+    expect(payload.is_byok).toBe(true);
+    expect(payload.auth_type).toBe("bearer_token");
+    expect(payload.credentials).toBeUndefined();
+  });
+
+  it("forces is_byok=false when auth_type is switched away from a static type after enabling it", async () => {
+    await selectHttpTransport();
+
+    const user = userEvent.setup({ delay: null });
+    await user.type(getServerNameInput(), "Switched_Server");
+    await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+    await selectAntOption("Authentication", "Bearer Token");
+    await waitFor(() => expect(screen.getByText(BYOK_LABEL)).toBeInTheDocument());
+    await act(async () => {
+      fireEvent.click(getByokSwitch()!);
+    });
+
+    // Switching to OAuth removes BYOK eligibility; a stale is_byok=true must not persist.
+    await selectAntOption("Authentication", "None");
+    await waitFor(() => expect(screen.queryByText(BYOK_LABEL)).not.toBeInTheDocument());
+
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ server_id: "switched-1" } as any);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+    });
+
+    await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+
+    const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+    expect(payload.is_byok).toBe(false);
   });
 });

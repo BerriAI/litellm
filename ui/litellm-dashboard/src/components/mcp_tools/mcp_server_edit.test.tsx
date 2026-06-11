@@ -940,3 +940,101 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     expect(mockSetToken).not.toHaveBeenCalled();
   });
 });
+
+describe("MCPServerEdit (BYOK)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const byokServer = {
+    server_id: "byok_server_1",
+    server_name: "ByokServer",
+    alias: "byok_server",
+    description: "BYOK MCP server",
+    transport: "http",
+    url: "https://example.com/mcp",
+    auth_type: "bearer_token",
+    is_byok: true,
+    byok_description: ["Create and manage issues"],
+    byok_api_key_help_url: "https://docs.example.com/keys",
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+    mcp_access_groups: [],
+  };
+
+  const getByokSwitch = () => {
+    const formItem = screen.queryByText("BYOK (Bring Your Own Key)")?.closest(".ant-form-item");
+    return (formItem?.querySelector('button[role="switch"]') as HTMLButtonElement) ?? null;
+  };
+
+  const save = async () => {
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+    return vi.mocked(networking.updateMCPServer).mock.calls[0][1];
+  };
+
+  it("renders the BYOK toggle on for an existing BYOK server and hides the shared auth value field", async () => {
+    render(
+      <MCPServerEdit
+        mcpServer={byokServer}
+        accessToken={null}
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => expect(getByokSwitch()).toBeTruthy());
+    expect(getByokSwitch()).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByText("Authentication Value")).not.toBeInTheDocument();
+  });
+
+  it("persists is_byok=true when saving an existing BYOK server", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(byokServer as any);
+
+    render(
+      <MCPServerEdit
+        mcpServer={byokServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => expect(getByokSwitch()).toBeTruthy());
+
+    const payload = await save();
+    expect(payload.is_byok).toBe(true);
+    expect(payload.credentials).toBeUndefined();
+  });
+
+  it("persists is_byok=false and restores the shared auth value field when BYOK is toggled off", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...byokServer, is_byok: false } as any);
+
+    render(
+      <MCPServerEdit
+        mcpServer={byokServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => expect(getByokSwitch()).toBeTruthy());
+    await act(async () => {
+      fireEvent.click(getByokSwitch()!);
+    });
+
+    await waitFor(() => expect(screen.getByText("Authentication Value")).toBeInTheDocument());
+
+    const payload = await save();
+    expect(payload.is_byok).toBe(false);
+  });
+});
