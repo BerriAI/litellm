@@ -1,6 +1,7 @@
 from typing import Literal, Optional, Tuple
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.secret_managers.main import get_secret_str
 
@@ -8,6 +9,58 @@ CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = (
     "aws-external-anthropic"
 )
 CLAUDE_PLATFORM_BEDROCK_ROUTE = "claude_platform/"
+
+# Auth/routing params consumed by validate_environment / sign_request that
+# must not be forwarded in the Messages API request body (together with any
+# key prefixed "aws_") — the API rejects unknown fields with
+# "Extra inputs are not permitted".
+CLAUDE_PLATFORM_NON_REQUEST_PARAMS = {
+    "workspace_id",
+    "anthropic_workspace_id",
+    "anthropic-workspace-id",
+}
+
+# Messages API fields that are valid on Anthropic's first-party API but are
+# not yet supported by the Claude Platform on AWS (aws-external-anthropic)
+# endpoint, which rejects them with "Extra inputs are not permitted". Unlike
+# the auth params above these carry user intent, so dropping them is logged at
+# WARNING — the request succeeds but the requested feature is not applied.
+CLAUDE_PLATFORM_UNSUPPORTED_REQUEST_PARAMS = {
+    "context_management",
+}
+
+
+def filter_claude_platform_request_body(params: dict) -> dict:
+    """Return a copy of ``params`` with fields the Claude Platform on AWS
+    endpoint rejects removed.
+
+    Strips auth/routing config (workspace-id aliases and any ``aws_``-prefixed
+    key) silently, since those are consumed by validate_environment /
+    sign_request and never belong in the body. Strips Messages API fields the
+    AWS endpoint does not support yet (e.g. ``context_management``) with a
+    WARNING, since those reflect user intent that will not be applied on this
+    route.
+
+    Filters a copy so callers' ``sign_request`` still sees ``aws_region_name``.
+    """
+    dropped_unsupported = [
+        k for k in params if k in CLAUDE_PLATFORM_UNSUPPORTED_REQUEST_PARAMS
+    ]
+    if dropped_unsupported:
+        verbose_logger.warning(
+            "bedrock/claude_platform: dropping unsupported Messages API "
+            "param(s) %s from the request body — the Claude Platform on AWS "
+            "(aws-external-anthropic) endpoint does not support them and "
+            "rejects unknown fields. The request will proceed without them.",
+            dropped_unsupported,
+        )
+    return {
+        k: v
+        for k, v in params.items()
+        if k not in CLAUDE_PLATFORM_NON_REQUEST_PARAMS
+        and k not in CLAUDE_PLATFORM_UNSUPPORTED_REQUEST_PARAMS
+        and not k.startswith("aws_")
+    }
 
 
 def strip_claude_platform_route(model: str) -> str:
