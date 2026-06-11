@@ -1304,8 +1304,7 @@ class TestOCIStreamingSignedBody:
         When signed_json_body is provided, the POST must use that exact bytes object,
         not json.dumps(data) — otherwise the RSA-SHA256 signature is invalid.
         """
-        import httpx
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         config = OCIChatConfig()
         signed_bytes = b'{"signed": true}'
@@ -1464,6 +1463,21 @@ class TestOCIChatConfigErrorPaths:
         )
         assert "audio" not in result
 
+    @pytest.mark.parametrize("model", ["cohere.command-latest", "xai.grok-4"])
+    def test_map_openai_params_max_retries_dropped_without_drop_params(self, model):
+        """max_retries is a litellm control param, not a generation param. It
+        must be dropped silently (no raise) even when drop_params is False, so
+        the litellm proxy (which injects max_retries on every request) does not
+        500 every OCI call.
+        """
+        config = OCIChatConfig()
+        result = config.map_openai_params(
+            non_default_params={"max_retries": 3},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert "max_retries" not in result
     def test_map_openai_params_cohere_n_default_dropped(self):
         """Cohere has no numGenerations field, but n=1 (and None) is the OpenAI
         default single-generation request. It must be dropped silently rather

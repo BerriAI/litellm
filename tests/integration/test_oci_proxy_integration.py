@@ -108,38 +108,35 @@ def _oci_env_from_profile() -> dict[str, str]:
     }
 
 
-@pytest.fixture(scope="module")
-def proxy_url() -> Iterator[str]:
-    oci_env = _oci_env_from_profile()
-
-    port = _free_port()
-    base_url = f"http://127.0.0.1:{port}"
-
+def _serve(config_path: str) -> Iterator[str]:
+    """Boot the litellm proxy with the given config and yield its base URL."""
     env = os.environ.copy()
-    env.update(oci_env)
+    env.update(_oci_env_from_profile())
     # Avoid pulling in DB-backed features for this lightweight smoke run.
     env.pop("DATABASE_URL", None)
     env["STORE_MODEL_IN_DB"] = "False"
+
+    port = _free_port()
+    base_url = f"http://127.0.0.1:{port}"
 
     # Prefer the `litellm` console script that lives next to the active
     # Python so we inherit the test virtualenv. Fall back to PATH.
     cli = Path(sys.executable).parent / "litellm"
     if not cli.exists():
         cli = "litellm"
-    cmd = [
-        str(cli),
-        "--config",
-        str(CONFIG_PATH),
-        "--port",
-        str(port),
-        "--host",
-        "127.0.0.1",
-        "--num_workers",
-        "1",
-    ]
 
     proc = subprocess.Popen(
-        cmd,
+        [
+            str(cli),
+            "--config",
+            config_path,
+            "--port",
+            str(port),
+            "--host",
+            "127.0.0.1",
+            "--num_workers",
+            "1",
+        ],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -155,6 +152,27 @@ def proxy_url() -> Iterator[str]:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+
+
+@pytest.fixture(scope="module")
+def proxy_url() -> Iterator[str]:
+    yield from _serve(str(CONFIG_PATH))
+
+
+@pytest.fixture(scope="module")
+def proxy_url_no_drop_params(tmp_path_factory) -> Iterator[str]:
+    """A proxy WITHOUT drop_params, to prove benign params the proxy injects
+    (e.g. max_retries) don't break OCI calls."""
+    cfg = tmp_path_factory.mktemp("oci_nodrop") / "config.yaml"
+    cfg.write_text(
+        "model_list:\n"
+        "  - model_name: oci-cohere-command\n"
+        "    litellm_params:\n"
+        "      model: oci/cohere.command-latest\n"
+        "general_settings:\n"
+        f"  master_key: {MASTER_KEY}\n"
+    )
+    yield from _serve(str(cfg))
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +289,25 @@ def test_model_list_advertises_oci_models(proxy_url: str) -> None:
     advertised = {row["id"] for row in r.json()["data"]}
     for expected in CHAT_MODELS + ["oci-embed"]:
         assert expected in advertised, f"{expected} missing from /v1/models: {advertised}"
+
+
+def test_chat_completion_no_drop_params(proxy_url_no_drop_params: str) -> None:
+    """A plain chat completion succeeds through a proxy without drop_params.
+
+    Regression for the HTTP 500 ``param `max_retries` is not supported on OCI``:
+    the proxy injects max_retries on every request, so without this fix any OCI
+    call through the proxy failed unless drop_params was set.
+    """
+    r = httpx.post(
+        f"{proxy_url_no_drop_params}/v1/chat/completions",
+        headers=_auth_headers(),
+        json=_chat_payload("oci-cohere-command"),
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    assert r.status_code == 200, f"no-drop_params -> {r.status_code}: {r.text}"
+    body = r.json()
+    assert body["object"] == "chat.completion"
+    assert body["choices"][0]["message"].get("content") is not None
 
 
 def test_cohere_default_n_via_proxy(proxy_url: str) -> None:

@@ -357,7 +357,13 @@ class OCIChatConfig(BaseConfig):
 
         for key, value in {**non_default_params, **optional_params}.items():
             alias = param_map.get(key)
-            if alias is False:
+if alias is False:
+                # max_retries is a litellm-level control param (litellm applies
+                # retries itself); it is never a generation param OCI accepts, so
+                # drop it silently. The litellm proxy injects it on every request,
+                # which otherwise 500s OCI calls unless drop_params is set.
+                if key == "max_retries":
+                    continue
                 # n=1 (or None) is the OpenAI default: a single generation, which
                 # every OCI model produces anyway. Drop it silently so standard
                 # clients that always send n=1 (e.g. the MLflow gateway) are not
