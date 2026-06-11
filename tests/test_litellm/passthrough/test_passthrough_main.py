@@ -663,6 +663,60 @@ def test_timeout_httpx_timeout_object_forwarded():
         assert call_kwargs["timeout"] is custom_timeout
 
 
+def test_timeout_httpx_timeout_object_unwrapped_for_unsupported_provider():
+    """
+    When an httpx.Timeout object is passed but the provider does not support
+    httpx timeouts (not in supports_httpx_timeout's allow-list), the `.read`
+    value should be extracted and forwarded as a float to build_request.
+    """
+    client = HTTPHandler()
+
+    mock_provider_config = MagicMock()
+    mock_provider_config.get_complete_url.return_value = (
+        httpx.URL("https://api.anthropic.com/v1/messages"),
+        "https://api.anthropic.com",
+    )
+    mock_provider_config.get_api_key.return_value = "test-key"
+    mock_provider_config.validate_environment.return_value = {}
+    mock_provider_config.sign_request.return_value = ({}, None)
+    mock_provider_config.is_streaming_request.return_value = False
+
+    custom_timeout = httpx.Timeout(timeout=45.0, connect=10.0)
+
+    with patch(
+        "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+        return_value=mock_provider_config,
+    ), patch(
+        "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
+        return_value={},
+    ), patch(
+        "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+        return_value=("my-model", "anthropic", "test-key", "https://api.anthropic.com"),
+    ), patch.object(
+        client.client, "send", return_value=MagicMock(status_code=200)
+    ), patch.object(
+        client.client, "build_request"
+    ) as mock_build_request:
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.update_environment_variables = MagicMock()
+
+        llm_passthrough_route(
+            model="anthropic/my-model",
+            endpoint="v1/messages",
+            method="POST",
+            custom_llm_provider="anthropic",
+            json={"model": "my-model", "messages": [{"role": "user", "content": "Hi"}]},
+            timeout=custom_timeout,
+            client=client,
+            litellm_logging_obj=mock_logging_obj,
+        )
+
+        mock_build_request.assert_called_once()
+        call_kwargs = mock_build_request.call_args.kwargs
+        # `.read` (45.0) is extracted since anthropic is not in the allow-list
+        assert call_kwargs["timeout"] == 45.0
+
+
 def test_content_param_forwarded_to_build_request():
     """
     Regression test: the `content` parameter passed to llm_passthrough_route
