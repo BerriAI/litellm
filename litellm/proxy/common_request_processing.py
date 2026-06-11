@@ -556,6 +556,51 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
     return False
 
 
+def _log_llm_api_exception(e: Exception) -> None:
+    if getattr(e, "status_code", None) == 499:
+        verbose_proxy_logger.info(
+            "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, upstream LLM request cancelled"
+        )
+        return
+    verbose_proxy_logger.exception(
+        f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
+    )
+
+
+async def _cancel_llm_call_on_client_disconnect(
+    request: Request,
+    llm_api_call: "asyncio.Future[Any]",
+    disconnect_event: asyncio.Event,
+) -> None:
+    while True:
+        message = await request.receive()
+        if message["type"] == "http.disconnect":
+            disconnect_event.set()
+            llm_api_call.cancel()
+            return
+
+
+async def _await_llm_call_cancelling_on_disconnect(
+    request: Request,
+    llm_api_call: "asyncio.Future[Any]",
+) -> Any:
+    disconnect_event = asyncio.Event()
+    monitor = asyncio.create_task(
+        _cancel_llm_call_on_client_disconnect(request, llm_api_call, disconnect_event)
+    )
+    try:
+        return await llm_api_call
+    except asyncio.CancelledError:
+        if disconnect_event.is_set():
+            raise HTTPException(
+                status_code=499,
+                detail="Client disconnected the request",
+            )
+        raise
+    finally:
+        monitor.cancel()
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -1222,7 +1267,12 @@ class ProxyBaseLLMRequestProcessing:
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        responses = await llm_responses
+        if general_settings.get("cancel_on_disconnect", False):
+            responses = await _await_llm_call_cancelling_on_disconnect(
+                request, llm_responses
+            )
+        else:
+            responses = await llm_responses
 
         response = responses[1]
 
@@ -1834,9 +1884,7 @@ class ProxyBaseLLMRequestProcessing:
         version: Optional[str] = None,
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
-        verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
-        )
+        _log_llm_api_exception(e)
         # Allow callbacks to transform the error response
         transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
