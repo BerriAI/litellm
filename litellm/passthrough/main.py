@@ -290,7 +290,7 @@ def llm_passthrough_route(
         json["model"] = model
 
     ### TIMEOUT LOGIC ###
-    timeout = timeout or kwargs.get("request_timeout", 600) or 600
+    timeout = timeout if timeout is not None else kwargs.get("request_timeout", 600) or 600
     if (
         custom_llm_provider is not None
         and isinstance(timeout, httpx.Timeout)
