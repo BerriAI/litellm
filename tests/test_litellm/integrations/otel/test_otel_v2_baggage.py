@@ -77,26 +77,65 @@ def test_identity_promoted_onto_every_span():
         assert span.attributes.get(GenAI.REQUEST_MODEL) == "gpt-4o"
 
 
-def test_team_metadata_and_provider_model_promoted():
-    """The team's metadata dict (JSON) and the provider/underlying model name are
-    promoted onto every span, alongside the user-facing ``gen_ai.request.model``."""
+def test_team_metadata_promoted_only_for_allowlisted_subkeys():
+    """Allowlisted team-metadata sub-keys are promoted (JSON) onto every span;
+    non-allowlisted sub-keys are excluded, alongside the provider/underlying
+    model name and the user-facing ``gen_ai.request.model``."""
     import json
 
     engine, exporter = _engine_and_exporter()
     data = LLMCallSpanData.from_standard_logging_payload(_payload())
-    bag = promoted_baggage(data.identity, data.request_model, BAGGAGE_PROMOTED_KEYS)
+    bag = promoted_baggage(
+        data.identity,
+        data.request_model,
+        BAGGAGE_PROMOTED_KEYS,
+        team_metadata_keys=("tier",),
+    )
     ctx = ctx_mod.set_request_baggage(bag)
     engine.emit(SpanRole.SERVICE, ServiceSpanData("redis", call_type="set"), ctx)
     (span,) = exporter.get_finished_spans()
 
-    # team metadata: the whole dict, JSON-serialized into one value
-    assert json.loads(span.attributes[LiteLLM.TEAM_METADATA]) == {
-        "tier": "gold",
-        "cost_center": "42",
-    }
+    # only the allowlisted sub-key is promoted; ``cost_center`` is excluded
+    assert json.loads(span.attributes[LiteLLM.TEAM_METADATA]) == {"tier": "gold"}
     # provider model is distinct from the user-facing request model
     assert span.attributes.get(LiteLLM.PROVIDER_MODEL) == "azure/my-deployment"
     assert span.attributes.get(GenAI.REQUEST_MODEL) == "gpt-4o"
+
+
+def test_team_metadata_not_promoted_by_default():
+    """The default allowlist is empty, so a team's metadata is never promoted
+    even though its dict is present on the request."""
+    data = LLMCallSpanData.from_standard_logging_payload(_payload())
+    # raw dict is carried on the identity for promotion-time filtering
+    assert data.identity.team_metadata == {"tier": "gold", "cost_center": "42"}
+    bag = promoted_baggage(data.identity, data.request_model, BAGGAGE_PROMOTED_KEYS)
+    assert LiteLLM.TEAM_METADATA not in bag
+
+
+def test_team_metadata_dropped_when_no_allowlisted_key_present():
+    """An allowlist that matches no present sub-key drops team_metadata rather
+    than promoting a useless ``{}``."""
+    data = LLMCallSpanData.from_standard_logging_payload(_payload())
+    bag = promoted_baggage(
+        data.identity,
+        data.request_model,
+        BAGGAGE_PROMOTED_KEYS,
+        team_metadata_keys=("absent_key",),
+    )
+    assert LiteLLM.TEAM_METADATA not in bag
+
+
+def test_team_metadata_not_promoted_when_key_excluded_from_promoted_keys():
+    """Even with sub-keys allowlisted, team_metadata stays off the wire when
+    ``litellm.team.metadata`` itself isn't in ``promoted_keys``."""
+    data = LLMCallSpanData.from_standard_logging_payload(_payload())
+    bag = promoted_baggage(
+        data.identity,
+        data.request_model,
+        (LiteLLM.TEAM_ID,),
+        team_metadata_keys=("tier",),
+    )
+    assert LiteLLM.TEAM_METADATA not in bag
 
 
 def test_empty_team_metadata_is_dropped():

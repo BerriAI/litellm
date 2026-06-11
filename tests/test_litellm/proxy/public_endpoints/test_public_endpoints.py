@@ -703,3 +703,67 @@ def test_clean_display_name_strips_suffix():
 def test_clean_display_name_passthrough_when_no_suffix():
     assert _clean_display_name("OpenAI") == "OpenAI"
     assert _clean_display_name("") == ""
+
+
+def test_public_mcp_hub_returns_only_whitelisted_servers():
+    """Regression: /public/mcp_hub must gate strictly on
+    litellm.public_mcp_servers, mirroring /public/model_hub and
+    /public/agent_hub. Servers with available_on_public_internet=True that
+    are not on the whitelist must not leak."""
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.proxy._types import MCPTransport
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    listed = MCPServer(
+        server_id="listed",
+        name="listed",
+        server_name="listed",
+        transport=MCPTransport.http,
+        available_on_public_internet=True,
+    )
+
+    mock_manager = MagicMock()
+    mock_manager.get_public_mcp_servers.return_value = [listed]
+
+    with (
+        patch("litellm.public_mcp_servers", ["listed"]),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        response = client.get("/public/mcp_hub")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["server_id"] for item in data] == ["listed"]
+    app.dependency_overrides.clear()
+
+
+def test_public_mcp_hub_returns_empty_when_whitelist_unset():
+    """When no servers have been published via /v1/mcp/make_public, the
+    hub returns an empty list (matches /public/agent_hub behavior)."""
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    mock_manager = MagicMock()
+    mock_manager.get_public_mcp_servers.return_value = []
+
+    with (
+        patch("litellm.public_mcp_servers", None),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        response = client.get("/public/mcp_hub")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    app.dependency_overrides.clear()

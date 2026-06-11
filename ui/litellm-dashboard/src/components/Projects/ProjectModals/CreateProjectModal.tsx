@@ -1,14 +1,8 @@
 import { Modal, Form, Button, Typography } from "antd";
 import { FolderAddOutlined } from "@ant-design/icons";
 import MessageManager from "@/components/molecules/message_manager";
-import {
-  useCreateProject,
-  ProjectCreateParams,
-} from "@/app/(dashboard)/hooks/projects/useCreateProject";
-import {
-  ProjectBaseForm,
-  ProjectFormValues,
-} from "./ProjectBaseForm";
+import { useCreateProject, ProjectCreateParams } from "@/app/(dashboard)/hooks/projects/useCreateProject";
+import { ProjectBaseForm, ProjectFormValues } from "./ProjectBaseForm";
 import { buildProjectApiParams } from "./projectFormUtils";
 
 interface CreateProjectModalProps {
@@ -16,10 +10,7 @@ interface CreateProjectModalProps {
   onClose: () => void;
 }
 
-export function CreateProjectModal({
-  isOpen,
-  onClose,
-}: CreateProjectModalProps) {
+export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps) {
   const [form] = Form.useForm<ProjectFormValues>();
   const createMutation = useCreateProject();
 

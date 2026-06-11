@@ -675,28 +675,60 @@ def test_sanitize_vertex_anthropic_output_params_unit():
         sanitize_vertex_anthropic_output_params,
     )
 
+    supported = "claude-opus-4-6"
+
     # No-op when output_config absent.
     data: dict = {"max_tokens": 8}
-    sanitize_vertex_anthropic_output_params(data)
+    sanitize_vertex_anthropic_output_params(data, supported)
     assert data == {"max_tokens": 8}
 
-    # Effort-only → preserved (Vertex 4.6/4.7 accept it on rawPredict).
+    # Effort-only on a supporting model → preserved (Vertex 4.6/4.7 accept it).
     data = {"output_config": {"effort": "high"}}
-    sanitize_vertex_anthropic_output_params(data)
+    sanitize_vertex_anthropic_output_params(data, supported)
     assert data["output_config"] == {"effort": "high"}
 
     # Format-only → preserved unchanged.
     fmt = {"format": {"type": "json_schema", "schema": {"type": "object"}}}
     data = {"output_config": dict(fmt)}
-    sanitize_vertex_anthropic_output_params(data)
+    sanitize_vertex_anthropic_output_params(data, supported)
     assert data["output_config"] == fmt
 
-    # Mixed → both effort and format kept (no current Vertex-unsupported keys).
+    # Mixed on a supporting model → both effort and format kept.
     data = {"output_config": {"format": fmt["format"], "effort": "high"}}
-    sanitize_vertex_anthropic_output_params(data)
+    sanitize_vertex_anthropic_output_params(data, supported)
     assert data["output_config"] == {"format": fmt["format"], "effort": "high"}
 
     # Non-dict → dropped defensively.
     data = {"output_config": "garbage"}
-    sanitize_vertex_anthropic_output_params(data)
+    sanitize_vertex_anthropic_output_params(data, supported)
     assert "output_config" not in data
+
+
+def test_sanitize_strips_effort_for_haiku_45():
+    """Regression: Haiku 4.5 on Vertex does not support ``output_config.effort``
+    and 400s with ``Extra inputs are not permitted``. Claude Code injects
+    ``effort`` into every Messages payload, so the helper must strip it for
+    models that don't advertise output_config support while leaving it intact
+    for Opus/Sonnet 4.6+."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.output_params_utils import (
+        sanitize_vertex_anthropic_output_params,
+    )
+
+    haiku = "claude-haiku-4-5@20251001"
+
+    # Effort-only → output_config removed entirely (no empty dict on the wire).
+    data: dict = {"output_config": {"effort": "high"}, "max_tokens": 8}
+    sanitize_vertex_anthropic_output_params(data, haiku)
+    assert "output_config" not in data
+    assert data["max_tokens"] == 8
+
+    # Mixed → effort stripped, format preserved.
+    fmt = {"type": "json_schema", "schema": {"type": "object"}}
+    data = {"output_config": {"effort": "high", "format": fmt}}
+    sanitize_vertex_anthropic_output_params(data, haiku)
+    assert data["output_config"] == {"format": fmt}
+
+    # Same payload on a supporting model keeps effort untouched.
+    data = {"output_config": {"effort": "high"}}
+    sanitize_vertex_anthropic_output_params(data, "vertex_ai/claude-opus-4-6")
+    assert data["output_config"] == {"effort": "high"}

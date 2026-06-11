@@ -87,6 +87,7 @@ class ExceptionCheckers:
             "is longer than the model's context length",
             "input tokens exceed the configured limit",
             "`inputs` tokens + `max_new_tokens` must be",
+            "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
         ]
         for substring in known_exception_substrings:
@@ -654,7 +655,11 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 custom_llm_provider == "anthropic"
                 or custom_llm_provider == "anthropic_text"
             ):  # one of the anthropics
-                if "prompt is too long" in error_str or "prompt: length" in error_str:
+                if (
+                    "prompt is too long" in error_str
+                    or "prompt: length" in error_str
+                    or ExceptionCheckers.is_error_str_context_window_exceeded(error_str)
+                ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message="AnthropicError - {}".format(error_str),
@@ -891,12 +896,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
                     )
-                elif "model's maximum context limit" in error_str:
+                elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"{custom_llm_provider.capitalize()}Exception: Context Window Error - {error_str}",
                         model=model,
                         llm_provider=custom_llm_provider,
+                        response=getattr(original_exception, "response", None),
+                        litellm_debug_info=extra_information,
                     )
                 elif "token_quota_reached" in error_str:
                     exception_mapping_worked = True

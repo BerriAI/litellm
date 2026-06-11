@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm.cost_calculator import (
+    RealtimeAPITokenUsageProcessor,
     completion_cost,
     cost_per_token,
     handle_realtime_stream_cost_calculation,
@@ -383,6 +384,88 @@ def test_handle_realtime_stream_cost_calculation():
         litellm_model_name="gpt-3.5-turbo",
     )
     assert cost == 0.0  # No usage, no cost
+
+    
+def test_realtime_stream_combines_text_and_audio_token_details():
+    """Realtime response.done usage with input_token_details / output_token_details."""
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "total_tokens": 30,
+                    "input_token_details": {"text_tokens": 8, "audio_tokens": 2},
+                    "output_token_details": {"text_tokens": 12, "audio_tokens": 8},
+                }
+            },
+        },
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 5,
+                    "output_tokens": 15,
+                    "total_tokens": 20,
+                    "input_token_details": {"text_tokens": 3, "audio_tokens": 2},
+                    "output_token_details": {"text_tokens": 5, "audio_tokens": 10},
+                }
+            },
+        },
+    ]
+
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    assert combined.prompt_tokens_details is not None
+    assert combined.prompt_tokens_details.text_tokens == 11
+    assert combined.prompt_tokens_details.audio_tokens == 4
+
+    assert combined.completion_tokens_details is not None
+    assert combined.completion_tokens_details.text_tokens == 17
+    assert combined.completion_tokens_details.audio_tokens == 18
+
+
+def test_realtime_logging_object_allows_null_transcript_in_conversation_item_added():
+    results: OpenAIRealtimeStreamList = [
+        {
+            "type": "conversation.item.added",
+            "event_id": "event_added",
+            "item": {
+                "id": "item_123",
+                "type": "message",
+                "role": "assistant",
+                "status": "in_progress",
+                "content": [{"type": "audio", "transcript": None}],
+            },
+        },
+        {
+            "type": "response.done",
+            "event_id": "event_done",
+            "response": {
+                "id": "resp_123",
+                "object": "realtime.response",
+                "status": "completed",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            },
+        },
+    ]
+
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results
+    )
+    logging_result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+        usage=usage,
+        results=results,
+    )
+
+    assert logging_result.usage.total_tokens == 18
+    assert logging_result.results[0]["item"]["content"][0]["transcript"] is None
 
 
 def test_custom_pricing_with_router_model_id():
@@ -2120,11 +2203,11 @@ def test_gemini_3_1_flash_lite_pricing():
     ):
         model_info = litellm.model_cost.get(model_name)
         assert model_info is not None, f"Missing model pricing entry: {model_name}"
-        assert model_info["input_cost_per_token"] == 4.5e-07
-        assert model_info["input_cost_per_audio_token"] == 9e-07
-        assert model_info["output_cost_per_token"] == 2.7e-06
-        assert model_info["output_cost_per_reasoning_token"] == 2.7e-06
-        assert model_info["cache_read_input_token_cost"] == 4.5e-08
+        assert model_info["input_cost_per_token"] == 2.5e-07
+        assert model_info["input_cost_per_audio_token"] == 5e-07
+        assert model_info["output_cost_per_token"] == 1.5e-06
+        assert model_info["output_cost_per_reasoning_token"] == 1.5e-06
+        assert model_info["cache_read_input_token_cost"] == 2.5e-08
         assert model_info["max_input_tokens"] == 1048576
 
 

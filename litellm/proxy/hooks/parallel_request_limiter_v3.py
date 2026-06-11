@@ -23,8 +23,6 @@ from typing import (
     cast,
 )
 
-from fastapi import HTTPException
-
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
@@ -34,9 +32,20 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
+from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    ProxyRateLimitError,
+    map_v3_rate_limit_type,
+)
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import (
+    CallTypes,
+    EmbeddingResponse,
+    ModelResponse,
+    TextCompletionResponse,
+    Usage,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1375,6 +1384,79 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         )
 
+    def _add_mcp_per_key_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        mcp_server_name: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add a per-MCP-server rpm descriptor for the API key, if a limit is
+        configured for the server being called.
+
+        MCP tool calls have no token usage, so only requests_per_unit is set;
+        tokens_per_unit stays None so the TPM reservation path is never engaged.
+        """
+        from litellm.proxy.auth.auth_utils import get_key_mcp_rpm_limit
+
+        if not mcp_server_name or not user_api_key_dict.api_key:
+            return
+
+        mcp_rpm_limit = get_key_mcp_rpm_limit(user_api_key_dict)
+        if not mcp_rpm_limit:
+            return
+
+        server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
+        if server_rpm_limit is None:
+            return
+
+        descriptors.append(
+            RateLimitDescriptor(
+                key="mcp_per_key",
+                value=f"{user_api_key_dict.api_key}:{mcp_server_name}",
+                rate_limit={
+                    "requests_per_unit": server_rpm_limit,
+                    "tokens_per_unit": None,
+                    "window_size": self.window_size,
+                },
+            )
+        )
+
+    def _add_mcp_per_team_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        mcp_server_name: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add a per-MCP-server rpm descriptor for the team, if a limit is
+        configured for the server being called.
+        """
+        from litellm.proxy.auth.auth_utils import get_team_mcp_rpm_limit
+
+        if not mcp_server_name or not user_api_key_dict.team_id:
+            return
+
+        mcp_rpm_limit = get_team_mcp_rpm_limit(user_api_key_dict)
+        if not mcp_rpm_limit:
+            return
+
+        server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
+        if server_rpm_limit is None:
+            return
+
+        descriptors.append(
+            RateLimitDescriptor(
+                key="mcp_per_team",
+                value=f"{user_api_key_dict.team_id}:{mcp_server_name}",
+                rate_limit={
+                    "requests_per_unit": server_rpm_limit,
+                    "tokens_per_unit": None,
+                    "window_size": self.window_size,
+                },
+            )
+        )
+
     def _should_enforce_rate_limit(
         self,
         limit_type: Optional[str],
@@ -1533,6 +1615,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rpm_limit_type: Optional[str],
         tpm_limit_type: Optional[str],
         model_has_failures: bool,
+        call_type: Optional[str] = None,
     ) -> List[RateLimitDescriptor]:
         """
         Create all rate limit descriptors for the request.
@@ -1652,6 +1735,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             requested_model=requested_model,
             descriptors=descriptors,
         )
+
+        # REST MCP calls pass the raw body through this hook before server
+        # resolution; only the later synthetic hook payload may carry this key.
+        if call_type == CallTypes.call_mcp_tool.value and "server_id" not in data:
+            mcp_server_name = data.get("mcp_server_name", None)
+            self._add_mcp_per_key_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
+            self._add_mcp_per_team_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
 
         if (
             get_team_model_rpm_limit(user_api_key_dict) is not None
@@ -1878,8 +1976,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         response: RateLimitResponse,
         descriptors: List[RateLimitDescriptor],
+        requested_model: Optional[str] = None,
     ) -> None:
-        """Handle rate limit exceeded error by raising HTTPException."""
+        """Handle rate limit exceeded by raising :class:`ProxyRateLimitError` (a 429)."""
         for status in response["statuses"]:
             if status["code"] == "OVER_LIMIT":
                 descriptor_key = status["descriptor_key"]
@@ -1910,14 +2009,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     f"Limit resets at: {reset_time_formatted}"
                 )
 
-                raise HTTPException(
-                    status_code=429,
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+                    requested_model
+                )
+                raise ProxyRateLimitError(
                     detail=detail,
                     headers={
                         "retry-after": str(self.window_size),
                         "rate_limit_type": str(status["rate_limit_type"]),
                         "reset_at": reset_time_formatted,
                     },
+                    rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
+                    model=resolved_model,
+                    llm_provider=llm_provider,
                 )
 
     async def async_pre_call_hook(
@@ -1983,6 +2087,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             rpm_limit_type=rpm_limit_type,
             tpm_limit_type=tpm_limit_type,
             model_has_failures=model_has_failures,
+            call_type=call_type,
         )
 
         # Add team model rate limits from team_metadata
@@ -2025,6 +2130,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._handle_rate_limit_error(
                     response=response,
                     descriptors=descriptors,
+                    requested_model=requested_model,
                 )
             else:
                 # add descriptors to request headers
@@ -2098,6 +2204,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._handle_rate_limit_error(
                         response=tpm_response,
                         descriptors=descriptors,
+                        requested_model=requested_model,
                     )
                 else:
                     self._stash_value_in_metadata_channels(
@@ -2635,9 +2742,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Get total tokens from response
         total_tokens = 0
-        # spot fix for /responses api
-        if isinstance(response_obj, ModelResponse) or isinstance(
-            response_obj, BaseLiteLLMOpenAIResponseObject
+        if isinstance(
+            response_obj,
+            (
+                ModelResponse,
+                EmbeddingResponse,
+                TextCompletionResponse,
+                BaseLiteLLMOpenAIResponseObject,
+            ),
         ):
             _usage = getattr(response_obj, "usage", None)
             total_tokens = self._get_total_tokens_from_usage(

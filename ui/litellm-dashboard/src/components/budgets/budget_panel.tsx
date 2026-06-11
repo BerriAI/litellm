@@ -108,10 +108,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
         <TabPanels>
           <TabPanel>
             <div className="mt-6">
-              <BudgetModal
-                isModalVisible={isCreateModelVisible}
-                setIsModalVisible={setIsCreateModelVisible}
-              />
+              <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
               {selectedBudget && (
                 <EditBudgetModal
                   isModalVisible={isEditModalVisible}

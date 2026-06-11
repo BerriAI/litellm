@@ -335,6 +335,79 @@ async def test_async_anthropic_messages_handler_passes_litellm_metadata():
 
 
 @pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_forwards_router_model_info():
+    """Ensure router deployment model_info is forwarded into litellm_params.
+
+    The Router stamps kwargs['model_info'] on every deployment dispatch via
+    _update_kwargs_with_deployment. Downstream cooldown / success callbacks
+    (router.deployment_callback_on_failure, deployment_callback_on_success)
+    look up the deployment id via kwargs['litellm_params']['model_info']['id'].
+    If async_anthropic_messages_handler builds its own litellm_params dict
+    without forwarding model_info, the id is missing and cooldown is silently
+    skipped for /v1/messages requests under the Router.
+    """
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
+    )
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude-sonnet-4-20250514", "messages": []}
+    )
+
+    mock_client = AsyncMock()
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+    }
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_from_kwargs = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = False
+
+    deployment_model_info = {
+        "id": "deployment-123",
+        "db_model": False,
+    }
+
+    try:
+        await handler.async_anthropic_messages_handler(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_provider_config=mock_config,
+            anthropic_messages_optional_request_params={},
+            custom_llm_provider="anthropic",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=mock_logging_obj,
+            client=mock_client,
+            kwargs={"model_info": deployment_model_info},
+        )
+    except Exception:
+        pass
+
+    mock_logging_obj.update_from_kwargs.assert_called_once()
+    call_kwargs = mock_logging_obj.update_from_kwargs.call_args
+    litellm_params_arg = (
+        call_kwargs.kwargs.get(
+            "litellm_params", call_kwargs[1].get("litellm_params", {})
+        )
+        if call_kwargs.kwargs
+        else call_kwargs[1].get("litellm_params", {})
+    )
+
+    assert litellm_params_arg.get("model_info") == deployment_model_info
+
+
+@pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_header_priority():
     """
     Test that async_anthropic_messages_handler respects header priority:
@@ -500,6 +573,46 @@ def test_sync_delete_responses_omits_body_for_azure():
     )
 
 
+def _content_type(headers: dict) -> str:
+    for key, value in headers.items():
+        if key.lower() == "content-type":
+            return value
+    return ""
+
+
+def test_async_delete_responses_sets_json_content_type():
+    """OpenAI rejects a responses DELETE with no Content-Type by treating it as
+    application/octet-stream. The handler must declare application/json."""
+    captured: dict = {}
+    fake_async_delete, _ = _build_delete_response_mock(captured)
+
+    async def run():
+        with patch.object(AsyncHTTPHandler, "delete", new=fake_async_delete):
+            await litellm.adelete_responses(
+                response_id="resp_xyz",
+                custom_llm_provider="openai",
+                api_key="test-key",
+            )
+
+    asyncio.run(run())
+
+    assert _content_type(captured["headers"]) == "application/json"
+
+
+def test_sync_delete_responses_sets_json_content_type():
+    captured: dict = {}
+    _, fake_sync_delete = _build_delete_response_mock(captured)
+
+    with patch.object(HTTPHandler, "delete", new=fake_sync_delete):
+        litellm.delete_responses(
+            response_id="resp_xyz",
+            custom_llm_provider="openai",
+            api_key="test-key",
+        )
+
+    assert _content_type(captured["headers"]) == "application/json"
+
+
 # ---------------------------------------------------------------------------
 # Parity tests: request-body is serialized once and reused for the wire.
 # (_async_post_anthropic_messages_with_http_error_retry)
@@ -638,3 +751,241 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     assert first_sent == prebuilt  # attempt 0 used prebuilt
     assert second_sent == _json.dumps(request_body)  # attempt 1 re-serialized
     assert "MUTATED" in second_sent  # ... the mutated body
+
+
+def test_base_responses_config_sign_request_is_noop_by_default():
+    """Default responses sign_request must be a no-op: unchanged headers, no signed body.
+
+    Guards the 15 existing responses providers from accidental signing when the
+    handler starts calling sign_request.
+    """
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    cfg = OpenAIResponsesAPIConfig()
+    headers = {"Authorization": "Bearer sk-existing"}
+    out_headers, signed_body = cfg.sign_request(
+        headers=headers,
+        optional_params={},
+        request_data={"input": "hi"},
+        api_base="https://api.openai.com/v1/responses",
+    )
+    assert out_headers == {"Authorization": "Bearer sk-existing"}
+    assert signed_body is None
+
+
+def _make_responses_handler_call(signed_body):
+    """Drive BaseLLMHTTPHandler.response_api_handler with a fully mocked provider
+    config + sync client, returning the kwargs the client.post was called with.
+
+    signed_body=None simulates a no-op (non-signing) provider; bytes simulates a
+    signing provider (e.g. Bedrock Mantle).
+    """
+    from unittest.mock import MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    provider_config = MagicMock()
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = (
+        "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+    )
+    provider_config.transform_responses_api_request.return_value = {"input": "hi"}
+    provider_config.should_fake_stream.return_value = False
+    provider_config.sign_request.return_value = ({"X-Signed": "1"}, signed_body)
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_client.post.return_value = MagicMock()
+
+    handler = BaseLLMHTTPHandler()
+    handler.response_api_handler(
+        model="openai.gpt-5.5",
+        input="hi",
+        responses_api_provider_config=provider_config,
+        response_api_optional_request_params={},
+        custom_llm_provider="bedrock_mantle",
+        litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
+        logging_obj=MagicMock(),
+        client=mock_client,
+        _is_async=False,
+    )
+    return mock_client.post.call_args.kwargs
+
+
+def test_responses_handler_sends_json_when_not_signed():
+    """No-op provider (signed_body is None) -> handler posts json=data, no data= bytes."""
+    kwargs = _make_responses_handler_call(signed_body=None)
+    assert kwargs.get("json") == {"input": "hi"}
+    assert "data" not in kwargs
+
+
+def test_responses_handler_sends_signed_bytes_when_signed():
+    """Signing provider -> handler posts the exact signed bytes via data=, not json=."""
+    kwargs = _make_responses_handler_call(signed_body=b'{"input": "hi"}')
+    assert kwargs.get("data") == b'{"input": "hi"}'
+    assert "json" not in kwargs
+    assert kwargs["headers"] == {"X-Signed": "1"}
+
+
+def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
+    """Fake-stream signing-order invariant: the bytes SIGNED must equal the bytes SENT.
+
+    In the streaming + fake-stream path the handler first runs
+    _prepare_fake_stream_request, which pops "stream" out of the body, and only
+    then calls sign_request. If signing ran before that pop, the signed body
+    would still carry "stream" while the body sent over the wire would not,
+    producing a SigV4 payload-hash mismatch (401) for a real Mantle deployment.
+    We snapshot request_data at sign time and assert "stream" is already gone.
+    """
+    from unittest.mock import MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.router import GenericLiteLLMParams
+
+    provider_config = MagicMock()
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = (
+        "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+    )
+    provider_config.transform_responses_api_request.return_value = {
+        "input": "hi",
+        "stream": True,
+    }
+    provider_config.should_fake_stream.return_value = True
+    provider_config.transform_response_api_response.return_value = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        output=[],
+        status="completed",
+        model="openai.gpt-5.5",
+    )
+
+    captured = {}
+
+    def _capture_sign(**kwargs):
+        captured["request_data"] = dict(kwargs["request_data"])
+        return ({"X-Signed": "1"}, b'{"input": "hi"}')
+
+    provider_config.sign_request.side_effect = _capture_sign
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_client.post.return_value = MagicMock()
+
+    handler = BaseLLMHTTPHandler()
+    handler.response_api_handler(
+        model="openai.gpt-5.5",
+        input="hi",
+        responses_api_provider_config=provider_config,
+        response_api_optional_request_params={"stream": True},
+        custom_llm_provider="bedrock_mantle",
+        litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
+        logging_obj=MagicMock(),
+        client=mock_client,
+        _is_async=False,
+        fake_stream=True,
+    )
+
+    assert "stream" not in captured["request_data"]
+    assert "input" in captured["request_data"]
+
+    post_kwargs = mock_client.post.call_args.kwargs
+    assert post_kwargs.get("data") == b'{"input": "hi"}'
+    assert "json" not in post_kwargs
+    assert "stream" in post_kwargs
+
+
+def _make_compact_handler_call(signed_body, is_async):
+    """Drive (async_)compact_response_api_handler with a fully mocked provider config
+    + client, returning the kwargs the client.post was called with.
+
+    signed_body=None simulates a no-op (non-signing) provider; bytes simulates a
+    signing provider (e.g. Bedrock Mantle SigV4 / bearer).
+    """
+    from unittest.mock import MagicMock
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    compact_url = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses/compact"
+    provider_config = MagicMock()
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = (
+        "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+    )
+    provider_config.transform_compact_response_api_request.return_value = (
+        compact_url,
+        {"model": "openai.gpt-5.5", "input": "hi"},
+    )
+    provider_config.sign_request.return_value = ({"X-Signed": "1"}, signed_body)
+    provider_config.transform_compact_response_api_response.return_value = "ok"
+
+    spec = AsyncHTTPHandler if is_async else HTTPHandler
+    mock_client = MagicMock(spec=spec)
+    if is_async:
+        mock_client.post = AsyncMock(return_value=MagicMock())
+    else:
+        mock_client.post.return_value = MagicMock()
+
+    handler = BaseLLMHTTPHandler()
+    result = handler.compact_response_api_handler(
+        model="openai.gpt-5.5",
+        input="hi",
+        responses_api_provider_config=provider_config,
+        response_api_optional_request_params={},
+        custom_llm_provider="bedrock_mantle",
+        litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
+        logging_obj=MagicMock(),
+        client=mock_client,
+        _is_async=is_async,
+    )
+    if is_async:
+        asyncio.run(result)
+    return provider_config, mock_client.post.call_args.kwargs
+
+
+def test_compact_handler_sends_json_when_not_signed():
+    """No-op provider on compact (signed_body is None) -> posts json=data, no data= bytes."""
+    provider_config, kwargs = _make_compact_handler_call(
+        signed_body=None, is_async=False
+    )
+    provider_config.sign_request.assert_called_once()
+    assert kwargs.get("json") == {"model": "openai.gpt-5.5", "input": "hi"}
+    assert "data" not in kwargs
+
+
+def test_compact_handler_sends_signed_bytes_when_signed():
+    """Signing provider on compact -> posts the signed bytes via data=, not json=.
+
+    Regression for the adversarial-review finding that /responses/compact bypassed
+    the SigV4 signing hook, so IAM-only Mantle callers sent unsigned bodies.
+    """
+    provider_config, kwargs = _make_compact_handler_call(
+        signed_body=b'{"model": "openai.gpt-5.5", "input": "hi"}', is_async=False
+    )
+    assert kwargs.get("data") == b'{"model": "openai.gpt-5.5", "input": "hi"}'
+    assert "json" not in kwargs
+    assert kwargs["headers"] == {"X-Signed": "1"}
+    # signing must use the compact endpoint as api_base, not the create URL
+    assert provider_config.sign_request.call_args.kwargs["api_base"].endswith(
+        "/openai/v1/responses/compact"
+    )
+
+
+def test_async_compact_handler_sends_signed_bytes_when_signed():
+    """Async compact must sign identically to sync (same omission in the async twin)."""
+    provider_config, kwargs = _make_compact_handler_call(
+        signed_body=b'{"model": "openai.gpt-5.5", "input": "hi"}', is_async=True
+    )
+    assert kwargs.get("data") == b'{"model": "openai.gpt-5.5", "input": "hi"}'
+    assert "json" not in kwargs
+    assert kwargs["headers"] == {"X-Signed": "1"}
+
+
+def test_async_compact_handler_sends_json_when_not_signed():
+    """Async no-op provider on compact -> posts json=data, no data= bytes."""
+    _provider_config, kwargs = _make_compact_handler_call(
+        signed_body=None, is_async=True
+    )
+    assert kwargs.get("json") == {"model": "openai.gpt-5.5", "input": "hi"}
+    assert "data" not in kwargs

@@ -170,6 +170,44 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
     }
 
 
+def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_only_content_block():
+    """OpenAI-compatible reasoning backends (vLLM/SGLang) emit ``reasoning_content``
+    without ``thinking_blocks``. The content-block classifier must still open a
+    ``thinking`` block so the matching ``thinking_delta`` stream is not emitted
+    inside a text block (which silently drops chain-of-thought for /v1/messages
+    streaming clients)."""
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="Let me think",
+                thinking_blocks=None,
+                content=None,
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        block_type,
+        content_block_start,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "thinking"
+    assert content_block_start == {
+        "type": "thinking",
+        "thinking": "",
+        "signature": "",
+    }
+
+
 def test_translate_streaming_openai_chunk_to_anthropic_thinking_signature_block():
     choices = [
         StreamingChoices(

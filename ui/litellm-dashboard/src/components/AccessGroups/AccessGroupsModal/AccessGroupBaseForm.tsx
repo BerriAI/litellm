@@ -20,10 +20,7 @@ interface AccessGroupBaseFormProps {
   isNameDisabled?: boolean;
 }
 
-export function AccessGroupBaseForm({
-  form,
-  isNameDisabled = false,
-}: AccessGroupBaseFormProps) {
+export function AccessGroupBaseForm({ form, isNameDisabled = false }: AccessGroupBaseFormProps) {
   const { data: agentsData } = useAgents();
   const { data: mcpServersData } = useMCPServers();
 
@@ -50,19 +47,10 @@ export function AccessGroupBaseForm({
               },
             ]}
           >
-            <Input
-              placeholder="e.g. Engineering Team"
-              disabled={isNameDisabled}
-            />
+            <Input placeholder="e.g. Engineering Team" disabled={isNameDisabled} />
           </Form.Item>
-          <Form.Item
-            name="description"
-            label="Description"
-          >
-            <TextArea
-              rows={4}
-              placeholder="Describe the purpose of this access group..."
-            />
+          <Form.Item name="description" label="Description">
+            <TextArea rows={4} placeholder="Describe the purpose of this access group..." />
           </Form.Item>
         </div>
       ),

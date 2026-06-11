@@ -293,6 +293,51 @@ def test_translate_event_to_beta_drops_conversation_item_done():
     )
 
 
+@pytest.mark.asyncio
+async def test_provider_config_path_translates_ga_events_for_beta_clients():
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": [
+                {
+                    "type": "response.output_text.delta",
+                    "event_id": "event_1",
+                    "delta": "hello",
+                },
+                {"type": "conversation.item.done", "event_id": "event_2"},
+            ],
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+
+    await streaming._handle_provider_config_message("{}")
+
+    assert client_ws.send_text.await_count == 1
+    sent = json.loads(client_ws.send_text.await_args.args[0])
+    assert sent["type"] == "response.text.delta"
+    assert sent["delta"] == "hello"
+
+
 def test_client_sent_openai_beta_realtime_header_detects_header():
     ws = MagicMock()
     ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
@@ -728,17 +773,15 @@ async def test_realtime_guardrail_blocks_prompt_injection():
     guardrail_items = [
         e for e in sent_to_backend if e.get("type") == "conversation.item.create"
     ]
-    assert len(guardrail_items) == 1, (
-        f"Guardrail should inject a conversation.item.create with violation message, "
-        f"got: {guardrail_items}"
-    )
+    assert (
+        len(guardrail_items) == 1
+    ), f"Guardrail should inject a conversation.item.create with violation message, got: {guardrail_items}"
     response_creates = [
         e for e in sent_to_backend if e.get("type") == "response.create"
     ]
-    assert len(response_creates) == 1, (
-        f"Guardrail should send exactly one response.create to voice the violation, "
-        f"got: {response_creates}"
-    )
+    assert (
+        len(response_creates) == 1
+    ), f"Guardrail should send exactly one response.create to voice the violation, got: {response_creates}"
 
     # ASSERT 2: error event was sent directly to the client WebSocket
     sent_to_client = [
@@ -1005,10 +1048,9 @@ async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(
     # every toolCall with a toolResponse (Gemini/Vertex Live) exit their
     # pending-tool-call state instead of stalling. The placeholder must NOT
     # contain any of the blocked content.
-    assert len(forwarded_tool_outputs) == 1, (
-        f"Sanitized function_call_output should be forwarded, got: "
-        f"{forwarded_tool_outputs}"
-    )
+    assert (
+        len(forwarded_tool_outputs) == 1
+    ), f"Sanitized function_call_output should be forwarded, got: {forwarded_tool_outputs}"
     sanitized_item = forwarded_tool_outputs[0]["item"]
     assert sanitized_item["call_id"] == "call_123"
     assert "test@example.com" not in sanitized_item["output"]
@@ -1770,3 +1812,497 @@ async def test_follow_up_setup_updates_cached_session_configuration_request():
     await streaming.client_ack_messages()
 
     assert streaming.session_configuration_request == follow_up_setup
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_buffers_audio_until_backend_setup_complete(monkeypatch):
+    """Pipecat may send audio before session.update when setup is deferred."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws = MagicMock()
+    audio_msg = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    client_ws.receive_text = AsyncMock(
+        side_effect=[audio_msg, ConnectionClosed(None, None)]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+
+    config = GeminiRealtimeConfig()
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=config,
+        model="gemini-live-2.5-flash-native-audio",
+    )
+    assert streaming._backend_setup_complete is False
+
+    await streaming.client_ack_messages()
+
+    backend_ws.send.assert_not_called()
+    assert len(streaming._pending_messages_until_setup) == 1
+
+    streaming._backend_setup_complete = True
+    await streaming._flush_pending_messages_until_setup()
+
+    assert backend_ws.send.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_sends_session_update_before_buffered_audio(monkeypatch):
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws = MagicMock()
+    audio_msg = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    session_update = json.dumps(
+        {"type": "session.update", "session": {"modalities": ["audio"]}}
+    )
+    client_ws.receive_text = AsyncMock(
+        side_effect=[audio_msg, session_update, ConnectionClosed(None, None)]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+    config = GeminiRealtimeConfig()
+
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=config,
+        model="gemini-live-2.5-flash-native-audio",
+    )
+
+    await streaming.client_ack_messages()
+
+    assert backend_ws.send.await_count == 1
+    sent_payload = json.loads(backend_ws.send.await_args_list[0].args[0])
+    assert "setup" in sent_payload
+    assert "realtimeInput" not in sent_payload
+    assert streaming._pending_messages_until_setup == [audio_msg]
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_flush_buffers_audio_received_during_flush():
+    import asyncio
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    new_audio_msg = json.dumps(
+        {"type": "input_audio_buffer.append", "audio": "new-audio"}
+    )
+    client_ws.receive_text = AsyncMock(
+        side_effect=[new_audio_msg, ConnectionClosed(None, None)]
+    )
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+
+    provider_config = MagicMock()
+    provider_config.requires_session_configuration = MagicMock(return_value=False)
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": {
+                "type": "session.created",
+                "event_id": "event_1",
+                "session": {"id": "sess_1", "modalities": ["audio"]},
+            },
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-live-2.5-flash-native-audio",
+    )
+    old_audio_msg = json.dumps(
+        {"type": "input_audio_buffer.append", "audio": "old-audio"}
+    )
+    streaming._pending_messages_until_setup = [old_audio_msg]
+    streaming._pending_messages_byte_total = len(old_audio_msg.encode("utf-8"))
+
+    first_flush_started = asyncio.Event()
+    release_flush = asyncio.Event()
+    sent_messages = []
+
+    async def send_to_backend(message):
+        sent_messages.append(message)
+        if message == old_audio_msg:
+            first_flush_started.set()
+            await release_flush.wait()
+        return True
+
+    streaming._send_to_backend = send_to_backend  # type: ignore[method-assign]
+    setup_task = asyncio.create_task(
+        streaming._handle_provider_config_message(json.dumps({"setupComplete": {}}))
+    )
+
+    await asyncio.wait_for(first_flush_started.wait(), timeout=1)
+    await streaming.client_ack_messages()
+
+    assert sent_messages == [old_audio_msg]
+    assert streaming._pending_messages_until_setup == [new_audio_msg]
+
+    release_flush.set()
+    await asyncio.wait_for(setup_task, timeout=1)
+
+    assert sent_messages == [old_audio_msg, new_audio_msg]
+    assert streaming._pending_messages_until_setup == []
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_flush_retains_unsent_messages_after_send_failure():
+    client_ws = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    buffered_messages = [
+        json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="}),
+        json.dumps({"type": "input_audio_buffer.commit"}),
+    ]
+    streaming._pending_messages_until_setup = list(buffered_messages)
+    streaming._pending_messages_byte_total = sum(
+        len(message.encode("utf-8")) for message in buffered_messages
+    )
+    streaming._send_to_backend = AsyncMock(  # type: ignore[method-assign]
+        side_effect=Exception("transient")
+    )
+
+    await streaming._flush_pending_messages_until_setup()
+
+    assert streaming._pending_messages_until_setup == buffered_messages
+    assert streaming._pending_messages_byte_total == sum(
+        len(message.encode("utf-8")) for message in buffered_messages
+    )
+
+    streaming._send_to_backend = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    await streaming._flush_pending_messages_until_setup()
+
+    assert streaming._pending_messages_until_setup == []
+    assert streaming._pending_messages_byte_total == 0
+    assert streaming._send_to_backend.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_flushes_audio_on_backend_session_created(monkeypatch):
+    """Buffered audio is released when Gemini setupComplete becomes session.created."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({"setupComplete": {}}).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_defer"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    config = GeminiRealtimeConfig()
+
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=config,
+        model="gemini-live-2.5-flash-native-audio",
+    )
+    streaming._pending_messages_until_setup.append(
+        json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert streaming._backend_setup_complete is True
+    assert streaming._pending_messages_until_setup == []
+    assert backend_ws.send.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_caps_non_audio_buffered_messages(monkeypatch):
+    """A client that withholds session.update cannot grow the pre-setup buffer
+    without bound by streaming non-audio frames after the first audio frame."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    cap = RealTimeStreaming._MAX_BUFFERED_MESSAGES
+    audio_msg = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    flood_msg = json.dumps({"type": "foo", "data": "x" * 1024})
+
+    client_ws = MagicMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[audio_msg]
+        + [flood_msg] * (cap + 50)
+        + [ConnectionClosed(None, None)]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-live-2.5-flash-native-audio",
+    )
+    assert streaming._backend_setup_complete is False
+
+    await streaming.client_ack_messages()
+
+    backend_ws.send.assert_not_called()
+    assert len(streaming._pending_messages_until_setup) == cap
+    assert (
+        streaming._pending_messages_byte_total <= RealTimeStreaming._MAX_BUFFERED_BYTES
+    )
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_caps_non_audio_buffered_bytes(monkeypatch):
+    """Non-audio frames appended after the first audio frame honor the byte budget."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    audio_msg = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    big_non_audio = json.dumps(
+        {"type": "foo", "data": "x" * (RealTimeStreaming._MAX_BUFFERED_BYTES + 1)}
+    )
+
+    client_ws = MagicMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[audio_msg, big_non_audio, ConnectionClosed(None, None)]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-live-2.5-flash-native-audio",
+    )
+
+    await streaming.client_ack_messages()
+
+    assert streaming._pending_messages_until_setup == [audio_msg]
+    assert (
+        streaming._pending_messages_byte_total <= RealTimeStreaming._MAX_BUFFERED_BYTES
+    )
+
+
+def _beta_client_ws():
+    ws = MagicMock()
+    ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    ws.send_text = AsyncMock()
+    return ws
+
+
+def _ga_client_ws():
+    ws = MagicMock()
+    ws.scope = {"headers": []}
+    ws.send_text = AsyncMock()
+    return ws
+
+
+def _streaming_with(client_ws):
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    return RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+
+def test_parse_backend_event_returns_none_for_non_json():
+    assert RealTimeStreaming._parse_backend_event("not json") is None
+
+
+def test_parse_backend_event_returns_none_for_non_dict_json():
+    assert RealTimeStreaming._parse_backend_event("[1, 2, 3]") is None
+    assert RealTimeStreaming._parse_backend_event('"a string"') is None
+
+
+def test_parse_backend_event_returns_dict():
+    parsed = RealTimeStreaming._parse_backend_event('{"type": "x", "v": 1}')
+    assert parsed == {"type": "x", "v": 1}
+
+
+def test_translate_event_to_beta_returns_identity_when_no_translation():
+    """An event with no renamed type and no item/response is returned unchanged
+    (same object), so the caller can forward the raw frame without re-serializing."""
+    ev = {"type": "error", "error": {"message": "boom"}}
+    out = RealTimeStreaming._translate_event_to_beta(ev)
+    assert out is ev
+
+
+def test_translate_event_to_beta_preserves_audio_delta_payload():
+    payload = "QUJDREVG" * 200
+    out = RealTimeStreaming._translate_event_to_beta(
+        {"type": "response.output_audio.delta", "delta": payload, "event_id": "e1"}
+    )
+    assert out is not None
+    assert out["type"] == "response.audio.delta"
+    assert out["delta"] == payload
+
+
+def test_translate_event_to_beta_remaps_response_done_output_content_types():
+    out = RealTimeStreaming._translate_event_to_beta(
+        {
+            "type": "response.done",
+            "response": {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_audio", "transcript": "hi"}],
+                    }
+                ]
+            },
+        }
+    )
+    assert out is not None
+    assert out["response"]["output"][0]["content"][0]["type"] == "audio"
+
+
+@pytest.mark.asyncio
+async def test_beta_client_receives_translated_audio_delta():
+    client_ws = _beta_client_ws()
+    frame = json.dumps(
+        {"type": "response.output_audio.delta", "delta": "QUJD", "event_id": "e1"}
+    )
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[frame.encode(), ConnectionClosed(None, None)]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    assert client_ws.send_text.await_count == 1
+    sent = json.loads(client_ws.send_text.await_args.args[0])
+    assert sent["type"] == "response.audio.delta"
+    assert sent["delta"] == "QUJD"
+
+
+@pytest.mark.asyncio
+async def test_ga_client_receives_raw_passthrough():
+    client_ws = _ga_client_ws()
+    frame = json.dumps(
+        {"type": "response.output_audio.delta", "delta": "QUJD", "event_id": "e1"}
+    )
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[frame.encode(), ConnectionClosed(None, None)]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    assert client_ws.send_text.await_count == 1
+    # GA client gets the byte-identical frame, no re-serialization.
+    assert client_ws.send_text.await_args.args[0] == frame
+
+
+@pytest.mark.asyncio
+async def test_beta_client_non_translated_event_forwarded_raw():
+    """For a beta client, an event needing no translation is forwarded as the
+    original raw frame (identity return path), not a re-serialized copy."""
+    client_ws = _beta_client_ws()
+    frame = json.dumps({"type": "error", "error": {"message": "boom"}})
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[frame.encode(), ConnectionClosed(None, None)]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    assert client_ws.send_text.await_count == 1
+    assert client_ws.send_text.await_args.args[0] == frame
+
+
+@pytest.mark.asyncio
+async def test_beta_client_drops_conversation_item_done():
+    client_ws = _beta_client_ws()
+    frame = json.dumps({"type": "conversation.item.done", "item": {"id": "i1"}})
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[frame.encode(), ConnectionClosed(None, None)]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    assert client_ws.send_text.await_count == 0
+
+
+def test_store_message_skips_pydantic_for_unlogged_audio_delta():
+    """Audio deltas are not in DefaultLoggedRealTimeEventTypes; store_message must
+    skip the Pydantic build entirely (no append, no validation)."""
+    streaming = _streaming_with(_ga_client_ws())
+    with patch(
+        "litellm.litellm_core_utils.realtime_streaming.OpenAIRealtimeStreamResponseBaseObject"
+    ) as base_obj:
+        streaming.store_message({"type": "response.output_audio.delta", "delta": "x"})
+    base_obj.assert_not_called()
+    assert streaming.messages == []
+
+
+@pytest.mark.asyncio
+async def test_audio_delta_frame_parsed_at_most_once():
+    client_ws = _beta_client_ws()
+    frame = json.dumps(
+        {"type": "response.output_audio.delta", "delta": "QUJD", "event_id": "e1"}
+    )
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[frame.encode(), ConnectionClosed(None, None)]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    real_loads = json.loads
+    calls = {"n": 0}
+
+    def counting_loads(*args, **kwargs):
+        calls["n"] += 1
+        return real_loads(*args, **kwargs)
+
+    with patch(
+        "litellm.litellm_core_utils.realtime_streaming.json.loads",
+        side_effect=counting_loads,
+    ):
+        await streaming.backend_to_client_send_messages()
+
+    assert calls["n"] == 1

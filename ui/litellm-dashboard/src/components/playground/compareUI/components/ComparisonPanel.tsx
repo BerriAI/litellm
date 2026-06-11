@@ -205,9 +205,7 @@ export function ComparisonPanel({
             options={selectorOptions}
             loading={isLoadingOptions}
             config={endpointConfig}
-            onChange={(value) =>
-              onUpdate(isA2AMode ? { agent: value } : { model: value })
-            }
+            onChange={(value) => onUpdate(isA2AMode ? { agent: value } : { model: value })}
           />
           <div className="flex items-center gap-2">
             <Popover

@@ -2,20 +2,38 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "../networking";
+import { setToken } from "@/utils/mcpTokenStore";
 import CreateMCPServer from "./create_mcp_server";
 
 vi.mock("../networking", () => ({
   createMCPServer: vi.fn(),
+  registerMCPServer: vi.fn(),
+  storeMCPOAuthUserCredential: vi.fn().mockResolvedValue({}),
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
+vi.mock("@/utils/mcpTokenStore", () => ({
+  setToken: vi.fn(),
+}));
+
+// Mutable holder so individual tests can simulate "Authorize & Fetch" having
+// produced a token before submit, and inspect the reset wiring.
+const oauthHook = vi.hoisted(() => ({
+  tokenResponse: null as Record<string, unknown> | null,
+  reset: vi.fn(),
+  onTokenReceived: null as ((token: Record<string, unknown> | null) => void) | null,
+}));
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
-  useMcpOAuthFlow: () => ({
-    startOAuthFlow: vi.fn(),
-    status: "idle",
-    error: null,
-    tokenResponse: null,
-  }),
+  useMcpOAuthFlow: (opts: { onTokenReceived: (token: Record<string, unknown> | null) => void }) => {
+    oauthHook.onTokenReceived = opts.onTokenReceived;
+    return {
+      startOAuthFlow: vi.fn(),
+      status: "idle",
+      error: null,
+      tokenResponse: oauthHook.tokenResponse,
+      reset: oauthHook.reset,
+    };
+  },
 }));
 
 vi.mock("./mcp_server_cost_config", () => ({
@@ -27,11 +45,31 @@ vi.mock("./MCPPermissionManagement", () => ({
 }));
 
 vi.mock("./mcp_tool_configuration", () => ({
-  default: () => <div data-testid="mcp-tool-config" />,
+  default: ({
+    onAllowedToolsChange,
+    onToolAllowlistInteraction,
+  }: {
+    onAllowedToolsChange?: (tools: string[]) => void;
+    onToolAllowlistInteraction?: () => void;
+  }) => (
+    <div data-testid="mcp-tool-config">
+      <button
+        type="button"
+        onClick={() => {
+          onToolAllowlistInteraction?.();
+          onAllowedToolsChange?.([]);
+        }}
+      >
+        Disable all tools
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("./mcp_connection_status", () => ({
-  default: () => <div data-testid="mcp-connection-status" />,
+  default: ({ tools }: { tools?: any[] }) => (
+    <div data-testid="mcp-connection-status" data-tool-count={tools?.length ?? 0} />
+  ),
 }));
 
 vi.mock("./StdioConfiguration", () => ({
@@ -92,6 +130,8 @@ async function selectAntOption(labelText: string, optionText: string) {
 describe("CreateMCPServer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    oauthHook.tokenResponse = null;
+    oauthHook.onTokenReceived = null;
   });
 
   it("should render the modal with title when visible", () => {
@@ -335,6 +375,50 @@ describe("CreateMCPServer", () => {
       // No credentials should be sent for "none" auth
       expect(payload.credentials).toBeUndefined();
     });
+
+    it("enforces the allowlist when the user explicitly deselects every tool", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+
+      const nameInput = getServerNameInput();
+      await user.type(nameInput, "Locked_Down_Server");
+
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await user.type(urlInput, "https://example.com/mcp");
+
+      await selectAntOption("Authentication", "None");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Disable all tools" }));
+      });
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-1",
+        server_name: "Locked_Down_Server",
+        alias: "Locked_Down_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.mcp_info.tool_allowlist_enforced).toBe(true);
+      expect(payload.allowed_tools).toEqual([]);
+    });
   });
 
   describe("when OAuth interactive auth is selected", () => {
@@ -450,6 +534,58 @@ describe("CreateMCPServer", () => {
       expect(payload.token_validation).toBeUndefined();
     });
 
+    it("persists access + refresh token to the DB on submit for OBO mode", async () => {
+      // "Authorize & Fetch" produced a token before submit.
+      oauthHook.tokenResponse = {
+        access_token: "obo-access-token",
+        refresh_token: "obo-refresh-token",
+        expires_in: 3600,
+        token_type: "bearer",
+        scope: "channels:read chat:write",
+      };
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "obo-server-1",
+        server_name: "OBO_Server",
+        alias: "OBO_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      // Interactive OAuth + delegate_auth_to_upstream off (the default) => OBO mode.
+      await setupOAuthInteractive();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OBO_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalledTimes(1);
+      });
+      expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalledWith("test-token", "obo-server-1", {
+        access_token: "obo-access-token",
+        refresh_token: "obo-refresh-token",
+        expires_in: 3600,
+        scopes: ["channels:read", "chat:write"],
+      });
+      // OBO persists server-side; it must not fall back to the browser-only cache.
+      expect(setToken).not.toHaveBeenCalled();
+    });
+
     it("does not submit and shows validation error for invalid JSON in token_validation_json", async () => {
       await setupOAuthInteractive();
 
@@ -488,6 +624,100 @@ describe("CreateMCPServer", () => {
       });
 
       expect(defaultProps.setModalVisible).toHaveBeenCalledWith(false);
+    });
+
+    it("does not leak a previous server's OAuth token into the next add-server session", async () => {
+      const usedToken = (token: string) =>
+        vi.mocked(networking.testMCPToolsListRequest).mock.calls.some((call) => call[2] === token);
+
+      const { rerender } = render(<CreateMCPServer {...defaultProps} />);
+
+      await selectAntOption("Transport Type", "Streamable HTTP");
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+      });
+      await selectAntOption("Authentication", "OAuth");
+      await waitFor(() => {
+        expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+      });
+
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://server-a.example.com/mcp" } });
+      });
+
+      // Simulate "Authorize & Fetch Token" completing for server A.
+      await act(async () => {
+        oauthHook.onTokenReceived?.({ access_token: "stale-token-A", expires_in: 3600 });
+      });
+
+      // Precondition: the freshly fetched token drives the tool preview for server A.
+      await waitFor(() => {
+        expect(usedToken("stale-token-A")).toBe(true);
+      });
+
+      // Parent hides the modal (Cancel / successful create both flip this prop).
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+
+      // The OAuth flow state (source of the "Token fetched" badge) is reset on close.
+      expect(oauthHook.reset).toHaveBeenCalled();
+
+      vi.mocked(networking.testMCPToolsListRequest).mockClear();
+
+      // Reopen for a brand-new server and enter a different URL without re-authorizing.
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
+      const reopenedUrlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(reopenedUrlInput, { target: { value: "https://server-b.example.com/mcp" } });
+      });
+
+      // The previous server's token must never be replayed for the new session.
+      expect(usedToken("stale-token-A")).toBe(false);
+    });
+
+    it("clears the tool list and form fields when a parent dismisses the modal", async () => {
+      vi.mocked(networking.testMCPToolsListRequest).mockResolvedValue({
+        tools: [{ name: "tool_a" }],
+        error: null,
+      });
+      const toolCount = () => screen.getByTestId("mcp-connection-status").getAttribute("data-tool-count");
+
+      const { rerender } = render(<CreateMCPServer {...defaultProps} />);
+
+      await selectAntOption("Transport Type", "Streamable HTTP");
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+      });
+      await selectAntOption("Authentication", "OAuth");
+      await waitFor(() => {
+        expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+      });
+
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://server-a.example.com/mcp" } });
+      });
+      await act(async () => {
+        oauthHook.onTokenReceived?.({ access_token: "stale-token-A", expires_in: 3600 });
+      });
+
+      // Precondition: a tool list is shown for server A.
+      await waitFor(() => {
+        expect(toolCount()).toBe("1");
+      });
+
+      // Parent dismisses the modal without routing through Cancel or create.
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+
+      // Stale tools are cleared even though neither handler ran.
+      await waitFor(() => {
+        expect(toolCount()).toBe("0");
+      });
+
+      // Reopening starts clean: the URL the prior server left in the Ant form store is gone.
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
+      const reopenedUrlInput = screen.getByPlaceholderText("https://your-mcp-server.com") as HTMLInputElement;
+      expect(reopenedUrlInput.value).toBe("");
     });
   });
 
