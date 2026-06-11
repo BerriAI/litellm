@@ -11,7 +11,6 @@ This test suite verifies:
 7. Parameter validation (e.g., stop sequences not supported)
 """
 
-from base_llm_unit_tests import BaseLLMChatTest
 import sys
 import os
 import json
@@ -24,27 +23,10 @@ from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
-class TestBedrockMoonshotInvoke(BaseLLMChatTest):
-    """
-    Test suite for Bedrock Moonshot via invoke route.
-    Inherits all standard LLM tests from BaseLLMChatTest.
-    """
-
-    def get_base_completion_call_args(self) -> dict:
-        litellm._turn_on_debug()
-        return {
-            "model": "bedrock/invoke/moonshot.kimi-k2-thinking",
-        }
-
-    # ---------------------------------------------------------------------
-    # The overrides below replace inherited BaseLLMChatTest tests that would
-    # otherwise make live AWS Bedrock calls. The live versions were
-    # consistently crashing llm_translation xdist workers. Each override
-    # patches the HTTP client's post() so no network request is sent, and
-    # asserts on the outgoing request body (and, where needed, parses a
-    # canned response) — which is what the translation lane is actually
-    # supposed to cover.
-    # ---------------------------------------------------------------------
+class TestBedrockMoonshotInvokeGoldens:
+    """Request-body goldens for the moonshot invoke route; HTTP stubbed,
+    real transform asserted. The live BaseLLMChatTest subclass moved to
+    tests/harness_suites/chat_live_bedrock/."""
 
     @staticmethod
     def _make_moonshot_response(content: str = "Hi!") -> Mock:

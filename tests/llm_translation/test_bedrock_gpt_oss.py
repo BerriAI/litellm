@@ -1,9 +1,9 @@
-from base_llm_unit_tests import BaseLLMChatTest
 import json
-import pytest
 import sys
 import os
-from unittest.mock import patch, Mock, MagicMock
+from unittest.mock import patch, Mock
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -13,21 +13,10 @@ from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConf
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
-class TestBedrockGPTOSS(BaseLLMChatTest):
-    def get_base_completion_call_args(self) -> dict:
-        return {
-            "model": "bedrock/converse/openai.gpt-oss-20b-1:0",
-        }
-
-    def test_function_calling_with_tool_response(self):
-        """Bedrock GPT-OSS intermittently emits truncated toolUse.input deltas on
-        the live endpoint, which makes the inherited live integration test flaky.
-        The accumulation side is covered deterministically by
-        tests/test_litellm/llms/bedrock/chat/test_invoke_handler.py::test_transform_tool_calls_index;
-        the GPT-OSS-specific request-body transformation is covered by
-        test_function_calling_request_body_gpt_oss below.
-        """
-        pass
+class TestBedrockGPTOSSGoldens:
+    """Request-body and param-mapping goldens for Bedrock GPT-OSS; HTTP
+    stubbed, real transform asserted. The live BaseLLMChatTest subclass moved
+    to tests/harness_suites/chat_live_bedrock/."""
 
     def test_function_calling_request_body_gpt_oss(self):
         """Verify the Bedrock Converse request body is well-formed for GPT-OSS when the
@@ -111,18 +100,6 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
             request_body["messages"][0]["content"][0]["text"]
             == "How is the weather in Mumbai?"
         )
-
-    def test_prompt_caching(self):
-        """
-        Remove override once we have access to Bedrock prompt caching
-        """
-        pass
-
-    async def test_completion_cost(self):
-        """
-        Bedrock GPT-OSS models are flaky and occasionally report 0 token counts in api response
-        """
-        pass
 
     @pytest.mark.parametrize(
         "model",
