@@ -648,10 +648,10 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.server._user_has_resolvable_oauth_token",
             new_callable=AsyncMock,
-            return_value=None,
-        ) as mock_get_stored_token,
+            return_value=False,
+        ) as mock_has_token,
         patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
@@ -666,7 +666,7 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
             await handle_streamable_http_mcp(scope, receive, send)
 
     # Verify a 401 was raised
-    assert mock_get_stored_token.await_count == 1
+    assert mock_has_token.await_count == 1
     assert mock_handle_request.await_count == 0
     assert exc_info.value.status_code == 401
     assert "www-authenticate" in exc_info.value.headers
@@ -733,10 +733,10 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.server._user_has_resolvable_oauth_token",
             new_callable=AsyncMock,
-            return_value={"Authorization": "Bearer cached-token"},
-        ) as mock_get_stored_token,
+            return_value=True,
+        ) as mock_has_token,
         patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
@@ -754,8 +754,179 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
-    assert mock_get_stored_token.await_count == 1
+    assert mock_has_token.await_count == 1
     assert mock_handle_request.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_preemptive_check_does_not_refresh_expired_token_on_initialize():
+    """
+    Regression: the pre-flight 401 check on a per-user OAuth server must NOT
+    trigger a network token refresh. An expired-but-refreshable stored token
+    counts as present (the lazy list_tools / call_tool path refreshes it), so
+    the request proceeds to the session manager instead of blocking initialize
+    on a token-endpoint round-trip (which timed out individual /server/mcp
+    endpoints while the aggregator stayed unaffected).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateless,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/slack_obo/mcp",
+        "scheme": "http",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("localhost", 8000),
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"host", b"localhost:8000"),
+        ],
+    }
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+            "more_body": False,
+        }
+    )
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = "test-user-id"
+    oauth_server = MagicMock()
+    oauth_server.auth_type = MCPAuth.oauth2
+    oauth_server.needs_user_oauth_token = True
+    oauth_server.server_id = "slack-obo-server-id"
+
+    expired_cred = {
+        "access_token": "expired-access-token",
+        "refresh_token": "stored-refresh-token",
+        "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+    }
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(user_auth, None, ["slack_obo"], None, None, None),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=oauth_server,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_per_user_token_cache.get",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_user_oauth_credential",
+            new_callable=AsyncMock,
+            return_value=expired_cred,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.refresh_user_oauth_token",
+            new_callable=AsyncMock,
+        ) as mock_refresh,
+        patch.object(
+            session_manager_stateless,
+            "handle_request",
+            new_callable=AsyncMock,
+        ) as mock_handle_request,
+        patch.object(
+            session_manager_stateless,
+            "_server_instances",
+            {},
+        ),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert mock_refresh.await_count == 0
+    assert mock_handle_request.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_user_has_resolvable_oauth_token_classification():
+    """
+    _user_has_resolvable_oauth_token resolves token presence WITHOUT a network
+    refresh: valid or expired-with-refresh-token counts as present; missing or
+    expired-without-refresh-token does not.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _user_has_resolvable_oauth_token,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_auth = MagicMock()
+    user_auth.user_id = "test-user-id"
+    server = MagicMock()
+    server.auth_type = MCPAuth.oauth2
+    server.server_id = "srv-1"
+
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+    cases = {
+        "valid": ({"access_token": "a", "expires_at": future}, True),
+        "expired_with_refresh": (
+            {"access_token": "a", "expires_at": past, "refresh_token": "r"},
+            True,
+        ),
+        "expired_no_refresh": ({"access_token": "a", "expires_at": past}, False),
+        "missing": (None, False),
+    }
+
+    for label, (cred, expected) in cases.items():
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_per_user_token_cache.get",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.utils.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.get_user_oauth_credential",
+                new_callable=AsyncMock,
+                return_value=cred,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.refresh_user_oauth_token",
+                new_callable=AsyncMock,
+            ) as mock_refresh,
+        ):
+            result = await _user_has_resolvable_oauth_token(server, user_auth)
+
+        assert result is expected, f"case {label}: expected {expected}, got {result}"
+        assert mock_refresh.await_count == 0, f"case {label} triggered a refresh"
 
 
 @pytest.mark.asyncio

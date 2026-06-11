@@ -7,7 +7,10 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
+from litellm.constants import (
+    MCP_METADATA_TIMEOUT,
+    MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -1121,6 +1124,7 @@ async def refresh_user_oauth_token(
             token_url,
             headers={"Accept": "application/json"},
             data=token_data,
+            timeout=MCP_METADATA_TIMEOUT,
         )
         response.raise_for_status()
         body: Dict[str, Any] = response.json()
