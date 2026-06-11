@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,6 +20,7 @@ from litellm.auth_v2.config import (
     AuthConfig,
     HttpBasicConfig,
     MutualTlsConfig,
+    OAuth2IntrospectionConfig,
     OidcProviderConfig,
 )
 from litellm.auth_v2.errors import AuthError
@@ -235,6 +237,75 @@ async def test_oauth2_opaque_token_without_introspection_raises(rsa_keypair):
 async def test_oauth2_no_bearer_returns_none(rsa_keypair):
     _, public_key = rsa_keypair
     assert await _oauth2(public_key).authenticate(make_request()) is None
+
+
+def _introspecting_oauth2() -> OAuth2Authenticator:
+    return OAuth2Authenticator(
+        [],
+        introspection=OAuth2IntrospectionConfig(
+            introspection_endpoint="https://idp.example.com/introspect",
+            client_id="rs-client",
+            client_secret="rs-secret",
+            subject_field="sub",
+        ),
+    )
+
+
+def _mock_introspection_post(status_code: int, body: dict) -> AsyncMock:
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = body
+    handler = MagicMock()
+    handler.post = AsyncMock(return_value=response)
+    factory = MagicMock(return_value=handler)
+    return factory
+
+
+async def test_oauth2_opaque_token_introspects_active_to_credential():
+    factory = _mock_introspection_post(
+        200,
+        {"active": True, "sub": "svc-9", "scope": "models:read tools:run", "aud": "rs"},
+    )
+    request = make_request(headers={"authorization": "Bearer opaque-xyz"})
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", factory
+    ):
+        credential = await _introspecting_oauth2().authenticate(request)
+
+    assert credential is not None
+    assert credential.method == AuthMethod.OAUTH2_INTROSPECTION
+    assert credential.subject == "svc-9"
+    assert credential.scopes == ["models:read", "tools:run"]
+    assert credential.audience == ["rs"]
+
+    handler = factory.return_value
+    _, kwargs = handler.post.call_args
+    assert kwargs["data"] == {"token": "opaque-xyz"}
+    expected_basic = base64.b64encode(b"rs-client:rs-secret").decode()
+    assert kwargs["headers"]["Authorization"] == f"Basic {expected_basic}"
+    assert handler.post.call_args.args[0] == "https://idp.example.com/introspect"
+
+
+async def test_oauth2_introspection_inactive_token_raises():
+    factory = _mock_introspection_post(200, {"active": False})
+    request = make_request(headers={"authorization": "Bearer opaque-xyz"})
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", factory
+    ):
+        with pytest.raises(AuthError) as exc:
+            await _introspecting_oauth2().authenticate(request)
+    assert exc.value.status_code == 401
+
+
+async def test_oauth2_introspection_non_200_raises():
+    factory = _mock_introspection_post(500, {})
+    request = make_request(headers={"authorization": "Bearer opaque-xyz"})
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", factory
+    ):
+        with pytest.raises(AuthError) as exc:
+            await _introspecting_oauth2().authenticate(request)
+    assert exc.value.status_code == 401
 
 
 # --------------------------------------------------------------------------- #
