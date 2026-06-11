@@ -5535,6 +5535,14 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
     with (
         patch.object(
             mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={
+                api_key_server.server_id: api_key_server,
+                oauth_server.server_id: oauth_server,
+            },
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
             "_get_mcp_server_from_tool_name",
             return_value=oauth_server,
         ),
@@ -5595,6 +5603,14 @@ async def test_execute_mcp_tool_rest_prefixed_tool_still_validates_server_id():
     with (
         patch.object(
             mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={
+                api_key_server.server_id: api_key_server,
+                oauth_server.server_id: oauth_server,
+            },
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
             "_get_mcp_server_from_tool_name",
             return_value=oauth_server,
         ),
@@ -5620,3 +5636,105 @@ async def test_execute_mcp_tool_rest_prefixed_tool_still_validates_server_id():
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail["error"] == "tool_server_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_rest_unauthorized_prefix_still_mismatches():
+    """Prefixed name for a registry server the caller cannot access must 403."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    api_key_server = MCPServer(
+        server_id="api-key-server-id",
+        name="echo_api_key",
+        server_name="echo_api_key",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="abc123",
+    )
+    restricted_server = MCPServer(
+        server_id="restricted-server-id",
+        name="restricted_server",
+        server_name="restricted_server",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.bearer_token,
+        authentication_token="secret",
+    )
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={
+                api_key_server.server_id: api_key_server,
+                restricted_server.server_id: restricted_server,
+            },
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=restricted_server,
+        ),
+        patch.object(
+            mcp_module.MCPRequestHandler,
+            "is_tool_allowed",
+            return_value=True,
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=None,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="restricted_server-echo",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[api_key_server],
+            start_time=datetime.now(),
+            requested_server_id=api_key_server.server_id,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error"] == "tool_server_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_rest_ambiguous_hyphenated_name_rejected():
+    """REST server_id + hyphenated name with no registry prefix must 400."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    api_key_server = MCPServer(
+        server_id="api-key-server-id",
+        name="echo_api_key",
+        server_name="echo_api_key",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="abc123",
+    )
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={api_key_server.server_id: api_key_server},
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=None,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="text-to-speech",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[api_key_server],
+            start_time=datetime.now(),
+            requested_server_id=api_key_server.server_id,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["error"] == "ambiguous_tool_name"

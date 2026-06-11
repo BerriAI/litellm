@@ -270,6 +270,7 @@ if MCP_AVAILABLE:
         global_mcp_tool_registry,
     )
     from litellm.proxy._experimental.mcp_server.utils import (
+        MCP_TOOL_PREFIX_SEPARATOR,
         is_tool_name_prefixed,
         normalize_server_name,
         split_server_prefix_from_name,
@@ -2485,16 +2486,30 @@ if MCP_AVAILABLE:
                 None,
             )
 
-        known_server_prefixes: Set[str] = set()
-        for allowed_server in allowed_mcp_servers:
-            for known_prefix in iter_known_server_prefixes(allowed_server):
-                known_server_prefixes.add(normalize_server_name(known_prefix))
+        all_registry_prefixes: Set[str] = set()
+        for registry_server in global_mcp_server_manager.get_registry().values():
+            for known_prefix in iter_known_server_prefixes(registry_server):
+                all_registry_prefixes.add(normalize_server_name(known_prefix))
 
         name_is_prefixed = is_tool_name_prefixed(
-            name, known_server_prefixes=known_server_prefixes
+            name, known_server_prefixes=all_registry_prefixes
         )
 
         if requested_server is not None and not name_is_prefixed:
+            if MCP_TOOL_PREFIX_SEPARATOR in name:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "ambiguous_tool_name",
+                        "message": (
+                            f"Tool name '{name}' contains "
+                            f"'{MCP_TOOL_PREFIX_SEPARATOR}' but does not match "
+                            "a registered MCP server prefix. Pass the unprefixed "
+                            "upstream tool name with server_id, or use the full "
+                            "prefixed form 'server_name-tool_name'."
+                        ),
+                    },
+                )
             # REST callers may pass server_id with the upstream tool name (no
             # LiteLLM prefix). Multiple MCP entries can share the same URL and
             # tool name; server_id is authoritative for routing and auth.
