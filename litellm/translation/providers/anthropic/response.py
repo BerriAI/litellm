@@ -168,6 +168,7 @@ def parse_usage(raw: PlainJson) -> ResponseUsage | TranslationError:
         cache_creation_input_tokens=_int_of(raw.get("cache_creation_input_tokens")),
         cache_read_input_tokens=_int_of(raw.get("cache_read_input_tokens")),
         cache_creation=details,
+        total_tokens=Nothing,
     )
 
 

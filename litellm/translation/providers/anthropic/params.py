@@ -41,7 +41,7 @@ from ...ir import (
     ThinkingParam,
 )
 
-_EFFORT_BUDGETS: Mapping[str, int] = MappingProxyType(
+EFFORT_BUDGETS: Mapping[str, int] = MappingProxyType(
     {
         "low": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
         "medium": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -208,7 +208,7 @@ def map_thinking(
                         f"thinking is not a supported param for {request.model}; v1 raises or drops it"
                     )
                 )
-            return Ok((_thinking_json(thinking), None))
+            return Ok((thinking_json(thinking), None))
         case _:
             pass
     match request.reasoning_effort:
@@ -224,7 +224,7 @@ def map_thinking(
             return Ok((None, None))
 
 
-def _thinking_json(thinking: ThinkingParam) -> PlainJson:
+def thinking_json(thinking: ThinkingParam) -> PlainJson:
     match thinking.tag:
         case "enabled":
             match thinking.enabled.budget_tokens:
@@ -245,7 +245,7 @@ def _effort_outcome(
     if effort == "none":
         return Ok((None, None))
     if not is_adaptive_thinking_model(model, deps):
-        return Ok(({"type": "enabled", "budget_tokens": _EFFORT_BUDGETS[effort]}, None))
+        return Ok(({"type": "enabled", "budget_tokens": EFFORT_BUDGETS[effort]}, None))
     if effort == "xhigh" and not deps.supports_capability(
         model, "supports_xhigh_reasoning_effort"
     ):

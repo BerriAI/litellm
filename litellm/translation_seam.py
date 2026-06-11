@@ -67,15 +67,21 @@ def build_translation_deps(
     )
 
 
+UsageStyle = str  # "anthropic" | "bedrock_converse" (mirrors the v1 transform)
+
+
 def to_model_response(
-    body: Body, model_response: Optional[ModelResponse] = None
+    body: Body,
+    model_response: Optional[ModelResponse] = None,
+    usage_style: UsageStyle = "anthropic",
 ) -> ModelResponse:
     """Adapt a v2 response body onto litellm's ModelResponse envelope.
 
-    Mirrors v1's ``transform_parsed_response`` assembly exactly (assign into
-    the pre-allocated response's first choice, stamp created/model, setattr a
-    real ``Usage``), so the serialized shape is identical to v1's. The
-    envelope (chatcmpl id, created timestamp) stays litellm-ambient.
+    Mirrors v1's per-provider response assembly exactly (assign into the
+    pre-allocated response's first choice, stamp created/model, setattr a
+    real ``Usage`` built with that transform's exact kwarg set — extra-field
+    serialization only dumps explicitly set fields). The envelope (chatcmpl
+    id, created timestamp) stays litellm-ambient.
     """
     import time
 
@@ -92,13 +98,42 @@ def to_model_response(
         Any, finish if isinstance(finish, str) else "stop"
     )
     usage_payload = body.get("usage")
-    usage = _build_usage(usage_payload) if isinstance(usage_payload, dict) else Usage()
+    if not isinstance(usage_payload, dict):
+        usage = Usage()
+    elif usage_style == "bedrock_converse":
+        usage = _build_usage_converse(usage_payload)
+    else:
+        usage = _build_usage(usage_payload)
     setattr(response, "usage", usage)
     response.created = int(time.time())
     model = body.get("model")
     if isinstance(model, str):
         response.model = model
     return response
+
+
+def _build_usage_converse(payload: dict) -> Usage:
+    """Construct Usage with the exact kwarg set v1's converse
+    ``_transform_usage`` passes: no ephemeral cache-creation detail and no
+    server_tool_use/inference_geo/speed extras."""
+    prompt_details = payload.get("prompt_tokens_details") or {}
+    completion_details = payload.get("completion_tokens_details") or {}
+    return Usage(
+        prompt_tokens=payload.get("prompt_tokens"),
+        completion_tokens=payload.get("completion_tokens"),
+        total_tokens=payload.get("total_tokens"),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=prompt_details.get("cached_tokens"),
+            cache_creation_tokens=prompt_details.get("cache_creation_tokens"),
+            text_tokens=prompt_details.get("text_tokens"),
+        ),
+        cache_creation_input_tokens=payload.get("cache_creation_input_tokens"),
+        cache_read_input_tokens=payload.get("cache_read_input_tokens"),
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=completion_details.get("reasoning_tokens"),
+            text_tokens=completion_details.get("text_tokens"),
+        ),
+    )
 
 
 def _build_usage(payload: dict) -> Usage:
@@ -252,6 +287,209 @@ def try_completion_v2(
     import asyncio
 
     return asyncio.run(coroutine)
+
+
+_BEDROCK_ROUTE_TO_PROVIDER = {
+    "converse": "bedrock_converse",
+    "invoke": "bedrock_invoke",
+}
+
+_AWS_PARAM_KEYS_PASSED_THROUGH = ("model_id", "guardrailConfig")
+
+
+def try_completion_v2_bedrock(
+    *,
+    bedrock_route: str,
+    model: str,
+    messages: list,
+    optional_param_args: dict,
+    non_default_params: dict,
+    api_key: Optional[str],
+    api_base: Optional[str],
+    timeout: Optional[float],
+    stream: Optional[bool],
+    acompletion: Optional[bool],
+    logging_obj,
+    model_response: ModelResponse,
+    request_drop_params: Optional[bool],
+):
+    """The completion() fork for translation v2 on the bedrock branch.
+
+    Returns None to stay on v1: flag off, streaming, modify_params,
+    provisioned-throughput model_id, non-Claude models, or any request shape
+    outside v2's proven surface (the fail-closed translate). AWS auth params
+    are split out of the body BEFORE parsing (they are envelope, not payload)
+    and feed credential resolution; SigV4 signs AFTER the wire body is final
+    (dossier section 8: sign-after-body-final, or bedrock 403s).
+    """
+    from litellm.translation.engine.pipeline import prepare_chat_request
+
+    provider_key = _BEDROCK_ROUTE_TO_PROVIDER.get(bedrock_route)
+    if provider_key is None or provider_key not in enabled_providers():
+        return None
+    if stream is True or litellm.modify_params is True:
+        return None
+    aws_params = {
+        key: value
+        for key, value in non_default_params.items()
+        if key.startswith("aws_")
+    }
+    if any(key in non_default_params for key in _AWS_PARAM_KEYS_PASSED_THROUGH):
+        return None  # provisioned throughput / guardrails stay on v1
+    body_params = {
+        key: value
+        for key, value in non_default_params.items()
+        if not key.startswith("aws_")
+    }
+    raw_body = _raw_openai_body(model, messages, optional_param_args, body_params)
+    deps = build_translation_deps(request_drop_params=request_drop_params)
+    prepared_result = prepare_chat_request(raw_body, provider_key, deps)  # type: ignore[arg-type]
+    if prepared_result.is_error():
+        litellm.verbose_logger.debug(
+            "translation v2 fallback to v1: %s", prepared_result.error.summary
+        )
+        return None
+    coroutine = _send_v2_bedrock(
+        prepared=prepared_result.ok,
+        provider_key=provider_key,
+        deps=deps,
+        model=model,
+        messages=messages,
+        aws_params=aws_params,
+        api_key=api_key,
+        api_base=api_base,
+        timeout=timeout,
+        logging_obj=logging_obj,
+        model_response=model_response,
+    )
+    if acompletion is True:
+        return coroutine
+    import asyncio
+
+    return asyncio.run(coroutine)
+
+
+def _bedrock_endpoint_url(
+    config,
+    provider_key: str,
+    model: str,
+    aws_params: dict,
+    aws_region_name: str,
+    api_base: Optional[str],
+) -> str:
+    if provider_key == "bedrock_invoke":
+        return config.get_complete_url(
+            api_base=api_base,
+            api_key=None,
+            model=model,
+            optional_params=dict(aws_params),
+            litellm_params={},
+            stream=False,
+        )
+    from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+
+    _, proxy_endpoint_url = config.get_runtime_endpoint(
+        api_base=api_base,
+        aws_bedrock_runtime_endpoint=aws_params.get("aws_bedrock_runtime_endpoint"),
+        aws_region_name=aws_region_name,
+    )
+    model_id = config.encode_model_id(model_id=strip_bedrock_routing_prefix(model))
+    return f"{proxy_endpoint_url}/model/{model_id}/converse"
+
+
+async def _send_v2_bedrock(
+    *,
+    prepared,
+    provider_key: str,
+    deps: TranslationDeps,
+    model: str,
+    messages: list,
+    aws_params: dict,
+    api_key: Optional[str],
+    api_base: Optional[str],
+    timeout: Optional[float],
+    logging_obj,
+    model_response: ModelResponse,
+) -> ModelResponse:
+    import httpx
+
+    from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+        AmazonInvokeConfig,
+    )
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    from litellm.translation.engine.pipeline import (
+        response_dialect,
+        translate_chat_response,
+        wire_body,
+    )
+
+    config = AmazonInvokeConfig()
+    region_params = dict(aws_params)
+    aws_region_name = config._get_aws_region_name(
+        optional_params=region_params, model=model
+    )
+    credentials = config.get_credentials(
+        aws_access_key_id=aws_params.get("aws_access_key_id"),
+        aws_secret_access_key=aws_params.get("aws_secret_access_key"),
+        aws_session_token=aws_params.get("aws_session_token"),
+        aws_region_name=aws_region_name,
+        aws_session_name=aws_params.get("aws_session_name"),
+        aws_profile_name=aws_params.get("aws_profile_name"),
+        aws_role_name=aws_params.get("aws_role_name"),
+        aws_web_identity_token=aws_params.get("aws_web_identity_token"),
+        aws_sts_endpoint=aws_params.get("aws_sts_endpoint"),
+        aws_external_id=aws_params.get("aws_external_id"),
+    )
+    url = _bedrock_endpoint_url(
+        config, provider_key, model, aws_params, aws_region_name, api_base
+    )
+    # The wire body is FINAL here; SigV4 covers these exact bytes.
+    data = json.dumps(wire_body(prepared, provider_key))  # type: ignore[arg-type]
+    prepped = config.get_request_headers(
+        credentials=credentials,
+        aws_region_name=aws_region_name,
+        extra_headers=None,
+        endpoint_url=url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        api_key=api_key,
+    )
+    logging_obj.pre_call(
+        input=messages,
+        api_key="",
+        additional_args={
+            "complete_input_dict": data,
+            "api_base": url,
+            "headers": dict(prepped.headers),
+        },
+    )
+    async with httpx.AsyncClient(
+        timeout=float(timeout) if timeout else 600.0
+    ) as client:
+        raw = await client.post(url, headers=dict(prepped.headers), content=data)
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response=raw.text,
+        additional_args={"complete_input_dict": data},
+    )
+    if raw.status_code < 200 or raw.status_code >= 300:
+        raise BedrockError(status_code=raw.status_code, message=raw.text)
+    try:
+        payload = raw.json()
+    except ValueError as parse_error:
+        raise BedrockError(
+            status_code=422, message=f"non-JSON bedrock response: {raw.text[:200]}"
+        ) from parse_error
+    result = translate_chat_response(
+        payload, prepared.request, provider_key, deps  # type: ignore[arg-type]
+    )
+    if result.is_error():
+        raise BedrockError(status_code=500, message=result.error.summary)
+    return to_model_response(
+        result.ok, model_response, usage_style=response_dialect(provider_key)  # type: ignore[arg-type]
+    )
 
 
 _BODY_FIELDS = (

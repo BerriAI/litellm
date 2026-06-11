@@ -3,10 +3,14 @@
 ``translate_chat_request`` is the pure request transform (parse -> serialize)
 the differential gate runs. ``execute_chat_request`` is the full async
 pipeline: translate, send through the injected HTTP port (popping the
-``json_mode`` transform-seam marker exactly like v1's HTTP handler), parse
-the provider response, and serialize the outbound body. Everything returns
-one ``Result`` and never raises; sync callers get the one wrapper the seam
-provides (v1's completion() already runs on an executor thread).
+transform-seam markers exactly like v1's HTTP handlers), parse the provider
+response, and serialize the outbound body. Everything returns one ``Result``
+and never raises; sync callers get the one wrapper the seam provides (v1's
+completion() already runs on an executor thread).
+
+Per-provider registrations live in the three tables below: the serializer,
+the response parser, and the outbound response dialect (which v1 transform
+the chunk/message/usage shapes mirror). To add a provider, fill all three.
 """
 
 from __future__ import annotations
@@ -21,10 +25,20 @@ from ..deps import TranslationDeps
 from ..dispatch import Provider
 from ..errors import TranslateResult, TranslationError
 from ..inbound.openai_chat import parse_request
-from ..inbound.openai_chat.response import serialize_response
+from ..inbound.openai_chat.response import ResponseDialect, serialize_response
 from ..ir import Body, ChatRequest, ChatResponse, PlainJson
 from ..providers.anthropic import serialize_request
 from ..providers.anthropic.response import parse_response
+from ..providers.bedrock_converse import (
+    parse_response as bedrock_converse_parse_response,
+)
+from ..providers.bedrock_converse import (
+    serialize_request as bedrock_converse_serialize_request,
+)
+from ..providers.bedrock_invoke import parse_response as bedrock_invoke_parse_response
+from ..providers.bedrock_invoke import (
+    serialize_request as bedrock_invoke_serialize_request,
+)
 from .http import Endpoint, ExecuteError, HttpPort, ProviderHttpError
 
 _Serializer = Callable[[ChatRequest, TranslationDeps], Result[Body, TranslationError]]
@@ -35,14 +49,30 @@ _ResponseParser = Callable[
 _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
     {
         "anthropic": serialize_request,
+        "bedrock_converse": bedrock_converse_serialize_request,
+        "bedrock_invoke": bedrock_invoke_serialize_request,
     }
 )
 
 _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
     {
         "anthropic": parse_response,
+        "bedrock_converse": bedrock_converse_parse_response,
+        "bedrock_invoke": bedrock_invoke_parse_response,
     }
 )
+
+_RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
+    {
+        "anthropic": "anthropic",
+        "bedrock_converse": "bedrock_converse",
+        "bedrock_invoke": "anthropic",  # invoke delegates to the anthropic transform
+    }
+)
+
+
+def response_dialect(provider: Provider) -> ResponseDialect:
+    return _RESPONSE_DIALECTS.get(provider, "anthropic")
 
 
 def translate_chat_request(
@@ -71,8 +101,9 @@ def translate_chat_response(
                 f"provider {provider!r} has no v2 response parser yet"
             )
         )
+    dialect = response_dialect(provider)
     return parser(raw_response, request).map(
-        lambda response: serialize_response(response, deps)
+        lambda response: serialize_response(response, deps, dialect)
     )
 
 
@@ -106,10 +137,25 @@ def prepare_chat_request(
     )
 
 
-def wire_body(prepared: PreparedRequest) -> Body:
-    """v1's HTTP handler pops json_mode from optional_params before the wire;
-    the marker exists only at the transform seam."""
-    return {key: value for key, value in prepared.body.items() if key != "json_mode"}
+def wire_body(prepared: PreparedRequest, provider: Provider = "anthropic") -> Body:
+    """Strip the transform-seam markers v1's HTTP layer pops before the wire:
+    ``json_mode`` (anthropic family) and converse's ``stream`` rider inside
+    ``additionalModelRequestFields`` (production pops ``stream`` from
+    optional_params before transform, so the wire never carries it)."""
+    body = {key: value for key, value in prepared.body.items() if key != "json_mode"}
+    if provider != "bedrock_converse":
+        return body
+    additional = body.get("additionalModelRequestFields")
+    if not isinstance(additional, dict):
+        return body
+    stripped = {key: value for key, value in additional.items() if key != "stream"}
+    if stripped:
+        return {**body, "additionalModelRequestFields": stripped}
+    return {
+        key: value
+        for key, value in body.items()
+        if key != "additionalModelRequestFields"
+    }
 
 
 async def send_prepared(
@@ -128,7 +174,7 @@ async def send_prepared(
                 )
             )
         )
-    response = await http.post_json(endpoint, wire_body(prepared))
+    response = await http.post_json(endpoint, wire_body(prepared, provider))
     if response.status_code < 200 or response.status_code >= 300:
         return Error(
             ExecuteError.of_provider_http(
@@ -141,7 +187,9 @@ async def send_prepared(
         )
     match parser(response.body, prepared.request):
         case Result(tag="ok", ok=chat_response):
-            return Ok(serialize_response(chat_response, deps))
+            return Ok(
+                serialize_response(chat_response, deps, response_dialect(provider))
+            )
         case Result(error=response_err):
             return Error(ExecuteError.of_translation(response_err))
 

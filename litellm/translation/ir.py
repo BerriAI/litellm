@@ -378,13 +378,19 @@ class CacheCreationDetails:
 
 @dataclass(frozen=True)
 class ResponseUsage:
-    """Provider-reported token counts, provider-neutral."""
+    """Provider-reported token counts, provider-neutral.
+
+    ``total_tokens`` is the wire-reported total when the provider sends one
+    (bedrock converse); ``Nothing`` means the inbound serializer computes
+    prompt + completion (anthropic, whose wire total never includes cache).
+    """
 
     input_tokens: int
     output_tokens: int
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
     cache_creation: Option[CacheCreationDetails]
+    total_tokens: Option[int]
 
 
 @dataclass(frozen=True)
