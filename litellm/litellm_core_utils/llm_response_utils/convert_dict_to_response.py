@@ -268,7 +268,12 @@ async def convert_to_streaming_response_async(  # noqa: PLR0915
         slice_chunk = model_response_object.model_copy(deep=True)
         slice_chunk.choices[0].delta.content = piece
         if i > 0:
+            # role, tool_calls and function_call belong on the first slice
+            # only — repeating them would make downstream handlers that
+            # accumulate tool-call deltas collect them N times.
             slice_chunk.choices[0].delta.role = None
+            slice_chunk.choices[0].delta.tool_calls = None
+            slice_chunk.choices[0].delta.function_call = None
         slice_chunk.choices[0].finish_reason = (
             original_finish_reason if i == last_idx else None  # type: ignore[assignment]
         )
@@ -278,7 +283,9 @@ async def convert_to_streaming_response_async(  # noqa: PLR0915
         await asyncio.sleep(0)
 
 
-def convert_to_streaming_response(response_object: Optional[dict] = None):
+def convert_to_streaming_response(  # noqa: PLR0915
+    response_object: Optional[dict] = None,
+):
     # used for yielding Cache hits when stream == True
     if response_object is None:
         raise Exception("Error in response object format")
@@ -362,7 +369,12 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
         slice_chunk = model_response_object.model_copy(deep=True)
         slice_chunk.choices[0].delta.content = piece
         if i > 0:
+            # role, tool_calls and function_call belong on the first slice
+            # only — repeating them would make downstream handlers that
+            # accumulate tool-call deltas collect them N times.
             slice_chunk.choices[0].delta.role = None
+            slice_chunk.choices[0].delta.tool_calls = None
+            slice_chunk.choices[0].delta.function_call = None
         slice_chunk.choices[0].finish_reason = (
             original_finish_reason if i == last_idx else None  # type: ignore[assignment]
         )

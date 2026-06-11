@@ -6,8 +6,7 @@ These generators are used by ``LLMCachingHandler._convert_cached_stream_response
 to replay a cached non-streaming ``ModelResponse`` as a stream when the
 incoming request has ``stream=True``. The fix in this test file ensures the
 replay yields multiple word-shaped chunks instead of a single one-shot
-content frame, restoring per-token cadence on cache hits (case
-2026-04-13-pramod-streaming-buffered-subsequent-requests).
+content frame, restoring per-token cadence on cache hits.
 """
 
 import pytest
@@ -127,6 +126,30 @@ async def test_async_empty_content_yields_single_finish_frame():
     assert chunks[0].choices[0].finish_reason == "stop"
     assert chunks[0].choices[0].delta.role == "assistant"
     assert getattr(chunks[0], "usage", None) is None
+
+
+@pytest.mark.asyncio
+async def test_async_tool_calls_and_function_call_only_on_first_chunk():
+    # A cached response combining multi-word content with tool_calls must not
+    # repeat the tool_calls on every slice — downstream handlers accumulate
+    # tool-call deltas and would collect them N times.
+    payload = _async_payload(content="I'll look that up for you")
+    payload["choices"][0]["message"]["tool_calls"] = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "lookup", "arguments": "{}"},
+            "index": 0,
+        }
+    ]
+    chunks = await _collect_async(payload)
+    assert len(chunks) > 1
+    first_tool_calls = chunks[0].choices[0].delta.tool_calls
+    assert first_tool_calls is not None and len(first_tool_calls) == 1
+    assert first_tool_calls[0].function.name == "lookup"
+    for c in chunks[1:]:
+        assert c.choices[0].delta.tool_calls is None
+        assert c.choices[0].delta.function_call is None
 
 
 @pytest.mark.asyncio

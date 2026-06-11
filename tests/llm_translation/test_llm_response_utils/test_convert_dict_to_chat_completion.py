@@ -1993,7 +1993,7 @@ class TestConvertToStreamingResponseAsync:
         assert len(chunks) == 2
         assert all(c.id == "msg_async_1" for c in chunks)
         assert all(c.model == "claude-3" for c in chunks)
-        assert "".join(c.choices[0].delta.content for c in chunks) == "Hi there"
+        assert "".join(c.choices[0].delta.content or "" for c in chunks) == "Hi there"
         assert chunks[0].choices[0].finish_reason is None
         assert chunks[-1].choices[0].finish_reason == "stop"
         assert chunks[-1].usage.prompt_tokens == 3
