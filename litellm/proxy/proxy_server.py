@@ -7028,6 +7028,23 @@ def _format_streaming_sse_chunk(chunk: Union[str, bytes]) -> Union[str, bytes]:
     return f"data: {chunk}\n\n"
 
 
+_SSE_FRAME_DELIMITERS = ("\r\n\r\n", "\n\n", "\r\r")
+
+
+def _pop_complete_sse_frame(buffer: str) -> Tuple[Optional[str], str]:
+    delimiter_positions = [
+        (position, delimiter)
+        for delimiter in _SSE_FRAME_DELIMITERS
+        if (position := buffer.find(delimiter)) != -1
+    ]
+    if not delimiter_positions:
+        return None, buffer
+
+    position, delimiter = min(delimiter_positions, key=lambda item: item[0])
+    frame_end = position + len(delimiter)
+    return buffer[:frame_end], buffer[frame_end:]
+
+
 async def async_data_generator(  # noqa: PLR0915
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -7053,6 +7070,8 @@ async def async_data_generator(  # noqa: PLR0915
         # happened to ship a streaming-iterator override (the default).
         needs_iterator_wrap = proxy_logging_obj.needs_iterator_wrap()
         needs_per_chunk_hook = proxy_logging_obj.needs_per_chunk_streaming_hook()
+        is_raw_sse_stream = bool(request_data.get("_litellm_skip_openai_stream_done"))
+        raw_sse_buffer = ""
 
         if needs_iterator_wrap:
             stream_iterator = proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -7083,13 +7102,18 @@ async def async_data_generator(  # noqa: PLR0915
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
             elif isinstance(chunk, bytes):
-                # Some upstream streaming iterators (e.g. AsyncGoogleGenAIGenerateContentStreamingIterator
-                # for /v1beta/.../streamGenerateContent) yield raw SSE bytes from Gemini.
-                # Decode to str so the f-string below does not emit a Python b'...' literal,
-                # and pass already-formatted SSE through unchanged to avoid double "data:" prefix.
                 chunk = chunk.decode("utf-8", errors="replace")
-                if chunk.startswith(("data:", "event:", ":")):
-                    yield chunk if chunk.endswith("\n\n") else chunk + "\n\n"
+                if (
+                    is_raw_sse_stream
+                    or raw_sse_buffer
+                    or chunk.startswith(("data:", "event:", ":"))
+                ):
+                    raw_sse_buffer += chunk
+                    while True:
+                        frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
+                        if frame is None:
+                            break
+                        yield frame
                     continue
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
