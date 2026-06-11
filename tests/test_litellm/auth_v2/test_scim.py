@@ -5,26 +5,49 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.auth_v2.config import AuthConfig
-from litellm.auth_v2.resolver import InMemoryIdentityStore
+from litellm.auth_v2.models import AuthMethod, Principal, PrincipalType
+from litellm.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
 from litellm.auth_v2.security import install_auth
 
 USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User"
 GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group"
 ERROR_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:Error"
 
+SCIM_KEY = "sk-scim-writer"
+NOSCOPE_KEY = "sk-no-scim-scope"
 
-@pytest.fixture
-def client() -> TestClient:
+
+def _principal(subject: str, scopes: list) -> Principal:
+    return Principal(
+        principal_type=PrincipalType.HUMAN,
+        subject=subject,
+        auth_method=AuthMethod.API_KEY,
+        scopes=scopes,
+    )
+
+
+def _app() -> FastAPI:
     app = FastAPI()
     install_auth(
         app,
         AuthConfig(),
-        InMemoryIdentityStore(),
+        InMemoryIdentityStore(
+            api_keys={
+                _hash_api_key(SCIM_KEY): _principal("scim-writer", ["scim:write"]),
+                _hash_api_key(NOSCOPE_KEY): _principal("no-scope", []),
+            }
+        ),
         mount_scim=True,
         mount_oidc=False,
         mount_saml=False,
     )
-    return TestClient(app)
+    return app
+
+
+@pytest.fixture
+def client() -> TestClient:
+    # SCIM routes require scim:write; authenticate every request with a scoped key
+    return TestClient(_app(), headers={"x-litellm-api-key": SCIM_KEY})
 
 
 def _create_user(client: TestClient, user_name="alice@example.com", display="Alice"):
@@ -144,3 +167,25 @@ def test_schemas_endpoint_returns_user_and_group(client):
     response = client.get("/scim/v2/Schemas")
     assert response.status_code == 200
     assert response.json()["totalResults"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# SCIM routes are gated by scim:write (design section 11)
+# --------------------------------------------------------------------------- #
+
+
+def test_scim_requires_authentication():
+    unauth = TestClient(_app())
+    response = unauth.post(
+        "/scim/v2/Users",
+        json={"schemas": [USER_SCHEMA], "userName": "x@example.com"},
+    )
+    assert response.status_code == 401
+    assert "WWW-Authenticate" in response.headers
+
+
+def test_scim_requires_scim_write_scope():
+    underscoped = TestClient(_app(), headers={"x-litellm-api-key": NOSCOPE_KEY})
+    response = underscoped.get("/scim/v2/Users")
+    assert response.status_code == 403
+    assert "insufficient_scope" in response.headers.get("WWW-Authenticate", "")

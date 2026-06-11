@@ -287,6 +287,67 @@ def test_acs_missing_response_is_rejected(saml_env):
     assert response.status_code == 400
 
 
+def test_acs_rejects_garbage_response(saml_env):
+    app, store = _build_app(saml_env)
+    client = TestClient(app)
+    response = client.post(
+        "/auth/saml/acs",
+        data={"SAMLResponse": "this-is-not-a-saml-response"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 401
+    assert store._users == {}
+
+
+def test_acs_redirects_to_safe_relay_state(saml_env):
+    app, _ = _build_app(saml_env)
+    client = TestClient(app)
+    acs = client.post(
+        "/auth/saml/acs",
+        data={"SAMLResponse": saml_env.mint_response(), "RelayState": "/dashboard"},
+        follow_redirects=False,
+    )
+    assert acs.status_code == 303
+    assert acs.headers["location"] == "/dashboard"
+
+
+def test_acs_rejects_open_redirect_relay_state(saml_env):
+    app, _ = _build_app(saml_env)
+    client = TestClient(app)
+    acs = client.post(
+        "/auth/saml/acs",
+        data={
+            "SAMLResponse": saml_env.mint_response(),
+            "RelayState": "https://evil.example.com/phish",
+        },
+        follow_redirects=False,
+    )
+    assert acs.status_code == 303
+    # unsafe RelayState falls back to default_redirect_path, never the attacker URL
+    assert acs.headers["location"] == "/"
+
+
+def test_login_threads_safe_next_as_relay_state(saml_env):
+    app, _ = _build_app(saml_env)
+    client = TestClient(app)
+    response = client.get("/auth/saml/login?next=/dashboard", follow_redirects=False)
+    assert response.status_code == 303
+    assert "RelayState=%2Fdashboard" in response.headers["location"]
+
+
+def test_login_rejects_open_redirect_next(saml_env):
+    app, _ = _build_app(saml_env)
+    client = TestClient(app)
+    response = client.get(
+        "/auth/saml/login?next=https://evil.example.com", follow_redirects=False
+    )
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert "evil.example.com" not in location
+    # falls back to default_redirect_path ("/") as the RelayState
+    assert "RelayState=%2F&" in location or location.endswith("RelayState=%2F")
+
+
 # --------------------------------------------------------------------------- #
 # Pure helpers (no xmlsec1 required) - attribute mapping + open-redirect guard
 # --------------------------------------------------------------------------- #
