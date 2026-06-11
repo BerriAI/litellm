@@ -239,18 +239,23 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 tool_content = (
                     content if isinstance(content, str) else json.dumps(content)
                 )
-                conversation.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_call_id,
-                                "content": tool_content,
-                            }
-                        ],
-                    }
-                )
+                tool_result_block = {
+                    "type": "tool_result",
+                    "tool_use_id": tool_call_id,
+                    "content": tool_content,
+                }
+                if (
+                    conversation
+                    and conversation[-1]["role"] == "user"
+                    and isinstance(conversation[-1]["content"], list)
+                    and conversation[-1]["content"]
+                    and conversation[-1]["content"][0].get("type") == "tool_result"
+                ):
+                    conversation[-1]["content"].append(tool_result_block)
+                else:
+                    conversation.append(
+                        {"role": "user", "content": [tool_result_block]}
+                    )
             else:
                 conversation.append({"role": role, "content": content})
 
