@@ -283,7 +283,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         }
 
         if resolved_max is not None:
-            body["max_tokens"] = resolved_max
+            body["max_completion_tokens"] = resolved_max
 
         return body
 
