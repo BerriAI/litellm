@@ -30,7 +30,8 @@ class TestTryShortCircuitSearch:
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
             mock_search.return_value = (
-                "Title: Result\nURL: https://example.com\nSnippet: test"
+                "Title: Result\nURL: https://example.com\nSnippet: test",
+                None,
             )
 
             result = await logger.try_short_circuit_search(
@@ -48,9 +49,15 @@ class TestTryShortCircuitSearch:
         assert result["type"] == "message"
         assert result["role"] == "assistant"
         assert result["stop_reason"] == "end_turn"
-        assert len(result["content"]) == 1
-        assert result["content"][0]["type"] == "text"
-        assert "Result" in result["content"][0]["text"]
+        # Native web_search_20250305 client → short-circuit emits native
+        # blocks (server_tool_use + web_search_tool_result) plus the legacy
+        # text block so Cowork / Claude Desktop citations panels populate.
+        block_types = [b["type"] for b in result["content"]]
+        assert "server_tool_use" in block_types
+        assert "web_search_tool_result" in block_types
+        assert "text" in block_types
+        text_block = next(b for b in result["content"] if b["type"] == "text")
+        assert "Result" in text_block["text"]
         mock_search.assert_called_once_with("Search for Claude Code releases")
 
     @pytest.mark.asyncio
@@ -173,7 +180,8 @@ class TestTryShortCircuitSearch:
             )
 
         assert result is not None
-        assert "Search failed" in result["content"][0]["text"]
+        text_block = next(b for b in result["content"] if b["type"] == "text")
+        assert "Search failed" in text_block["text"]
 
     @pytest.mark.asyncio
     async def test_response_has_valid_structure(self):
@@ -183,7 +191,7 @@ class TestTryShortCircuitSearch:
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
-            mock_search.return_value = "search results here"
+            mock_search.return_value = ("search results here", None)
 
             result = await logger.try_short_circuit_search(
                 model="github_copilot/claude-sonnet-4",
@@ -246,7 +254,7 @@ class TestShortCircuitEntryPoint:
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
-            mock_search.return_value = "results"
+            mock_search.return_value = ("results", None)
             with patch("litellm.callbacks", [logger]):
                 result = await _try_websearch_short_circuit(
                     model="github_copilot/claude-sonnet-4",
@@ -257,7 +265,8 @@ class TestShortCircuitEntryPoint:
                 )
 
         assert isinstance(result, dict)
-        assert result["content"][0]["text"] == "results"
+        text_block = next(b for b in result["content"] if b["type"] == "text")
+        assert text_block["text"] == "results"
 
     @pytest.mark.asyncio
     async def test_returns_stream_iterator_when_streaming(self):
@@ -273,7 +282,7 @@ class TestShortCircuitEntryPoint:
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
-            mock_search.return_value = "streaming results"
+            mock_search.return_value = ("streaming results", None)
             with patch("litellm.callbacks", [logger]):
                 result = await _try_websearch_short_circuit(
                     model="github_copilot/claude-sonnet-4",
@@ -338,7 +347,7 @@ class TestShortCircuitEntryPoint:
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
-            mock_search.return_value = "streaming results"
+            mock_search.return_value = ("streaming results", None)
             with patch("litellm.callbacks", [logger]):
                 # Simulate what anthropic_messages() does: original_stream=True
                 # is passed to the short-circuit, even though the hook would have
@@ -368,7 +377,7 @@ class TestShortCircuitEntryPoint:
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
-            mock_search.return_value = "results"
+            mock_search.return_value = ("results", None)
             with patch("litellm.callbacks", [logger]):
                 # Simulate the caller having derived custom_llm_provider from
                 # the model string before calling _try_websearch_short_circuit
@@ -381,4 +390,5 @@ class TestShortCircuitEntryPoint:
                 )
 
         assert result is not None
-        assert result["content"][0]["text"] == "results"
+        text_block = next(b for b in result["content"] if b["type"] == "text")
+        assert text_block["text"] == "results"

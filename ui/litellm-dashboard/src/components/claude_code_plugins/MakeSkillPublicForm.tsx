@@ -86,7 +86,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
             return disableClaudeCodePlugin(accessToken, skill.name);
           }
           return Promise.resolve();
-        })
+        }),
       );
 
       NotificationsManager.success(`Skill Hub updated — ${selectedSkills.size} skill(s) published`);
@@ -100,8 +100,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
     }
   };
 
-  const allSelected =
-    skillsList.length > 0 && skillsList.every((s) => selectedSkills.has(s.name));
+  const allSelected = skillsList.length > 0 && skillsList.every((s) => selectedSkills.has(s.name));
   const isIndeterminate = selectedSkills.size > 0 && !allSelected;
 
   const renderStep1 = () => (
@@ -119,8 +118,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
       </div>
 
       <Text className="text-sm text-gray-600">
-        Selected skills will be visible to all users in the Skill Hub.
-        Deselected skills will be unpublished.
+        Selected skills will be visible to all users in the Skill Hub. Deselected skills will be unpublished.
       </Text>
 
       <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
@@ -131,10 +129,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
             </div>
           ) : (
             skillsList.map((skill) => (
-              <div
-                key={skill.name}
-                className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50"
-              >
+              <div key={skill.name} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50">
                 <Checkbox
                   checked={selectedSkills.has(skill.name)}
                   onChange={(e) => handleSkillSelection(skill.name, e.target.checked)}
@@ -143,17 +138,19 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
                   <div className="flex items-center gap-2">
                     <Text className="font-medium font-mono text-sm">{skill.name}</Text>
                     {skill.enabled && (
-                      <Badge color="green" size="xs">Public</Badge>
+                      <Badge color="green" size="xs">
+                        Public
+                      </Badge>
                     )}
                   </div>
                   {skill.description && (
-                    <Text className="text-xs text-gray-500 truncate max-w-sm">
-                      {skill.description}
-                    </Text>
+                    <Text className="text-xs text-gray-500 truncate max-w-sm">{skill.description}</Text>
                   )}
                 </div>
                 {skill.domain && (
-                  <Badge color="blue" size="xs">{skill.domain}</Badge>
+                  <Badge color="blue" size="xs">
+                    {skill.domain}
+                  </Badge>
                 )}
               </div>
             ))
@@ -177,8 +174,8 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
 
       <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
         <Text className="text-sm text-yellow-800">
-          <strong>Note:</strong> Published skills will be visible to all users in the Skill Hub tab.
-          Skills not in the list below will be unpublished.
+          <strong>Note:</strong> Published skills will be visible to all users in the Skill Hub tab. Skills not in the
+          list below will be unpublished.
         </Text>
       </div>
 
@@ -191,7 +188,11 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
               return (
                 <div key={name} className="flex items-center justify-between p-2 bg-gray-50 rounded">
                   <Text className="font-mono text-sm">{name}</Text>
-                  {skill?.domain && <Badge color="blue" size="xs">{skill.domain}</Badge>}
+                  {skill?.domain && (
+                    <Badge color="blue" size="xs">
+                      {skill.domain}
+                    </Badge>
+                  )}
                 </div>
               );
             })}

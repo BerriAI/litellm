@@ -1,10 +1,16 @@
 import { Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
-import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings, modelAvailableCall } from "../networking";
+import {
+  createGuardrailCall,
+  getGuardrailProviderSpecificParams,
+  getGuardrailUISettings,
+  modelAvailableCall,
+} from "../networking";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 import {
   choiceToSkipSystemForCreate,
+  choiceToSkipToolForCreate,
   getGuardrailProviders,
   guardrail_provider_map,
   guardrailLogoMap,
@@ -188,6 +194,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       mode: preset.mode,
       default_on: preset.defaultOn,
       skip_system_message_choice: "inherit",
+      skip_tool_message_choice: "inherit",
     };
     if (preset.provider === "BlockCodeExecution") {
       baseValues.confidence_threshold = 0.5;
@@ -431,6 +438,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       const skipForCreate = choiceToSkipSystemForCreate(values.skip_system_message_choice);
       if (skipForCreate !== undefined) {
         guardrailData.litellm_params.skip_system_message_in_guardrail = skipForCreate;
+      }
+
+      const skipToolForCreate = choiceToSkipToolForCreate(values.skip_tool_message_choice);
+      if (skipToolForCreate !== undefined) {
+        guardrailData.litellm_params.skip_tool_message_in_guardrail = skipToolForCreate;
       }
 
       // For Presidio PII, add the entity and action configurations
@@ -804,14 +816,28 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           </Select>
         </Form.Item>
 
+        <Form.Item
+          name="skip_tool_message_choice"
+          label="Skip tool messages in guardrail"
+          tooltip="Unified guardrails only: omit role: tool from guardrail evaluation input (OpenAI chat + Anthropic messages). The model still receives full messages. Use global default follows litellm_settings.skip_tool_message_in_guardrail."
+        >
+          <Select>
+            <Select.Option value="inherit">Use global default</Select.Option>
+            <Select.Option value="yes">Yes — exclude from guardrail scan</Select.Option>
+            <Select.Option value="no">No — always include in scan</Select.Option>
+          </Select>
+        </Form.Item>
+
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
-        {!isToolPermissionProvider && !shouldRenderContentFilterConfigSettings(selectedProvider) && !shouldRenderLLMJudgeFields(selectedProvider) && (
-          <GuardrailProviderFields
-            selectedProvider={selectedProvider}
-            accessToken={accessToken}
-            providerParams={providerParams}
-          />
-        )}
+        {!isToolPermissionProvider &&
+          !shouldRenderContentFilterConfigSettings(selectedProvider) &&
+          !shouldRenderLLMJudgeFields(selectedProvider) && (
+            <GuardrailProviderFields
+              selectedProvider={selectedProvider}
+              accessToken={accessToken}
+              providerParams={providerParams}
+            />
+          )}
       </>
     );
   };
@@ -979,8 +1005,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       <div className="space-y-6">
         <div>
           <p className="text-sm text-gray-500">
-            Configure settings for a specific call type. Most guardrails don't need this — skip it
-            unless you're using a specific endpoint like <code>/v1/realtime</code>.
+            Configure settings for a specific call type. Most guardrails don't need this — skip it unless you're using a
+            specific endpoint like <code>/v1/realtime</code>.
           </p>
         </div>
 
@@ -1022,12 +1048,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             {endpointSettingsOpen && (
               <div className="space-y-5 px-4 py-4 border-t border-gray-200">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    End session after X violations
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">End session after X violations</label>
                   <p className="text-xs text-gray-400 mb-2">
-                    Automatically close the session after this many guardrail violations. Leave
-                    empty to never auto-close.
+                    Automatically close the session after this many guardrail violations. Leave empty to never
+                    auto-close.
                   </p>
                   <input
                     type="number"
@@ -1035,18 +1059,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                     placeholder="e.g. 3"
                     value={endSessionAfterNFails ?? ""}
                     onChange={(e) =>
-                      setEndSessionAfterNFails(
-                        e.target.value ? parseInt(e.target.value, 10) : undefined
-                      )
+                      setEndSessionAfterNFails(e.target.value ? parseInt(e.target.value, 10) : undefined)
                     }
                     className="border border-gray-300 rounded px-3 py-1.5 text-sm w-32"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    On violation
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">On violation</label>
                   <div className="space-y-2">
                     {(["warn", "end_session"] as const).map((opt) => (
                       <label key={opt} className="flex items-start gap-2 cursor-pointer">
@@ -1074,12 +1094,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Message the user hears
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Message the user hears</label>
                   <p className="text-xs text-gray-400 mb-2">
-                    What the bot says aloud when this guardrail fires. Falls back to the default
-                    violation message if empty.
+                    What the bot says aloud when this guardrail fires. Falls back to the default violation message if
+                    empty.
                   </p>
                   <textarea
                     rows={3}
@@ -1126,6 +1144,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       title={null}
       open={visible}
       onCancel={handleClose}
+      maskClosable={false}
       footer={null}
       width={1000}
       closable={false}
@@ -1155,6 +1174,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
               mode: "pre_call",
               default_on: false,
               skip_system_message_choice: "inherit",
+              skip_tool_message_choice: "inherit",
             }}
           >
             {stepConfigs.map((step, index) => {

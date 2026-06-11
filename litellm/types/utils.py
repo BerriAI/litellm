@@ -38,7 +38,6 @@ from pydantic import (
     Field,
     PrivateAttr,
     field_validator,
-    model_validator,
 )
 from typing_extensions import Required, TypedDict
 
@@ -107,9 +106,13 @@ class LiteLLMCommonStrings(Enum):
 SupportedCacheControls = ["ttl", "s-maxage", "no-cache", "no-store"]
 
 
-class CostPerToken(TypedDict):
-    input_cost_per_token: float
-    output_cost_per_token: float
+class CostPerToken(TypedDict, total=False):
+    # Required base rates — kept under total=False so we can mark them
+    # Required individually while leaving the cache rates NotRequired.
+    input_cost_per_token: Required[float]
+    output_cost_per_token: Required[float]
+    cache_read_input_token_cost: float
+    cache_creation_input_token_cost: float
 
 
 class ProviderField(TypedDict):
@@ -143,6 +146,11 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_low_reasoning_effort: Optional[bool]
     supports_xhigh_reasoning_effort: Optional[bool]
     supports_max_reasoning_effort: Optional[bool]
+    supports_output_config: Optional[bool]
+    supports_image_size: Optional[bool]
+    bedrock_output_config_effort_ceiling: Optional[
+        Literal["low", "medium", "high", "max", "xhigh"]
+    ]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -189,6 +197,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]  # OpenAI priority service tier pricing
     cache_read_input_token_cost_above_200k_tokens: Optional[float]
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
+    cache_read_input_token_cost_above_512k_tokens: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -198,6 +207,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_272k_tokens: Optional[
         float
     ]  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
+    input_cost_per_token_above_512k_tokens: Optional[
+        float
+    ]  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -214,6 +226,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_priority: Optional[
         float
     ]  # OpenAI priority service tier pricing
+    regional_processing_uplift_multiplier_eu: Optional[
+        float
+    ]  # OpenAI EU data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
+    regional_processing_uplift_multiplier_us: Optional[
+        float
+    ]  # OpenAI US data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
@@ -225,6 +243,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_272k_tokens: Optional[
         float
     ]  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
+    output_cost_per_token_above_512k_tokens: Optional[
+        float
+    ]  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -239,6 +260,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     ocr_cost_per_page: Optional[float]  # for OCR models
+    ocr_cost_per_credit: Optional[float]  # for OCR models priced by credit
     annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
@@ -256,6 +278,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "chat",
             "audio_transcription",
             "responses",
+            "ocr",
         ]
     ]
     tpm: Optional[int]
@@ -825,6 +848,7 @@ API_ROUTE_TO_CALL_TYPES = {
     # Realtime API
     "/realtime": [CallTypes.arealtime],
     "/v1/realtime": [CallTypes.arealtime],
+    "/openai/v1/realtime": [CallTypes.arealtime],
     # Provider-specific routes
     "/anthropic/v1/messages": [CallTypes.anthropic_messages],
     # Google GenAI routes
@@ -1523,6 +1547,11 @@ class ServerToolUse(BaseModel):
     web_search_requests: Optional[int] = None
     tool_search_requests: Optional[int] = None
 
+    def __getitem__(self, key: str) -> Optional[int]:
+        if key not in self.__class__.model_fields:
+            raise KeyError(key)
+        return getattr(self, key)
+
 
 class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
@@ -1553,7 +1582,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
-        server_tool_use: Optional[ServerToolUse] = None,
+        server_tool_use: Optional[Union[ServerToolUse, dict]] = None,
         cost: Optional[float] = None,
         **params,
     ):
@@ -1653,6 +1682,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
             completion_tokens_details=_completion_tokens_details or None,
             prompt_tokens_details=_prompt_tokens_details or None,
         )
+
+        if isinstance(server_tool_use, dict):
+            server_tool_use = ServerToolUse(**server_tool_use)
 
         if server_tool_use is not None:
             # Coerce dict -> ServerToolUse so downstream cost-calc code can
@@ -2574,6 +2606,12 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     Cost per query for the MCP server tool call
     """
 
+    mcp_session_id: Optional[str]
+    """
+    The MCP `mcp-session-id` of the stateful session this tool call ran in, when
+    the client is driving a stateful session. Absent for stateless calls.
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """
@@ -2707,6 +2745,23 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     llm_provider: Optional[str]
     traceback: Optional[str]
     error_message: Optional[str]
+    # error_rate_limit_category:
+    #   For 429 / rate-limit errors, the source of the rate limit. One of the
+    #   string values defined by `litellm.exceptions.RateLimitErrorCategory`
+    #   (vendor_rate_limit, vendor_batch_rate_limit, litellm_rate_limit,
+    #   litellm_batch_rate_limit). None for non-rate-limit exceptions.
+    #   Surfaced here so custom callbacks / metrics consumers can switch on
+    #   the rate-limit source without reaching for the raw exception.
+    error_rate_limit_category: Optional[str]
+    # error_rate_limit_type:
+    #   For 429 / rate-limit errors, the dimension that was exceeded. One of
+    #   the string values defined by `litellm.exceptions.RateLimitType`
+    #   (requests, tokens, concurrent_requests, budget, max_iterations).
+    #   None for non-rate-limit exceptions and for rate-limit exceptions that
+    #   did not classify the failure (e.g. legacy vendor 429 with no header
+    #   hints). Lets dashboards split rate-limit failures by cause without
+    #   parsing free-text error messages.
+    error_rate_limit_type: Optional[str]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -2771,6 +2826,20 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     risk_score: Optional[float]
     """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
 
+    violation_categories: Optional[List[str]]
+    """Names of the policy items that intervened on this request (e.g. Bedrock
+    topic-policy topic names, content-policy filter types, PII entity types).
+    Populated by the provider hook before redaction so downstream loggers
+    (OTEL, Langfuse, ...) can filter by violation category without parsing
+    the raw guardrail_response blob. Empty/absent when the guardrail allowed
+    the request through."""
+
+    guardrail_action: Optional[str]
+    """Provider's raw top-level action string (e.g. Bedrock's ``GUARDRAIL_INTERVENED``
+    or ``NONE``). Populated by the provider hook so the OTEL integration can
+    surface it as a queryable span attribute without parsing the raw
+    guardrail_response blob."""
+
 
 class EvalVerdict(TypedDict, total=False):
     criterion_name: str
@@ -2812,6 +2881,8 @@ class GuardrailTracingDetail(TypedDict, total=False):
     patterns_checked: Optional[int]
     alert_recipients: Optional[List[str]]
     risk_score: Optional[float]
+    violation_categories: Optional[List[str]]
+    guardrail_action: Optional[str]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -3158,11 +3229,13 @@ all_litellm_params = (
         "allowed_openai_params",
         "litellm_session_id",
         "use_litellm_proxy",
+        "use_chat_completions_api",
         "prompt_label",
         "shared_session",
         "search_tool_name",
         "order",
         "enable_json_schema_validation",
+        "use_xai_oauth",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -3225,6 +3298,7 @@ class LlmProviders(str, Enum):
     ANTHROPIC_TEXT = "anthropic_text"
     BYTEZ = "bytez"
     REPLICATE = "replicate"
+    REDUCTO = "reducto"
     RUNWAYML = "runwayml"
     AWS_POLLY = "aws_polly"
     HUGGINGFACE = "huggingface"
@@ -3258,6 +3332,8 @@ class LlmProviders(str, Enum):
     A2A = "a2a"
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
+    NVIDIA_RIVA = "nvidia_riva"
+    SONIOX = "soniox"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
@@ -3269,6 +3345,8 @@ class LlmProviders(str, Enum):
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
+    INCEPTION = "inception"
+    TEXT_COMPLETION_INCEPTION = "text-completion-inception"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
@@ -3333,13 +3411,17 @@ class LlmProviders(str, Enum):
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
+    LANGFLOW = "langflow"
     MINIMAX = "minimax"
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"
     NANOGPT = "nano-gpt"
     POE = "poe"
     CHUTES = "chutes"
+    NEOSANTARA = "neosantara"
+    PARASAIL = "parasail"
     XIAOMI_MIMO = "xiaomi_mimo"
+    TENSORMESH = "tensormesh"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3380,6 +3462,8 @@ class SearchProviders(str, Enum):
     DUCKDUCKGO = "duckduckgo"
     SEARCHAPI = "searchapi"
     SERPER = "serper"
+    YOU_COM = "you_com"
+    APISERPENT = "apiserpent"
 
 
 # Create a set of all search provider values for quick lookup
@@ -3520,25 +3604,11 @@ class RawRequestTypedDict(TypedDict, total=False):
     error: Optional[str]
 
 
-class CredentialBase(BaseModel):
-    credential_name: str
-    credential_info: dict
-
-
-class CredentialItem(CredentialBase):
-    credential_values: dict
-
-
-class CreateCredentialItem(CredentialBase):
-    credential_values: Optional[dict] = None
-    model_id: Optional[str] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_credential_params(cls, values):
-        if not values.get("credential_values") and not values.get("model_id"):
-            raise ValueError("Either credential_values or model_id must be set")
-        return values
+from litellm.models.credentials import CredentialBase as CredentialBase  # noqa: E402
+from litellm.models.credentials import CredentialItem as CredentialItem  # noqa: E402
+from litellm.models.credentials import (  # noqa: E402
+    CreateCredentialItem as CreateCredentialItem,
+)
 
 
 class ExtractedFileData(TypedDict):
@@ -3578,12 +3648,30 @@ class SpecialEnums(Enum):
         "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
     )
 
+    LITELLM_PASSTHROUGH_MANAGED_ID_COMPLETE_STR = (
+        "litellm_proxy:passthrough;provider:{};unified_id,{};raw_id,{}"
+    )
+
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
 
     FLEX = "flex"
     PRIORITY = "priority"
+
+
+class DataResidency(Enum):
+    """
+    OpenAI data-residency / regional-processing regions.
+
+    Inferred from the OpenAI api_base host (eu.api.openai.com -> EU,
+    us.api.openai.com -> US). Used to apply the regional-processing
+    cost uplift (see ``regional_processing_uplift_multiplier_<region>``
+    on ModelInfo).
+    """
+
+    US = "us"
+    EU = "eu"
 
 
 LLMResponseTypes = Union[

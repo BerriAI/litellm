@@ -15,7 +15,6 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -29,6 +28,7 @@ from ..common_utils import (
     DEFAULT_MAX_POLLING_TIME,
     DEFAULT_POLLING_INTERVAL,
     BlackForestLabsError,
+    assert_bfl_polling_url,
 )
 from .transformation import BlackForestLabsImageEditConfig
 
@@ -332,16 +332,11 @@ class BlackForestLabsImageEdit:
                 message="No polling_url in BFL response",
             )
 
-        # Reject cross-origin polling URLs — the ``x-key`` auth header
-        # would otherwise leak to whatever URL the upstream returns.
-        # VERIA-51.
-        try:
-            assert_same_origin(polling_url, str(initial_response.request.url))
-        except SSRFError as ssrf_err:
-            raise BlackForestLabsError(
-                status_code=502,
-                message=f"Rejected polling URL: {ssrf_err}",
-            )
+        # Reject polling URLs that don't belong to BFL-controlled infrastructure.
+        # BFL uses regional subdomains (e.g. gateway.bfl.ai) that differ from the
+        # submission host (api.bfl.ai), so we validate against the registered
+        # domain rather than doing a strict same-origin check. VERIA-51.
+        assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
         polling_headers = {"x-key": headers.get("x-key", "")}
@@ -428,16 +423,11 @@ class BlackForestLabsImageEdit:
                 message="No polling_url in BFL response",
             )
 
-        # Reject cross-origin polling URLs — the ``x-key`` auth header
-        # would otherwise leak to whatever URL the upstream returns.
-        # VERIA-51.
-        try:
-            assert_same_origin(polling_url, str(initial_response.request.url))
-        except SSRFError as ssrf_err:
-            raise BlackForestLabsError(
-                status_code=502,
-                message=f"Rejected polling URL: {ssrf_err}",
-            )
+        # Reject polling URLs that don't belong to BFL-controlled infrastructure.
+        # BFL uses regional subdomains (e.g. gateway.bfl.ai) that differ from the
+        # submission host (api.bfl.ai), so we validate against the registered
+        # domain rather than doing a strict same-origin check. VERIA-51.
+        assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
         polling_headers = {"x-key": headers.get("x-key", "")}

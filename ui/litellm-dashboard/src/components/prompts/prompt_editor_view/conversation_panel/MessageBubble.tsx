@@ -35,9 +35,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
           </div>
           <strong className="text-sm capitalize">{message.role}</strong>
           {message.role === "assistant" && message.model && (
-            <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
-              {message.model}
-            </span>
+            <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">{message.model}</span>
           )}
         </div>
 
@@ -86,9 +84,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
                     </code>
                   );
                 },
-                pre: ({ node, ...props }) => (
-                  <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />
-                ),
+                pre: ({ node, ...props }) => <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />,
               }}
             >
               {message.content}
@@ -97,14 +93,13 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
             <div className="whitespace-pre-wrap">{message.content}</div>
           )}
 
-          {message.role === "assistant" &&
-            (message.timeToFirstToken || message.totalLatency || message.usage) && (
-              <ResponseMetrics
-                timeToFirstToken={message.timeToFirstToken}
-                totalLatency={message.totalLatency}
-                usage={message.usage}
-              />
-            )}
+          {message.role === "assistant" && (message.timeToFirstToken || message.totalLatency || message.usage) && (
+            <ResponseMetrics
+              timeToFirstToken={message.timeToFirstToken}
+              totalLatency={message.totalLatency}
+              usage={message.usage}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -112,4 +107,3 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
 };
 
 export default MessageBubble;
-

@@ -2,7 +2,18 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from typing import (
+    Any,
+    Coroutine,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+    overload,
+)
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
@@ -21,6 +32,61 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
+    def _convert_custom_tools_to_function_tools(
+        self, tools: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        vLLM chat completions currently accepts only OpenAI function tools.
+        Convert custom tools into function tools so request validation does not fail.
+        """
+        converted_tools: List[Dict[str, Any]] = []
+        for idx, tool in enumerate(tools):
+            if not isinstance(tool, dict):
+                converted_tools.append(tool)
+                continue
+
+            if tool.get("type") != "custom":
+                converted_tools.append(tool)
+                continue
+
+            custom_tool = tool.get("custom", {})
+            if not isinstance(custom_tool, dict):
+                custom_tool = {}
+
+            tool_name = (
+                custom_tool.get("name") or tool.get("name") or f"custom_tool_{idx}"
+            )
+            tool_description = custom_tool.get("description") or tool.get("description")
+            tool_parameters = custom_tool.get("input_schema") or tool.get(
+                "input_schema"
+            )
+
+            if not isinstance(tool_parameters, dict):
+                tool_parameters = {
+                    "type": "object",
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": "Raw tool input payload.",
+                        }
+                    },
+                    "required": ["input"],
+                }
+
+            function_tool: Dict[str, Any] = {
+                "type": "function",
+                "function": {
+                    "name": str(tool_name),
+                    "parameters": tool_parameters,
+                },
+            }
+            if isinstance(tool_description, str):
+                function_tool["function"]["description"] = tool_description
+
+            converted_tools.append(function_tool)
+
+        return converted_tools
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         params = super().get_supported_openai_params(model)
         params.extend(["reasoning_effort", "thinking"])
@@ -39,6 +105,8 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             _tools = _remove_additional_properties(_tools)
             # remove 'strict' from tools
             _tools = _remove_strict_from_schema(_tools)
+            if isinstance(_tools, list):
+                _tools = self._convert_custom_tools_to_function_tools(_tools)
         if _tools is not None:
             non_default_params["tools"] = _tools
 

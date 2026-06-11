@@ -155,6 +155,70 @@ class TeamMemberPermissionChecks:
         return True
 
     @staticmethod
+    def enforce_member_can_assign_access_groups(
+        user_api_key_dict: UserAPIKeyAuth,
+        team_table: Optional[LiteLLM_TeamTableCachedObj],
+        access_group_ids: Optional[List[str]],
+    ) -> None:
+        """
+        Field-level opt-in gate: a non-admin team member may only set
+        `access_group_ids` on a (team) key if their team has opted in by adding
+        `KEY_ACCESS_GROUP_ASSIGNMENT` to `team_member_permissions`.
+
+        Bypassed for proxy admins, team admins, and personal (non-team) keys.
+        Default-deny: members cannot self-assign access groups until enabled.
+
+        Raises HTTPException(403) when a gated member attempts the assignment.
+        """
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _get_user_in_team,
+        )
+
+        # No-op when the request does not assign any access groups.
+        if not access_group_ids:
+            return
+
+        # Proxy admins always bypass.
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+            return
+
+        # Personal (non-team) keys are out of scope for team-member gating.
+        if team_table is None:
+            return
+
+        team_member_object = _get_user_in_team(
+            team_table=team_table, user_id=user_api_key_dict.user_id
+        )
+
+        # Team admins always bypass (consistent with other member-permission checks).
+        if team_member_object is not None and team_member_object.role == "admin":
+            return
+
+        permissions = (
+            TeamMemberPermissionChecks._get_list_of_route_enum_as_str(
+                TeamMemberPermissionChecks.get_permissions_for_team_member(
+                    team_member_object=team_member_object,
+                    team_table=team_table,
+                )
+            )
+            if team_member_object is not None
+            else []
+        )
+
+        if KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value not in permissions:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Team members cannot assign access groups to keys for team "
+                    f"{team_table.team_id}. Ask a team or proxy admin to enable the "
+                    f"'{KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value}' team "
+                    "member permission to allow this."
+                ),
+            )
+
+    @staticmethod
     async def user_belongs_to_keys_team(
         user_api_key_dict: UserAPIKeyAuth,
         existing_key_row: LiteLLM_VerificationToken,

@@ -658,7 +658,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     if isinstance(content, str):
                         continue
                     for c in content:
-                        if c["type"] == "file":
+                        if c.get("type") == "file":
                             file_object = cast(ChatCompletionFileObject, c)
                             file_object_file_field = file_object["file"]
                             file_id = file_object_file_field.get("file_id")

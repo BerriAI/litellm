@@ -22,7 +22,8 @@ export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
   {
     id: "cf_denied_financial",
     name: "Denied Financial Advice",
-    description: "Detects requests for personalized financial advice, investment recommendations, or financial planning.",
+    description:
+      "Detects requests for personalized financial advice, investment recommendations, or financial planning.",
     category: "litellm",
     subcategory: "Content Category",
     logo: `${ASSET_PREFIX}litellm_logo.jpg`,
@@ -198,7 +199,8 @@ export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
   {
     id: "cf_patterns",
     name: "Pattern Matching",
-    description: "Detect and block sensitive data patterns like SSNs, credit card numbers, API keys, and custom regex patterns.",
+    description:
+      "Detect and block sensitive data patterns like SSNs, credit card numbers, API keys, and custom regex patterns.",
     category: "litellm",
     subcategory: "Patterns",
     logo: `${ASSET_PREFIX}litellm_logo.jpg`,
@@ -207,7 +209,8 @@ export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
   {
     id: "cf_keywords",
     name: "Keyword Blocking",
-    description: "Block or mask content containing specific keywords or phrases. Upload custom word lists or add individual terms.",
+    description:
+      "Block or mask content containing specific keywords or phrases. Upload custom word lists or add individual terms.",
     category: "litellm",
     subcategory: "Keywords",
     logo: `${ASSET_PREFIX}litellm_logo.jpg`,
@@ -216,7 +219,8 @@ export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
   {
     id: "block_code_execution",
     name: "Block Code Execution",
-    description: "Detects markdown fenced code blocks in requests and responses. Block or mask executable code (e.g. Python, JavaScript, Bash) by language with configurable confidence.",
+    description:
+      "Detects markdown fenced code blocks in requests and responses. Block or mask executable code (e.g. Python, JavaScript, Bash) by language with configurable confidence.",
     category: "litellm",
     subcategory: "Code Safety",
     logo: `${ASSET_PREFIX}litellm_logo.jpg`,
@@ -225,7 +229,8 @@ export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
   {
     id: "cf_competitor_intent",
     name: "Competitor Name Blocking",
-    description: "Block or reframe competitor comparison and ranking intent. Detect when users ask to compare or recommend competitors (airline or generic competitor lists).",
+    description:
+      "Block or reframe competitor comparison and ranking intent. Detect when users ask to compare or recommend competitors (airline or generic competitor lists).",
     category: "litellm",
     subcategory: "Content Category",
     logo: `${ASSET_PREFIX}litellm_logo.jpg`,
@@ -237,7 +242,8 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
   {
     id: "presidio",
     name: "Presidio PII",
-    description: "Microsoft Presidio for PII detection and anonymization. Supports 30+ entity types with configurable actions.",
+    description:
+      "Microsoft Presidio for PII detection and anonymization. Supports 30+ entity types with configurable actions.",
     category: "partner",
     logo: `${ASSET_PREFIX}microsoft_azure.svg`,
     tags: ["PII", "Microsoft"],
@@ -323,6 +329,14 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     description: "AIM Security guardrails for comprehensive AI threat detection and mitigation.",
     category: "partner",
     logo: `${ASSET_PREFIX}aim_security.jpeg`,
+    tags: ["Security", "Threat Detection"],
+  },
+  {
+    id: "cato_networks",
+    name: "Cato Networks Guardrail",
+    description: "Cato Networks guardrails for comprehensive AI threat detection and mitigation.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}cato_networks.svg`,
     tags: ["Security", "Threat Detection"],
   },
   {

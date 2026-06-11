@@ -2,6 +2,7 @@ import asyncio
 import copy
 import logging
 import os
+import secrets
 import time
 import traceback
 from datetime import datetime, timedelta
@@ -32,12 +33,14 @@ from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
+    health_check_filter_kwargs_from_general_settings,
     perform_health_check,
     run_with_timeout,
 )
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
+from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
 #### Health ENDPOINTS ####
 
@@ -126,6 +129,7 @@ services = Union[
         "datadog_llm_observability",
         "generic_api",
         "arize",
+        "galileo",
         "sqs",
     ],
     str,
@@ -150,7 +154,10 @@ async def test_endpoint(request: Request):
         dict: A dictionary containing the route of the request URL.
     """
     # ping the proxy server to check if its healthy
-    return {"route": request.url.path}
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+    return {"route": get_request_route(request)}
 
 
 @router.get(
@@ -200,6 +207,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog_llm_observability",
             "generic_api",
             "arize",
+            "galileo",
             "sqs",
         ]:
             raise HTTPException(
@@ -287,6 +295,19 @@ async def health_services_endpoint(  # noqa: PLR0915
                     response["error_message"]
                     if response["status"] == "unhealthy"
                     else "Arize is healthy"
+                ),
+            }
+        elif service == "galileo":
+            from litellm.integrations.galileo import GalileoObserve
+
+            galileo_logger = GalileoObserve()
+            response = await galileo_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Galileo is healthy"
                 ),
             }
         elif service == "langfuse":
@@ -858,6 +879,7 @@ async def _perform_health_check_and_save(
     user_id,
     model_id=None,
     max_concurrency=None,
+    **perform_health_check_extra,
 ):
     """Helper function to perform health check and save results to database"""
     healthy_endpoints, unhealthy_endpoints, _ = await perform_health_check(
@@ -867,6 +889,7 @@ async def _perform_health_check_and_save(
         details=details,
         max_concurrency=max_concurrency,
         model_id=model_id,
+        **perform_health_check_extra,
     )
 
     # Optionally save health check result to database (non-blocking)
@@ -892,6 +915,37 @@ async def _perform_health_check_and_save(
         "healthy_count": len(healthy_endpoints),
         "unhealthy_count": len(unhealthy_endpoints),
     }
+
+
+def _health_endpoint_resolve_target_model_name(
+    model: Optional[str],
+    model_id: Optional[str],
+    llm_router,
+) -> Optional[str]:
+    """Map ``model_id`` (without ``model``) to ``model_name`` for live health checks."""
+    if not model_id or model:
+        return model
+    if llm_router is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": f"Model with ID {model_id} not found"},
+        )
+    try:
+        deployment = llm_router.get_deployment(model_id=model_id)
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error getting deployment for model_id {model_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": f"Model with ID {model_id} not found"},
+        ) from e
+    if deployment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": f"Model with ID {model_id} not found"},
+        )
+    return deployment.model_name
 
 
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
@@ -920,10 +974,15 @@ async def health_endpoint(
         background_health_checks: True
     ```
     else, the health checks will be run on models when /health is called.
+
+    To skip deployments that set ``model_info.disable_background_health_check: true``
+    on ``GET /health`` as well as in the background loop, set
+    ``general_settings.health_check_skip_disabled_background_models: true``.
     """
     import time
 
     from litellm.proxy.proxy_server import (
+        general_settings,
         health_check_concurrency,
         health_check_details,
         health_check_results,
@@ -934,35 +993,12 @@ async def health_endpoint(
         user_model,
     )
 
+    _hc_filter = health_check_filter_kwargs_from_general_settings(general_settings)
     start_time = time.time()
 
-    # Handle model_id parameter - convert to model name for health check
-    target_model = model
-    if model_id and not model:
-        # Use get_deployment from router to find the model name
-        if llm_router is not None:
-            try:
-                deployment = llm_router.get_deployment(model_id=model_id)
-                if deployment is not None:
-                    target_model = deployment.model_name
-                else:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail={"error": f"Model with ID {model_id} not found"},
-                    )
-            except Exception as e:
-                verbose_proxy_logger.error(
-                    f"Error getting deployment for model_id {model_id}: {e}"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={"error": f"Model with ID {model_id} not found"},
-                )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"Model with ID {model_id} not found"},
-            )
+    target_model = _health_endpoint_resolve_target_model_name(
+        model, model_id, llm_router
+    )
 
     is_admin = _is_proxy_admin(user_api_key_dict)
     model_specific_request = bool(model or model_id)
@@ -1000,6 +1036,7 @@ async def health_endpoint(
                     user_id=user_api_key_dict.user_id,
                     model_id=None,  # CLI model doesn't have model_id
                     max_concurrency=health_check_concurrency,
+                    **_hc_filter,
                 )
                 return _post_process(cli_result)
             raise HTTPException(
@@ -1085,6 +1122,7 @@ async def health_endpoint(
                 user_id=user_api_key_dict.user_id,
                 model_id=model_id,
                 max_concurrency=health_check_concurrency,
+                **_hc_filter,
             )
             return _post_process(router_result)
     except Exception as e:
@@ -1530,15 +1568,65 @@ def _allow_public_health_readiness_details() -> bool:
     return general_settings.get("allow_public_health_readiness_details") is True
 
 
-async def _set_public_readiness_status(response: Response) -> None:
+def _drain_endpoint_enabled() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("enable_drain_endpoint") is True
+
+
+def _drain_endpoint_token() -> Optional[str]:
+    """
+    Shared secret required on the X-Drain-Token header to call /health/drain.
+
+    Falls back to the ``DRAIN_ENDPOINT_TOKEN`` env var when unset in
+    general_settings so the kubelet preStop hook can supply it via
+    ``valueFrom.secretKeyRef`` without a config reload.
+    """
+    from litellm.proxy.proxy_server import general_settings
+
+    token = general_settings.get("drain_endpoint_token")
+    if isinstance(token, str) and token:
+        return token
+    env_token = os.getenv("DRAIN_ENDPOINT_TOKEN")
+    if env_token:
+        return env_token
+    return None
+
+
+def _authorize_drain_request(request: Request) -> None:
+    """
+    Reject /health/drain calls that don't carry the configured X-Drain-Token.
+
+    When no token is configured the endpoint is treated as already opted-in
+    (the ``enable_drain_endpoint`` flag is the only gate). Comparison uses
+    ``secrets.compare_digest`` to avoid timing leaks.
+    """
+    expected = _drain_endpoint_token()
+    if expected is None:
+        return
+    supplied = request.headers.get("x-drain-token") or ""
+    if not secrets.compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-Drain-Token",
+        )
+
+
+async def _resolve_public_readiness_db(response: Response) -> str:
+    """
+    Return the db status string for the public probe and flip the response to
+    503 when a configured DB is unreachable. Mirrors the legacy values:
+    "Not connected" (no DB configured), "connected", "disconnected".
+    """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        return
+        return "Not connected"
 
     db_health_status = await _db_health_readiness_check()
     if db_health_status["status"] != "connected":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return db_health_status["status"]
 
 
 @router.get(
@@ -1547,15 +1635,21 @@ async def _set_public_readiness_status(response: Response) -> None:
 )
 async def health_readiness(response: Response):
     """
-    Public readiness probe. Keep this low-detail for unauthenticated load
-    balancers by default. Admins can opt into the legacy detailed public
-    payload with general_settings.allow_public_health_readiness_details.
+    Public readiness probe. Returns a low-detail payload safe to expose to
+    unauthenticated load balancers — `status` plus `db` so orchestrators and
+    external probes can distinguish "healthy" from "DB unreachable" without a
+    credential. Admins can opt into the legacy detailed payload with
+    general_settings.allow_public_health_readiness_details.
     """
+    if GracefulShutdownManager.is_shutting_down():
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "shutting_down"}
+
     if _allow_public_health_readiness_details():
         return await _get_health_readiness_details(response=response)
 
-    await _set_public_readiness_status(response=response)
-    return {"status": "healthy"}
+    db_status = await _resolve_public_readiness_db(response=response)
+    return {"status": "healthy", "db": db_status}
 
 
 @router.get(
@@ -1588,6 +1682,54 @@ async def health_backlog():
 
 
 @router.get(
+    "/health/drain",
+    tags=["health"],
+)
+async def health_drain(request: Request):
+    """
+    Graceful-drain probe for Kubernetes ``preStop`` hooks.
+
+    Disabled by default and returns 404 unless ``general_settings`` sets
+    ``enable_drain_endpoint: true``. Calling it flips a process-wide
+    shutting-down flag, so a successful call permanently takes the worker out
+    of rotation until the pod restarts.
+
+    Because the kubelet calls preStop hooks without proxy credentials, the
+    endpoint does not require ``user_api_key_auth``. To prevent any
+    pod-reachable caller from triggering shutdown, set
+    ``general_settings.drain_endpoint_token`` (or the ``DRAIN_ENDPOINT_TOKEN``
+    env var) and supply the same value on the ``X-Drain-Token`` header from
+    the preStop hook. Calls without the header (or with a wrong value) get a
+    401 and have no side effect.
+
+    When enabled, it marks the worker as shutting down (so /health/readiness
+    and /health/liveliness immediately start returning 503, removing the pod
+    from service) and blocks until the in-flight request counter drains to
+    zero or ``GRACEFUL_SHUTDOWN_TIMEOUT`` elapses. Unlike a fixed ``sleep``,
+    this returns as soon as real in-flight work is done.
+
+    Wire it up as:
+
+    ```yaml
+    lifecycle:
+      preStop:
+        httpGet:
+          path: /health/drain
+          port: 4000
+          httpHeaders:
+            - name: X-Drain-Token
+              value: <same value as drain_endpoint_token>
+    ```
+    """
+    if not _drain_endpoint_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    _authorize_drain_request(request)
+    GracefulShutdownManager.start_shutdown()
+    drained = await GracefulShutdownManager.wait_for_drain(exclude_self=True)
+    return {"status": "drained", "drained_requests": drained}
+
+
+@router.get(
     "/health/liveliness",  # Historical LiteLLM name; doesn't match k8s terminology but kept for backwards compatibility
     tags=["health"],
 )
@@ -1595,10 +1737,16 @@ async def health_backlog():
     "/health/liveness",  # Kubernetes has "liveness" probes (https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command)
     tags=["health"],
 )
-async def health_liveliness():
+async def health_liveliness(response: Response):
     """
-    Unprotected endpoint for checking if worker is alive
+    Unprotected endpoint for checking if worker is alive.
+
+    Returns 503 once graceful shutdown has begun so Kubernetes stops counting
+    the draining pod as live and terminates it on schedule.
     """
+    if GracefulShutdownManager.is_shutting_down():
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "shutting_down"}
     return "I'm alive!"
 
 
@@ -1742,29 +1890,54 @@ async def test_model_connection(
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
-        if model_name and llm_router is not None:
+        if llm_router is not None:
+            # Prefer disambiguation by deployment id (`model_info.id`) when
+            # the caller supplies it. This is required when multiple
+            # deployments share a `model_name` (e.g. wildcard `openai/*`
+            # with multiple `api_base` values for failover): the UI's
+            # "Test Connection" button targets a specific row, and that
+            # row's id is the only thing that uniquely identifies which
+            # deployment to probe. Without this, all duplicates collapse
+            # onto `deployments[0]`.
+            request_model_info = model_info or {}
+            request_model_id = request_model_info.get("id")
             try:
-                # First try to find by proxy model_name (e.g., "gpt-4o")
-                deployments = llm_router.get_model_list(model_name=model_name)
-
-                # If not found, try to find by litellm model name (e.g., "azure/gpt-4o")
-                if not deployments or len(deployments) == 0:
-                    all_deployments = llm_router.get_model_list(model_name=None)
-                    if all_deployments:
-                        for deployment in all_deployments:
-                            if (
-                                deployment.get("litellm_params", {}).get("model")
-                                == model_name
-                            ):
-                                deployments = [deployment]
-                                break
-
-                if deployments and len(deployments) > 0:
-                    # Use the first deployment's litellm_params as base config
-                    # These already have resolved environment variables from proxy config
-                    config_litellm_params = dict(
-                        deployments[0].get("litellm_params", {})
+                deployment_by_id = None
+                if request_model_id:
+                    deployment_by_id = llm_router.get_deployment(
+                        model_id=request_model_id
                     )
+
+                if deployment_by_id is not None:
+                    config_litellm_params = deployment_by_id.litellm_params.model_dump(
+                        exclude_none=True
+                    )
+                elif model_name:
+                    # Fall back to model_name lookup for callers (e.g. the
+                    # "Add Model" wizard, or curl) that don't supply an id.
+                    # First try to find by proxy model_name (e.g., "gpt-4o")
+                    deployments = llm_router.get_model_list(model_name=model_name)
+
+                    # If not found, try to find by litellm model name
+                    # (e.g., "azure/gpt-4o")
+                    if not deployments or len(deployments) == 0:
+                        all_deployments = llm_router.get_model_list(model_name=None)
+                        if all_deployments:
+                            for deployment in all_deployments:
+                                if (
+                                    deployment.get("litellm_params", {}).get("model")
+                                    == model_name
+                                ):
+                                    deployments = [deployment]
+                                    break
+
+                    if deployments and len(deployments) > 0:
+                        # Use the first deployment's litellm_params as base
+                        # config. These already have resolved environment
+                        # variables from proxy config.
+                        config_litellm_params = dict(
+                            deployments[0].get("litellm_params", {})
+                        )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Could not find model {model_name} in router: {e}. "

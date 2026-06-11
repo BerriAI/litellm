@@ -692,6 +692,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
             "type": "object",
             "properties": {
                 "supports_computer_use": {"type": "boolean"},
+                "tool_use_system_prompt_tokens": {"type": "number"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
@@ -699,6 +700,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {
                     "type": "number"
@@ -706,6 +708,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_audio_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_per_audio_token": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
+                "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -719,6 +722,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
+                "input_cost_per_token_above_512k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens_priority": {
@@ -736,6 +740,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "regional_processing_uplift_multiplier_eu": {"type": "number"},
+                "regional_processing_uplift_multiplier_us": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -754,6 +760,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_dbu_cost_per_token": {"type": "number"},
                 "annotation_cost_per_page": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
+                "ocr_cost_per_credit": {"type": "number"},
                 "code_interpreter_cost_per_session": {"type": "number"},
                 "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
@@ -806,6 +813,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
                 "output_cost_per_token_above_256k_tokens": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens": {"type": "number"},
+                "output_cost_per_token_above_512k_tokens": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
                     "type": "number"
@@ -853,9 +861,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_sampling_params": {"type": "boolean"},
                 "supports_service_tier": {"type": "boolean"},
                 "supports_preset": {"type": "boolean"},
-                "tool_use_system_prompt_tokens": {"type": "number"},
+                "supports_output_config": {"type": "boolean"},
+                "bedrock_output_config_effort_ceiling": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "max", "xhigh"],
+                },
                 "tpm": {"type": "number"},
                 "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
@@ -920,7 +933,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},
+                "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
+                "use_openai_responses_path": {"type": "boolean"},
                 "tiered_pricing": {
                     "type": "array",
                     "items": {
@@ -1136,6 +1151,34 @@ def test_check_provider_match():
     # Test non-matching provider
     model_info = {"litellm_provider": "bedrock"}
     assert litellm.utils._check_provider_match(model_info, "openai") is False
+
+
+def test_check_provider_match_none_value_matches_any_provider():
+    """
+    A ``litellm_provider`` of None must be treated the same as a missing
+    key: both mean "no provider constraint" and should match any
+    ``custom_llm_provider``.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/28336.
+    Before the fix, ``register_model`` persisted ``litellm_provider: None``
+    via ``get_model_info`` for deployments registered without a provider
+    (e.g. ``Router.add_deployment``), which caused ``_check_provider_match``
+    to drop custom pricing intermittently.
+    """
+    # Missing key already returned True; None must behave identically.
+    assert litellm.utils._check_provider_match({}, "openai") is True
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, "openai")
+        is True
+    )
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, "anthropic")
+        is True
+    )
+    # When custom_llm_provider is also None nothing constrains the match.
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
+    )
 
 
 def test_get_provider_rerank_config():
@@ -2817,6 +2860,128 @@ def test_generate_gcp_iam_access_token_import_error():
         assert "pip install google-cloud-iam" in str(exc_info.value)
 
 
+def test_generate_azure_ad_redis_token():
+    """Test _generate_azure_ad_redis_token with mocked Azure credential."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "azure-access-token-12345"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = Mock()
+    mock_azure_identity.ManagedIdentityCredential = Mock()
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token()
+
+        assert result == expected_token
+        mock_credential.get_token.assert_called_once_with(
+            "https://redis.azure.com/.default"
+        )
+
+
+def test_generate_azure_ad_redis_token_service_principal():
+    """Test _generate_azure_ad_redis_token with service principal credentials."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "sp-access-token-67890"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    mock_client_secret_credential = Mock(return_value=mock_credential)
+
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock()
+    mock_azure_identity.ClientSecretCredential = mock_client_secret_credential
+    mock_azure_identity.ManagedIdentityCredential = Mock()
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token(
+            azure_client_id="test-client-id",
+            azure_tenant_id="test-tenant-id",
+            azure_client_secret="test-secret",
+        )
+
+        assert result == expected_token
+        mock_client_secret_credential.assert_called_once_with(
+            client_id="test-client-id",
+            tenant_id="test-tenant-id",
+            client_secret="test-secret",
+        )
+
+
+def test_generate_azure_ad_redis_token_import_error():
+    """Test that _generate_azure_ad_redis_token raises ImportError when azure-identity is missing."""
+    from unittest.mock import patch
+    from litellm._redis import _generate_azure_ad_redis_token
+
+    with patch.dict("sys.modules", {"azure.identity": None}):
+        with pytest.raises(ImportError) as exc_info:
+            _generate_azure_ad_redis_token()
+
+        assert "azure-identity is required" in str(exc_info.value)
+
+
+def test_redis_client_logic_azure_ad_auth():
+    """Test that _get_redis_client_logic sets up Azure AD auth when REDIS_AZURE_AD_TOKEN=true.
+
+    Mocks ``azure.identity`` via ``sys.modules`` so the test does not require
+    the real ``azure-identity`` package to be installed in the CI environment.
+    """
+    from unittest.mock import Mock, patch
+
+    mock_credential = Mock()
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ManagedIdentityCredential = Mock(return_value=mock_credential)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _get_redis_client_logic
+
+        redis_kwargs = _get_redis_client_logic(
+            host="myredis.redis.cache.windows.net",
+            port="6380",
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+        assert "redis_connect_func" in redis_kwargs
+        # Marker for async paths to detect Azure AD auth
+        assert hasattr(redis_kwargs["redis_connect_func"], "_azure_redis_ad_token")
+        assert redis_kwargs["redis_connect_func"]._azure_redis_ad_token is True
+        # Live credential object (not raw secret) is exposed for async paths
+        assert hasattr(redis_kwargs["redis_connect_func"], "_azure_credential")
+        # Raw credentials must NOT be exposed on the function
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_client_secret")
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_client_id")
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_tenant_id")
+
+        # Azure-specific kwargs should be removed from the dict passed to Redis
+        assert "azure_redis_ad_token" not in redis_kwargs
+        assert "azure_client_id" not in redis_kwargs
+
+
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
@@ -2880,7 +3045,7 @@ def test_model_info_for_openrouter_kimi_k2_5():
 
 
 def test_gemini_embedding_2_ga_in_cost_map():
-    """GA gemini-embedding-2 entries align with preview multimodal unit pricing."""
+    """GA and Vertex preview gemini-embedding-2 entries align with multimodal unit pricing."""
     import json
     from pathlib import Path
 
@@ -2891,6 +3056,7 @@ def test_gemini_embedding_2_ga_in_cost_map():
     for key, provider in (
         ("gemini/gemini-embedding-2", "gemini"),
         ("vertex_ai/gemini-embedding-2", "vertex_ai"),
+        ("vertex_ai/gemini-embedding-2-preview", "vertex_ai"),
         ("gemini-embedding-2", "vertex_ai-embedding-models"),
     ):
         info = model_cost.get(key)
@@ -3984,3 +4150,51 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+class TestBedrockBaseModelLabelKeepsTools:
+    """Regression for #29618: a Bedrock deployment whose ``base_model`` is a friendly
+    label must not silently drop ``tools``/``tool_choice`` under ``drop_params``."""
+
+    TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+    def test_base_model_label_keeps_tools_with_drop_params(self):
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            custom_llm_provider="bedrock",
+            base_model="claude-haiku-4-5",
+            tools=self.TOOLS,
+            tool_choice="auto",
+            drop_params=True,
+        )
+
+        assert "tools" in result
+        assert "tool_choice" in result
+
+    def test_base_model_label_alone_drops_tools(self):
+        """Without the real model id the label resolves to no tool support, so passing
+        the label as ``model`` is exactly what dropped tools before the fix."""
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="claude-haiku-4-5",
+            custom_llm_provider="bedrock",
+            tools=self.TOOLS,
+            tool_choice="auto",
+            drop_params=True,
+        )
+
+        assert "tools" not in result

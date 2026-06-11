@@ -60,11 +60,20 @@ async def cache_ping():
     """
     litellm_cache_params: Dict[str, Any] = {}
     cleaned_cache_params: Dict[str, Any] = {}
+    if litellm.cache is None:
+        raise ProxyException(
+            message=safe_dumps(
+                {
+                    "message": "Cache not initialized. litellm.cache is None",
+                    "litellm_cache_params": "{}",
+                    "health_check_cache_params": "{}",
+                }
+            ),
+            type=ProxyErrorTypes.cache_ping_error,
+            param="cache_ping",
+            code=503,
+        )
     try:
-        if litellm.cache is None:
-            raise HTTPException(
-                status_code=503, detail="Cache not initialized. litellm.cache is None"
-            )
         litellm_cache_params = masker.mask_dict(vars(litellm.cache))
         # remove field that might reference itself
         litellm_cache_params.pop("cache", None)
@@ -97,14 +106,14 @@ async def cache_ping():
                 cache_type=str(litellm.cache.type),
                 litellm_cache_params=safe_dumps(litellm_cache_params),
             )
-    except Exception as e:
-        import traceback
-
+    except HTTPException:
+        raise
+    except Exception:
+        verbose_proxy_logger.exception("Cache health check failed")
         error_message = {
-            "message": f"Service Unhealthy ({str(e)})",
+            "message": "Service Unhealthy",
             "litellm_cache_params": safe_dumps(litellm_cache_params),
             "health_check_cache_params": safe_dumps(cleaned_cache_params),
-            "traceback": traceback.format_exc(),
         }
         raise ProxyException(
             message=safe_dumps(error_message),

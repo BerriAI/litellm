@@ -14,7 +14,6 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-
 _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "master_key",
     "prisma_client",
@@ -47,6 +46,18 @@ def _isolate_proxy_module_globals():
                     delattr(proxy_server, name)
             else:
                 setattr(proxy_server, name, value)
+
+
+@pytest.fixture(autouse=True)
+def _reset_graceful_shutdown_state():
+    """Graceful shutdown state is process-scoped; keep it from leaking between tests."""
+    from litellm.proxy.shutdown.graceful_shutdown_manager import (
+        GracefulShutdownManager,
+    )
+
+    GracefulShutdownManager.reset()
+    yield
+    GracefulShutdownManager.reset()
 
 
 def build_cache_config(enable_cache: bool = True) -> Optional[Dict]:

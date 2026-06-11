@@ -20,6 +20,7 @@ from litellm.types.utils import (
     ServerToolUse,
     Usage,
 )
+from litellm._logging import verbose_logger
 from litellm.utils import print_verbose, token_counter
 
 if TYPE_CHECKING:
@@ -78,6 +79,54 @@ class ChunkProcessor:
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params = chunk.get("_hidden_params", {})
         return model_response
+
+    @staticmethod
+    def apply_provider_assembled_streaming_metadata(
+        response: ModelResponse,
+        chunks: List[Any],
+        logging_obj: Optional[Any] = None,
+    ) -> None:
+        if not chunks:
+            return
+
+        model = getattr(response, "model", None)
+        if not model:
+            return
+
+        custom_llm_provider = None
+        if logging_obj is not None:
+            custom_llm_provider = logging_obj.model_call_details.get(
+                "custom_llm_provider"
+            )
+
+        try:
+            from litellm.litellm_core_utils.get_llm_provider_logic import (
+                get_llm_provider,
+            )
+            from litellm.types.utils import LlmProviders
+            from litellm.utils import ProviderConfigManager
+
+            if custom_llm_provider:
+                provider = LlmProviders(custom_llm_provider)
+            else:
+                _, provider_str, _, _ = get_llm_provider(model)
+                provider = LlmProviders(provider_str)
+
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model,
+                provider=provider,
+            )
+            if provider_config is not None:
+                provider_config.apply_assembled_streaming_response_metadata(
+                    response=response,
+                    chunks=chunks,
+                )
+        except Exception as e:
+            verbose_logger.debug(
+                "apply_provider_assembled_streaming_metadata failed for model=%s: %s",
+                model,
+                e,
+            )
 
     @staticmethod
     def _get_chunk_id(chunks: List[Dict[str, Any]]) -> str:

@@ -21,7 +21,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
     openai_messages_without_system,
+    openai_messages_without_tool,
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -73,6 +75,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             return data
 
         skip_system = effective_skip_system_message_for_guardrail(guardrail_to_apply)
+        skip_tool = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
@@ -91,6 +94,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 text_task_mappings=text_task_mappings,
                 tool_call_task_mappings=tool_call_task_mappings,
                 skip_system_message=skip_system,
+                skip_tool_message=skip_tool,
             )
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -102,11 +106,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
             structured_messages = self.get_structured_messages(data)
             if structured_messages:
-                inputs["structured_messages"] = (
-                    openai_messages_without_system(structured_messages)
-                    if skip_system
-                    else structured_messages
-                )
+                if skip_system:
+                    structured_messages = openai_messages_without_system(
+                        structured_messages
+                    )
+                if skip_tool:
+                    structured_messages = openai_messages_without_tool(
+                        structured_messages
+                    )
+                inputs["structured_messages"] = structured_messages
             # Pass tools (function definitions) to the guardrail
             tools = data.get("tools")
             if tools:
@@ -176,13 +184,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         text_task_mappings: List[Tuple[int, Optional[int]]],
         tool_call_task_mappings: List[Tuple[int, int]],
         skip_system_message: bool = False,
+        skip_tool_message: bool = False,
     ) -> None:
         """
         Extract text content, images, and tool calls from a message.
 
         Override this method to customize text/image/tool call extraction logic.
         """
-        if skip_system_message and str(message.get("role") or "").lower() == "system":
+        role = str(message.get("role") or "").lower()
+        if skip_system_message and role == "system":
+            return
+        if skip_tool_message and role == "tool":
             return
 
         content = message.get("content", None)
@@ -364,6 +376,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            returned_tool_calls = guardrailed_inputs.get("tool_calls")
+            guardrailed_tool_calls: List[Dict[str, Any]] = (
+                cast(List[Dict[str, Any]], returned_tool_calls)
+                if isinstance(returned_tool_calls, list)
+                and len(returned_tool_calls) == len(tool_calls_to_check)
+                else tool_calls_to_check
+            )
 
             # Step 3: Map guardrail responses back to original response structure
             if guardrailed_texts and texts_to_check:
@@ -374,10 +393,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 )
 
             # Step 4: Apply guardrailed tool calls back to response
-            if tool_calls_to_check:
+            if guardrailed_tool_calls:
                 await self._apply_guardrail_responses_to_output_tool_calls(
                     response=response,
-                    tool_calls=tool_calls_to_check,
+                    tool_calls=guardrailed_tool_calls,
                     task_mappings=tool_call_task_mappings,
                 )
 
@@ -736,10 +755,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         task_mappings: List[Tuple[int, int]],
     ) -> None:
         """
-        Apply guardrailed tool calls back to output response.
+        Apply guardrailed tool calls back to the output response.
 
-        The guardrail may have modified the tool_calls list in place,
-        so we apply the modified tool calls back to the original response.
+        The guardrail may return updated tool calls (either mutated in place or as
+        a new list), so we apply the provided tool calls back to the original
+        response.
 
         Override this method to customize how tool call responses are applied.
         """

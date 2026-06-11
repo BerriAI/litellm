@@ -42,7 +42,7 @@ def test_default_deployment_isolation():
     router.default_deployment = {  # type: ignore
         "model_name": "default-model",
         "litellm_params": {
-            "model": "gpt-3.5-turbo",  # This will be overwritten per request
+            "model": "gpt-5-mini",  # This will be overwritten per request
             "api_key": "test-key",  # This should be shared
             "custom_config": {  # Deep nested - will be SHARED
                 "nested_setting": "original",
@@ -66,7 +66,7 @@ def test_default_deployment_isolation():
     assert deployment2["litellm_params"]["model"] == "custom-model-2"  # type: ignore
 
     # Assert: Original default_deployment must remain unchanged (not mutated by requests)
-    assert router.default_deployment["litellm_params"]["model"] == "gpt-3.5-turbo"  # type: ignore
+    assert router.default_deployment["litellm_params"]["model"] == "gpt-5-mini"  # type: ignore
 
     # Assert: Shared fields should still be accessible in all copies
     assert deployment1["litellm_params"]["api_key"] == "test-key"  # type: ignore
