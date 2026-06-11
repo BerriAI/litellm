@@ -134,7 +134,9 @@ def _split_assembled_content_for_replay(content: Optional[str]) -> List[str]:
     non-empty ``s``. Returns ``[]`` for ``None`` / empty / all-whitespace
     content.
     """
-    if not content:
+    if not content or content.isspace():
+        # isspace() guard: on all-whitespace content the regex backtracks
+        # quadratically before returning no matches.
         return []
     return _REPLAY_CONTENT_SLICE_RE.findall(content)
 

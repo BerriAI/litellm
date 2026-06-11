@@ -68,6 +68,13 @@ def test_split_returns_empty_for_none_and_empty():
     assert _split_assembled_content_for_replay("") == []
 
 
+def test_split_returns_empty_for_whitespace_only():
+    # Must short-circuit before the regex: findall backtracks quadratically
+    # on all-whitespace input.
+    assert _split_assembled_content_for_replay("   ") == []
+    assert _split_assembled_content_for_replay(" \n\t" * 10000) == []
+
+
 # ---------- async generator ----------
 
 
