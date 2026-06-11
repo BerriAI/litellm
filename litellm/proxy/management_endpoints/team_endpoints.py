@@ -358,6 +358,42 @@ class TeamMemberBudgetHandler:
         data_dict.pop("team_member_tpm_limit", None)
 
     @staticmethod
+    async def clear_team_member_budget_fields(
+        team_table: LiteLLM_TeamTable,
+        user_api_key_dict: "UserAPIKeyAuth",
+        updated_kv: dict,
+        explicitly_set_fields: set,
+    ) -> dict:
+        """Clear explicitly-nulled fields on the team member budget row."""
+        from litellm.proxy._types import BudgetNewRequest
+        from litellm.proxy.management_endpoints.budget_management_endpoints import (
+            update_budget,
+        )
+
+        if team_table.metadata is None:
+            team_table.metadata = {}
+
+        team_member_budget_id = team_table.metadata.get("team_member_budget_id")
+        if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
+            budget_request = BudgetNewRequest(budget_id=team_member_budget_id)
+            if "team_member_budget" in explicitly_set_fields:
+                budget_request.max_budget = None
+            if "team_member_budget_duration" in explicitly_set_fields:
+                budget_request.budget_duration = None
+                budget_request.budget_reset_at = None
+            if "team_member_rpm_limit" in explicitly_set_fields:
+                budget_request.rpm_limit = None
+            if "team_member_tpm_limit" in explicitly_set_fields:
+                budget_request.tpm_limit = None
+            await update_budget(
+                budget_obj=budget_request,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+        return updated_kv
+
+    @staticmethod
     async def backfill_team_member_budget_entries(
         team_id: str,
         members_with_roles: List[Union[Member, dict]],
@@ -1872,11 +1908,25 @@ async def update_team(  # noqa: PLR0915
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
 
-        if TeamMemberBudgetHandler.should_create_budget(
-            team_member_budget=data.team_member_budget,
-            team_member_rpm_limit=data.team_member_rpm_limit,
-            team_member_tpm_limit=data.team_member_tpm_limit,
-            team_member_budget_duration=data.team_member_budget_duration,
+        _team_member_fields_in_request = {
+            field
+            for field in [
+                "team_member_budget",
+                "team_member_rpm_limit",
+                "team_member_tpm_limit",
+                "team_member_budget_duration",
+            ]
+            if field in updated_kv
+        }
+
+        if (
+            _team_member_fields_in_request
+            and TeamMemberBudgetHandler.should_create_budget(
+                team_member_budget=data.team_member_budget,
+                team_member_rpm_limit=data.team_member_rpm_limit,
+                team_member_tpm_limit=data.team_member_tpm_limit,
+                team_member_budget_duration=data.team_member_budget_duration,
+            )
         ):
             updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
                 team_table=existing_team_row,
@@ -1899,6 +1949,13 @@ async def update_team(  # noqa: PLR0915
                     team_member_budget_id=_backfill_budget_id,
                     prisma_client=prisma_client,
                 )
+        elif _team_member_fields_in_request:
+            updated_kv = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
+                team_table=existing_team_row,
+                user_api_key_dict=user_api_key_dict,
+                updated_kv=updated_kv,
+                explicitly_set_fields=_team_member_fields_in_request,
+            )
         else:
             TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
 
@@ -1987,6 +2044,8 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
 
         reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
         updated_kv["budget_reset_at"] = reset_at
+    elif "budget_duration" in updated_kv and updated_kv["budget_duration"] is None:
+        updated_kv["budget_reset_at"] = None
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time

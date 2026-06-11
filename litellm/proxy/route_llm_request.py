@@ -99,6 +99,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "avideo_extension": "/videos/extensions",
     "acreate_realtime_client_secret": "/realtime/client_secrets",
     "arealtime_calls": "/realtime/calls",
+    "acreate_realtime_transcription_session": "/realtime/transcription_sessions",
     "acreate_container": "/containers",
     "alist_containers": "/containers",
     "aretrieve_container": "/containers/{container_id}",
@@ -286,6 +287,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "_arealtime",  # private function for realtime API
         "acreate_realtime_client_secret",
         "arealtime_calls",
+        "acreate_realtime_transcription_session",
         "_aresponses_websocket",  # private function for responses WebSocket mode
         "aimage_edit",
         "agenerate_content",
@@ -455,6 +457,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             "adelete_run",
             "acreate_realtime_client_secret",
             "arealtime_calls",
+            "acreate_realtime_transcription_session",
         ]:
             # If a model is provided, get its credentials from the router
             model = data.get("model")

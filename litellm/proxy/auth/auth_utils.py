@@ -271,6 +271,11 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     # tokens) to the attacker's host, or coerces the proxy into
     # authenticating against the attacker's host with admin secrets.
     "aws_bedrock_runtime_endpoint",
+    # Bedrock project/workspace association. Deployments pin this to
+    # enforce a data-retention policy, so a caller-supplied value would
+    # re-route the request's retention and accounting to any project
+    # reachable with the deployment's shared AWS credentials.
+    "aws_bedrock_project_id",
     # Provider-specific endpoint overrides that flow into the outbound
     # request via ``optional_params``. Same threat as ``api_base``:
     # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
