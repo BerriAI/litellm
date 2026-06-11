@@ -169,26 +169,46 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
 
-        await self.prisma_client.db.litellm_managedobjecttable.upsert(
-            where={"unified_object_id": unified_object_id},
-            data={
-                "create": {
-                    "unified_object_id": unified_object_id,
-                    "file_object": file_object.model_dump_json(),
-                    "model_object_id": model_object_id,
-                    "file_purpose": file_purpose,
-                    "created_by": user_api_key_dict.user_id,
-                    "team_id": user_api_key_dict.team_id,
-                    "updated_by": user_api_key_dict.user_id,
-                    "status": file_object.status,
+        try:
+            from prisma.errors import UniqueViolationError
+        except ImportError:
+            UniqueViolationError = Exception  # type: ignore
+
+        try:
+            await self.prisma_client.db.litellm_managedobjecttable.upsert(
+                where={"unified_object_id": unified_object_id},
+                data={
+                    "create": {
+                        "unified_object_id": unified_object_id,
+                        "file_object": file_object.model_dump_json(),
+                        "model_object_id": model_object_id,
+                        "file_purpose": file_purpose,
+                        "created_by": user_api_key_dict.user_id,
+                        "team_id": user_api_key_dict.team_id,
+                        "updated_by": user_api_key_dict.user_id,
+                        "status": file_object.status,
+                    },
+                    "update": {
+                        "file_object": file_object.model_dump_json(),
+                        "status": file_object.status,
+                        "updated_by": user_api_key_dict.user_id,
+                    },  # FIX: Update status and file_object on every operation to keep state in sync
                 },
-                "update": {
-                    "file_object": file_object.model_dump_json(),
-                    "status": file_object.status,
-                    "updated_by": user_api_key_dict.user_id,
-                },  # FIX: Update status and file_object on every operation to keep state in sync
-            },
-        )
+            )
+        except UniqueViolationError:
+            # The upsert is keyed on `unified_object_id`, but the table also has a
+            # separate UNIQUE constraint on `model_object_id`. When the same
+            # provider object is re-registered under a NEW unified_object_id
+            # (e.g. a chat turn re-references an already-uploaded managed file),
+            # the "create" branch violates that constraint. The existing mapping
+            # is valid — re-registering is a benign no-op, not an error.
+            verbose_logger.debug(
+                "LiteLLM Managed %s object with model_object_id=%s is already "
+                "registered under another unified_object_id — skipping duplicate "
+                "registration.",
+                file_purpose,
+                model_object_id,
+            )
 
     async def get_unified_file_id(
         self, file_id: str, litellm_parent_otel_span: Optional[Span] = None
