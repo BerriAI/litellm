@@ -1,14 +1,18 @@
 """Failures as values.
 
 Nothing in this package raises. Fallible steps return ``Result`` and the
-FastAPI layer converts an error to an HTTP response at the edge. Every error
-carries a ``.summary`` so the edge has one human-readable string to surface.
+dispatch seam converts an error at the edge: a ``boundary`` or ``unsupported``
+error means "this request is outside v2's proven surface", and the seam falls
+back to v1 so no feature is ever silently lost. Every error carries a
+``.summary`` so the edge has one human-readable string to surface or log.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+
+from typing_extensions import assert_never
 
 from expression import Result, case, tag, tagged_union
 from expression.collections import Block
@@ -50,14 +54,15 @@ class TranslationError:
 
     @property
     def summary(self) -> str:
-        match self:
-            case TranslationError(tag="boundary", boundary=err):
-                return err.summary
-            case TranslationError(tag="unsupported", unsupported=reason):
-                return reason
-        return "unknown translation error"
+        match self.tag:
+            case "boundary":
+                return self.boundary.summary
+            case "unsupported":
+                return self.unsupported
+            case never:
+                assert_never(never)
 
 
-ParseResult = Result[ChatRequest, BoundaryError]
+ParseResult = Result[ChatRequest, TranslationError]
 
 TranslateResult = Result[Body, TranslationError]

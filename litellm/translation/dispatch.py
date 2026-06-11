@@ -16,9 +16,7 @@ from expression import case, tag, tagged_union
 
 from .ir import UNIT, Unit
 
-InboundSchema = Literal[
-    "openai_chat", "anthropic_messages", "google_genai", "responses", "completions"
-]
+InboundSchema = Literal["openai_chat", "anthropic_messages", "google_genai", "responses", "completions"]
 
 Provider = Literal[
     "anthropic",

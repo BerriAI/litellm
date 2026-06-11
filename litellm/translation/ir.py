@@ -3,8 +3,11 @@
 This is the hub of the hub-and-spoke: inbound parsers map each accepted
 request schema into these types, and provider serializers map these types
 onto a wire format. Everything here is immutable. Product types are frozen
-dataclasses, sum types are Expression tagged unions matched with ``match``,
-and collections are Expression ``Block``/``Map`` rather than ``list``/``dict``.
+dataclasses, sum types are Expression tagged unions matched on their
+``Literal`` tag (with ``assert_never`` on the final arm), and collections are
+Expression ``Block``s. Boundary-validated JSON the package never inspects
+(tool arguments, JSON schemas) rides as an opaque ``JsonBlob`` instead of
+being recursively frozen, so the hot path does no freeze/thaw churn.
 Nothing in this module performs I/O or imports a provider.
 """
 
@@ -18,11 +21,12 @@ from expression.collections import Block, Map
 
 Json = Union[None, bool, int, float, str, "Block[Json]", "Map[str, Json]"]
 
-PlainJson = Union[
-    None, bool, int, float, str, "list[PlainJson]", "dict[str, PlainJson]"
-]
+PlainJson = Union[None, bool, int, float, str, "list[PlainJson]", "dict[str, PlainJson]"]
 
 Body = Dict[str, PlainJson]
+
+Sampling = Union[int, float]
+"""A numeric parameter kept as the caller sent it (int stays int on the wire)."""
 
 
 @dataclass(frozen=True)
@@ -34,37 +38,116 @@ UNIT = Unit()
 
 
 @dataclass(frozen=True)
+class JsonBlob:
+    """Boundary-validated plain JSON the package treats as opaque.
+
+    Built only by ``boundary.as_plain_json``, which deep-copies and checks
+    every leaf, so the wrapped value has no aliases outside the package.
+    Nothing in the package mutates it; serializers deep-copy on emit because
+    returned bodies are plain dicts that downstream v1-era code may mutate.
+    """
+
+    value: PlainJson
+
+
+@dataclass(frozen=True)
+class CacheControl:
+    type: str
+    ttl: Option[str]
+
+
+@dataclass(frozen=True)
+class Base64Source:
+    media_type: str
+    data: str
+
+
+@dataclass(frozen=True)
+class UrlSource:
+    url: str
+
+
+@tagged_union(frozen=True)
+class ImageSource:
+    tag: Literal["base64", "url"] = tag()
+
+    base64: Base64Source = case()
+    url: UrlSource = case()
+
+    @staticmethod
+    def of_base64(value: Base64Source) -> "ImageSource":
+        return ImageSource(base64=value)
+
+    @staticmethod
+    def of_url(value: UrlSource) -> "ImageSource":
+        return ImageSource(url=value)
+
+
+@dataclass(frozen=True)
 class Text:
     text: str
+    cache: Option[CacheControl]
 
 
 @dataclass(frozen=True)
 class Image:
-    media_type: str
-    data: str
+    source: ImageSource
+    cache: Option[CacheControl]
 
 
 @dataclass(frozen=True)
 class ToolUse:
     id: str
     name: str
-    arguments: Map[str, Json]
+    arguments: JsonBlob
+    cache: Option[CacheControl]
+
+
+@tagged_union(frozen=True)
+class ToolResultContent:
+    tag: Literal["text", "parts"] = tag()
+
+    text: str = case()
+    parts: Block[Text] = case()
+
+    @staticmethod
+    def of_text(value: str) -> "ToolResultContent":
+        return ToolResultContent(text=value)
+
+    @staticmethod
+    def of_parts(value: Block[Text]) -> "ToolResultContent":
+        return ToolResultContent(parts=value)
 
 
 @dataclass(frozen=True)
 class ToolResult:
     tool_use_id: str
-    content: str
+    content: ToolResultContent
+    cache: Option[CacheControl]
+
+
+@dataclass(frozen=True)
+class Thinking:
+    thinking: str
+    signature: Option[str]
+    cache: Option[CacheControl]
+
+
+@dataclass(frozen=True)
+class RedactedThinking:
+    data: str
 
 
 @tagged_union(frozen=True)
 class ContentBlock:
-    tag: Literal["text", "image", "tool_use", "tool_result"] = tag()
+    tag: Literal["text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking"] = tag()
 
     text: Text = case()
     image: Image = case()
     tool_use: ToolUse = case()
     tool_result: ToolResult = case()
+    thinking: Thinking = case()
+    redacted_thinking: RedactedThinking = case()
 
     @staticmethod
     def of_text(value: Text) -> "ContentBlock":
@@ -82,6 +165,14 @@ class ContentBlock:
     def of_tool_result(value: ToolResult) -> "ContentBlock":
         return ContentBlock(tool_result=value)
 
+    @staticmethod
+    def of_thinking(value: Thinking) -> "ContentBlock":
+        return ContentBlock(thinking=value)
+
+    @staticmethod
+    def of_redacted_thinking(value: RedactedThinking) -> "ContentBlock":
+        return ContentBlock(redacted_thinking=value)
+
 
 Role = Literal["user", "assistant"]
 
@@ -95,13 +186,15 @@ class Message:
 @dataclass(frozen=True)
 class SystemText:
     text: str
+    cache: Option[CacheControl]
 
 
 @dataclass(frozen=True)
 class ToolDef:
     name: str
     description: Option[str]
-    parameters: Map[str, Json]
+    parameters: Option[JsonBlob]
+    cache: Option[CacheControl]
 
 
 @tagged_union(frozen=True)
@@ -131,10 +224,66 @@ class ToolChoice:
 
 
 @dataclass(frozen=True)
+class JsonSchemaSpec:
+    schema: JsonBlob
+
+
+@tagged_union(frozen=True)
+class ResponseFormat:
+    tag: Literal["text", "json_object", "json_schema"] = tag()
+
+    text: Unit = case()
+    json_object: Unit = case()
+    json_schema: JsonSchemaSpec = case()
+
+    @staticmethod
+    def of_text() -> "ResponseFormat":
+        return ResponseFormat(text=UNIT)
+
+    @staticmethod
+    def of_json_object() -> "ResponseFormat":
+        return ResponseFormat(json_object=UNIT)
+
+    @staticmethod
+    def of_json_schema(value: JsonSchemaSpec) -> "ResponseFormat":
+        return ResponseFormat(json_schema=value)
+
+
+@dataclass(frozen=True)
+class ThinkingEnabled:
+    budget_tokens: Option[int]
+
+
+@tagged_union(frozen=True)
+class ThinkingParam:
+    tag: Literal["enabled", "disabled", "adaptive"] = tag()
+
+    enabled: ThinkingEnabled = case()
+    disabled: Unit = case()
+    adaptive: Unit = case()
+
+    @staticmethod
+    def of_enabled(budget_tokens: Option[int]) -> "ThinkingParam":
+        return ThinkingParam(enabled=ThinkingEnabled(budget_tokens=budget_tokens))
+
+    @staticmethod
+    def of_disabled() -> "ThinkingParam":
+        return ThinkingParam(disabled=UNIT)
+
+    @staticmethod
+    def of_adaptive() -> "ThinkingParam":
+        return ThinkingParam(adaptive=UNIT)
+
+
+ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh", "max", "none"]
+
+
+@dataclass(frozen=True)
 class InferenceParams:
     max_tokens: Option[int]
-    temperature: Option[float]
-    top_p: Option[float]
+    temperature: Option[Sampling]
+    top_p: Option[Sampling]
+    top_k: Option[Sampling]
     stop: Block[str]
 
 
@@ -145,14 +294,15 @@ class ChatRequest:
     messages: Block[Message]
     tools: Block[ToolDef]
     tool_choice: Option[ToolChoice]
+    parallel_tool_calls: Option[bool]
+    response_format: Option[ResponseFormat]
+    thinking: Option[ThinkingParam]
+    reasoning_effort: Option[ReasoningEffort]
+    user: Option[str]
     params: InferenceParams
     stream: bool
 
 
 def has_tool_blocks(messages: Block[Message]) -> bool:
     """True when any message carries a tool_use or tool_result content block."""
-    return any(
-        block.tag in ("tool_use", "tool_result")
-        for message in messages
-        for block in message.content
-    )
+    return any(block.tag in ("tool_use", "tool_result") for message in messages for block in message.content)

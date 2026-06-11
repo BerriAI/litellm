@@ -1,39 +1,36 @@
-"""Async-first composition and the public translation entry point.
+"""Composition and the public translate entry point.
 
-For this slice the inbound schema is OpenAI chat and the only ported provider
-is Anthropic. ``translate_chat_request`` composes the inbound parse with the
-provider serialize, lifting the boundary failure into a ``TranslationError`` so
-the whole pipeline returns one ``Result`` and never raises.
+``translate_chat_request`` composes the inbound parse with the provider
+serialize under injected deps; the whole pipeline returns one ``Result`` and
+never raises. Any error means "outside v2's proven surface" and the dispatch
+seam falls back to v1, so no request ever loses a feature silently.
 """
 
 from __future__ import annotations
 
 from types import MappingProxyType
-from typing import Callable, Dict, Mapping
+from typing import Callable, Mapping
 
-from expression import Error
+from expression import Error, Result
 
+from ..deps import TranslationDeps
 from ..dispatch import Provider
 from ..errors import TranslateResult, TranslationError
 from ..inbound.openai_chat import parse_request
 from ..ir import Body, ChatRequest
 from ..providers.anthropic import serialize_request
 
-_SERIALIZERS: Mapping[Provider, Callable[[ChatRequest], Body]] = MappingProxyType(
+_Serializer = Callable[[ChatRequest, TranslationDeps], Result[Body, TranslationError]]
+
+_SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
     {
         "anthropic": serialize_request,
     }
 )
 
 
-def translate_chat_request(
-    raw: Dict[str, object], provider: Provider
-) -> TranslateResult:
+def translate_chat_request(raw: Mapping[str, object], provider: Provider, deps: TranslationDeps) -> TranslateResult:
     serializer = _SERIALIZERS.get(provider)
     if serializer is None:
-        return Error(
-            TranslationError.of_unsupported(
-                f"provider {provider!r} has no v2 chat serializer yet"
-            )
-        )
-    return parse_request(raw).map(serializer).map_error(TranslationError.of_boundary)
+        return Error(TranslationError.of_unsupported(f"provider {provider!r} has no v2 chat serializer yet"))
+    return parse_request(raw).bind(lambda request: serializer(request, deps))

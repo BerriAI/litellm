@@ -1,414 +1,247 @@
 """Parse an OpenAI chat-completions request body into the IR.
 
-The body dict is untyped, so every field is checked and field-level problems
-accumulate into a ``BoundaryError`` rather than raising. Values are extracted
-best-effort; they are only handed to ``ChatRequest`` when no failure was
-recorded, so a partially-parsed value is never observed by a caller.
+``boundary.parse`` validates the untyped body against the frozen wire models
+(accumulating every field failure, arktype-style); this module then converts
+the validated models into IR values, with the residual semantic checks that
+need more than shape. Top-level ``null`` fields are stripped first because the
+v1 seam treats an explicit ``null`` exactly like an absent parameter.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from typing import Dict, Tuple, TypeVar
+from typing import List, Mapping, Optional, TypeVar, Union
 
 from expression import Error, Nothing, Ok, Option, Result, Some
-from expression.collections import Block, Map
+from expression.collections import Block
 
-from ...boundary import as_mapping, as_sequence, as_str, freeze
-from ...errors import BoundaryError, ParseResult
+from ... import boundary
+from ...errors import ParseResult, TranslationError
 from ...ir import (
     ChatRequest,
-    ContentBlock,
-    Image,
     InferenceParams,
-    Json,
-    Message,
-    Role,
-    SystemText,
-    Text,
+    JsonBlob,
+    JsonSchemaSpec,
+    ReasoningEffort,
+    ResponseFormat,
+    ThinkingParam,
     ToolChoice,
     ToolDef,
-    ToolResult,
-    ToolUse,
+)
+from .messages import cache_of, convert_messages
+from .schema import (
+    ChatRequestIn,
+    ReasoningEffortObjectIn,
+    ResponseFormatIn,
+    ThinkingIn,
+    ToolChoiceNamedIn,
+    ToolChoiceTypeOnlyIn,
+    ToolIn,
 )
 
 _T = TypeVar("_T")
 
-_EMPTY_STR: Block[str] = Block.empty()
+
+def parse_request(raw: Mapping[str, object]) -> ParseResult:
+    present = {key: value for key, value in raw.items() if value is not None}
+    match boundary.parse(ChatRequestIn, present):
+        case Result(tag="ok", ok=wire):
+            return _to_ir(wire)
+        case Result(error=err):
+            return Error(err)
 
 
-@dataclass(frozen=True)
-class _ParsedMessage:
-    systems: Block[SystemText]
-    entries: Block[Message]
-    failures: Block[str]
-
-
-def parse_request(raw: Dict[str, object]) -> ParseResult:
-    model, model_fail = _parse_model(raw.get("model"))
-    systems, messages, message_fail = _parse_messages(raw.get("messages"))
-    tools, tools_fail = _parse_tools(raw.get("tools"))
-    tool_choice, tool_choice_fail = _parse_tool_choice(raw.get("tool_choice"))
-    params = _parse_params(raw)
-    stream = raw.get("stream") is True
-
-    failures = _concat(Block.of(model_fail, message_fail, tools_fail, tool_choice_fail))
-    if len(failures) > 0:
-        return Error(BoundaryError.of(failures))
-
+def _to_ir(wire: ChatRequestIn) -> ParseResult:
+    if (
+        isinstance(wire.tool_choice, ToolChoiceTypeOnlyIn)
+        and wire.tool_choice.type == "none"
+        and wire.parallel_tool_calls is not None
+    ):
+        # v1 treats string-"none" and {"type": "none"} differently when
+        # parallel_tool_calls rides along; only the string form is ported.
+        return Error(
+            TranslationError.of_unsupported("tool_choice {'type': 'none'} with parallel_tool_calls; v1 handles it")
+        )
+    match convert_messages(wire.messages):
+        case Result(tag="ok", ok=(systems, messages)):
+            pass
+        case Result(error=err):
+            return Error(err)
+    match _parse_tools(wire.tools):
+        case Result(tag="ok", ok=tools):
+            pass
+        case Result(error=tools_err):
+            return Error(tools_err)
+    match _parse_response_format(wire.response_format):
+        case Result(tag="ok", ok=response_format):
+            pass
+        case Result(error=rf_err):
+            return Error(rf_err)
+    match _parse_thinking(wire.thinking):
+        case Result(tag="ok", ok=thinking):
+            pass
+        case Result(error=thinking_err):
+            return Error(thinking_err)
     return Ok(
         ChatRequest(
-            model=model,
+            model=wire.model,
             system=systems,
             messages=messages,
             tools=tools,
-            tool_choice=tool_choice,
-            params=params,
-            stream=stream,
+            tool_choice=_parse_tool_choice(wire.tool_choice),
+            parallel_tool_calls=_option(wire.parallel_tool_calls),
+            response_format=response_format,
+            thinking=thinking,
+            reasoning_effort=_parse_reasoning_effort(wire.reasoning_effort),
+            user=_option(wire.user),
+            params=_parse_params(wire),
+            stream=wire.stream is True,
         )
     )
 
 
-def _parse_model(value: object) -> Tuple[str, Block[str]]:
-    match as_str(value):
-        case Option(tag="some", some=model):
-            return model, _EMPTY_STR
-        case _:
-            return "", Block.of("field 'model' is required and must be a string")
+def _option(value: Optional[_T]) -> Option[_T]:
+    return Some(value) if value is not None else Nothing
 
 
-def _parse_messages(
-    value: object,
-) -> Tuple[Block[SystemText], Block[Message], Block[str]]:
-    match as_sequence(value):
-        case Option(tag="some", some=items):
-            parsed = Block.of_seq(_parse_one_message(item) for item in items)
-            systems = _concat(parsed.map(lambda p: p.systems))
-            entries = _merge_adjacent(_concat(parsed.map(lambda p: p.entries)))
-            failures = _concat(parsed.map(lambda p: p.failures))
-            return systems, entries, failures
-        case _:
-            return (
-                Block.empty(),
-                Block.empty(),
-                Block.of("field 'messages' is required and must be an array"),
-            )
+def _parse_tools(
+    tools: Optional[List[ToolIn]],
+) -> Result[Block[ToolDef], TranslationError]:
+    if tools is None:
+        return Ok(Block.empty())
+    defs: List[ToolDef] = []
+    for tool in tools:
+        match _parse_tool(tool):
+            case Result(tag="ok", ok=tool_def):
+                defs.append(tool_def)  # nosemgrep: translation-no-mutation
+            case Result(error=err):
+                return Error(err)
+    return Ok(Block.of_seq(defs))
 
 
-def _parse_one_message(value: object) -> _ParsedMessage:
-    match as_mapping(value):
-        case Option(tag="some", some=message):
-            return _route_message(message)
-        case _:
-            return _ParsedMessage(
-                Block.empty(), Block.empty(), Block.of("each message must be an object")
-            )
-
-
-def _route_message(message: Dict[str, object]) -> _ParsedMessage:
-    role = message.get("role")
-    if role == "system":
-        return _ParsedMessage(
-            _parse_system_content(message.get("content")), Block.empty(), _EMPTY_STR
+def _parse_tool(tool: ToolIn) -> Result[ToolDef, TranslationError]:
+    extras = (
+        tool.defer_loading,
+        tool.allowed_callers,
+        tool.input_examples,
+        tool.function.defer_loading,
+        tool.function.allowed_callers,
+        tool.function.input_examples,
+    )
+    if any(extra is not None for extra in extras):
+        return Error(
+            TranslationError.of_unsupported("tool defer_loading/allowed_callers/input_examples; v1 handles them")
         )
-    if role == "user":
-        content, failures = _parse_message_content(message.get("content"))
-        return _entry("user", content, failures)
-    if role == "assistant":
-        content, failures = _parse_assistant_content(message)
-        return _entry("assistant", content, failures)
-    if role == "tool":
-        content, failures = _parse_tool_message(message)
-        return _entry("user", content, failures)
-    return _ParsedMessage(
-        Block.empty(), Block.empty(), Block.of(f"unsupported message role: {role!r}")
-    )
+    cache = cache_of(tool.cache_control)
+    if cache.is_none():
+        cache = cache_of(tool.function.cache_control)
+    match _parse_tool_parameters(tool.function.parameters):
+        case Result(tag="ok", ok=parameters):
+            return Ok(
+                ToolDef(
+                    name=tool.function.name,
+                    description=_option(tool.function.description),
+                    parameters=parameters,
+                    cache=cache,
+                )
+            )
+        case Result(error=err):
+            return Error(err)
 
 
-def _entry(
-    role: Role, content: Block[ContentBlock], failures: Block[str]
-) -> _ParsedMessage:
-    return _ParsedMessage(
-        Block.empty(), Block.of(Message(role=role, content=content)), failures
-    )
+def _parse_tool_parameters(
+    parameters: Optional[object],
+) -> Result[Option[JsonBlob], TranslationError]:
+    if parameters is None:
+        return Ok(Nothing)
+    if not isinstance(parameters, dict):
+        return Error(TranslationError.of_unsupported("non-object tool parameters; v1 handles them"))
+    if "definitions" in parameters or "components" in parameters:
+        return Error(TranslationError.of_unsupported("legacy $defs (definitions/components) need v1's schema inlining"))
+    match boundary.as_plain_json(parameters):
+        case Result(tag="ok", ok=copied):
+            return Ok(Some(JsonBlob(value=copied)))
+        case Result(error=reason):
+            return Error(TranslationError.of_unsupported(f"tool parameters: {reason}"))
 
 
-def _parse_system_content(value: object) -> Block[SystemText]:
-    match as_str(value):
-        case Option(tag="some", some=text):
-            return Block.of(SystemText(text=text)) if text else Block.empty()
-        case _:
-            pass
-    match as_sequence(value):
-        case Option(tag="some", some=parts):
-            return Block.of_seq(parts).choose(_system_text_of)
-        case _:
-            return Block.empty()
-
-
-def _system_text_of(part: object) -> Option[SystemText]:
-    text = as_mapping(part).bind(lambda m: as_str(m.get("text")))
-    match text:
-        case Option(tag="some", some=value) if value:
-            return Some(SystemText(text=value))
+def _parse_tool_choice(
+    choice: Union[str, ToolChoiceNamedIn, ToolChoiceTypeOnlyIn, None],
+) -> Option[ToolChoice]:
+    match choice:
+        case None:
+            return Nothing
+        case "auto" | ToolChoiceTypeOnlyIn(type="auto"):
+            return Some(ToolChoice.of_auto())
+        case "required" | ToolChoiceTypeOnlyIn(type="required" | "any"):
+            return Some(ToolChoice.of_required())
+        case "none" | ToolChoiceTypeOnlyIn(type="none"):
+            return Some(ToolChoice.of_none())
+        case ToolChoiceNamedIn() as named:
+            return Some(ToolChoice.of_specific(named.function.name))
         case _:
             return Nothing
 
 
-def _parse_message_content(value: object) -> Tuple[Block[ContentBlock], Block[str]]:
+def _parse_response_format(
+    value: Optional[ResponseFormatIn],
+) -> Result[Option[ResponseFormat], TranslationError]:
     if value is None:
-        return Block.empty(), _EMPTY_STR
-    match as_str(value):
-        case Option(tag="some", some=text):
-            blocks = (
-                Block.of(ContentBlock.of_text(Text(text=text)))
-                if text
-                else Block.empty()
-            )
-            return blocks, _EMPTY_STR
-        case _:
-            pass
-    match as_sequence(value):
-        case Option(tag="some", some=parts):
-            return _split(Block.of_seq(_parse_content_part(part) for part in parts))
-        case _:
-            return Block.empty(), Block.of(
-                "message content must be a string or an array"
-            )
+        return Ok(Nothing)
+    if value.type == "text":
+        return Ok(Some(ResponseFormat.of_text()))
+    if value.type == "json_object":
+        return Ok(Some(ResponseFormat.of_json_object()))
+    if value.json_schema is None:
+        return Error(TranslationError.of_unsupported("response_format json_schema without a schema; v1 handles it"))
+    match boundary.as_plain_json(value.json_schema.json_schema):
+        case Result(tag="ok", ok=copied):
+            if not isinstance(copied, dict):
+                return Error(TranslationError.of_unsupported("non-object response_format schema; v1 handles it"))
+            return Ok(Some(ResponseFormat.of_json_schema(JsonSchemaSpec(schema=JsonBlob(value=copied)))))
+        case Result(error=reason):
+            return Error(TranslationError.of_unsupported(f"response_format schema: {reason}"))
 
 
-def _parse_content_part(part: object) -> Result[ContentBlock, str]:
-    match as_mapping(part):
-        case Option(tag="some", some=mapping):
-            return _content_block_of(mapping)
-        case _:
-            return Error("each content part must be an object")
-
-
-def _content_block_of(part: Dict[str, object]) -> Result[ContentBlock, str]:
-    kind = part.get("type")
-    if kind == "text":
-        return (
-            as_str(part.get("text"))
-            .to_result("text content part is missing 'text'")
-            .map(lambda text: ContentBlock.of_text(Text(text=text)))
+def _parse_thinking(
+    value: Optional[ThinkingIn],
+) -> Result[Option[ThinkingParam], TranslationError]:
+    if value is None:
+        return Ok(Nothing)
+    if value.type == "enabled":
+        return Ok(Some(ThinkingParam.of_enabled(_option(value.budget_tokens))))
+    if value.budget_tokens is not None:
+        return Error(
+            TranslationError.of_unsupported(f"thinking type={value.type!r} with budget_tokens; v1 forwards it")
         )
-    if kind == "image_url":
-        return _parse_image(part.get("image_url")).map(ContentBlock.of_image)
-    return Error(f"unsupported content part type: {kind!r}")
+    if value.type == "disabled":
+        return Ok(Some(ThinkingParam.of_disabled()))
+    return Ok(Some(ThinkingParam.of_adaptive()))
 
 
-def _parse_image(value: object) -> Result[Image, str]:
-    url = as_mapping(value).bind(lambda m: as_str(m.get("url")))
-    match url:
-        case Option(tag="some", some=data_url):
-            return _parse_data_uri(data_url)
-        case _:
-            return Error("image_url is missing a 'url' string")
-
-
-def _parse_data_uri(url: str) -> Result[Image, str]:
-    if not url.startswith("data:"):
-        return Error("only base64 data: image URLs are supported")
-    header, _, data = url.partition(",")
-    media_type = header[len("data:") :].split(";")[0]
-    return Ok(Image(media_type=media_type, data=data))
-
-
-def _parse_assistant_content(
-    message: Dict[str, object],
-) -> Tuple[Block[ContentBlock], Block[str]]:
-    content, content_fail = _parse_message_content(message.get("content"))
-    tool_uses, tool_fail = _parse_tool_calls(message.get("tool_calls"))
-    return content + tool_uses, content_fail + tool_fail
-
-
-def _parse_tool_calls(value: object) -> Tuple[Block[ContentBlock], Block[str]]:
+def _parse_reasoning_effort(
+    value: Union[str, ReasoningEffortObjectIn, None],
+) -> Option[ReasoningEffort]:
     if value is None:
-        return Block.empty(), _EMPTY_STR
-    match as_sequence(value):
-        case Option(tag="some", some=calls):
-            return _split(Block.of_seq(_parse_tool_call(call) for call in calls))
-        case _:
-            return Block.empty(), Block.of("'tool_calls' must be an array")
-
-
-def _parse_tool_call(value: object) -> Result[ContentBlock, str]:
-    match as_mapping(value):
-        case Option(tag="some", some=call):
-            return _tool_use_of(call)
-        case _:
-            return Error("each tool_call must be an object")
-
-
-def _tool_use_of(call: Dict[str, object]) -> Result[ContentBlock, str]:
-    function = as_mapping(call.get("function")).default_value({})
-    call_id = as_str(call.get("id"))
-    name = as_str(function.get("name"))
-    match (call_id, name):
-        case (Option(tag="some", some=cid), Option(tag="some", some=fname)):
-            return _parse_arguments(function.get("arguments")).map(
-                lambda args: ContentBlock.of_tool_use(
-                    ToolUse(id=cid, name=fname, arguments=args)
-                )
-            )
-        case _:
-            return Error("tool_call requires 'id' and 'function.name'")
-
-
-def _parse_arguments(value: object) -> Result[Map[str, Json], str]:
-    if not isinstance(value, str):
-        return Error("tool_call.function.arguments must be a JSON string")
-    try:
-        loaded = json.loads(value) if value else {}
-    except json.JSONDecodeError as exc:
-        return Error(f"tool_call.function.arguments is not valid JSON: {exc.msg}")
-    frozen = freeze(loaded)
-    if not isinstance(frozen, Map):
-        return Error("tool_call.function.arguments must be a JSON object")
-    return Ok(frozen)
-
-
-def _parse_tool_message(
-    message: Dict[str, object],
-) -> Tuple[Block[ContentBlock], Block[str]]:
-    tool_use_id = as_str(message.get("tool_call_id"))
-    content = as_str(message.get("content"))
-    match (tool_use_id, content):
-        case (Option(tag="some", some=tid), Option(tag="some", some=text)):
-            return (
-                Block.of(
-                    ContentBlock.of_tool_result(
-                        ToolResult(tool_use_id=tid, content=text)
-                    )
-                ),
-                _EMPTY_STR,
-            )
-        case _:
-            return Block.empty(), Block.of(
-                "tool message requires 'tool_call_id' and string 'content'"
-            )
-
-
-def _parse_tools(value: object) -> Tuple[Block[ToolDef], Block[str]]:
-    if value is None:
-        return Block.empty(), _EMPTY_STR
-    match as_sequence(value):
-        case Option(tag="some", some=tools):
-            return _split(Block.of_seq(_parse_tool(tool) for tool in tools))
-        case _:
-            return Block.empty(), Block.of("'tools' must be an array")
-
-
-def _parse_tool(value: object) -> Result[ToolDef, str]:
-    function = as_mapping(value).bind(lambda m: as_mapping(m.get("function")))
-    match function:
-        case Option(tag="some", some=fn):
-            return _tool_def_of(fn)
-        case _:
-            return Error("each tool must have a 'function' object")
-
-
-def _tool_def_of(function: Dict[str, object]) -> Result[ToolDef, str]:
-    match as_str(function.get("name")):
-        case Option(tag="some", some=name):
-            parameters = freeze(
-                function.get("parameters") or {"type": "object", "properties": {}}
-            )
-            schema = parameters if isinstance(parameters, Map) else Map.empty()
-            return Ok(
-                ToolDef(
-                    name=name,
-                    description=as_str(function.get("description")),
-                    parameters=schema,
-                )
-            )
-        case _:
-            return Error("tool function requires a 'name'")
-
-
-def _parse_tool_choice(value: object) -> Tuple[Option[ToolChoice], Block[str]]:
-    if value is None:
-        return Nothing, _EMPTY_STR
-    if value == "auto":
-        return Some(ToolChoice.of_auto()), _EMPTY_STR
-    if value == "required":
-        return Some(ToolChoice.of_required()), _EMPTY_STR
-    if value == "none":
-        return Some(ToolChoice.of_none()), _EMPTY_STR
-    match as_mapping(value):
-        case Option(tag="some", some=mapping):
-            return _named_tool_choice(mapping)
-        case _:
-            return Nothing, Block.of(f"unsupported tool_choice: {value!r}")
-
-
-def _named_tool_choice(
-    mapping: Dict[str, object],
-) -> Tuple[Option[ToolChoice], Block[str]]:
-    name = as_mapping(mapping.get("function")).bind(lambda m: as_str(m.get("name")))
-    match name:
-        case Option(tag="some", some=tool_name):
-            return Some(ToolChoice.of_specific(tool_name)), _EMPTY_STR
-        case _:
-            return Nothing, Block.of("tool_choice object requires 'function.name'")
-
-
-def _parse_params(raw: Dict[str, object]) -> InferenceParams:
-    return InferenceParams(
-        max_tokens=_as_int(raw.get("max_tokens")).or_else(
-            _as_int(raw.get("max_completion_tokens"))
-        ),
-        temperature=_as_float(raw.get("temperature")),
-        top_p=_as_float(raw.get("top_p")),
-        stop=_parse_stop(raw.get("stop")),
-    )
-
-
-def _parse_stop(value: object) -> Block[str]:
-    match as_str(value):
-        case Option(tag="some", some=text):
-            return Block.of(text)
-        case _:
-            pass
-    match as_sequence(value):
-        case Option(tag="some", some=items):
-            return Block.of_seq(item for item in items if isinstance(item, str))
-        case _:
-            return Block.empty()
-
-
-def _as_int(value: object) -> Option[int]:
-    return (
-        Some(value)
-        if isinstance(value, int) and not isinstance(value, bool)
-        else Nothing
-    )
-
-
-def _as_float(value: object) -> Option[float]:
-    if isinstance(value, bool):
         return Nothing
-    return Some(float(value)) if isinstance(value, (int, float)) else Nothing
+    if isinstance(value, ReasoningEffortObjectIn):
+        return Some(value.effort)
+    return Some(value)
 
 
-def _split(results: Block[Result[_T, str]]) -> Tuple[Block[_T], Block[str]]:
-    oks = results.choose(lambda r: Some(r.ok) if r.is_ok() else Nothing)
-    errors = results.choose(lambda r: Some(r.error) if r.is_error() else Nothing)
-    return oks, errors
+def _parse_params(wire: ChatRequestIn) -> InferenceParams:
+    max_tokens = wire.max_tokens if wire.max_tokens is not None else wire.max_completion_tokens
+    return InferenceParams(
+        max_tokens=_option(max_tokens),
+        temperature=_option(wire.temperature),
+        top_p=_option(wire.top_p),
+        top_k=_option(wire.top_k),
+        stop=_parse_stop(wire.stop),
+    )
 
 
-def _concat(blocks: Block[Block[_T]]) -> Block[_T]:
-    return blocks.fold(lambda acc, block: acc + block, Block.empty())
-
-
-def _merge_adjacent(entries: Block[Message]) -> Block[Message]:
-    def folder(acc: Block[Message], message: Message) -> Block[Message]:
-        if len(acc) > 0 and acc[-1].role == message.role:
-            last = acc[-1]
-            merged = Message(role=last.role, content=last.content + message.content)
-            return acc.take(len(acc) - 1) + Block.of(merged)
-        return acc + Block.of(message)
-
-    return entries.fold(folder, Block.empty())
+def _parse_stop(value: Union[str, List[str], None]) -> Block[str]:
+    if value is None:
+        return Block.empty()
+    if isinstance(value, str):
+        return Block.of_seq([value])
+    return Block.of_seq(value)

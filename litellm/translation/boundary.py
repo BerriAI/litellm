@@ -1,46 +1,70 @@
 """The typed boundary.
 
 Untyped data enters the package here and nowhere else: the FastAPI body dict
-on the way in, provider response JSON on the way out. ``freeze`` lifts plain
-JSON into the immutable ``Block``/``Map`` representation the IR is built from,
-``thaw`` lowers it back to the plain ``list``/``dict`` a serializer emits, and
-the ``as_*`` accessors narrow an ``object`` to a concrete shape as an ``Option``
-so callers branch on presence instead of guarding with ``isinstance`` inline.
+on the way in, provider response JSON on the way out. ``parse`` follows the
+arktype calling convention over frozen pydantic v2 models: hand it a model
+class and a raw payload and it returns the validated model or an error value
+listing every field failure, never raising. Models are declared with
+``extra="forbid"`` so an inbound field the schema does not account for is a
+typed ``unsupported`` error (the dispatch seam falls back to v1 on it), never
+a silent drop. ``as_plain_json`` admits opaque JSON sub-trees (tool arguments,
+JSON schemas) by checking every leaf and deep-copying, so a ``JsonBlob`` never
+aliases caller-owned data.
 """
 
 from __future__ import annotations
 
-from typing import Dict, List, cast
+import json
+from typing import Mapping, Type, TypeVar
 
-from expression import Nothing, Option, Some
-from expression.collections import Block, Map
+from pydantic import BaseModel, ValidationError
 
-from .ir import Json, PlainJson
+from expression import Error, Ok, Result
+from expression.collections import Block
 
+from .errors import BoundaryError, TranslationError
+from .ir import PlainJson
 
-def freeze(value: object) -> Json:
-    if isinstance(value, dict):
-        return Map.of_seq((str(key), freeze(item)) for key, item in value.items())
-    if isinstance(value, (list, tuple)):
-        return Block.of_seq(freeze(item) for item in value)
-    return cast(Json, value)
+_TModel = TypeVar("_TModel", bound=BaseModel)
 
-
-def thaw(value: Json) -> PlainJson:
-    if isinstance(value, Map):
-        return {key: thaw(item) for key, item in value.items()}
-    if isinstance(value, Block):
-        return [thaw(item) for item in value]
-    return value
+_UNSUPPORTED_ERROR_TYPES = frozenset({"extra_forbidden", "union_tag_invalid"})
 
 
-def as_str(value: object) -> Option[str]:
-    return Some(value) if isinstance(value, str) else Nothing
+def parse(model_cls: Type[_TModel], raw: Mapping[str, object]) -> Result[_TModel, TranslationError]:
+    """Validate ``raw`` against ``model_cls``, accumulating every failure.
+
+    Unknown fields (``extra_forbidden``) and unrecognized union tags become an
+    ``unsupported`` error so the seam can fall back to v1; everything else is
+    a ``boundary`` error. Both carry every individual failure, not just the
+    first.
+    """
+    try:
+        return Ok(model_cls.model_validate(raw))
+    except ValidationError as exc:
+        unsupported: list[str] = []
+        failures: list[str] = []
+        for err in exc.errors(include_url=False):
+            location = ".".join(str(part) for part in err["loc"])
+            if err["type"] in _UNSUPPORTED_ERROR_TYPES:
+                unsupported.append(location or "<root>")
+            else:
+                failures.append(f"{location or '<root>'}: {err['msg']}")
+        if unsupported:
+            fields = ", ".join(sorted(set(unsupported)))
+            return Error(TranslationError.of_unsupported(f"fields not yet supported by translation v2: {fields}"))
+        return Error(TranslationError.of_boundary(BoundaryError.of(Block.of_seq(failures))))
 
 
-def as_mapping(value: object) -> Option[Dict[str, object]]:
-    return Some(value) if isinstance(value, dict) else Nothing
+def as_plain_json(value: object) -> Result[PlainJson, str]:
+    """Admit an opaque JSON sub-tree: checks every leaf and returns a deep copy.
 
-
-def as_sequence(value: object) -> Option[List[object]]:
-    return Some(value) if isinstance(value, list) else Nothing
+    A C-speed ``dumps``/``loads`` round-trip both proves the value is plain
+    JSON and produces a copy that shares no structure with caller-owned data,
+    so later (immutable) use inside the package cannot observe caller mutation
+    and emitting it cannot leak package state back to the caller. Key order is
+    preserved, matching what v1 sends on the wire.
+    """
+    try:
+        return Ok(json.loads(json.dumps(value)))
+    except (TypeError, ValueError) as exc:
+        return Error(f"not plain JSON: {exc}")
