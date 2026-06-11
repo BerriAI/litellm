@@ -3411,6 +3411,7 @@ class LlmProviders(str, Enum):
     PARASAIL = "parasail"
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
+    LIBERTAI = "libertai"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
