@@ -1,7 +1,18 @@
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    FrozenSet,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 
 import litellm
 from litellm._logging import verbose_logger
@@ -82,6 +93,83 @@ _VALID_CAPTURE_MODES = {
     CAPTURE_MODE_SPAN_AND_EVENT,
 }
 
+METRIC_METADATA_KEYS: Tuple[str, ...] = (
+    "user_api_key_hash",
+    "user_api_key_alias",
+    "user_api_key_team_id",
+    "user_api_key_org_id",
+    "user_api_key_user_id",
+    "user_api_key_team_alias",
+    "user_api_key_user_email",
+    "spend_logs_metadata",
+    "requester_ip_address",
+    "requester_metadata",
+    "user_api_key_end_user_id",
+    "prompt_management_metadata",
+    "applied_guardrails",
+    "mcp_tool_call_metadata",
+    "vector_store_request_metadata",
+)
+
+VALID_METRIC_ATTRIBUTE_NAMES: FrozenSet[str] = frozenset(
+    (
+        "gen_ai.operation.name",
+        "gen_ai.system",
+        "gen_ai.request.model",
+        "gen_ai.framework",
+        "gen_ai.token.type",
+        "hidden_params",
+    )
+    + tuple(f"metadata.{key}" for key in METRIC_METADATA_KEYS)
+)
+
+
+@dataclass(frozen=True)
+class OTELMetricAttributeFilter:
+    include_list: Optional[List[str]] = None
+    exclude_list: Optional[List[str]] = None
+
+
+def _build_metric_attribute_filter(value: Any) -> OTELMetricAttributeFilter:
+    if isinstance(value, OTELMetricAttributeFilter):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError(
+            "otel.attributes must be a mapping with optional 'include_list' / "
+            f"'exclude_list', got {type(value).__name__}"
+        )
+    return OTELMetricAttributeFilter(
+        include_list=value.get("include_list"),
+        exclude_list=value.get("exclude_list"),
+    )
+
+
+def _resolve_metric_attribute_filter(
+    attributes: Optional[OTELMetricAttributeFilter],
+) -> Tuple[Optional[FrozenSet[str]], Optional[FrozenSet[str]]]:
+    if attributes is None:
+        return None, None
+    include = attributes.include_list or None
+    exclude = attributes.exclude_list or None
+    if include and exclude:
+        raise ValueError(
+            "otel.attributes: include_list and exclude_list are mutually exclusive"
+        )
+    unknown = sorted(
+        name
+        for name in (include or exclude or [])
+        if name not in VALID_METRIC_ATTRIBUTE_NAMES
+    )
+    if unknown:
+        raise ValueError(
+            f"otel.attributes: unknown attribute name(s) {unknown}. "
+            f"Valid names: {sorted(VALID_METRIC_ATTRIBUTE_NAMES)}"
+        )
+    return (
+        frozenset(include) if include else None,
+        frozenset(exclude) if exclude else None,
+    )
+
 
 def _normalize_team_metadata_keys(value: Any) -> List[str]:
     """Coerce a team-metadata allowlist from a list or comma-separated string.
@@ -117,6 +205,9 @@ class OpenTelemetryConfig:
     # under ``litellm.team.metadata``. Empty by default so none of a team's
     # metadata leaves the process until explicitly allowlisted.
     baggage_team_metadata_keys: List[str] = field(default_factory=list)
+    # Prometheus-style include/exclude control over which attributes are stamped
+    # on emitted metrics, to cap metric cardinality.
+    attributes: Optional[OTELMetricAttributeFilter] = None
 
     def __post_init__(self) -> None:
         # If endpoint is specified but exporter is still the default "console",
@@ -211,14 +302,23 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         **kwargs,
     ):
         team_metadata_keys_override = kwargs.pop("baggage_team_metadata_keys", None)
+        metric_attributes_override = kwargs.pop("attributes", None)
         if config is None:
             config = OpenTelemetryConfig.from_env()
         if team_metadata_keys_override is not None:
             config.baggage_team_metadata_keys = _normalize_team_metadata_keys(
                 team_metadata_keys_override
             )
+        if metric_attributes_override is not None:
+            config.attributes = _build_metric_attribute_filter(
+                metric_attributes_override
+            )
 
         self.config = config
+        (
+            self._metric_attr_include,
+            self._metric_attr_exclude,
+        ) = _resolve_metric_attribute_filter(config.attributes)
         self.callback_name = callback_name
         self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
@@ -1318,6 +1418,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             return None
         return safe_dumps(filtered)
 
+    def _filter_metric_attributes(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
+        if self._metric_attr_include is not None:
+            return {k: v for k, v in attrs.items() if k in self._metric_attr_include}
+        if self._metric_attr_exclude is not None:
+            return {
+                k: v for k, v in attrs.items() if k not in self._metric_attr_exclude
+            }
+        return attrs
+
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s = (end_time - start_time).total_seconds()
         params = kwargs.get("litellm_params") or {}
@@ -1336,23 +1445,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         std_log = kwargs.get("standard_logging_object")
         md = getattr(std_log, "metadata", None) or (std_log or {}).get("metadata", {})
-        for key in [
-            "user_api_key_hash",
-            "user_api_key_alias",
-            "user_api_key_team_id",
-            "user_api_key_org_id",
-            "user_api_key_user_id",
-            "user_api_key_team_alias",
-            "user_api_key_user_email",
-            "spend_logs_metadata",
-            "requester_ip_address",
-            "requester_metadata",
-            "user_api_key_end_user_id",
-            "prompt_management_metadata",
-            "applied_guardrails",
-            "mcp_tool_call_metadata",
-            "vector_store_request_metadata",
-        ]:
+        for key in METRIC_METADATA_KEYS:
             value = md.get(key)
             if value is None:
                 continue
@@ -1367,6 +1460,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
         if hidden_params:
             common_attrs["hidden_params"] = safe_dumps(hidden_params)
+
+        common_attrs = self._filter_metric_attributes(common_attrs)
 
         if self._operation_duration_histogram:
             self._operation_duration_histogram.record(
