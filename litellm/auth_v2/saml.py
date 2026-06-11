@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import secrets
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -9,48 +9,93 @@ from saml2 import BINDING_HTTP_POST
 from saml2.client import Saml2Client
 from saml2.config import SPConfig
 from saml2.metadata import entity_descriptor
+from scim2_models import Email, Name
 from scim2_models import User as ScimUser
 
 from .config import SamlConfig
 from .models import AuthMethod, Credential, CredentialRef, SecuritySchemeType
 from .resolver import ProvisioningStore
 
-_SINGLE_VALUE_CLAIM = {
-    "email": "email",
-    "user_name": "preferred_username",
-    "display_name": "name",
+_SINGLE_VALUE_TARGETS = {
+    "email",
+    "given_name",
+    "family_name",
+    "user_name",
+    "display_name",
 }
-_MULTI_VALUE_ATTRS = ("groups", "roles")
+_MULTI_VALUE_TARGETS = ("groups", "roles")
 
 
-def _normalize_attributes(
+def _map_attributes(
     ava: Dict[str, Any], attribute_map: Dict[str, str]
 ) -> Dict[str, Any]:
-    claims: Dict[str, Any] = {}
+    mapped: Dict[str, Any] = {}
     for saml_attr, target in attribute_map.items():
-        if saml_attr not in ava or target not in _SINGLE_VALUE_CLAIM:
+        if saml_attr not in ava:
             continue
         value = ava[saml_attr]
-        scalar = value[0] if isinstance(value, list) and value else value
-        claims.setdefault(_SINGLE_VALUE_CLAIM[target], scalar)
-    for attr in _MULTI_VALUE_ATTRS:
-        value = ava.get(attr)
-        if isinstance(value, list):
-            claims[attr] = value
+        if target in _SINGLE_VALUE_TARGETS:
+            scalar = value[0] if isinstance(value, list) and value else value
+            mapped.setdefault(target, scalar)
+        elif target in _MULTI_VALUE_TARGETS and isinstance(value, list):
+            mapped[target] = value
+    return mapped
+
+
+def _formatted_name(mapped: Dict[str, Any]) -> Optional[str]:
+    if mapped.get("display_name"):
+        return mapped["display_name"]
+    parts: List[str] = [
+        part for part in (mapped.get("given_name"), mapped.get("family_name")) if part
+    ]
+    return " ".join(parts) if parts else None
+
+
+def _user_from_mapped(name_id: str, mapped: Dict[str, Any]) -> ScimUser:
+    display = _formatted_name(mapped)
+    user = ScimUser(
+        external_id=name_id,
+        user_name=mapped.get("user_name") or mapped.get("email") or name_id,
+        display_name=display,
+    )
+    if mapped.get("given_name") or mapped.get("family_name"):
+        user.name = Name(
+            given_name=mapped.get("given_name"),
+            family_name=mapped.get("family_name"),
+            formatted=display,
+        )
+    if mapped.get("email"):
+        user.emails = [Email(value=mapped["email"], primary=True)]
+    return user
+
+
+def _claims_from_mapped(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    claims: Dict[str, Any] = {}
+    if mapped.get("email"):
+        claims["email"] = mapped["email"]
+    if mapped.get("user_name"):
+        claims["preferred_username"] = mapped["user_name"]
+    display = _formatted_name(mapped)
+    if display:
+        claims["name"] = display
+    for target in _MULTI_VALUE_TARGETS:
+        if mapped.get(target):
+            claims[target] = mapped[target]
     return claims
 
 
-def _user_from_claims(name_id: str, claims: Dict[str, Any]) -> ScimUser:
-    return ScimUser(
-        external_id=name_id,
-        user_name=claims.get("preferred_username") or claims.get("email") or name_id,
-        display_name=claims.get("name"),
-    )
+def _metadata_source(idp_metadata: str) -> Dict[str, Any]:
+    stripped = idp_metadata.strip()
+    if stripped.startswith("<"):
+        return {"inline": [idp_metadata]}
+    if stripped.startswith("http://") or stripped.startswith("https://"):
+        return {"remote": [{"url": idp_metadata}]}
+    return {"local": [idp_metadata]}
 
 
 def _sp_config_dict(config: SamlConfig) -> Dict[str, Any]:
     cfg: Dict[str, Any] = {
-        "entityid": config.sp_entity_id,
+        "entityid": config.entity_id,
         "service": {
             "sp": {
                 "endpoints": {
@@ -58,16 +103,13 @@ def _sp_config_dict(config: SamlConfig) -> Dict[str, Any]:
                 },
                 "allow_unsolicited": config.allow_unsolicited,
                 "authn_requests_signed": False,
-                "want_assertions_signed": config.want_assertions_signed,
+                "want_assertions_signed": True,
                 "want_response_signed": False,
             }
         },
+        "metadata": _metadata_source(config.idp_metadata),
         "allow_unknown_attributes": True,
     }
-    if config.idp_metadata_path:
-        cfg["metadata"] = {"local": [config.idp_metadata_path]}
-    elif config.idp_metadata_inline:
-        cfg["metadata"] = {"inline": [config.idp_metadata_inline]}
     if config.sp_key_file:
         cfg["key_file"] = config.sp_key_file
     if config.sp_cert_file:
@@ -153,18 +195,23 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
         saml_response = form.get("SAMLResponse")
         if not isinstance(saml_response, str):
             raise HTTPException(status_code=400, detail="missing SAMLResponse")
-        authn_response = client.parse_authn_request_response(
-            saml_response,
-            BINDING_HTTP_POST,
-            outstanding=session_store.outstanding or None,
-        )
+        try:
+            authn_response = client.parse_authn_request_response(
+                saml_response,
+                BINDING_HTTP_POST,
+                outstanding=session_store.outstanding or None,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=401, detail="invalid SAML response"
+            ) from exc
         if authn_response is None:
             raise HTTPException(status_code=401, detail="invalid SAML response")
 
         name_id = authn_response.get_subject().text
         ava = authn_response.get_identity() or {}
-        claims = _normalize_attributes(ava, config.attribute_map)
-        user = _user_from_claims(name_id, claims)
+        mapped = _map_attributes(ava, config.attribute_map)
+        user = _user_from_mapped(name_id, mapped)
 
         store: ProvisioningStore = request.app.state.auth_v2.resolver
         await store.upsert_user(user)
@@ -173,7 +220,11 @@ def build_saml_router(config: SamlConfig, session_store: SamlSessionStore) -> AP
         if in_response_to:
             session_store.outstanding.pop(in_response_to, None)
         session_id = session_store.create_session(
-            {"name_id": name_id, "issuer": authn_response.issuer(), "claims": claims}
+            {
+                "name_id": name_id,
+                "issuer": authn_response.issuer(),
+                "claims": _claims_from_mapped(mapped),
+            }
         )
         response = JSONResponse(content=user.model_dump())
         response.set_cookie(

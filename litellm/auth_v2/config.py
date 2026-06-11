@@ -9,12 +9,14 @@ from .models import SecuritySchemeType
 DEFAULT_SAML_ATTRIBUTE_MAP = {
     "email": "email",
     "mail": "email",
-    "emailAddress": "email",
+    "givenName": "given_name",
+    "surname": "family_name",
+    "sn": "family_name",
     "displayName": "display_name",
-    "cn": "display_name",
     "userName": "user_name",
     "uid": "user_name",
-    "sAMAccountName": "user_name",
+    "groups": "groups",
+    "roles": "roles",
 }
 
 
@@ -59,13 +61,11 @@ class TrustedProxyConfig(BaseModel):
 
 class SamlConfig(BaseModel):
     enabled: bool = False
-    sp_entity_id: str
+    entity_id: str
     acs_url: str
-    idp_metadata_path: Optional[str] = None
-    idp_metadata_inline: Optional[str] = None
+    idp_metadata: str = ""
     sp_key_file: Optional[str] = None
     sp_cert_file: Optional[str] = None
-    want_assertions_signed: bool = True
     allow_unsolicited: bool = True
     session_cookie: str = "saml_session"
     xmlsec_binary: Optional[str] = None
@@ -75,9 +75,9 @@ class SamlConfig(BaseModel):
 
     @model_validator(mode="after")
     def _require_idp_metadata(self) -> "SamlConfig":
-        if self.enabled and not (self.idp_metadata_path or self.idp_metadata_inline):
+        if self.enabled and not self.idp_metadata.strip():
             raise ValueError(
-                "SAML enabled but no IdP metadata: set idp_metadata_path or idp_metadata_inline"
+                "SAML enabled but idp_metadata is empty (inline XML, local path, or URL)"
             )
         return self
 
