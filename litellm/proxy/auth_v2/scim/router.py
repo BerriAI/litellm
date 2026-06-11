@@ -52,7 +52,9 @@ def _error(status_code: int, detail: str) -> JSONResponse:
 class _ScimRoute(APIRoute):
     """Render authentication failures with the SCIM Error schema (RFC 7644)."""
 
-    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+    def get_route_handler(  # type: ignore[override]
+        self,
+    ) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         handler = super().get_route_handler()
 
         async def scim_handler(request: Request) -> Response:

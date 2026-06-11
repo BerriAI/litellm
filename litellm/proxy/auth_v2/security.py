@@ -40,6 +40,9 @@ class AuthSecurity:
     uvicorn with ``--no-proxy-headers`` and let this module resolve the client IP,
     or leave ``trusted_proxy_cidrs`` empty and rely on uvicorn's
     ``--forwarded-allow-ips``. Do not enable both.
+
+    To return SCIM-shaped error bodies, register ``errors.scim_error_response`` as
+    the host app's exception handler for the SCIM routes.
     """
 
     def __init__(

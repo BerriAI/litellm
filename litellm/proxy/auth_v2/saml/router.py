@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
@@ -129,13 +129,44 @@ def build_sp_client(config: SAMLConfig) -> Saml2Client:
 
 
 class SAMLProtocolStore:
-    def __init__(self, replay_ttl_seconds: int) -> None:
-        self.outstanding: Dict[str, str] = {}
+    def __init__(
+        self,
+        replay_ttl_seconds: int,
+        outstanding_ttl_seconds: int = 300,
+        max_outstanding: int = 10000,
+    ) -> None:
+        self._outstanding: Dict[str, Tuple[float, str]] = {}
         self._seen_assertions: Dict[str, float] = {}
         self._replay_ttl = replay_ttl_seconds
+        self._outstanding_ttl = outstanding_ttl_seconds
+        self._max_outstanding = max_outstanding
 
     def remember_request(self, request_id: str, relay_state: str) -> None:
-        self.outstanding[request_id] = relay_state
+        now = time.time()
+        self._evict_outstanding(now)
+        self._outstanding[request_id] = (now + self._outstanding_ttl, relay_state)
+
+    def outstanding_relays(self) -> Dict[str, str]:
+        now = time.time()
+        return {
+            rid: relay for rid, (exp, relay) in self._outstanding.items() if exp >= now
+        }
+
+    def consume_request(self, request_id: str) -> Optional[str]:
+        entry = self._outstanding.pop(request_id, None)
+        if entry is None:
+            return None
+        expires_at, relay = entry
+        return relay if expires_at >= time.time() else None
+
+    def _evict_outstanding(self, now: float) -> None:
+        for rid in [r for r, (exp, _) in self._outstanding.items() if exp < now]:
+            self._outstanding.pop(rid, None)
+        overflow = len(self._outstanding) - self._max_outstanding + 1
+        if overflow > 0:
+            oldest = sorted(self._outstanding, key=lambda r: self._outstanding[r][0])
+            for rid in oldest[:overflow]:
+                self._outstanding.pop(rid, None)
 
     def consume_assertion(self, assertion_id: str) -> bool:
         now = time.time()
@@ -185,7 +216,7 @@ def build_saml_router(auth: "AuthSecurity") -> APIRouter:
             authn_response = client.parse_authn_request_response(
                 saml_response,
                 BINDING_HTTP_POST,
-                outstanding=protocol.outstanding or None,
+                outstanding=protocol.outstanding_relays() or None,
             )
         except Exception as exc:
             raise HTTPException(
@@ -196,7 +227,7 @@ def build_saml_router(auth: "AuthSecurity") -> APIRouter:
 
         in_response_to = getattr(authn_response, "in_response_to", None)
         bound_relay = (
-            protocol.outstanding.pop(in_response_to, None) if in_response_to else None
+            protocol.consume_request(in_response_to) if in_response_to else None
         )
 
         assertion = getattr(authn_response, "assertion", None)
