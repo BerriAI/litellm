@@ -7,12 +7,14 @@ import styles from './styles.module.css';
 const TABS = [
   {id: 'all', label: 'All'},
   {id: 'engineering', label: 'Engineering'},
+  {id: 'ideas', label: 'Ideas'},
   {id: 'security', label: 'Security'},
   {id: 'infrastructure', label: 'Performance / Reliability'},
 ];
 
 const SECURITY_TAGS = ['security', 'incident-report'];
 const INFRA_TAGS = ['performance', 'reliability', 'infrastructure'];
+const IDEAS_TAGS = ['ideas', 'thesis'];
 
 function hasTag(item, tagSet) {
   const tags = item.content?.metadata?.tags || [];
@@ -23,7 +25,12 @@ function filterItems(items, tab) {
   if (tab === 'all') return items;
   if (tab === 'security') return items.filter(i => hasTag(i, SECURITY_TAGS));
   if (tab === 'infrastructure') return items.filter(i => hasTag(i, INFRA_TAGS));
-  return items.filter(i => !hasTag(i, SECURITY_TAGS) && !hasTag(i, INFRA_TAGS));
+  if (tab === 'ideas') return items.filter(i => hasTag(i, IDEAS_TAGS));
+  return items.filter(i =>
+    !hasTag(i, SECURITY_TAGS) &&
+    !hasTag(i, INFRA_TAGS) &&
+    !hasTag(i, IDEAS_TAGS)
+  );
 }
 
 // ── Provider marquee ──────────────────────────────────────────────────────
