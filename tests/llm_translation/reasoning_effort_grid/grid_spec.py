@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
-
 OMIT = object()
 
 
@@ -106,6 +105,13 @@ _CAPS_NONE: FrozenSet[str] = frozenset()
 
 ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
     ModelEntry(
+        alias="claude-fable-5",
+        model="anthropic/claude-fable-5",
+        mode="adaptive",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_OPUS_4_7,
+    ),
+    ModelEntry(
         alias="claude-opus-4-7",
         model="anthropic/claude-opus-4-7",
         mode="adaptive",
@@ -130,6 +136,13 @@ ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
 
 
 AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="azure-claude-fable-5",
+        model="azure_ai/claude-fable-5",
+        mode="adaptive",
+        required_env=_AZURE_FOUNDRY_REQ,
+        caps=_CAPS_OPUS_4_7,
+    ),
     ModelEntry(
         alias="azure-claude-opus-4-7",
         model="azure_ai/claude-opus-4-7",
@@ -162,6 +175,14 @@ AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
 
 
 VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="vertex-claude-fable-5",
+        model="vertex_ai/claude-fable-5",
+        mode="adaptive",
+        extra_params=(("vertex_location", "global"),),
+        required_env=_VERTEX_REQ,
+        caps=_CAPS_OPUS_4_7,
+    ),
     ModelEntry(
         alias="vertex-claude-opus-4-7",
         model="vertex_ai/claude-opus-4-7",
@@ -198,6 +219,14 @@ VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
 
 
 BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="bedrock-claude-fable-5",
+        model="bedrock/converse/us.anthropic.claude-fable-5",
+        mode="adaptive",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_OPUS_4_7,
+    ),
     ModelEntry(
         alias="bedrock-claude-opus-4-7",
         model="bedrock/converse/us.anthropic.claude-opus-4-7",

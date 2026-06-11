@@ -4864,3 +4864,140 @@ def test_sanitize_tool_names_in_request_no_tools_is_noop():
     forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({"tools": []})
     assert forward == {}
     assert reverse == {}
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["claude-fable-5", "claude-opus-4-7", "claude-opus-4-8-20260120"],
+)
+def test_sampling_params_dropped_for_models_that_removed_them(model):
+    """Fable 5 / Opus 4.7 / 4.8 reject temperature != 1 and any top_p with a
+    400; with drop_params set they must be dropped, not forwarded (#30064)."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+    assert "top_p" not in result
+
+
+@pytest.mark.parametrize("params", [{"temperature": 0.5}, {"top_p": 0.9}, {"top_p": 1}])
+def test_sampling_params_raise_clean_error_without_drop_params(params, monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model="claude-fable-5",
+            drop_params=False,
+        )
+
+
+def test_temperature_1_forwarded_on_models_that_removed_sampling_params():
+    """temperature=1 (the API default) is still accepted and must pass through."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 1},
+        optional_params={},
+        model="claude-fable-5",
+        drop_params=False,
+    )
+
+    assert result["temperature"] == 1
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-6", "claude-sonnet-4-6"])
+def test_sampling_params_forwarded_on_models_that_accept_them(model):
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert result["temperature"] == 0.5
+    assert result["top_p"] == 0.9
+
+
+def test_sampling_param_gating_driven_by_model_map_flag(monkeypatch):
+    """The drop/raise decision must come from ``supports_sampling_params`` in
+    the model map, not just name matching: a flagged entry gates a model whose
+    name says nothing, and an explicit ``true`` overrides the name fallback."""
+    monkeypatch.setitem(
+        litellm.model_cost, "claude-zeta-9", {"supports_sampling_params": False}
+    )
+    monkeypatch.setitem(
+        litellm.model_cost, "claude-fable-5-test", {"supports_sampling_params": True}
+    )
+    config = AnthropicConfig()
+
+    flagged_off = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="claude-zeta-9",
+        drop_params=True,
+    )
+    assert "top_p" not in flagged_off
+
+    flagged_on = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="claude-fable-5-test",
+        drop_params=True,
+    )
+    assert flagged_on["top_p"] == 0.9
+
+
+def test_top_k_dropped_at_transform_for_models_that_removed_it():
+    """``top_k`` is a provider-specific kwarg that bypasses
+    ``map_openai_params``, so it must be stripped at the transform_request
+    boundary shared by the direct, invoke, Vertex, and Azure paths (#30064)."""
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-fable-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert "top_k" not in result
+
+
+def test_top_k_raises_at_transform_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"max_tokens": 10, "top_k": 40},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_top_k_forwarded_at_transform_on_models_that_accept_it():
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["top_k"] == 40
