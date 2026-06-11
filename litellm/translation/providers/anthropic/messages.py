@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-import copy
+
 from typing import Dict, List, Mapping
 
 from typing_extensions import assert_never
@@ -118,7 +118,12 @@ def _tool_use_json(tool_use: ToolUse, name_forward: Mapping[str, str]) -> PlainJ
         "type": "tool_use",
         "id": sanitize_tool_use_id(tool_use.id),
         "name": name_forward.get(tool_use.name, tool_use.name),
-        "input": copy.deepcopy(tool_use.arguments.value),
+        # Ownership transfer, not aliasing: every JsonBlob is built fresh at
+        # the parse boundary (json.loads / as_plain_json copy), each request
+        # serializes once, and the IR is dropped after the body is emitted.
+        # A deepcopy here costs more than everything else on a tool-heavy
+        # history and protects nothing.
+        "input": tool_use.arguments.value,
     }
     return _with_cache(base, tool_use.cache)
 
