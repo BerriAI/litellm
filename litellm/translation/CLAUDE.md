@@ -25,24 +25,36 @@ translation/
 ├── deps.py         # TranslationDeps: every ambient litellm input (model map
 │                   #   lookups, drop_params/modify_params) enters as a value
 ├── dispatch.py     # route(): per-provider allowlist + same-family fast path
-├── inbound/        # one subpackage per accepted schema: raw dict -> IR
+├── inbound/        # one subpackage per accepted schema: raw <-> OpenAI shapes
 │   └── openai_chat/
 │       ├── schema.py    # pydantic wire models, extra="forbid" + strict=True
 │       ├── messages.py  # wire messages -> IR messages (hot path)
-│       └── parse.py     # top-level parse + semantic checks
-├── providers/      # one subpackage per wire format: IR -> body. Pure, no I/O
+│       ├── parse.py     # top-level parse + semantic checks
+│       ├── response.py  # IR ChatResponse -> chat-completion body
+│       └── stream.py    # IR stream events -> chunk bodies (pure fold)
+├── providers/      # one subpackage per wire format. Pure, no I/O
 │   └── anthropic/
 │       ├── serialize.py # body assembly in v1 transform_request order
 │       ├── messages.py  # IR messages -> anthropic dicts (placeholder, dedupe,
 │       │                #   id sanitize, final-assistant rstrip)
 │       ├── tools.py     # tool defs, name sanitize maps, schema whitelists
-│       └── params.py    # sampling gates, thinking/effort, model detection
+│       ├── params.py    # sampling gates, thinking/effort, model detection
+│       ├── response.py  # response JSON -> IR (json_tool_call rewrite here)
+│       └── stream.py    # SSE lines -> IR stream events
 └── engine/
-    └── pipeline.py # composition + the public translate entry point
+    ├── pipeline.py # prepare (pure, drives the fallback decision) -> send;
+    │               #   async-first, the seam owns the one sync wrapper
+    ├── http.py     # the injected HttpPort + ExecuteError values
+    └── stream.py   # the ONE accumulator: lines -> IR events -> chunks
 ```
 
-`engine/http.py` (the injected I/O port) and `engine/stream.py` (the ONE
-provider-SSE -> IR-events accumulator) land with the response/stream increment.
+The v1-side adapter lives OUTSIDE the package in `litellm/translation_seam.py`:
+deps building from litellm ambient state, ModelResponse/ModelResponseStream
+envelope adaptation, the `completion()` fork, and the
+`litellm.translation_v2_providers` allowlist (env:
+`LITELLM_TRANSLATION_V2_PROVIDERS`). Streaming and `modify_params=True`
+traffic stay on v1 until their seams land; response headers passthrough into
+`_hidden_params` and pooled async clients are noted follow-ups there.
 
 ## The fail-closed contract (the most important invariant)
 
