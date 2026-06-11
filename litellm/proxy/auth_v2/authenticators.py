@@ -32,22 +32,15 @@ from .models import (
 )
 from .network import ip_in_trusted_proxies
 from .oidc.config import OIDCProviderConfig
-from .rbac import Role
+from .rbac import filter_claim_roles
 
 AT_JWT_TYPES = {"at+jwt", "application/at+jwt"}
-_PLATFORM_ROLE_VALUES = {Role.PLATFORM_ADMIN.value, Role.PLATFORM_VIEWER.value}
 
 
 def _apply_role_policy(claims: Dict[str, Any], provider: OIDCProviderConfig) -> None:
-    raw = claims.get("roles")
-    if not isinstance(raw, list):
-        claims["roles"] = []
-        return
-    allowed = set(provider.allowed_roles)
-    filtered = [role for role in raw if role in allowed]
-    if not provider.allow_platform_roles:
-        filtered = [role for role in filtered if role not in _PLATFORM_ROLE_VALUES]
-    claims["roles"] = filtered
+    claims["roles"] = filter_claim_roles(
+        claims.get("roles"), provider.allowed_roles, provider.allow_platform_roles
+    )
 
 
 @runtime_checkable

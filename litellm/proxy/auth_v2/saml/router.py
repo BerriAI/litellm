@@ -13,6 +13,7 @@ from scim2_models import Email, Name
 from scim2_models import User as ScimUser
 
 from .config import SAMLConfig
+from ..rbac import filter_claim_roles
 from ..resolver import ProvisioningStore
 from ..session import safe_relay_state
 
@@ -238,6 +239,9 @@ def build_saml_router(auth: "AuthSecurity") -> APIRouter:
         name_id = authn_response.get_subject().text
         ava = authn_response.get_identity() or {}
         mapped = _map_attributes(ava, config.attribute_map)
+        mapped["roles"] = filter_claim_roles(
+            mapped.get("roles"), config.allowed_roles, config.allow_platform_roles
+        )
         user = _user_from_mapped(name_id, mapped)
 
         store = cast(ProvisioningStore, auth.resolver)

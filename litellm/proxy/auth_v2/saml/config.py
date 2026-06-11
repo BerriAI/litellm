@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -28,6 +28,8 @@ class SAMLConfig(BaseModel):
     attribute_map: Dict[str, str] = Field(
         default_factory=lambda: dict(DEFAULT_SAML_ATTRIBUTE_MAP)
     )
+    allowed_roles: List[str] = Field(default_factory=list)
+    allow_platform_roles: bool = False
 
     @model_validator(mode="after")
     def _require_idp_metadata(self) -> "SAMLConfig":
