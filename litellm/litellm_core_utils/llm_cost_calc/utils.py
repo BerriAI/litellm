@@ -689,6 +689,30 @@ def _apply_off_peak_to_base_costs(
     )
 
 
+def _loose_token_count(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
+
+
+def _detail_token(details: PromptTokensDetailsWrapper, field_name: str) -> int | None:
+    if field_name not in details.__dict__:
+        return None
+    if field_name == "text_tokens":
+        return details.text_tokens
+    if field_name == "cached_tokens":
+        return details.cached_tokens
+    if field_name == "cache_creation_tokens":
+        return details.cache_creation_tokens
+    if field_name == "audio_tokens":
+        return details.audio_tokens
+    if field_name == "image_tokens":
+        return details.image_tokens
+    if field_name == "video_tokens":
+        return details.video_tokens
+    return None
+
+
 def _loose_model_extra_token(usage: Usage, field_name: str) -> float:
     extra: Final = usage.model_extra
     if not isinstance(extra, dict) or field_name not in extra:
@@ -700,6 +724,23 @@ def _loose_model_extra_token(usage: Usage, field_name: str) -> float:
 
 
 def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
+    """Return the total effective input tokens for tier-threshold comparisons.
+
+    Some providers (Anthropic direct, Bedrock) roll cache_creation and cache_read
+    tokens into prompt_tokens before constructing the Usage object, while others
+    (Vertex AI) keep them separate.  When prompt_tokens_details is present we can
+    derive the true total from its per-category fields and avoid double-counting.
+    """
+    details: Final = usage.prompt_tokens_details
+    if details is not None:
+        raw_text_tokens: Final = _detail_token(details, "text_tokens")
+        text_tokens: Final = _loose_token_count(raw_text_tokens)
+        cached_tokens: Final = _loose_token_count(_detail_token(details, "cached_tokens"))
+        cache_creation: Final = _loose_token_count(_detail_token(details, "cache_creation_tokens"))
+        if text_tokens == 0:
+            return float(usage.prompt_tokens or 0) + cached_tokens + cache_creation
+        return text_tokens + cached_tokens + cache_creation
+
     prompt_tokens: Final = float(usage.prompt_tokens or 0)
     cache_read_tokens: Final = _loose_model_extra_token(usage, "cache_read_input_tokens")
     cache_creation_tokens: Final = _loose_model_extra_token(usage, "cache_creation_input_tokens")
