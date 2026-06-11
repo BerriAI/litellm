@@ -68,10 +68,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
   // Fetch available search providers
-  const {
-    data: providersResponse,
-    isLoading: isLoadingProviders,
-  } = useQuery({
+  const { data: providersResponse, isLoading: isLoadingProviders } = useQuery({
     queryKey: ["searchProviders"],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
@@ -97,8 +94,8 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
         },
         search_tool_info: formValues.description
           ? {
-            description: formValues.description,
-          }
+              description: formValues.description,
+            }
           : undefined,
       };
 
@@ -333,4 +330,3 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
 };
 
 export default CreateSearchTool;
-

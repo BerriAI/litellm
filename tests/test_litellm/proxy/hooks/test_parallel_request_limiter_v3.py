@@ -20,7 +20,12 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ModelResponse,
+    TextCompletionResponse,
+    Usage,
+)
 
 
 class TimeController:
@@ -545,6 +550,68 @@ async def test_token_rate_limit_type_respected_v3(monkeypatch, token_rate_limit_
     assert (
         tpm_operation["increment_value"] == expected_tokens[token_rate_limit_type]
     ), f"Expected {expected_tokens[token_rate_limit_type]} tokens for type '{token_rate_limit_type}', got {tpm_operation['increment_value']}"
+
+
+@pytest.mark.parametrize(
+    "response_obj",
+    [
+        EmbeddingResponse(
+            model="text-embedding-3-small",
+            usage=Usage(prompt_tokens=50, completion_tokens=0, total_tokens=50),
+        ),
+        TextCompletionResponse(
+            model="gpt-3.5-turbo-instruct",
+            usage=Usage(prompt_tokens=20, completion_tokens=30, total_tokens=50),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_log_success_event_counts_non_chat_response_tokens(
+    monkeypatch, response_obj
+):
+    """
+    Embedding and text completion responses must increment the TPM counter,
+    not just chat completion ModelResponse objects.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+
+    _api_key = hash_token("sk-12345")
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    monkeypatch.setattr(
+        parallel_request_handler, "get_rate_limit_type", lambda: "total"
+    )
+
+    mock_kwargs = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        "model": response_obj.model,
+    }
+
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=mock_kwargs,
+        response_obj=response_obj,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    tpm_operation = next(
+        (op for op in captured_operations if op["key"].endswith(":tokens")), None
+    )
+    assert tpm_operation is not None, "Should have a TPM increment operation"
+    assert tpm_operation["increment_value"] == 50
 
 
 @pytest.mark.asyncio
@@ -2893,3 +2960,230 @@ async def test_pre_call_hook_rejects_caller_supplied_stash_values():
     ):
         leaked = [k for k in _LITELLM_STASH_KEYS if k in channel]
         assert not leaked, f"caller-supplied stash survived in {channel!r}: {leaked}"
+
+
+# ----------------------- Per-MCP-server rate limiting (v3) -----------------------
+
+
+def _make_mcp_handler():
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    return handler, local_cache
+
+
+def _find_descriptor(descriptors, key):
+    return next((d for d in descriptors if d["key"] == key), None)
+
+
+def _build_mcp_descriptors(handler, user_api_key_dict, data, call_type="call_mcp_tool"):
+    return handler._create_rate_limit_descriptors(
+        user_api_key_dict=user_api_key_dict,
+        data=data,
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+        call_type=call_type,
+    )
+
+
+def test_mcp_per_key_descriptor_created_for_matching_server_v3():
+    handler, _ = _make_mcp_handler()
+    api_key = hash_token("sk-mcp-key")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        metadata={"mcp_rpm_limit": {"github": 5}},
+    )
+
+    descriptors = _build_mcp_descriptors(
+        handler, user_api_key_dict, {"mcp_server_name": "github"}
+    )
+
+    descriptor = _find_descriptor(descriptors, "mcp_per_key")
+    assert descriptor is not None
+    assert descriptor["value"] == f"{api_key}:github"
+    assert descriptor["rate_limit"]["requests_per_unit"] == 5
+    # MCP tool calls have no token usage; tokens_per_unit must stay None so the
+    # TPM reservation path is never engaged (otherwise budget would leak).
+    assert descriptor["rate_limit"]["tokens_per_unit"] is None
+
+
+def test_mcp_per_key_descriptor_skipped_for_non_matching_server_v3():
+    handler, _ = _make_mcp_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        metadata={"mcp_rpm_limit": {"github": 5}},
+    )
+
+    descriptors = _build_mcp_descriptors(
+        handler, user_api_key_dict, {"mcp_server_name": "slack"}
+    )
+
+    assert _find_descriptor(descriptors, "mcp_per_key") is None
+
+
+def test_mcp_descriptor_skipped_for_non_mcp_request_v3():
+    """A non-MCP request must not create an MCP descriptor even if the caller
+    injects mcp_server_name in the body; otherwise an LLM call could consume a
+    target server's MCP quota and 429 legitimate tool calls."""
+    handler, _ = _make_mcp_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        metadata={"mcp_rpm_limit": {"github": 5}},
+    )
+
+    descriptors = _build_mcp_descriptors(
+        handler,
+        user_api_key_dict,
+        {"model": "gpt-4", "mcp_server_name": "github"},
+        call_type="completion",
+    )
+
+    assert _find_descriptor(descriptors, "mcp_per_key") is None
+
+
+def test_mcp_descriptor_skipped_for_raw_rest_body_v3():
+    handler, _ = _make_mcp_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        team_id="team-1",
+        metadata={"mcp_rpm_limit": {"github": 5}},
+        team_metadata={"mcp_rpm_limit": {"github": 3}},
+    )
+
+    descriptors = _build_mcp_descriptors(
+        handler,
+        user_api_key_dict,
+        {
+            "server_id": "slack",
+            "name": "demo-tool",
+            "arguments": {},
+            "mcp_server_name": "github",
+        },
+    )
+
+    assert _find_descriptor(descriptors, "mcp_per_key") is None
+    assert _find_descriptor(descriptors, "mcp_per_team") is None
+
+
+def test_mcp_per_team_descriptor_created_from_team_metadata_v3():
+    handler, _ = _make_mcp_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        team_id="team-1",
+        team_metadata={"mcp_rpm_limit": {"github": 3}},
+    )
+
+    descriptors = _build_mcp_descriptors(
+        handler, user_api_key_dict, {"mcp_server_name": "github"}
+    )
+
+    descriptor = _find_descriptor(descriptors, "mcp_per_team")
+    assert descriptor is not None
+    assert descriptor["value"] == "team-1:github"
+    assert descriptor["rate_limit"]["requests_per_unit"] == 3
+    assert descriptor["rate_limit"]["tokens_per_unit"] is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_per_key_rpm_enforced_v3(monkeypatch):
+    """
+    A key configured with mcp_rpm_limit={"github": 2} must allow 2 calls to the
+    github MCP server within the window and reject the 3rd with a 429, while
+    calls to a different MCP server are unaffected.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    api_key = hash_token("sk-mcp-enforce")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    window_starts: Dict[str, int] = {}
+    request_counts: Dict[str, int] = {}
+
+    async def mock_batch_rate_limiter(*args, **kwargs):
+        keys = kwargs.get("keys") if kwargs else args[0]
+        args_list = kwargs.get("args") if kwargs else args[1]
+        now = args_list[0]
+        window_size = args_list[1]
+        results = []
+        for i in range(0, len(keys), 2):
+            window_key = keys[i]
+            counter_key = keys[i + 1]
+            prev_window = window_starts.get(window_key)
+            prev_counter = request_counts.get(counter_key, 0)
+            if prev_window is None or (now - prev_window) >= window_size:
+                window_starts[window_key] = now
+                new_counter = 1
+            else:
+                new_counter = prev_counter + 1
+            request_counts[counter_key] = new_counter
+            results.append(now)
+            results.append(new_counter)
+        return results
+
+    handler.batch_rate_limiter_script = mock_batch_rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        metadata={"mcp_rpm_limit": {"github": 2}},
+    )
+
+    for _ in range(2):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"mcp_server_name": "github"},
+            call_type="call_mcp_tool",
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"mcp_server_name": "github"},
+            call_type="call_mcp_tool",
+        )
+    assert exc_info.value.status_code == 429
+
+    # A different server has no configured limit -> not rate limited.
+    for _ in range(5):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"mcp_server_name": "slack"},
+            call_type="call_mcp_tool",
+        )
+
+    # The TPM counter must never be created for an MCP descriptor.
+    assert not any(":tokens" in key and "github" in key for key in request_counts)
+
+
+def test_get_key_mcp_rpm_limit_precedence():
+    from litellm.proxy.auth.auth_utils import (
+        get_key_mcp_rpm_limit,
+        get_team_mcp_rpm_limit,
+    )
+
+    # Key metadata takes precedence over team metadata.
+    key_first = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        metadata={"mcp_rpm_limit": {"github": 10}},
+        team_metadata={"mcp_rpm_limit": {"github": 99}},
+    )
+    assert get_key_mcp_rpm_limit(key_first) == {"github": 10}
+
+    # Falls back to team metadata when key has none.
+    team_only = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        team_metadata={"mcp_rpm_limit": {"github": 7}},
+    )
+    assert get_key_mcp_rpm_limit(team_only) == {"github": 7}
+    assert get_team_mcp_rpm_limit(team_only) == {"github": 7}
+
+    # No configuration anywhere.
+    none_set = UserAPIKeyAuth(api_key=hash_token("sk-mcp-key"))
+    assert get_key_mcp_rpm_limit(none_set) is None
+    assert get_team_mcp_rpm_limit(none_set) is None

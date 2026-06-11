@@ -36,12 +36,7 @@ const MultiExportDropdown: React.FC<MultiExportDropdownProps> = ({ multiResult }
 
   return (
     <div className="relative inline-block" ref={menuRef}>
-      <Button
-        size="xs"
-        variant="secondary"
-        icon={DownloadOutlined}
-        onClick={() => setIsOpen(!isOpen)}
-      >
+      <Button size="xs" variant="secondary" icon={DownloadOutlined} onClick={() => setIsOpen(!isOpen)}>
         Export
       </Button>
 
@@ -74,4 +69,3 @@ const MultiExportDropdown: React.FC<MultiExportDropdownProps> = ({ multiResult }
 };
 
 export default MultiExportDropdown;
-

@@ -511,29 +511,34 @@ def test_set_user_budget_metrics_default_no_email_alias_labels(
     )
 
 
-def test_set_user_budget_metrics_includes_user_email_and_alias_labels_when_opted_in(
-    prometheus_logger,
-):
-    """When prometheus_user_budget_label_include_email_alias=True, email+alias labels appear."""
+def test_set_user_budget_metrics_includes_user_email_and_alias_labels_when_opted_in():
+    """When prometheus_user_budget_label_include_email_alias=True, email+alias labels appear.
+
+    The flag is read once per metric at logger construction time and snapshotted,
+    so it must be enabled before the PrometheusLogger is built (mirroring how the
+    proxy applies config at startup before instantiating callbacks).
+    """
     import litellm
     from litellm.proxy._types import LiteLLM_UserTable
 
     litellm.prometheus_user_budget_label_include_email_alias = True
 
-    user = LiteLLM_UserTable(
-        user_id="user-abc-123",
-        user_email="alice@example.com",
-        user_alias="Alice",
-        spend=25.0,
-        max_budget=100.0,
-        budget_reset_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
-    )
-
-    prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
-    prometheus_logger.litellm_user_max_budget_metric = MagicMock()
-    prometheus_logger.litellm_user_budget_remaining_hours_metric = MagicMock()
-
     try:
+        prometheus_logger = PrometheusLogger()
+
+        user = LiteLLM_UserTable(
+            user_id="user-abc-123",
+            user_email="alice@example.com",
+            user_alias="Alice",
+            spend=25.0,
+            max_budget=100.0,
+            budget_reset_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        )
+
+        prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
+        prometheus_logger.litellm_user_max_budget_metric = MagicMock()
+        prometheus_logger.litellm_user_budget_remaining_hours_metric = MagicMock()
+
         prometheus_logger._set_user_budget_metrics(user)
 
         prometheus_logger.litellm_remaining_user_budget_metric.labels.assert_called_once_with(

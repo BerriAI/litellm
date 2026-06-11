@@ -59,13 +59,14 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-from litellm.proxy.utils import get_server_root_path, normalize_route_for_root_path
+from litellm.proxy.utils import normalize_route_for_root_path
+from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    EndpointType,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    EndpointType,
     PassthroughStandardLoggingPayload,
 )
 
@@ -667,6 +668,34 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         return stream
 
 
+def _carry_guardrail_logging_info(
+    request_data: dict, guardrail_data: Optional[dict]
+) -> None:
+    """Copy guardrail logging entries from ``guardrail_data`` onto ``request_data``.
+
+    Post-call guardrails run against a throwaway ``hook_data`` dict (its
+    ``metadata`` is what ``_init_kwargs_for_pass_through_endpoint`` already
+    stripped off ``_parsed_body``), so a block records the
+    ``standard_logging_guardrail_information`` there and not on the dict the
+    failure handler forwards to ``post_call_failure_hook``. Without this the
+    otel guardrail span is emitted on allow but missing on block. Carry the
+    entries over so the failure path matches the unified path.
+    """
+    if guardrail_data is None:
+        return
+    source_metadata = guardrail_data.get("metadata")
+    if not isinstance(source_metadata, dict):
+        return
+    entries = source_metadata.get("standard_logging_guardrail_information")
+    if not entries:
+        return
+
+    metadata = request_data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = request_data["metadata"] = {}
+    metadata.setdefault("standard_logging_guardrail_information", list(entries))
+
+
 async def pass_through_request(  # noqa: PLR0915
     request: Request,
     target: str,
@@ -718,6 +747,9 @@ async def pass_through_request(  # noqa: PLR0915
     # kwargs for pass through endpoint, contains metadata, litellm_params, call_type, litellm_call_id, passthrough_logging_payload
     kwargs: Optional[dict] = None
     logging_obj: Optional[Logging] = None
+    # the dict post-call guardrails wrote their logging info into; the failure
+    # handler reuses it so a guardrail block still surfaces its span/logs
+    post_call_guardrail_data: Optional[dict] = None
 
     #########################################################
     try:
@@ -971,9 +1003,7 @@ async def pass_through_request(  # noqa: PLR0915
                 is_passthrough_list_route,
                 list_passthrough_ids_from_db,
             )
-            from litellm.proxy.proxy_server import (
-                prisma_client as _list_prisma,
-            )
+            from litellm.proxy.proxy_server import prisma_client as _list_prisma
 
             if (
                 is_passthrough_list_route(
@@ -1030,6 +1060,9 @@ async def pass_through_request(  # noqa: PLR0915
         )
 
         if stream:
+            logging_obj.stream = True
+            logging_obj.model_call_details["stream"] = True
+
             if is_multipart:
                 response = (
                     await HttpPassThroughEndpointHelpers.make_multipart_http_request(
@@ -1066,6 +1099,20 @@ async def pass_through_request(  # noqa: PLR0915
                     status_code=e.response.status_code, detail=await e.response.aread()
                 )
 
+            # Call response headers hook for streaming pass-through
+            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=response.headers,
+                litellm_call_id=litellm_call_id,
+            )
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=_parsed_body or {},
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+            if callback_headers:
+                _response_headers.update(callback_headers)
+
             return StreamingResponse(
                 PassThroughStreamingHandler.chunk_processor(
                     response=response,
@@ -1076,10 +1123,7 @@ async def pass_through_request(  # noqa: PLR0915
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
                 ),
-                headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                    headers=response.headers,
-                    litellm_call_id=litellm_call_id,
-                ),
+                headers=_response_headers,
                 status_code=response.status_code,
             )
 
@@ -1108,12 +1152,29 @@ async def pass_through_request(  # noqa: PLR0915
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
 
         if _is_streaming_response(response) is True:
+            logging_obj.stream = True
+            logging_obj.model_call_details["stream"] = True
+
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
                 raise HTTPException(
                     status_code=e.response.status_code, detail=await e.response.aread()
                 )
+
+            # Call response headers hook for detected streaming pass-through
+            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=response.headers,
+                litellm_call_id=litellm_call_id,
+            )
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=_parsed_body or {},
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+            if callback_headers:
+                _response_headers.update(callback_headers)
 
             return StreamingResponse(
                 PassThroughStreamingHandler.chunk_processor(
@@ -1125,10 +1186,7 @@ async def pass_through_request(  # noqa: PLR0915
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
                 ),
-                headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                    headers=response.headers,
-                    litellm_call_id=litellm_call_id,
-                ),
+                headers=_response_headers,
                 status_code=response.status_code,
             )
 
@@ -1160,6 +1218,7 @@ async def pass_through_request(  # noqa: PLR0915
                 **existing_metadata,
                 "guardrails": guardrails_to_run,
             }
+            post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(
                 data=hook_data,
                 user_api_key_dict=user_api_key_dict,
@@ -1266,6 +1325,16 @@ async def pass_through_request(  # noqa: PLR0915
             api_base=str(url._uri_reference),
         )
 
+        # Call response headers hook
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=_parsed_body or {},
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=dict(request.headers),
+        )
+        if callback_headers:
+            custom_headers.update(callback_headers)
+
         response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
             headers=response.headers,
             custom_headers=custom_headers,
@@ -1342,6 +1411,8 @@ async def pass_through_request(  # noqa: PLR0915
             request_payload["model"] = _parsed_body.get("model", "")
         if "custom_llm_provider" not in request_payload and custom_llm_provider:
             request_payload["custom_llm_provider"] = custom_llm_provider
+
+        _carry_guardrail_logging_info(request_payload, post_call_guardrail_data)
 
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -2459,20 +2530,16 @@ class InitPassThroughEndpointHelpers:
         return list(_registered_pass_through_routes.keys())
 
     @staticmethod
-    def _build_full_path_with_root(path: str) -> str:
+    def _route_for_registry_lookup(route: str) -> str:
         """
-        Build full path by prepending server root path if needed.
+        Normalize an incoming route to the bare path stored in the registry.
 
-        Args:
-            path: The relative path to build
-
-        Returns:
-            Full path with server root prepended (if root is not "/")
+        Registry keys store root-stripped paths. Callers should pass routes from
+        ``get_request_route()`` (already stripped); prefixed ``request.url.path``
+        values are stripped via ``normalize_route_for_root_path``.
         """
-        root_path = get_server_root_path()
-        if root_path == "/":
-            return path
-        return f"{root_path}{path}"
+        normalized_route = normalize_route_for_root_path(route)
+        return normalized_route if normalized_route is not None else route
 
     @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
@@ -2495,6 +2562,10 @@ class InitPassThroughEndpointHelpers:
                 if normalized_route.startswith(mapped_route):
                     return True
 
+        comparison_route = InitPassThroughEndpointHelpers._route_for_registry_lookup(
+            route
+        )
+
         # Fast path: check if any registered route key contains this path
         # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"
         # For backward compatibility, also support old format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
@@ -2503,14 +2574,13 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
                 route_type = parts[1]
-                registered_path = (
-                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
-                )
-                if route_type == "exact" and route == registered_path:
+                registered_path = parts[2]
+                if route_type == "exact" and comparison_route == registered_path:
                     return True
                 elif route_type == "subpath":
-                    if route == registered_path or route.startswith(
-                        registered_path + "/"
+                    if (
+                        comparison_route == registered_path
+                        or comparison_route.startswith(registered_path + "/")
                     ):
                         return True
 
@@ -2521,13 +2591,14 @@ class InitPassThroughEndpointHelpers:
         route: str, method: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Get passthrough params for a given route and optionally filter by HTTP method"""
+        comparison_route = InitPassThroughEndpointHelpers._route_for_registry_lookup(
+            route
+        )
         for key in _registered_pass_through_routes.keys():
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
                 route_type = parts[1]
-                registered_path = (
-                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
-                )
+                registered_path = parts[2]
 
                 # Get the methods for this route. Prefer the registered metadata,
                 # but keep supporting test fixtures / older registry entries that
@@ -2541,11 +2612,12 @@ class InitPassThroughEndpointHelpers:
 
                 # Check if path matches
                 path_matches = False
-                if route_type == "exact" and route == registered_path:
+                if route_type == "exact" and comparison_route == registered_path:
                     path_matches = True
                 elif route_type == "subpath":
-                    if route == registered_path or route.startswith(
-                        registered_path + "/"
+                    if (
+                        comparison_route == registered_path
+                        or comparison_route.startswith(registered_path + "/")
                     ):
                         path_matches = True
 
@@ -2834,7 +2906,7 @@ async def _filter_endpoints_by_team_allowed_routes(
         HTTPException: If team is not found
     """
     # retrieve team from db
-    team = await prisma_client.db.litellm_teamtable.find_unique(
+    team = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id},
     )
     if team is None:

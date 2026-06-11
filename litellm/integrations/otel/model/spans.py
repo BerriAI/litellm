@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from litellm.integrations.otel.model.payloads import (
         GuardrailSpanData,
         LLMCallSpanData,
+        MCPToolCallSpanData,
         ProxyRequestSpanData,
         ServiceSpanData,
     )
@@ -54,6 +55,7 @@ if TYPE_CHECKING:
 class SpanRole(str, Enum):
     PROXY_REQUEST = "proxy_request"
     LLM_CALL = "llm_call"
+    MCP_TOOL_CALL = "mcp_tool_call"
     GUARDRAIL = "guardrail"
     DB_CALL = "db_call"
     SERVICE = "service"
@@ -80,6 +82,11 @@ SPAN_REGISTRY: dict[SpanRole, SpanSpec] = {
     ),
     SpanRole.LLM_CALL: SpanSpec(
         SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
+    ),
+    # The proxy is an MCP client to the upstream server it dispatches the tool
+    # call to, so this is a CLIENT span, sibling of the LLM call under the request.
+    SpanRole.MCP_TOOL_CALL: SpanSpec(
+        SpanRole.MCP_TOOL_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
     ),
     SpanRole.GUARDRAIL: SpanSpec(
         SpanRole.GUARDRAIL, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST
@@ -163,6 +170,11 @@ def llm_call_span_name(data: "LLMCallSpanData") -> str:
     """``"{operation} {model}"`` e.g. ``"chat gpt-4o"`` (GenAI semconv)."""
     model = data.request_model or ""
     return f"{data.operation.value} {model}".strip()
+
+
+def mcp_tool_call_span_name(data: "MCPToolCallSpanData") -> str:
+    """``"{mcp.method.name} {tool}"`` e.g. ``"tools/call get-weather"`` (MCP semconv)."""
+    return f"{data.method} {data.tool_name}".strip()
 
 
 def proxy_request_span_name(data: "ProxyRequestSpanData") -> str:

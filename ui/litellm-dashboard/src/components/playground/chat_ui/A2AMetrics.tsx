@@ -99,7 +99,9 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
       <div className="flex flex-wrap items-center gap-2 text-gray-500 ml-4">
         {/* Status badge */}
         {status?.state && (
-          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(status.state)}`}>
+          <span
+            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(status.state)}`}
+          >
             {getStatusIcon(status.state)}
             <span className="ml-1 capitalize">{status.state}</span>
           </span>
@@ -128,9 +130,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
         {/* Time to first token */}
         {timeToFirstToken !== undefined && (
           <Tooltip title="Time to first token">
-            <span className="flex items-center text-green-600">
-              TTFT: {(timeToFirstToken / 1000).toFixed(2)}s
-            </span>
+            <span className="flex items-center text-green-600">TTFT: {(timeToFirstToken / 1000).toFixed(2)}s</span>
           </Tooltip>
         )}
       </div>
@@ -205,7 +205,9 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
           {contextId && (
             <div className="mb-1.5 flex items-center">
               <span className="font-medium text-gray-700 w-24">Session ID:</span>
-              <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded text-xs font-mono">{contextId}</code>
+              <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded text-xs font-mono">
+                {contextId}
+              </code>
               <CopyOutlined
                 className="ml-2 cursor-pointer text-gray-400 hover:text-blue-500"
                 onClick={() => copyToClipboard(contextId)}
