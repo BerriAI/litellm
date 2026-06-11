@@ -5,15 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
-import fastapi
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
 
-import builtins
-import types
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
@@ -167,101 +164,34 @@ class TestProxyInitializationHelpers:
         assert opts["reload_dirs"] == [str(cwd_dir), str(elsewhere)]
         assert opts["reload_includes"] == ["*.py", ".env", "proxy.yaml"]
 
-    def test_patch_statreload_extra_paths_yields_config_and_py(self, tmp_path):
-        from pathlib import Path
+    def test_reload_uses_watchfiles_reloader(self):
+        from uvicorn.supervisors import ChangeReload
 
-        from uvicorn.supervisors.statreload import StatReload
+        assert ChangeReload.__name__ == "WatchFilesReload"
 
-        if hasattr(StatReload, "_litellm_patched_config_paths"):
-            StatReload._litellm_patched_config_paths.clear()
+    def test_reload_includes_match_config_and_env_under_watchfiles(
+        self, tmp_path, monkeypatch
+    ):
+        import uvicorn
+        from uvicorn.supervisors.watchfilesreload import FileFilter
 
-        config_file = tmp_path / "config.yaml"
+        config_file = tmp_path / "dev_config.yaml"
         config_file.write_text("model_list: []\n")
-        py_file = tmp_path / "module.py"
-        py_file.write_text("x = 1\n")
+        monkeypatch.chdir(tmp_path)
 
-        applied = ProxyInitializationHelpers._patch_statreload_extra_paths(
-            [str(config_file)]
-        )
-        assert applied is True
+        opts = ProxyInitializationHelpers._get_reload_options(str(config_file))
+        uvicorn_config = uvicorn.Config("litellm.proxy.proxy_server:app", **opts)
+        file_filter = FileFilter(uvicorn_config)
 
-        fake_self = types.SimpleNamespace(
-            config=types.SimpleNamespace(reload_dirs=[tmp_path])
-        )
-        yielded_paths = {Path(p).resolve() for p in StatReload.iter_py_files(fake_self)}
-
-        assert config_file.resolve() in yielded_paths
-        assert py_file.resolve() in yielded_paths
-
-    def test_patch_statreload_extra_paths_yields_env(self, tmp_path):
-        from pathlib import Path
-
-        from uvicorn.supervisors.statreload import StatReload
-
-        if hasattr(StatReload, "_litellm_patched_config_paths"):
-            StatReload._litellm_patched_config_paths.clear()
-
-        env_file = tmp_path / ".env"
-        env_file.write_text("FOO=bar\n")
-
-        applied = ProxyInitializationHelpers._patch_statreload_extra_paths(
-            [str(env_file)]
-        )
-        assert applied is True
-
-        fake_self = types.SimpleNamespace(
-            config=types.SimpleNamespace(reload_dirs=[tmp_path])
-        )
-        yielded_paths = {Path(p).resolve() for p in StatReload.iter_py_files(fake_self)}
-
-        assert env_file.resolve() in yielded_paths
-
-    def test_patch_statreload_extra_paths_skips_falsy(self, tmp_path):
-        from uvicorn.supervisors.statreload import StatReload
-
-        if hasattr(StatReload, "_litellm_patched_config_paths"):
-            StatReload._litellm_patched_config_paths.clear()
-
-        assert ProxyInitializationHelpers._patch_statreload_extra_paths([]) is False
-        assert (
-            ProxyInitializationHelpers._patch_statreload_extra_paths([None, ""])
-            is False
-        )
-
-    def test_patch_statreload_extra_paths_is_idempotent(self, tmp_path):
-        from pathlib import Path
-
-        from uvicorn.supervisors.statreload import StatReload
-
-        if hasattr(StatReload, "_litellm_patched_config_paths"):
-            StatReload._litellm_patched_config_paths.clear()
-
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text("model_list: []\n")
-        py_file = tmp_path / "only.py"
-        py_file.write_text("x = 1\n")
-
-        for _ in range(3):
-            ProxyInitializationHelpers._patch_statreload_extra_paths([str(config_file)])
-
-        fake_self = types.SimpleNamespace(
-            config=types.SimpleNamespace(reload_dirs=[tmp_path])
-        )
-        yielded = list(StatReload.iter_py_files(fake_self))
-        assert len(yielded) == len(set(map(str, yielded)))
-        yielded_paths = {Path(p).resolve() for p in yielded}
-        assert config_file.resolve() in yielded_paths
-        assert py_file.resolve() in yielded_paths
+        assert file_filter(config_file) is True
+        assert file_filter(tmp_path / ".env") is True
+        assert file_filter(tmp_path / "custom_auth.py") is True
+        assert file_filter(tmp_path / "notes.txt") is False
+        assert file_filter(tmp_path / "other.yaml") is False
 
     def test_configure_dev_reload_watches_env_and_sets_override_flag(
         self, tmp_path, monkeypatch
     ):
-        from pathlib import Path
-
-        from uvicorn.supervisors.statreload import StatReload
-
-        if hasattr(StatReload, "_litellm_patched_config_paths"):
-            StatReload._litellm_patched_config_paths.clear()
         monkeypatch.delenv("LITELLM_DEV_ENV_HOT_RELOAD", raising=False)
 
         config_file = tmp_path / "config.yaml"
@@ -285,12 +215,7 @@ class TestProxyInitializationHelpers:
         assert "override" in warning_text
         assert ".env" in warning_text
 
-        fake_self = types.SimpleNamespace(
-            config=types.SimpleNamespace(reload_dirs=[tmp_path])
-        )
-        yielded_paths = {Path(p).resolve() for p in StatReload.iter_py_files(fake_self)}
-        assert env_file.resolve() in yielded_paths
-        assert config_file.resolve() in yielded_paths
+        assert "config.yaml" in uvicorn_args["reload_includes"]
 
     def test_dev_env_hot_reload_enabled_reads_flag(self, monkeypatch):
         import litellm
@@ -1241,7 +1166,6 @@ class TestProxyInitializationHelpers:
     @patch("builtins.print")
     def test_run_server_no_config_passed(self, mock_print, mock_uvicorn_run):
         """Test that run_server properly handles the case when no config is passed"""
-        import asyncio
 
         from click.testing import CliRunner
 
