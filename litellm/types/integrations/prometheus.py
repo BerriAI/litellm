@@ -190,6 +190,9 @@ class UserAPIKeyLabelNames(Enum):
     ORG_ALIAS = "org_alias"
     MCP_TOOL_NAME = "mcp_tool_name"
     MCP_SERVER_NAME = "mcp_server_name"
+    POOL_NAME = "pool_name"
+    POOL_TYPE = "pool_type"
+    POD_WORKER = "pod_worker"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -269,6 +272,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     # MCP tool call metrics
     "litellm_mcp_tool_calls_total",
     "litellm_mcp_tool_call_spend_metric",
+    # Redis pool metrics
+    "litellm_redis_pool_active_connections",
+    "litellm_redis_pool_max_connections",
 ]
 
 
@@ -766,9 +772,27 @@ class PrometheusMetricLabels:
 
     litellm_mcp_tool_call_spend_metric: list[str] = list(litellm_mcp_tool_calls_total)
 
+    # Redis pool metrics
+    litellm_redis_pool_active_connections = [
+        UserAPIKeyLabelNames.POOL_NAME.value,
+        UserAPIKeyLabelNames.POOL_TYPE.value,
+        UserAPIKeyLabelNames.POD_WORKER.value,
+    ]
+    litellm_redis_pool_max_connections = litellm_redis_pool_active_connections
+
+    _metrics_without_global_custom_labels: ClassVar[frozenset[str]] = frozenset(
+        {
+            "litellm_redis_pool_active_connections",
+            "litellm_redis_pool_max_connections",
+        }
+    )
+
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
         default_labels = getattr(PrometheusMetricLabels, label_name)
+        if label_name in PrometheusMetricLabels._metrics_without_global_custom_labels:
+            return list(default_labels)
+
         custom_labels = []
 
         # Add custom metadata labels

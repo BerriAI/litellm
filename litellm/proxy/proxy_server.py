@@ -3371,6 +3371,59 @@ async def _run_background_health_check():
         await asyncio.sleep(health_check_interval)
 
 
+async def _poll_redis_pool_metrics():
+    """
+    Periodically poll all RedisCache instances for connection pool stats
+    and emit them as Prometheus gauges.
+    """
+    try:
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        prometheus_logger = PrometheusLogger.get_instance()
+        if prometheus_logger is None:
+            return
+
+        # Resolve pod worker identity from the container hostname (K8s pod name).
+        pod_worker = os.environ.get("HOSTNAME") or "unknown"
+
+        # Collect all RedisCache / RedisClusterCache instances
+        caches = []
+
+        # Global cache (litellm_settings.cache)
+        if redis_usage_cache is not None:
+            caches.append(("global", redis_usage_cache))
+
+        # Router cache (router_settings)
+        if llm_router is not None:
+            router_cache = getattr(llm_router, "cache", None)
+            router_redis = getattr(router_cache, "redis_cache", None)
+            if router_redis is not None and router_redis is not redis_usage_cache:
+                caches.append(("router", router_redis))
+
+        for pool_name, cache in caches:
+            try:
+                stats = cache.get_pool_stats()
+                for stat in stats:
+                    pool_type = stat.get("type", "unknown")
+                    labels = {
+                        "pool_name": pool_name,
+                        "pool_type": pool_type,
+                        "pod_worker": pod_worker,
+                    }
+                    prometheus_logger.litellm_redis_pool_active_connections.labels(
+                        **labels
+                    ).set(stat.get("active", 0))
+                    prometheus_logger.litellm_redis_pool_max_connections.labels(
+                        **labels
+                    ).set(stat.get("max", 0))
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    "Error reading pool stats for %s: %s", pool_name, e
+                )
+    except Exception as e:
+        verbose_proxy_logger.debug("Error polling Redis pool metrics: %s", e)
+
+
 class StreamingCallbackError(Exception):
     pass
 
@@ -7684,6 +7737,17 @@ class ProxyStartupEvent:
                     "Checking responses cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
                 pass
+
+        ### REDIS POOL METRICS ###
+        scheduler.add_job(
+            _poll_redis_pool_metrics,
+            "interval",
+            seconds=30,
+            # REMOVED jitter parameter - major cause of memory leak
+            id="redis_pool_metrics_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
 
         # MEMORY LEAK FIX: Start scheduler with paused=False to avoid backlog processing
         # Do NOT reset job times to "now" as this can trigger the memory leak

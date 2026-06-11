@@ -1313,6 +1313,62 @@ class RedisCache(BaseCache):
                 "error": str(e),
             }
 
+    def get_pool_stats(self):
+        """
+        Return connection pool statistics for all pools managed by this cache.
+
+        Returns:
+            List[Dict[str, Any]]: List of dicts with keys 'type', 'max', 'active'
+        """
+        stats = []
+        try:
+            # Sync client pool
+            if self.redis_client and hasattr(self.redis_client, "connection_pool"):
+                pool = self.redis_client.connection_pool
+                stats.append(
+                    {
+                        "type": "sync",
+                        "max": getattr(pool, "max_connections", 0),
+                        "active": len(getattr(pool, "_in_use_connections", set())),
+                    }
+                )
+        except Exception as e:
+            verbose_logger.debug("Error reading sync Redis pool stats: %s", e)
+
+        try:
+            # Async client pool — only report if already initialized
+            # (avoid triggering lazy init just for metrics)
+            async_client = self.redis_async_client
+            if async_client is None:
+                # Fall back to the explicitly-created pool from __init__
+                # which exists even if the async client is still lazy
+                pool = self.async_redis_conn_pool
+                if pool is not None and hasattr(pool, "max_connections"):
+                    stats.append(
+                        {
+                            "type": "async",
+                            "max": getattr(pool, "max_connections", 0),
+                            "active": len(
+                                getattr(pool, "_in_use_connections", set())
+                            ),
+                        }
+                    )
+            elif hasattr(async_client, "connection_pool"):
+                pool = async_client.connection_pool
+                stats.append(
+                    {
+                        "type": "async",
+                        "max": getattr(pool, "max_connections", 0),
+                        "active": len(
+                            getattr(pool, "_in_use_connections", set())
+                        ),
+                    }
+                )
+        except Exception as e:
+            verbose_logger.debug("Error reading async Redis pool stats: %s", e)
+
+        return stats
+
     @_redis_circuit_breaker_guard
     async def async_delete_cache(self, key: str):
         # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `delete`

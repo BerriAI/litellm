@@ -363,6 +363,25 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_remaining_tokens_metric"),
             )
 
+            ########################################
+            # Redis Connection Pool Metrics
+            ########################################
+            self.litellm_redis_pool_active_connections = self._gauge_factory(
+                "litellm_redis_pool_active_connections",
+                "Current active (checked-out) Redis connections",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_redis_pool_active_connections"
+                ),
+            )
+
+            self.litellm_redis_pool_max_connections = self._gauge_factory(
+                "litellm_redis_pool_max_connections",
+                "Maximum allowed Redis connections for the pool",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_redis_pool_max_connections"
+                ),
+            )
+
             self.litellm_overhead_latency_metric = self._histogram_factory(
                 "litellm_overhead_latency_metric",
                 "Latency overhead (milliseconds) added by LiteLLM processing",
