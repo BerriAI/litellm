@@ -1,9 +1,6 @@
 name: OSV Scan
 
 on:
-  push:
-    branches:
-      - "litellm_/recursing-bartik-8f5ed1"
   pull_request:
     branches:
       - main
