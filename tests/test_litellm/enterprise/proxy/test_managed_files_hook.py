@@ -165,3 +165,49 @@ async def test_should_fallback_when_no_router():
         call_kwargs = mock_afile_retrieve.call_args
         assert call_kwargs.kwargs.get("custom_llm_provider") == "azure"
         assert call_kwargs.kwargs.get("file_id") == "file-output-abc"
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_swallows_model_object_id_unique_violation():
+    """
+    The upsert in store_unified_object_id is keyed on unified_object_id, but the
+    LiteLLM_ManagedObjectTable also has a separate UNIQUE constraint on
+    model_object_id. When the same provider object is re-registered under a NEW
+    unified_object_id (e.g. a chat turn re-references an already-uploaded managed
+    file through the Anthropic passthrough), the "create" branch of the upsert
+    raises UniqueViolationError inside a fire-and-forget task.
+
+    The existing mapping is valid, so duplicate registration must be a benign
+    no-op instead of an unhandled exception.
+    """
+    from prisma.errors import UniqueViolationError
+
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    mock_cache = MagicMock()
+    mock_cache.async_set_cache = AsyncMock()
+    mock_prisma = MagicMock()
+    # Real instance without invoking prisma's __init__ (requires engine payload).
+    unique_violation = UniqueViolationError.__new__(UniqueViolationError)
+    mock_prisma.db.litellm_managedobjecttable.upsert = AsyncMock(
+        side_effect=unique_violation
+    )
+
+    instance = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=mock_cache,
+        prisma_client=mock_prisma,
+    )
+
+    # Must NOT raise — the provider object is simply already registered.
+    await instance.store_unified_object_id(
+        unified_object_id="unified-batch-2",
+        file_object=_make_batch_response(batch_id="batch-456"),
+        litellm_parent_otel_span=None,
+        model_object_id="provider-batch-abc",
+        file_purpose="batch",
+        user_api_key_dict=_make_user_api_key_dict(),
+    )
+
+    mock_prisma.db.litellm_managedobjecttable.upsert.assert_awaited_once()
