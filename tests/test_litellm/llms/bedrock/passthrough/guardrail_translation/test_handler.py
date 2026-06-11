@@ -72,9 +72,7 @@ class TestExtractConverseTexts:
             "system": [{"text": "sys text"}],
             "messages": [{"role": "user", "content": [{"text": "user text"}]}],
         }
-        texts, mappings = _extract_converse_texts(
-            body, skip_system=False, skip_tool=False
-        )
+        texts, mappings = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert texts == ["sys text", "user text"]
         assert mappings[0] == ("system", 0, -1)
         assert mappings[1] == ("message", 0, 0)
@@ -84,9 +82,7 @@ class TestExtractConverseTexts:
             "system": [{"text": "sys text"}],
             "messages": [{"role": "user", "content": [{"text": "user text"}]}],
         }
-        texts, mappings = _extract_converse_texts(
-            body, skip_system=True, skip_tool=False
-        )
+        texts, mappings = _extract_converse_texts(body, skip_system=True, skip_tool=False)
         assert texts == ["user text"]
         assert all(m[0] == "message" for m in mappings)
 
@@ -157,9 +153,7 @@ class TestWriteBackTexts:
         original = copy.deepcopy(body)
         _write_back_texts(body, ["replaced"], [("message", 0, 0)])
         assert body["messages"][0]["content"][0]["text"] == "replaced"
-        assert (
-            body["messages"][0]["content"][1] == original["messages"][0]["content"][1]
-        )
+        assert body["messages"][0]["content"][1] == original["messages"][0]["content"][1]
         assert body["inferenceConfig"] == original["inferenceConfig"]
 
 
@@ -186,9 +180,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         data = _converse_data()
         guardrail = _make_guardrail({"texts": ["[REDACTED]", "[REDACTED]"]})
 
-        result = await handler.process_input_messages(
-            data=data, guardrail_to_apply=guardrail
-        )
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         body = result["data"]
         assert body["system"][0]["text"] == "[REDACTED]"
@@ -206,14 +198,10 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         guardrail.guardrail_name = "block-guard"
         guardrail.skip_system_message_in_guardrail = False
         guardrail.skip_tool_message_in_guardrail = False
-        guardrail.apply_guardrail = AsyncMock(
-            side_effect=HTTPException(status_code=400, detail="Blocked")
-        )
+        guardrail.apply_guardrail = AsyncMock(side_effect=HTTPException(status_code=400, detail="Blocked"))
 
         with pytest.raises(HTTPException):
-            await handler.process_input_messages(
-                data=data, guardrail_to_apply=guardrail
-            )
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
     @pytest.mark.asyncio
     async def test_non_converse_endpoint_skips_apply_guardrail(self):
@@ -270,9 +258,7 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         response = self._converse_response("Model reply")
         guardrail = _make_guardrail({"texts": ["Model reply"]})
 
-        await handler.process_output_response(
-            response=response, guardrail_to_apply=guardrail
-        )
+        await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
         call_args = guardrail.apply_guardrail.call_args
         assert call_args.kwargs["input_type"] == "response"
@@ -284,9 +270,7 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         response = self._converse_response("Bad content")
         guardrail = _make_guardrail({"texts": ["[MASKED]"]})
 
-        result = await handler.process_output_response(
-            response=response, guardrail_to_apply=guardrail
-        )
+        result = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
         assert result["output"]["message"]["content"][0]["text"] == "[MASKED]"
         assert result["stopReason"] == "end_turn"
@@ -296,9 +280,7 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         handler = BedrockPassthroughGuardrailHandler()
         guardrail = _make_guardrail({"texts": []})
 
-        result = await handler.process_output_response(
-            response="raw string", guardrail_to_apply=guardrail
-        )
+        result = await handler.process_output_response(response="raw string", guardrail_to_apply=guardrail)
 
         assert result == "raw string"
         guardrail.apply_guardrail.assert_not_called()
@@ -309,9 +291,227 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         response = {"stopReason": "end_turn"}
         guardrail = _make_guardrail({"texts": []})
 
-        result = await handler.process_output_response(
-            response=response, guardrail_to_apply=guardrail
-        )
+        result = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
         assert result == {"stopReason": "end_turn"}
         guardrail.apply_guardrail.assert_not_called()
+
+
+def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
+    import json
+    import struct
+
+    from botocore.eventstream import crc32 as esm_crc32
+
+    payload_bytes = json.dumps(payload, separators=(",", ":")).encode()
+
+    def _encode_str_header(name: str, value: str) -> bytes:
+        name_b = name.encode()
+        value_b = value.encode()
+        return (
+            struct.pack("!B", len(name_b)) + name_b + struct.pack("!B", 7) + struct.pack("!H", len(value_b)) + value_b
+        )
+
+    headers_bytes = (
+        _encode_str_header(":event-type", event_type)
+        + _encode_str_header(":content-type", "application/json")
+        + _encode_str_header(":message-type", "event")
+    )
+
+    headers_length = len(headers_bytes)
+    total_length = 12 + headers_length + len(payload_bytes) + 4
+    prelude = struct.pack("!II", total_length, headers_length)
+    prelude_crc_val = esm_crc32(prelude) & 0xFFFFFFFF
+    prelude_crc_b = struct.pack("!I", prelude_crc_val)
+    part_for_msg = prelude_crc_b + headers_bytes + payload_bytes
+    msg_crc_val = esm_crc32(part_for_msg, prelude_crc_val) & 0xFFFFFFFF
+    msg_crc_b = struct.pack("!I", msg_crc_val)
+    return prelude + prelude_crc_b + headers_bytes + payload_bytes + msg_crc_b
+
+
+class TestDeAnonymizeConverseStream:
+    def _make_proxy_logging(self, mock_hook) -> MagicMock:
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_success_hook = mock_hook
+        return proxy_logging_obj
+
+    @pytest.mark.asyncio
+    async def test_text_delta_de_anonymized_in_modified_bytes(self):
+        import json
+        from botocore.eventstream import EventStreamBuffer
+
+        stream_bytes = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"})
+            + _build_event_stream_frame(
+                "contentBlockDelta",
+                {"contentBlockIndex": 0, "delta": {"text": "<PERSON_1> works at <ORG_2>"}},
+            )
+            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0})
+            + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
+        )
+
+        de_anon_response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "John Doe works at Acme Corp"}],
+                }
+            },
+            "stopReason": "end_turn",
+        }
+
+        async def mock_hook(data, user_api_key_dict, response):
+            return de_anon_response
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(mock_hook),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        buf = EventStreamBuffer()
+        buf.add_data(result)
+        texts = [
+            json.loads(msg.payload)["delta"]["text"]
+            for msg in buf
+            if msg.headers.get(":event-type") == "contentBlockDelta"
+        ]
+        assert "".join(texts) == "John Doe works at Acme Corp"
+
+    @pytest.mark.asyncio
+    async def test_tokens_split_across_chunks_reassembled(self):
+        import json
+        from botocore.eventstream import EventStreamBuffer
+
+        stream_bytes = _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"text": "<PERSON_"}},
+        ) + _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"text": "1> called."}},
+        )
+
+        de_anon_response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "Alice called."}],
+                }
+            },
+            "stopReason": "end_turn",
+        }
+
+        async def mock_hook(data, user_api_key_dict, response):
+            assert response["output"]["message"]["content"][0]["text"] == "<PERSON_1> called."
+            return de_anon_response
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(mock_hook),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        buf = EventStreamBuffer()
+        buf.add_data(result)
+        texts = [
+            json.loads(msg.payload)["delta"]["text"]
+            for msg in buf
+            if msg.headers.get(":event-type") == "contentBlockDelta"
+        ]
+        assert "".join(texts) == "Alice called."
+
+    @pytest.mark.asyncio
+    async def test_non_text_frames_preserved_unchanged(self):
+        from botocore.eventstream import EventStreamBuffer
+
+        stream_bytes = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"})
+            + _build_event_stream_frame(
+                "contentBlockDelta",
+                {"contentBlockIndex": 0, "delta": {"text": "<PERSON_1>"}},
+            )
+            + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
+        )
+
+        de_anon_response = {
+            "output": {"message": {"role": "assistant", "content": [{"text": "Bob"}]}},
+            "stopReason": "end_turn",
+        }
+
+        async def mock_hook(data, user_api_key_dict, response):
+            return de_anon_response
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(mock_hook),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        buf = EventStreamBuffer()
+        buf.add_data(result)
+        event_types = [msg.headers.get(":event-type") for msg in buf]
+        assert "messageStart" in event_types
+        assert "messageStop" in event_types
+        assert event_types.count("contentBlockDelta") == 1
+
+    @pytest.mark.asyncio
+    async def test_no_text_deltas_returns_original_bytes(self):
+        stream_bytes = _build_event_stream_frame("messageStart", {"role": "assistant"})
+
+        hook_spy = AsyncMock()
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(hook_spy),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        hook_spy.assert_not_called()
+        assert result is stream_bytes
+
+    @pytest.mark.asyncio
+    async def test_text_distributed_proportionally_across_chunks(self):
+        import json
+        from botocore.eventstream import EventStreamBuffer
+
+        stream_bytes = _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"text": "<PERSON_1>"}},
+        ) + _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"text": "<ORG>"}},
+        )
+
+        de_anon_response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "John Acme"}],
+                }
+            },
+            "stopReason": "end_turn",
+        }
+
+        async def mock_hook(data, user_api_key_dict, response):
+            return de_anon_response
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(mock_hook),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        buf = EventStreamBuffer()
+        buf.add_data(result)
+        texts = [
+            json.loads(msg.payload)["delta"]["text"]
+            for msg in buf
+            if msg.headers.get(":event-type") == "contentBlockDelta"
+        ]
+        assert "".join(texts) == "John Acme"
+        assert all(t != "" for t in texts), f"Expected no empty chunks, got: {texts}"

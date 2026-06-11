@@ -2370,6 +2370,7 @@ class TestAllmPassthroughRoutePostCallGuardrails:
                 response=httpx_response,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                custom_headers={},
             )
 
         assert len(received_responses) == 1
@@ -2412,6 +2413,7 @@ class TestAllmPassthroughRoutePostCallGuardrails:
                 response=httpx_response,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                custom_headers={},
             )
 
         spy_read.assert_not_called()
@@ -2457,225 +2459,75 @@ def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
 
 
 class TestEventStreamAllmPassthroughRoute:
-    def _make_guardrail_cb(self) -> MagicMock:
-        cb = MagicMock()
-        cb.event_hook = ["pre_call", "post_call"]
-        cb.async_post_call_success_hook = AsyncMock(return_value=None)
-        return cb
-
     @pytest.mark.asyncio
-    async def test_text_delta_de_anonymized_in_modified_bytes(self, monkeypatch):
-        import json
-        from botocore.eventstream import EventStreamBuffer
-
-        stream_bytes = (
-            _build_event_stream_frame("messageStart", {"role": "assistant"})
-            + _build_event_stream_frame(
-                "contentBlockDelta",
-                {"contentBlockIndex": 0, "delta": {"text": "<PERSON_1> works at <ORG_2>"}},
-            )
-            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0})
-            + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
-        )
-
-        de_anon_response = {
-            "output": {
-                "message": {
-                    "role": "assistant",
-                    "content": [{"text": "John Doe works at Acme Corp"}],
-                }
-            },
-            "stopReason": "end_turn",
-        }
-
-        async def mock_hook(data, user_api_key_dict, response):
-            return de_anon_response
-
-        cb = self._make_guardrail_cb()
-        monkeypatch.setattr(litellm, "callbacks", [cb])
-        ProxyLogging._callback_capabilities_cache.clear()
-
-        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
-        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", mock_hook)
-
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
-            processing_obj = ProxyBaseLLMRequestProcessing(data={})
-            result = await processing_obj._handle_event_stream_allm_passthrough_route(
-                body_bytes=stream_bytes,
-                proxy_logging_obj=proxy_logging_obj,
-                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
-            )
-
-        # Re-parse the modified bytes to check text content
-        buf = EventStreamBuffer()
-        buf.add_data(result)
-        texts = []
-        for msg in buf:
-            if msg.headers.get(":event-type") == "contentBlockDelta":
-                payload = json.loads(msg.payload)
-                texts.append(payload["delta"]["text"])
-
-        assert "".join(texts) == "John Doe works at Acme Corp"
-        ProxyLogging._callback_capabilities_cache.clear()
-
-    @pytest.mark.asyncio
-    async def test_tokens_split_across_chunks_reassembled(self, monkeypatch):
-        import json
-        from botocore.eventstream import EventStreamBuffer
-
-        stream_bytes = _build_event_stream_frame(
-            "contentBlockDelta",
-            {"contentBlockIndex": 0, "delta": {"text": "<PERSON_"}},
-        ) + _build_event_stream_frame(
-            "contentBlockDelta",
-            {"contentBlockIndex": 0, "delta": {"text": "1> called."}},
-        )
-
-        de_anon_response = {
-            "output": {
-                "message": {
-                    "role": "assistant",
-                    "content": [{"text": "Alice called."}],
-                }
-            },
-            "stopReason": "end_turn",
-        }
-
-        async def mock_hook(data, user_api_key_dict, response):
-            assert response["output"]["message"]["content"][0]["text"] == "<PERSON_1> called."
-            return de_anon_response
-
-        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
-        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", mock_hook)
-
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
-            processing_obj = ProxyBaseLLMRequestProcessing(data={})
-            result = await processing_obj._handle_event_stream_allm_passthrough_route(
-                body_bytes=stream_bytes,
-                proxy_logging_obj=proxy_logging_obj,
-                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
-            )
-
-        buf = EventStreamBuffer()
-        buf.add_data(result)
-        texts = []
-        for msg in buf:
-            if msg.headers.get(":event-type") == "contentBlockDelta":
-                payload = json.loads(msg.payload)
-                texts.append(payload["delta"]["text"])
-
-        assert "".join(texts) == "Alice called."
-        ProxyLogging._callback_capabilities_cache.clear()
-
-    @pytest.mark.asyncio
-    async def test_non_text_frames_preserved_unchanged(self, monkeypatch):
-        from botocore.eventstream import EventStreamBuffer
-
-        stream_bytes = (
-            _build_event_stream_frame("messageStart", {"role": "assistant"})
-            + _build_event_stream_frame(
-                "contentBlockDelta",
-                {"contentBlockIndex": 0, "delta": {"text": "<PERSON_1>"}},
-            )
-            + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
-        )
-
-        de_anon_response = {
-            "output": {"message": {"role": "assistant", "content": [{"text": "Bob"}]}},
-            "stopReason": "end_turn",
-        }
-
-        async def mock_hook(data, user_api_key_dict, response):
-            return de_anon_response
-
-        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
-        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", mock_hook)
-
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
-            processing_obj = ProxyBaseLLMRequestProcessing(data={})
-            result = await processing_obj._handle_event_stream_allm_passthrough_route(
-                body_bytes=stream_bytes,
-                proxy_logging_obj=proxy_logging_obj,
-                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
-            )
-
-        buf = EventStreamBuffer()
-        buf.add_data(result)
-        event_types = [msg.headers.get(":event-type") for msg in buf]
-
-        assert "messageStart" in event_types
-        assert "messageStop" in event_types
-        assert event_types.count("contentBlockDelta") == 1
-        ProxyLogging._callback_capabilities_cache.clear()
-
-    @pytest.mark.asyncio
-    async def test_no_text_deltas_returns_original_bytes(self, monkeypatch):
+    async def test_bedrock_provider_dispatches_to_handler(self):
         stream_bytes = _build_event_stream_frame("messageStart", {"role": "assistant"})
+        expected_bytes = _build_event_stream_frame("messageStart", {"role": "assistant"}) + b"extra"
 
-        hook_spy = AsyncMock()
-        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
-        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", hook_spy)
+        proxy_logging_obj = MagicMock()
+        user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
 
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
-            processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        with patch(
+            "litellm.llms.bedrock.passthrough.guardrail_translation.handler.BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream",
+            new=AsyncMock(return_value=expected_bytes),
+        ) as mock_handler:
+            processing_obj = ProxyBaseLLMRequestProcessing(data={"custom_llm_provider": "bedrock"})
             result = await processing_obj._handle_event_stream_allm_passthrough_route(
                 body_bytes=stream_bytes,
                 proxy_logging_obj=proxy_logging_obj,
-                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                user_api_key_dict=user_api_key_dict,
             )
 
-        hook_spy.assert_not_called()
-        assert result is stream_bytes
-        ProxyLogging._callback_capabilities_cache.clear()
+        mock_handler.assert_awaited_once()
+        assert result == expected_bytes
 
     @pytest.mark.asyncio
-    async def test_text_distributed_proportionally_across_chunks(self, monkeypatch):
-        import json
-        from botocore.eventstream import EventStreamBuffer
+    async def test_non_bedrock_provider_returns_original_bytes(self):
+        stream_bytes = _build_event_stream_frame("messageStart", {"role": "assistant"})
+        proxy_logging_obj = MagicMock()
 
-        # Two chunks of unequal length: 10 chars vs 4 chars (= 14 total)
-        stream_bytes = _build_event_stream_frame(
-            "contentBlockDelta",
-            {"contentBlockIndex": 0, "delta": {"text": "<PERSON_1>"}},
-        ) + _build_event_stream_frame(
-            "contentBlockDelta",
-            {"contentBlockIndex": 0, "delta": {"text": "<ORG>"}},
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"custom_llm_provider": "anthropic"})
+        result = await processing_obj._handle_event_stream_allm_passthrough_route(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
         )
 
-        de_anon_response = {
-            "output": {
-                "message": {
-                    "role": "assistant",
-                    "content": [{"text": "John Acme"}],
-                }
-            },
-            "stopReason": "end_turn",
-        }
+        assert result is stream_bytes
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_response_includes_custom_headers(self):
+        import json
+
+        body = {"output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}}}
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json", "content-length": "99"}
+        mock_response.aread = AsyncMock(return_value=json.dumps(body).encode())
 
         async def mock_hook(data, user_api_key_dict, response):
-            return de_anon_response
+            return response
 
-        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
-        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", mock_hook)
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_success_hook = mock_hook
+
+        custom_headers = {
+            "x-litellm-call-id": "test-call-123",
+            "x-litellm-model-id": "bedrock/claude",
+            "content-length": "99",
+        }
 
         with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
             processing_obj = ProxyBaseLLMRequestProcessing(data={})
-            result = await processing_obj._handle_event_stream_allm_passthrough_route(
-                body_bytes=stream_bytes,
+            result = await processing_obj._handle_non_streaming_allm_passthrough_route(
+                response=mock_response,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                custom_headers=custom_headers,
             )
 
-        buf = EventStreamBuffer()
-        buf.add_data(result)
-        texts = [
-            json.loads(msg.payload)["delta"]["text"]
-            for msg in buf
-            if msg.headers.get(":event-type") == "contentBlockDelta"
-        ]
-
-        # Full text is preserved
-        assert "".join(texts) == "John Acme"
-        # Neither chunk is empty — text was distributed across both
-        assert all(t != "" for t in texts), f"Expected no empty chunks, got: {texts}"
-        ProxyLogging._callback_capabilities_cache.clear()
+        assert result is not None
+        assert result.headers.get("x-litellm-call-id") == "test-call-123"
+        assert result.headers.get("x-litellm-model-id") == "bedrock/claude"
+        # content-length from custom_headers is filtered; Starlette sets the correct value from body
+        assert result.headers.get("content-length") != "99"
