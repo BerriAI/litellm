@@ -204,7 +204,13 @@ class TestProxyInitializationHelpers:
         monkeypatch.chdir(tmp_path)
 
         uvicorn_args: dict = {}
-        with patch("litellm._logging.verbose_proxy_logger.warning") as mock_warning:
+        with (
+            patch(
+                "litellm.proxy.proxy_cli.importlib.util.find_spec",
+                return_value=object(),
+            ),
+            patch("litellm._logging.verbose_proxy_logger.warning") as mock_warning,
+        ):
             ProxyInitializationHelpers._configure_dev_reload(
                 uvicorn_args, str(config_file)
             )
