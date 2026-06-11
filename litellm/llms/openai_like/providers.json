@@ -132,10 +132,7 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
-    "supported_endpoints": [
-      "/v1/chat/completions",
-      "/v1/responses"
-    ]
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   },
   "parasail": {
     "base_url": "https://api.parasail.io/v1",
