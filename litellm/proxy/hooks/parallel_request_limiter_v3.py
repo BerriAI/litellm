@@ -32,13 +32,20 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
-from litellm.proxy.hooks.rate_limiter_utils import (
-    ProxyHTTPRateLimitError,
-    resolve_llm_provider_for_rate_limit,
+from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    ProxyRateLimitError,
+    map_v3_rate_limit_type,
 )
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
-from litellm.types.utils import CallTypes, ModelResponse, Usage
+from litellm.types.utils import (
+    CallTypes,
+    EmbeddingResponse,
+    ModelResponse,
+    TextCompletionResponse,
+    Usage,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1971,7 +1978,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors: List[RateLimitDescriptor],
         requested_model: Optional[str] = None,
     ) -> None:
-        """Handle rate limit exceeded error by raising HTTPException."""
+        """Handle rate limit exceeded by raising :class:`ProxyRateLimitError` (a 429)."""
         for status in response["statuses"]:
             if status["code"] == "OVER_LIMIT":
                 descriptor_key = status["descriptor_key"]
@@ -2005,14 +2012,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
                     requested_model
                 )
-                raise ProxyHTTPRateLimitError(
-                    status_code=429,
+                raise ProxyRateLimitError(
                     detail=detail,
                     headers={
                         "retry-after": str(self.window_size),
                         "rate_limit_type": str(status["rate_limit_type"]),
                         "reset_at": reset_time_formatted,
                     },
+                    rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
                     model=resolved_model,
                     llm_provider=llm_provider,
                 )
@@ -2735,9 +2742,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Get total tokens from response
         total_tokens = 0
-        # spot fix for /responses api
-        if isinstance(response_obj, ModelResponse) or isinstance(
-            response_obj, BaseLiteLLMOpenAIResponseObject
+        if isinstance(
+            response_obj,
+            (
+                ModelResponse,
+                EmbeddingResponse,
+                TextCompletionResponse,
+                BaseLiteLLMOpenAIResponseObject,
+            ),
         ):
             _usage = getattr(response_obj, "usage", None)
             total_tokens = self._get_total_tokens_from_usage(

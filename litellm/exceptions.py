@@ -9,12 +9,108 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
-from typing import Any, Dict, Optional
+import enum
+from typing import Any, Dict, Optional, Union
 
 import httpx
 import openai
 
 from litellm.types.utils import LiteLLMCommonStrings
+
+
+class RateLimitErrorCategory(str, enum.Enum):
+    """
+    Category of a rate limit error, allowing callers to distinguish where the rate
+    limit originated. Exposed on every :class:`RateLimitError` instance via the
+    ``category`` attribute.
+
+    Use these values to switch on the rate limit source, e.g.::
+
+        try:
+            ...
+        except litellm.RateLimitError as e:
+            if e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT:
+                ...  # litellm's own limiter (key/team/user/model RPM/TPM/budget)
+            elif e.category == RateLimitErrorCategory.VENDOR_RATE_LIMIT:
+                ...  # the upstream LLM provider returned 429
+    """
+
+    VENDOR_RATE_LIMIT = "vendor_rate_limit"
+    """The upstream LLM provider returned a rate-limit response (e.g. OpenAI 429)."""
+
+    VENDOR_BATCH_RATE_LIMIT = "vendor_batch_rate_limit"
+    """The upstream LLM provider returned a rate-limit response on a batch endpoint."""
+
+    LITELLM_RATE_LIMIT = "litellm_rate_limit"
+    """LiteLLM's own rate limiter (key/team/user/model RPM/TPM, budget, parallel-requests, etc.) blocked the request."""
+
+    LITELLM_BATCH_RATE_LIMIT = "litellm_batch_rate_limit"
+    """LiteLLM's own batch rate limiter (token/request budget across a batch input file) blocked the request."""
+
+
+class RateLimitType(str, enum.Enum):
+    """
+    The dimension that was exceeded when a rate-limit error fired.
+
+    This is orthogonal to :class:`RateLimitErrorCategory` — *category* tells
+    callers **who** rate-limited the request (the upstream vendor vs. one of
+    litellm's own limiters), while *type* tells them **which limit dimension**
+    was exceeded (an RPM ceiling, a TPM ceiling, a max-parallel-requests
+    ceiling, a budget cap, or a max-iterations cap).
+
+    Surfaced both on every :class:`RateLimitError` instance via the
+    ``rate_limit_type`` attribute and on the structured
+    ``StandardLoggingPayload.error_information.error_rate_limit_type`` field
+    so custom callbacks / metrics consumers can split rate-limit failures by
+    cause without parsing free-text error messages.
+    """
+
+    REQUESTS = "requests"
+    """Requests-per-minute (RPM) or requests-per-window ceiling exceeded."""
+
+    TOKENS = "tokens"
+    """Tokens-per-minute (TPM) or tokens-per-window ceiling exceeded."""
+
+    CONCURRENT_REQUESTS = "concurrent_requests"
+    """``max_parallel_requests`` — too many in-flight requests at once."""
+
+    BUDGET = "budget"
+    """Spend budget cap reached (key, team, user, or per-session)."""
+
+    MAX_ITERATIONS = "max_iterations"
+    """Per-session max-iterations cap reached (agent-style flows)."""
+
+
+_RATE_LIMIT_CATEGORY_VALUES = frozenset(c.value for c in RateLimitErrorCategory)
+_RATE_LIMIT_TYPE_VALUES = frozenset(t.value for t in RateLimitType)
+
+
+def validate_rate_limit_category(value: Any) -> Optional[str]:
+    """Return ``value`` only if it matches a known :class:`RateLimitErrorCategory`.
+
+    Used at duck-typed read sites (StandardLoggingPayload extraction, Prometheus
+    labels) to reject `.category` strings set by unrelated third-party exceptions
+    — otherwise those would leak into custom-callback payloads and Prometheus
+    label cardinality.
+    """
+    if isinstance(value, RateLimitErrorCategory):
+        return value.value
+    if isinstance(value, str) and value in _RATE_LIMIT_CATEGORY_VALUES:
+        return value
+    return None
+
+
+def validate_rate_limit_type(value: Any) -> Optional[str]:
+    """Return ``value`` only if it matches a known :class:`RateLimitType`.
+
+    See :func:`validate_rate_limit_category` for the rationale.
+    """
+    if isinstance(value, RateLimitType):
+        return value.value
+    if isinstance(value, str) and value in _RATE_LIMIT_TYPE_VALUES:
+        return value
+    return None
+
 
 _MINIMAL_ERROR_RESPONSE: Optional[httpx.Response] = None
 
@@ -321,6 +417,18 @@ class PermissionDeniedError(openai.PermissionDeniedError):  # type: ignore
 
 
 class RateLimitError(openai.RateLimitError):  # type: ignore
+    """
+    Unified rate-limit error.
+
+    Every rate-limit condition surfaced by litellm — whether it originated from
+    an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+    proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+    max-iterations, etc.) — is raised as an instance of this class.
+
+    The :attr:`category` attribute lets callers distinguish the source. See
+    :class:`RateLimitErrorCategory` for the available values.
+    """
+
     def __init__(
         self,
         message,
@@ -330,6 +438,12 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
+        category: Union[str, RateLimitErrorCategory] = (
+            RateLimitErrorCategory.VENDOR_RATE_LIMIT
+        ),
+        rate_limit_type: Optional[Union[str, RateLimitType]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        detail: Any = None,
     ):
         self.status_code = 429
         self.message = "litellm.RateLimitError: {}".format(message)
@@ -338,9 +452,39 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        self.category = (
+            category.value if isinstance(category, RateLimitErrorCategory) else category
+        )
+        # Which dimension was exceeded — request count, token count, parallel
+        # requests, budget, max iterations. None when the source didn't
+        # classify the failure (e.g. legacy vendor 429 with no header hints).
+        self.rate_limit_type: Optional[str] = (
+            rate_limit_type.value
+            if isinstance(rate_limit_type, RateLimitType)
+            else rate_limit_type
+        )
+        # Headers explicitly attached to the error (e.g. retry-after,
+        # rate_limit_type, reset_at). Preserved across the proxy boundary so
+        # clients can react appropriately.
+        #
+        # IMPORTANT: we deliberately do NOT auto-populate self.headers from
+        # response.headers when only `response` is provided. A vendor 429 can
+        # set arbitrary response headers (Set-Cookie, CORS overrides, …); if
+        # those leaked into e.headers and a downstream proxy serializer
+        # forwarded them to the client, a malicious upstream could inject
+        # browser-interpreted headers for the proxy origin. Vendor response
+        # headers stay reachable on `e.response.headers` for callers that
+        # explicitly want them; only the proxy-supplied `headers=` kwarg
+        # makes it onto `self.headers`.
         _response_headers = (
             getattr(response, "headers", None) if response is not None else None
         )
+        self.headers: Optional[Dict[str, str]] = (
+            {k: str(v) for k, v in headers.items()} if headers else None
+        )
+        # Mirrors FastAPI HTTPException.detail so the same instance can be
+        # serialized through both the ProxyException and HTTPException paths.
+        self.detail = detail if detail is not None else self.message
         self.response = httpx.Response(
             status_code=429,
             headers=_response_headers,
@@ -843,11 +987,24 @@ LITELLM_EXCEPTION_TYPES = [
 
 class BudgetExceededError(Exception):
     def __init__(
-        self, current_cost: float, max_budget: float, message: Optional[str] = None
+        self,
+        current_cost: float,
+        max_budget: float,
+        message: Optional[str] = None,
+        llm_provider: Optional[str] = None,
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
         self.status_code = 429
+        self.llm_provider = llm_provider or ""
+        # Surface unified rate-limit fields without joining the RateLimitError
+        # hierarchy so existing `except BudgetExceededError:` handlers keep
+        # working; custom callbacks reading StandardLoggingPayload pick these
+        # up via the same `category` / `rate_limit_type` attributes the rest
+        # of the unified rate-limit error path uses. Stored as plain strings
+        # to match the normalization RateLimitError.__init__ performs.
+        self.category: str = RateLimitErrorCategory.LITELLM_RATE_LIMIT.value
+        self.rate_limit_type: str = RateLimitType.BUDGET.value
         message = (
             message
             or f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"

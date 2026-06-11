@@ -12,6 +12,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.table_repositories import MCPServerRepository
 
 if TYPE_CHECKING:
     from litellm.proxy._types import (
@@ -48,10 +50,10 @@ async def attach_object_permission_to_dict(
 
     object_permission_id = data_dict.get("object_permission_id")
     if object_permission_id:
-        object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": object_permission_id},
-            )
+        object_permission = await ObjectPermissionRepository(
+            prisma_client
+        ).table.find_unique(
+            where={"object_permission_id": object_permission_id},
         )
         if object_permission:
             # Convert to dict if needed
@@ -106,10 +108,10 @@ async def handle_update_object_permission_common(
     )
     existing_object_permissions_dict: Dict = {}
 
-    existing_object_permission = (
-        await prisma_client.db.litellm_objectpermissiontable.find_unique(
-            where={"object_permission_id": object_permission_id_to_use},
-        )
+    existing_object_permission = await ObjectPermissionRepository(
+        prisma_client
+    ).table.find_unique(
+        where={"object_permission_id": object_permission_id_to_use},
     )
 
     # Update the object permission
@@ -137,14 +139,14 @@ async def handle_update_object_permission_common(
     #########################################################
     # Commit the update to the LiteLLM_ObjectPermissionTable
     #########################################################
-    created_object_permission_row = (
-        await prisma_client.db.litellm_objectpermissiontable.upsert(
-            where={"object_permission_id": object_permission_id_to_use},
-            data={
-                "create": existing_object_permissions_dict,
-                "update": existing_object_permissions_dict,
-            },
-        )
+    created_object_permission_row = await ObjectPermissionRepository(
+        prisma_client
+    ).table.upsert(
+        where={"object_permission_id": object_permission_id_to_use},
+        data={
+            "create": existing_object_permissions_dict,
+            "update": existing_object_permissions_dict,
+        },
     )
 
     verbose_proxy_logger.debug(
@@ -183,7 +185,7 @@ async def _set_object_permission(
             clean_data["mcp_tool_permissions"]
         )
 
-    created_permission = await prisma_client.db.litellm_objectpermissiontable.create(
+    created_permission = await ObjectPermissionRepository(prisma_client).table.create(
         data=clean_data
     )
 
@@ -220,7 +222,7 @@ async def _get_db_mcp_servers_by_identifiers(
         return []
 
     identifier_list = list(identifiers)
-    return await prisma_client.db.litellm_mcpservertable.find_many(
+    return await MCPServerRepository(prisma_client).table.find_many(
         where={
             "OR": [
                 {"server_id": {"in": identifier_list}},

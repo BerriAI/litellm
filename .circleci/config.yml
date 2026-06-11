@@ -111,6 +111,28 @@ commands:
       - wait_for_service:
           url: tcp://localhost:6379
           timeout: "60"
+  start_openai_record_replay_proxy:
+    description: "Start the record/replay proxy (tests/_openai_record_replay_proxy.py) on host port 8090 and wait until healthy. Models whose api_base points here replay recorded provider responses, so the E2E run neither pays for nor depends on the live provider. The default upstream is OpenAI; a non-OpenAI model must point its api_base at /__recorder_upstream/<host>/ so the recorder forwards there instead of defaulting to OpenAI. Run after uv deps are synced."
+    steps:
+      - run:
+          name: Start record/replay proxy
+          background: true
+          command: |
+            CASSETTE_REDIS_URL="$CASSETTE_REDIS_URL" \
+            RECORDER_UPSTREAM_BASE_URL="https://api.openai.com" \
+              uv run --no-sync python tests/_openai_record_replay_proxy.py --host 0.0.0.0 --port 8090
+      - run:
+          name: Wait for record/replay proxy
+          command: |
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8090/__recorder_health >/dev/null 2>&1; then
+                echo "record/replay proxy is up"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "record/replay proxy did not become ready" >&2
+            exit 1
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -1625,25 +1647,7 @@ jobs:
           command: |
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker tag litellm-docker-database:ci my-app:latest
-      - run:
-          name: Start OpenAI image record/replay proxy
-          background: true
-          command: |
-            CASSETTE_REDIS_URL="$CASSETTE_REDIS_URL" \
-            RECORDER_UPSTREAM_BASE_URL="https://api.openai.com" \
-              uv run --no-sync python tests/_openai_record_replay_proxy.py --host 0.0.0.0 --port 8090
-      - run:
-          name: Wait for record/replay proxy
-          command: |
-            for i in $(seq 1 30); do
-              if curl -sf http://localhost:8090/__recorder_health >/dev/null 2>&1; then
-                echo "record/replay proxy is up"
-                exit 0
-              fi
-              sleep 1
-            done
-            echo "record/replay proxy did not become ready" >&2
-            exit 1
+      - start_openai_record_replay_proxy
       - run:
           name: Run Docker container
           command: |
@@ -1674,7 +1678,7 @@ jobs:
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
-              -e IMAGE_GEN_RECORDER_BASE_URL=http://host.docker.internal:8090/v1 \
+              -e RECORDER_OPENAI_BASE_URL=http://host.docker.internal:8090/v1 \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
@@ -1812,6 +1816,7 @@ jobs:
           command: |
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
+      - start_openai_record_replay_proxy
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -1835,6 +1840,7 @@ jobs:
               -e DD_SITE=$DD_SITE \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e COHERE_API_KEY=$COHERE_API_KEY \
+              -e RECORDER_COHERE_BASE_URL=http://host.docker.internal:8090/__recorder_upstream/api.cohere.com \
               -e GCS_FLUSH_INTERVAL="1" \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
@@ -2400,6 +2406,7 @@ jobs:
           command: |
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
+      - start_openai_record_replay_proxy
       - run:
           name: Run Docker container with test config
           command: |
@@ -2408,6 +2415,7 @@ jobs:
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e RECORDER_ANTHROPIC_BASE_URL=http://host.docker.internal:8090/__recorder_upstream/api.anthropic.com \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME="us-east-1" \
@@ -2682,6 +2690,122 @@ jobs:
           path: ui/litellm-dashboard/playwright-report
           destination: e2e-playwright-report
 
+  e2e_ui_testing_server_root_path:
+    docker:
+      - image: cimg/python:3.12-browsers@sha256:b432899af01c9a311bf74f4f22e9ada2e5306d4b1b4383f8d29e1228a5844ef2
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: e2euser
+          POSTGRES_PASSWORD: e2epassword
+          POSTGRES_DB: litellm_e2e
+    resource_class: large
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://e2euser:e2epassword@localhost:5432/litellm_e2e"
+      CI: "true"
+      # The whole job exercises the proxy mounted under a prefix. SERVER_ROOT_PATH
+      # is read both by the proxy at boot (to rewrite the built UI bundle in place)
+      # and by migration.serverRootPath.config.ts, which refuses to run without it.
+      SERVER_ROOT_PATH: "/litellm"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - restore_cache:
+          keys:
+            - v1-uv-cache-{{ checksum "uv.lock" }}
+      - run:
+          name: Install Python dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+            uv run --no-sync python -m prisma generate --schema litellm/proxy/schema.prisma
+      - save_cache:
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
+          paths:
+            - ~/.cache/uv
+      - restore_cache:
+          keys:
+            - ui-e2e-node-deps-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+      - run:
+          name: Install Node dependencies and Playwright
+          command: |
+            cd ui/litellm-dashboard
+            npm ci
+            npx playwright install chromium
+      - save_cache:
+          key: ui-e2e-node-deps-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+          paths:
+            - ui/litellm-dashboard/node_modules
+            - ~/.cache/ms-playwright
+      - run:
+          name: Build UI from source
+          command: |
+            cd ui/litellm-dashboard
+            npm run build
+            rm -rf ../../litellm/proxy/_experimental/out
+            mv out ../../litellm/proxy/_experimental/out
+            find ../../litellm/proxy/_experimental/out -name '*.html' ! -name 'index.html' | while read -r f; do
+              d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
+            done
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "30"
+      - run:
+          name: Push Prisma schema
+          command: uv run --no-sync python -m prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Seed database
+          command: |
+            PGPASSWORD=e2epassword psql -h localhost -p 5432 -U e2euser -d litellm_e2e \
+              -f ui/litellm-dashboard/e2e_tests/fixtures/seed.sql
+      - run:
+          name: Start mock LLM server
+          command: uv run --no-sync python ui/litellm-dashboard/e2e_tests/fixtures/mock_llm_server/server.py
+          background: true
+      - run:
+          name: Start LiteLLM proxy under a server root path
+          environment:
+            LITELLM_MASTER_KEY: "sk-1234"
+            MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
+            DISABLE_SCHEMA_UPDATE: "true"
+          # Output flows to this step's own log, so a boot crash is visible here
+          # rather than swallowed by a downstream readiness probe.
+          command: |
+            LITELLM_LICENSE="$LITELLM_LICENSE" \
+              uv run --no-sync python -m litellm.proxy.proxy_cli \
+                --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
+                --port 4000
+          background: true
+      - run:
+          name: Wait for prefixed proxy to be ready
+          command: |
+            for i in $(seq 1 60); do
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" http://127.0.0.1:4000/litellm/health 2>/dev/null || true)
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "Prefixed proxy is ready"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "Prefixed proxy failed to start; see the 'Start LiteLLM proxy under a server root path' step for the boot log"
+            exit 1
+      - run:
+          name: Run migration smoke under SERVER_ROOT_PATH
+          command: |
+            cd ui/litellm-dashboard
+            LITELLM_LICENSE="$LITELLM_LICENSE" \
+              npx playwright test --config e2e_tests/migration.serverRootPath.config.ts
+          no_output_timeout: 10m
+      - store_artifacts:
+          path: ui/litellm-dashboard/test-results
+          destination: e2e-server-root-path-test-results
+      - store_artifacts:
+          path: ui/litellm-dashboard/playwright-report
+          destination: e2e-server-root-path-playwright-report
+
   build_docker_database_image:
     machine:
       image: ubuntu-2204:2024.04.1
@@ -2786,6 +2910,8 @@ workflows:
       - build_docker_database_image:
           filters: *main_branches
       - e2e_ui_testing:
+          filters: *main_branches
+      - e2e_ui_testing_server_root_path:
           filters: *main_branches
       - build_and_test:
           requires:

@@ -404,6 +404,7 @@ export const getUiConfig = async () => {
    * Update the proxy base url and server root path
    */
   console.log("jsonData in getUiConfig:", jsonData);
+  updateServerRootPath(jsonData.server_root_path);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
   return jsonData;
 };
@@ -976,76 +977,22 @@ export const userListCall = async (
    * Get all available teams on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/list` : `/user/list`;
-    console.log("in userListCall");
-    const queryParams = new URLSearchParams();
-
-    if (userIDs && userIDs.length > 0) {
-      // Convert array to comma-separated string
-      const userIDsString = userIDs.join(",");
-      queryParams.append("user_ids", userIDsString);
-    }
-
-    if (page) {
-      queryParams.append("page", page.toString());
-    }
-
-    if (page_size) {
-      queryParams.append("page_size", page_size.toString());
-    }
-
-    if (userEmail) {
-      queryParams.append("user_email", userEmail);
-    }
-
-    if (userRole) {
-      queryParams.append("role", userRole);
-    }
-
-    if (team) {
-      queryParams.append("team", team);
-    }
-
-    if (sso_user_id) {
-      queryParams.append("sso_user_ids", sso_user_id);
-    }
-
-    if (sortBy) {
-      queryParams.append("sort_by", sortBy);
-    }
-
-    if (sortOrder) {
-      queryParams.append("sort_order", sortOrder);
-    }
-
-    if (organizationIds && organizationIds.length > 0) {
-      queryParams.append("organization_ids", organizationIds.join(","));
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    const data = (await apiClient.get(`/user/list`, {
+      accessToken,
+      query: {
+        user_ids: userIDs && userIDs.length > 0 ? userIDs.join(",") : undefined,
+        page: page || undefined,
+        page_size: page_size || undefined,
+        user_email: userEmail || undefined,
+        role: userRole || undefined,
+        team: team || undefined,
+        sso_user_ids: sso_user_id || undefined,
+        sort_by: sortBy || undefined,
+        sort_order: sortOrder || undefined,
+        organization_ids: organizationIds && organizationIds.length > 0 ? organizationIds.join(",") : undefined,
       },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = (await response.json()) as UserListResponse;
-    console.log("/user/list API Response:", data);
+    })) as UserListResponse;
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1081,27 +1028,7 @@ export interface UserInfoV2Response {
  */
 export const userGetInfoV2 = async (accessToken: string, userId?: string): Promise<UserInfoV2Response> => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/user/info` : `/v2/user/info`;
-    if (userId) {
-      url += `?user_id=${encodeURIComponent(userId)}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
+    return await apiClient.get(`/v2/user/info`, { accessToken, query: { user_id: userId || undefined } });
   } catch (error) {
     console.error("Failed to fetch user info v2:", error);
     throw error;
@@ -1117,46 +1044,22 @@ export const userInfoCall = async (
   page_size: number | null,
   lookup_user_id: boolean = false,
 ) => {
-  console.log(`userInfoCall: ${userID}, ${userRole}, ${viewAll}, ${page}, ${page_size}, ${lookup_user_id}`);
   try {
-    let url: string;
-
     if (viewAll) {
-      // Use /user/list endpoint when viewAll is true
-      url = proxyBaseUrl ? `${proxyBaseUrl}/user/list` : `/user/list`;
-      const queryParams = new URLSearchParams();
-      if (page != null) queryParams.append("page", page.toString());
-      if (page_size != null) queryParams.append("page_size", page_size.toString());
-      url += `?${queryParams.toString()}`;
-    } else {
-      // Use /user/info endpoint for individual user info
-      url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
-      if ((userRole === "Admin" || userRole === "Admin Viewer") && !lookup_user_id) {
-        // do nothing
-      } else if (userID) {
-        url += `?user_id=${userID}`;
-      }
+      return await apiClient.get(`/user/list`, {
+        accessToken,
+        query: {
+          page: page != null ? page.toString() : undefined,
+          page_size: page_size != null ? page_size.toString() : undefined,
+        },
+      });
     }
 
-    console.log("Requesting user data from:", url);
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
+    const includeUserID = !((userRole === "Admin" || userRole === "Admin Viewer") && !lookup_user_id) && userID;
+    return await apiClient.get(`/user/info`, {
+      accessToken,
+      query: { user_id: includeUserID ? userID : undefined },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
-    return data;
   } catch (error) {
     console.error("Failed to fetch user data:", error);
     throw error;
@@ -1165,30 +1068,7 @@ export const userInfoCall = async (
 
 export const teamInfoCall = async (accessToken: string, teamID: string | null) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/info` : `/team/info`;
-    if (teamID) {
-      url = `${url}?team_id=${encodeURIComponent(teamID)}`;
-    }
-    console.log("in teamInfoCall");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
+    return await apiClient.get(`/team/info`, { accessToken, query: { team_id: teamID || undefined } });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1218,50 +1098,15 @@ export const v2TeamListCall = async (
    * Get list of teams with filtering and sorting options
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/team/list` : `/v2/team/list`;
-    console.log("in teamInfoCall");
-    const queryParams = new URLSearchParams();
-
-    if (userID) {
-      queryParams.append("user_id", userID.toString());
-    }
-
-    if (organizationID) {
-      queryParams.append("organization_id", organizationID.toString());
-    }
-
-    if (teamID) {
-      queryParams.append("team_id", teamID.toString());
-    }
-
-    if (team_alias) {
-      queryParams.append("team_alias", team_alias.toString());
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/v2/team/list`, {
+      accessToken,
+      query: {
+        user_id: userID || undefined,
+        organization_id: organizationID || undefined,
+        team_id: teamID || undefined,
+        team_alias: team_alias || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("/v2/team/list API Response:", data);
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1279,50 +1124,15 @@ export const teamListCall = async (
    * Get all available teams on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/list` : `/team/list`;
-    console.log("in teamInfoCall");
-    const queryParams = new URLSearchParams();
-
-    if (userID) {
-      queryParams.append("user_id", userID.toString());
-    }
-
-    if (organizationID) {
-      queryParams.append("organization_id", organizationID.toString());
-    }
-
-    if (teamID) {
-      queryParams.append("team_id", teamID.toString());
-    }
-
-    if (team_alias) {
-      queryParams.append("team_alias", team_alias.toString());
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/team/list`, {
+      accessToken,
+      query: {
+        user_id: userID || undefined,
+        organization_id: organizationID || undefined,
+        team_id: teamID || undefined,
+        team_alias: team_alias || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("/team/list API Response:", data);
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1352,39 +1162,13 @@ export const organizationListCall = async (
    * Get all organizations on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/organization/list` : `/organization/list`;
-    const queryParams = new URLSearchParams();
-
-    if (org_id) {
-      queryParams.append("org_id", org_id.toString());
-    }
-
-    if (org_alias) {
-      queryParams.append("org_alias", org_alias.toString());
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/organization/list`, {
+      accessToken,
+      query: {
+        org_id: org_id || undefined,
+        org_alias: org_alias || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -2106,45 +1890,16 @@ export const modelAvailableCall = async (
    */
   console.log("in /models calls, globalLitellmHeaderName", globalLitellmHeaderName);
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
-    const params = new URLSearchParams();
-    params.append("include_model_access_groups", "True");
-    if (return_wildcard_routes === true) {
-      params.append("return_wildcard_routes", "True");
-    }
-    if (only_model_access_groups === true) {
-      params.append("only_model_access_groups", "True");
-    }
-    if (teamID) {
-      params.append("team_id", teamID.toString());
-    }
-    if (scope) {
-      params.append("scope", scope);
-    }
-    if (params.toString()) {
-      url += `?${params.toString()}`;
-    }
-
-    //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/models`, {
+      accessToken,
+      query: {
+        include_model_access_groups: "True",
+        return_wildcard_routes: return_wildcard_routes === true ? "True" : undefined,
+        only_model_access_groups: only_model_access_groups === true ? "True" : undefined,
+        team_id: teamID || undefined,
+        scope: scope || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    //NotificationsManager.info("Received model data");
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -2228,35 +1983,14 @@ export const allEndUsersCall = async (accessToken: string) => {
 
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
-    const base = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
-    const queryParams = new URLSearchParams();
-    if (params.get("user_email")) {
-      queryParams.append("user_email", params.get("user_email")!);
-    }
-    if (params.get("user_id")) {
-      queryParams.append("user_id", params.get("user_id")!);
-    }
-    if (params.get("team_id")) {
-      queryParams.append("team_id", params.get("team_id")!);
-    }
-    const qs = queryParams.toString();
-    const url = qs ? `${base}?${qs}` : base;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/user/filter/ui`, {
+      accessToken,
+      query: {
+        user_email: params.get("user_email") || undefined,
+        user_id: params.get("user_id") || undefined,
+        team_id: params.get("team_id") || undefined,
       },
     });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -2701,82 +2435,25 @@ export const keyListCall = async (
    * Get all available teams on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/key/list` : `/key/list`;
-    console.log("in keyListCall");
-    const queryParams = new URLSearchParams();
-
-    if (teamID) {
-      queryParams.append("team_id", teamID.toString());
-    }
-
-    if (organizationID) {
-      queryParams.append("organization_id", organizationID.toString());
-    }
-
-    if (selectedKeyAlias) {
-      queryParams.append("key_alias", selectedKeyAlias);
-    }
-
-    if (keyHash) {
-      queryParams.append("key_hash", keyHash);
-    }
-
-    if (userID) {
-      queryParams.append("user_id", userID.toString());
-    }
-
-    if (page) {
-      queryParams.append("page", page.toString());
-    }
-
-    if (pageSize) {
-      queryParams.append("size", pageSize.toString());
-    }
-
-    if (sortBy) {
-      queryParams.append("sort_by", sortBy);
-    }
-
-    if (sortOrder) {
-      queryParams.append("sort_order", sortOrder);
-    }
-
-    if (expand) {
-      queryParams.append("expand", expand);
-    }
-
-    if (status) {
-      queryParams.append("status", status);
-    }
-
-    queryParams.append("return_full_object", "true");
-    queryParams.append("include_team_keys", "true");
-    queryParams.append("include_created_by_keys", "true");
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/key/list`, {
+      accessToken,
+      query: {
+        team_id: teamID || undefined,
+        organization_id: organizationID || undefined,
+        key_alias: selectedKeyAlias || undefined,
+        key_hash: keyHash || undefined,
+        user_id: userID || undefined,
+        page: page ? page.toString() : undefined,
+        size: pageSize ? pageSize.toString() : undefined,
+        sort_by: sortBy || undefined,
+        sort_order: sortOrder || undefined,
+        expand: expand || undefined,
+        status: status || undefined,
+        return_full_object: "true",
+        include_team_keys: "true",
+        include_created_by_keys: "true",
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("/team/list API Response:", data);
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -2802,35 +2479,15 @@ export const keyAliasesCall = async (
    * Get key aliases from proxy with pagination and optional search
    */
   try {
-    const params = new URLSearchParams(
-      Object.entries({
+    return await apiClient.get(`/key/aliases`, {
+      accessToken,
+      query: {
         page: String(page),
         size: String(size),
-        ...(search ? { search } : {}),
-        ...(team_id ? { team_id } : {}),
-      }),
-    );
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/key/aliases` : `/key/aliases`;
-    url = `${url}?${params}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+        search: search || undefined,
+        team_id: team_id || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("/key/aliases API Response:", data);
-    return data;
   } catch (error) {
     console.error("Failed to fetch key aliases:", error);
     throw error;
@@ -2847,44 +2504,21 @@ export const userDailyActivityAggregatedCall = async (
    * Get aggregated daily user activity (no pagination)
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/daily/activity/aggregated` : `/user/daily/activity/aggregated`;
-    const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, "0");
       const day = String(date.getDate()).padStart(2, "0");
       return `${year}-${month}-${day}`;
     };
-    queryParams.append("start_date", formatDate(startTime));
-    queryParams.append("end_date", formatDate(endTime));
-    // Send timezone offset so backend can adjust date range for UTC storage
-    queryParams.append("timezone", new Date().getTimezoneOffset().toString());
-    if (userId) {
-      queryParams.append("user_id", userId);
-    }
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/user/daily/activity/aggregated`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        user_id: userId || undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch aggregated user daily activity:", error);
     throw error;
@@ -3189,6 +2823,7 @@ export interface Member {
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
+  budget_duration?: string | null;
   allowed_models?: string[] | null;
 }
 
@@ -3316,18 +2951,21 @@ export const teamMemberUpdateCall = async (
       user_id: formValues.user_id,
     };
 
-    // Add optional budget and rate limit fields
+    const orNull = (value: unknown) => (value === undefined || value === null || value === "" ? null : value);
     if (formValues.user_email !== undefined) {
       requestBody.user_email = formValues.user_email;
     }
-    if (formValues.max_budget_in_team !== undefined && formValues.max_budget_in_team !== null) {
-      requestBody.max_budget_in_team = formValues.max_budget_in_team;
+    if ("max_budget_in_team" in formValues) {
+      requestBody.max_budget_in_team = orNull(formValues.max_budget_in_team);
     }
-    if (formValues.tpm_limit !== undefined && formValues.tpm_limit !== null) {
-      requestBody.tpm_limit = formValues.tpm_limit;
+    if ("tpm_limit" in formValues) {
+      requestBody.tpm_limit = orNull(formValues.tpm_limit);
     }
-    if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
-      requestBody.rpm_limit = formValues.rpm_limit;
+    if ("rpm_limit" in formValues) {
+      requestBody.rpm_limit = orNull(formValues.rpm_limit);
+    }
+    if ("budget_duration" in formValues) {
+      requestBody.budget_duration = orNull(formValues.budget_duration);
     }
     if (formValues.allowed_models !== undefined) {
       requestBody.allowed_models = formValues.allowed_models;
@@ -4913,27 +4551,7 @@ export const estimateAttachmentImpactCall = async (accessToken: string, attachme
 
 export const getPromptsList = async (accessToken: string, environment?: string): Promise<ListPromptsResponse> => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
-    if (environment) {
-      url += `?environment=${encodeURIComponent(environment)}`;
-    }
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
+    return await apiClient.get(`/prompts/list`, { accessToken, query: { environment: environment || undefined } });
   } catch (error) {
     console.error("Failed to get prompts list:", error);
     throw error;
@@ -4946,27 +4564,10 @@ export const getPromptInfo = async (
   environment?: string,
 ): Promise<PromptInfoResponse> => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
-    if (environment) {
-      url += `?environment=${encodeURIComponent(environment)}`;
-    }
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
+    return await apiClient.get(`/prompts/${promptId}/info`, {
+      accessToken,
+      query: { environment: environment || undefined },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to get prompt info:", error);
     throw error;
@@ -5315,34 +4916,7 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
 
 export const fetchMCPServers = async (accessToken: string, teamId?: string | null) => {
   try {
-    // Construct base URL with optional team_id filter
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
-    if (teamId) {
-      const params = new URLSearchParams();
-      params.append("team_id", teamId);
-      url = `${url}?${params.toString()}`;
-    }
-
-    console.log("Fetching MCP servers from:", url);
-
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.GET,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Fetched MCP servers:", data);
-    return data;
+    return await apiClient.get(`/v1/mcp/server`, { accessToken, query: { team_id: teamId || undefined } });
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
     throw error;
@@ -5351,36 +4925,12 @@ export const fetchMCPServers = async (accessToken: string, teamId?: string | nul
 
 export const fetchMCPServerHealth = async (accessToken: string, serverIds?: string[]) => {
   try {
-    // Construct base URL
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server/health` : `/v1/mcp/server/health`;
-
-    // Add server_ids query parameters if provided
-    if (serverIds && serverIds.length > 0) {
-      const params = new URLSearchParams();
-      serverIds.forEach((id) => params.append("server_ids", id));
-      url = `${url}?${params.toString()}`;
-    }
-
-    console.log("Fetching MCP server health from:", url);
-
-    const response = await fetch(url, {
-      method: HTTP_REQUEST.GET,
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/v1/mcp/server/health`, {
+      accessToken,
+      query: {
+        server_ids: serverIds && serverIds.length > 0 ? serverIds : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("Fetched MCP server health:", data);
-    return data;
   } catch (error) {
     console.error("Failed to fetch MCP server health:", error);
     throw error;
@@ -5680,11 +5230,16 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string, customHeaders?: Record<string, string>) => {
-  // Construct base URL
-  let url = proxyBaseUrl
-    ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
-    : `/mcp-rest/tools/list?server_id=${serverId}`;
+export const listMCPTools = async (
+  accessToken: string,
+  serverId: string,
+  customHeaders?: Record<string, string>,
+  includeDisabledTools?: boolean,
+) => {
+  // Construct base URL. include_disabled_tools returns the full server catalog
+  // (admin-only, backend-enforced) so the settings UI can configure the allowlist.
+  const query = `server_id=${serverId}${includeDisabledTools ? "&include_disabled_tools=true" : ""}`;
+  let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/list?${query}` : `/mcp-rest/tools/list?${query}`;
 
   console.log("Fetching MCP tools from:", url);
 
@@ -6061,13 +5616,27 @@ export const teamPermissionsUpdateCall = async (accessToken: string, teamId: str
 };
 
 /**
- * Get all spend logs for a particular session
+ * Get a page of spend logs for a particular session.
+ *
+ * The backend paginates this endpoint (page / page_size, returning
+ * { data, total, page, page_size, total_pages }). Callers that need the whole
+ * session should page through total_pages and accumulate the results.
  */
-export const sessionSpendLogsCall = async (accessToken: string, session_id: string) => {
+export const sessionSpendLogsCall = async (
+  accessToken: string,
+  session_id: string,
+  page: number = 1,
+  page_size: number = 100,
+) => {
   try {
+    const params = new URLSearchParams({
+      session_id,
+      page: String(page),
+      page_size: String(page_size),
+    });
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`
-      : `/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`;
+      ? `${proxyBaseUrl}/spend/logs/session/ui?${params.toString()}`
+      : `/spend/logs/session/ui?${params.toString()}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -7457,11 +7026,6 @@ export const tagDauCall = async (accessToken: string, endDate: Date, tagFilter?:
    * Get Daily Active Users (DAU) for last 7 days ending on endDate
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/dau` : `/tag/dau`;
-
-    const queryParams = new URLSearchParams();
-
-    // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -7469,39 +7033,15 @@ export const tagDauCall = async (accessToken: string, endDate: Date, tagFilter?:
       return `${year}-${month}-${day}`;
     };
 
-    queryParams.append("end_date", formatDate(endDate));
-
-    // Handle multiple tag filters (takes precedence over single tag filter)
-    if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach((tag) => {
-        queryParams.append("tag_filters", tag);
-      });
-    } else if (tagFilter) {
-      queryParams.append("tag_filter", tagFilter);
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    const hasTagFilters = tagFilters && tagFilters.length > 0;
+    return await apiClient.get(`/tag/dau`, {
+      accessToken,
+      query: {
+        end_date: formatDate(endDate),
+        tag_filters: hasTagFilters ? tagFilters : undefined,
+        tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch DAU:", error);
     throw error;
@@ -7513,11 +7053,6 @@ export const tagWauCall = async (accessToken: string, endDate: Date, tagFilter?:
    * Get Weekly Active Users (WAU) for last 7 weeks ending on endDate
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/wau` : `/tag/wau`;
-
-    const queryParams = new URLSearchParams();
-
-    // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -7525,39 +7060,15 @@ export const tagWauCall = async (accessToken: string, endDate: Date, tagFilter?:
       return `${year}-${month}-${day}`;
     };
 
-    queryParams.append("end_date", formatDate(endDate));
-
-    // Handle multiple tag filters (takes precedence over single tag filter)
-    if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach((tag) => {
-        queryParams.append("tag_filters", tag);
-      });
-    } else if (tagFilter) {
-      queryParams.append("tag_filter", tagFilter);
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    const hasTagFilters = tagFilters && tagFilters.length > 0;
+    return await apiClient.get(`/tag/wau`, {
+      accessToken,
+      query: {
+        end_date: formatDate(endDate),
+        tag_filters: hasTagFilters ? tagFilters : undefined,
+        tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch WAU:", error);
     throw error;
@@ -7569,11 +7080,6 @@ export const tagMauCall = async (accessToken: string, endDate: Date, tagFilter?:
    * Get Monthly Active Users (MAU) for last 7 months ending on endDate
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/mau` : `/tag/mau`;
-
-    const queryParams = new URLSearchParams();
-
-    // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -7581,39 +7087,15 @@ export const tagMauCall = async (accessToken: string, endDate: Date, tagFilter?:
       return `${year}-${month}-${day}`;
     };
 
-    queryParams.append("end_date", formatDate(endDate));
-
-    // Handle multiple tag filters (takes precedence over single tag filter)
-    if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach((tag) => {
-        queryParams.append("tag_filters", tag);
-      });
-    } else if (tagFilter) {
-      queryParams.append("tag_filter", tagFilter);
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    const hasTagFilters = tagFilters && tagFilters.length > 0;
+    return await apiClient.get(`/tag/mau`, {
+      accessToken,
+      query: {
+        end_date: formatDate(endDate),
+        tag_filters: hasTagFilters ? tagFilters : undefined,
+        tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch MAU:", error);
     throw error;
@@ -7643,11 +7125,6 @@ export const userAgentSummaryCall = async (
    * Get user agent summary statistics
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/summary` : `/tag/summary`;
-
-    const queryParams = new URLSearchParams();
-
-    // Format dates as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -7655,38 +7132,14 @@ export const userAgentSummaryCall = async (
       return `${year}-${month}-${day}`;
     };
 
-    queryParams.append("start_date", formatDate(startTime));
-    queryParams.append("end_date", formatDate(endTime));
-
-    // Handle multiple tag filters
-    if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach((tag) => {
-        queryParams.append("tag_filters", tag);
-      });
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/tag/summary`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        tag_filters: tagFilters && tagFilters.length > 0 ? tagFilters : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch user agent summary:", error);
     throw error;
@@ -7703,42 +7156,14 @@ export const perUserAnalyticsCall = async (
    * Get per-user analytics data for the last 30 days
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/user-agent/per-user-analytics` : `/tag/user-agent/per-user-analytics`;
-
-    const queryParams = new URLSearchParams();
-
-    queryParams.append("page", page.toString());
-    queryParams.append("page_size", pageSize.toString());
-
-    // Handle multiple tag filters
-    if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach((tag) => {
-        queryParams.append("tag_filters", tag);
-      });
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    return await apiClient.get(`/tag/user-agent/per-user-analytics`, {
+      accessToken,
+      query: {
+        page: page.toString(),
+        page_size: pageSize.toString(),
+        tag_filters: tagFilters && tagFilters.length > 0 ? tagFilters : undefined,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
   } catch (error) {
     console.error("Failed to fetch per-user analytics:", error);
     throw error;
