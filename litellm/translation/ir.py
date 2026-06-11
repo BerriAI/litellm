@@ -13,8 +13,8 @@ Nothing in this module performs I/O or imports a provider.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, Literal, Union
+from dataclasses import dataclass, fields
+from typing import Callable, Dict, Literal, TypeVar, Union
 
 from expression import Option, case, tag, tagged_union
 from expression.collections import Block, Map
@@ -35,6 +35,37 @@ class Unit:
 
 
 UNIT = Unit()
+
+_TCase = TypeVar("_TCase")
+_TUnion = TypeVar("_TUnion")
+
+
+def _case_maker(cls: "type[_TUnion]", name: str) -> "Callable[[object], _TUnion]":
+    """Allocation-fast constructor for one case of an Expression tagged union.
+
+    Produces instances bit-identical to ``cls(name=value)`` (same ``tag``,
+    case attribute, ``_index`` and per-case ``__dataclass_fields__``), but
+    precomputes the per-case constants once instead of rebuilding them on
+    every call. Content blocks are built per message part on the hot path;
+    the stock ``__init__`` costs ~4x more (pattern-auditor perf budget:
+    v2 <= 1.5x v1 at 600-message histories).
+    """
+    field_list = fields(cls)  # type: ignore[arg-type]
+    field_names = tuple(f.name for f in field_list)
+    index = field_names.index(name)
+    case_fields = {f.name: f for f in field_list if f.name in (name, "tag")}
+    new = cls.__new__  # type: ignore[attr-defined]
+    set_attr = object.__setattr__
+
+    def make(value: object) -> "_TUnion":
+        instance = new(cls)
+        set_attr(instance, "tag", name)
+        set_attr(instance, name, value)
+        set_attr(instance, "_index", index)
+        set_attr(instance, "__dataclass_fields__", case_fields)
+        return instance
+
+    return make
 
 
 @dataclass(frozen=True)
@@ -112,11 +143,15 @@ class ToolResultContent:
 
     @staticmethod
     def of_text(value: str) -> "ToolResultContent":
-        return ToolResultContent(text=value)
+        return _tool_result_text(value)
 
     @staticmethod
     def of_parts(value: Block[Text]) -> "ToolResultContent":
-        return ToolResultContent(parts=value)
+        return _tool_result_parts(value)
+
+
+_tool_result_text = _case_maker(ToolResultContent, "text")
+_tool_result_parts = _case_maker(ToolResultContent, "parts")
 
 
 @dataclass(frozen=True)
@@ -151,27 +186,35 @@ class ContentBlock:
 
     @staticmethod
     def of_text(value: Text) -> "ContentBlock":
-        return ContentBlock(text=value)
+        return _content_text(value)
 
     @staticmethod
     def of_image(value: Image) -> "ContentBlock":
-        return ContentBlock(image=value)
+        return _content_image(value)
 
     @staticmethod
     def of_tool_use(value: ToolUse) -> "ContentBlock":
-        return ContentBlock(tool_use=value)
+        return _content_tool_use(value)
 
     @staticmethod
     def of_tool_result(value: ToolResult) -> "ContentBlock":
-        return ContentBlock(tool_result=value)
+        return _content_tool_result(value)
 
     @staticmethod
     def of_thinking(value: Thinking) -> "ContentBlock":
-        return ContentBlock(thinking=value)
+        return _content_thinking(value)
 
     @staticmethod
     def of_redacted_thinking(value: RedactedThinking) -> "ContentBlock":
-        return ContentBlock(redacted_thinking=value)
+        return _content_redacted_thinking(value)
+
+
+_content_text = _case_maker(ContentBlock, "text")
+_content_image = _case_maker(ContentBlock, "image")
+_content_tool_use = _case_maker(ContentBlock, "tool_use")
+_content_tool_result = _case_maker(ContentBlock, "tool_result")
+_content_thinking = _case_maker(ContentBlock, "thinking")
+_content_redacted_thinking = _case_maker(ContentBlock, "redacted_thinking")
 
 
 Role = Literal["user", "assistant"]
