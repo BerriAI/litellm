@@ -15,6 +15,11 @@ export const MIGRATED_PAGES: Record<string, string> = {
 };
 
 function uiBase(): string {
+  // next dev serves the app at the root; only the proxy mounts the static export under /ui
+  // (and optionally under server_root_path). Inlined at build time, so production is unaffected.
+  if (process.env.NODE_ENV === "development") {
+    return "";
+  }
   const root = serverRootPath && serverRootPath !== "/" ? `/${serverRootPath.replace(/^\/+|\/+$/g, "")}` : "";
   return `${root}/ui`;
 }
