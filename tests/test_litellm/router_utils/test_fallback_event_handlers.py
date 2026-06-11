@@ -93,3 +93,29 @@ def test_other_models_keep_legacy_prefill_resume(model):
     """Anything not explicitly marked supports_assistant_prefill=false keeps the
     pre-existing prefill-resume behavior (back-compat)."""
     _assert_legacy_prefill(_build(model))
+
+
+def test_prefill_rejecting_fallback_target_gets_user_continuation():
+    """The same continuation messages go to every fallback target — a primary
+    that supports prefill must still use the user continuation when any
+    configured fallback target rejects it (e.g. claude-3-5 → claude-sonnet-4-6)."""
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="claude-3-5-sonnet-20241022",
+        fallbacks=[{"claude-3-5-sonnet-20241022": ["claude-sonnet-4-6"]}],
+    )
+    assert len(result) == 2
+    assert result[1]["role"] == "user"
+    assert PARTIAL in result[1]["content"]
+
+
+def test_unrelated_fallback_groups_do_not_affect_prefill():
+    """Fallback config for OTHER model groups must not flip this group's behavior."""
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="gpt-4",
+        fallbacks=[{"some-other-model": ["claude-sonnet-4-6"]}],
+    )
+    _assert_legacy_prefill(result)

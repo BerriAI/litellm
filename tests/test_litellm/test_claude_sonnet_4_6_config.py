@@ -48,7 +48,9 @@ def test_bedrock_sonnet_4_6_region_prefixes():
         assert model_info.get("supports_prompt_caching") is True
         assert model_info.get("supports_response_schema") is True
         assert model_info.get("supports_pdf_input") is True
-        assert model_info.get("supports_assistant_prefill") is True
+        # Assistant prefill was removed in Sonnet 4.6 — a prefilled assistant
+        # message returns a 400 on every platform (Anthropic migration guide).
+        assert model_info.get("supports_assistant_prefill") is False
         assert model_info.get("supports_reasoning") is True
 
 

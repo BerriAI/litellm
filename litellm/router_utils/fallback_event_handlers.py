@@ -43,6 +43,7 @@ def build_mid_stream_continuation_messages(
     messages: List[Any],
     generated_content: str,
     model_group: Optional[str],
+    fallbacks: Optional[List[Any]] = None,
 ) -> List[Any]:
     """Build the message list a mid-stream fallback uses to resume an interrupted stream.
 
@@ -56,8 +57,24 @@ def build_mid_stream_continuation_messages(
     a trailing USER message instead — the continuation pattern Anthropic's
     migration guide documents:
     https://platform.claude.com/docs/en/about-claude/models/migration-guide
+
+    The same continuation messages are sent to every deployment the fallback
+    chain tries, so the safe pattern engages when the primary model OR any
+    configured fallback target for this model group is explicitly marked as
+    not supporting prefill.
     """
-    if _prefill_explicitly_unsupported(model_group):
+    candidate_models: List[Optional[str]] = [model_group]
+    if fallbacks is not None and model_group is not None:
+        try:
+            fallback_model_group, _ = get_fallback_model_group(
+                fallbacks=fallbacks, model_group=model_group
+            )
+            if fallback_model_group:
+                candidate_models.extend(fallback_model_group)
+        except Exception:
+            pass
+
+    if any(_prefill_explicitly_unsupported(m) for m in candidate_models):
         return messages + [
             {
                 "role": "user",

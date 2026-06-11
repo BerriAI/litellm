@@ -2242,6 +2242,7 @@ class Router:
                                 messages=messages,
                                 generated_content=e.generated_content,
                                 model_group=model_group,
+                                fallbacks=fallbacks,
                             )
                         )
                     self._update_kwargs_before_fallbacks(
@@ -2801,6 +2802,7 @@ class Router:
                                 messages=messages,
                                 generated_content=e.generated_content,
                                 model_group=model_group,
+                                fallbacks=fallbacks,
                             )
                         )
                     router_self._update_kwargs_before_fallbacks(

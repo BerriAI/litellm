@@ -2448,30 +2448,6 @@ def supports_url_context(model: str, custom_llm_provider: Optional[str] = None) 
     )
 
 
-def supports_assistant_prefill(
-    model: str, custom_llm_provider: Optional[str] = None
-) -> bool:
-    """
-    Check if the given model supports assistant message prefill and return a boolean value.
-
-    Anthropic removed assistant prefill starting with Claude Sonnet 4.6 / Opus 4.6 —
-    a prefilled assistant message returns a 400 error on those models.
-    https://platform.claude.com/docs/en/about-claude/models/migration-guide
-
-    Parameters:
-    model (str): The model name to be checked.
-    custom_llm_provider (Optional[str]): The provider to be checked.
-
-    Returns:
-    bool: True if the model supports assistant prefill, False otherwise (including unknown models).
-    """
-    return _supports_factory(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        key="supports_assistant_prefill",
-    )
-
-
 def supports_native_streaming(model: str, custom_llm_provider: Optional[str]) -> bool:
     """
     Check if the given model supports native streaming and return a boolean value.
