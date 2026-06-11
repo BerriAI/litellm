@@ -247,7 +247,9 @@ general_settings:
   #
   # model_cost_map_reload_config:
   #   interval_hours: 24      # Reload prices every 24 hours (set to null to disable)
-  #   force_reload: false     # Set to true to trigger a one-time reload on next cycle
+  #   force_reload: false     # NOTE: force_reload is only effective via the API (DB-managed config).
+  #                           # Setting this to true in YAML will be ignored — use
+  #                           # POST /reload/model_cost_map for a manual one-time reload.
 
   pass_through_endpoints:
     - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server

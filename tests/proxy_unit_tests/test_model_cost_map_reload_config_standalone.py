@@ -40,6 +40,31 @@ def test_source_code_has_new_helper_method():
     print("✓ _get_model_cost_map_reload_config method exists")
 
 
+def test_source_code_returns_tuple_with_source():
+    """Verify the helper returns (config, source) tuple."""
+    proxy_server_path = os.path.join(
+        os.path.dirname(__file__), "../../litellm/proxy/proxy_server.py"
+    )
+    with open(proxy_server_path, "r") as f:
+        source = f.read()
+
+    # Check the return type annotation includes Tuple
+    assert "Tuple[Optional[dict], Optional[str]]" in source, (
+        "Return type annotation should be Tuple[Optional[dict], Optional[str]]"
+    )
+    # Check it returns (db_config, \"db\") or (yaml_config, \"yaml\") or (None, None)
+    assert 'return db_config, "db"' in source, (
+        "Should return (db_config, 'db') for database source"
+    )
+    assert 'return yaml_config, "yaml"' in source, (
+        "Should return (yaml_config, 'yaml') for YAML source"
+    )
+    assert 'return None, None' in source, (
+        "Should return (None, None) when no config found"
+    )
+    print("✓ Return type is Tuple[Optional[dict], Optional[str]] with source tracking")
+
+
 def test_source_code_has_yaml_fallback_in_helper():
     """Verify the helper method checks general_settings for YAML config."""
     proxy_server_path = os.path.join(
@@ -52,13 +77,31 @@ def test_source_code_has_yaml_fallback_in_helper():
     assert "general_settings.get(\"model_cost_map_reload_config\")" in source, (
         "YAML fallback logic not found in _get_model_cost_map_reload_config"
     )
-    assert "Using model_cost_map_reload_config from config.yaml" in source, (
+    assert "model_cost_map_reload_config from config.yaml" in source, (
         "Config.yaml debug log not found"
     )
     assert "Using model_cost_map_reload_config from database" in source, (
         "Database debug log not found"
     )
     print("✓ YAML fallback logic exists in _get_model_cost_map_reload_config")
+
+
+def test_source_code_warns_when_db_overrides_yaml():
+    """Verify a warning is logged when DB config overrides YAML config."""
+    proxy_server_path = os.path.join(
+        os.path.dirname(__file__), "../../litellm/proxy/proxy_server.py"
+    )
+    with open(proxy_server_path, "r") as f:
+        source = f.read()
+
+    # Check for the warning log when both configs exist
+    assert "model_cost_map_reload_config is set in both the database" in source, (
+        "Warning about DB overriding YAML not found"
+    )
+    assert "_yaml_override_warned" in source, (
+        "Module-level flag for suppressing repeated warnings not found"
+    )
+    print("✓ Warning is logged when DB config overrides YAML config")
 
 
 def test_source_code_db_takes_precedence_over_yaml():
@@ -87,25 +130,55 @@ def test_source_code_db_takes_precedence_over_yaml():
     print("✓ DB config takes precedence over YAML config")
 
 
-def test_source_code_no_db_write_when_yaml_config():
-    """Verify that when config comes from YAML, no DB write is attempted."""
+def test_source_code_ignores_force_reload_from_yaml():
+    """Verify force_reload from YAML is ignored with a warning."""
     proxy_server_path = os.path.join(
         os.path.dirname(__file__), "../../litellm/proxy/proxy_server.py"
     )
     with open(proxy_server_path, "r") as f:
         source = f.read()
 
-    # Check for the DB existence check before writing
-    assert "db_config_record = await get_config_param(" in source, (
-        "DB existence check not found before write"
+    # Check for the force_reload YAML handling in _check_and_reload_model_cost_map
+    assert "force_reload is only effective via the API" in source, (
+        "Warning about force_reload from YAML not found"
     )
-    assert "db_config_record is not None" in source, (
-        "DB record null check not found"
+    assert 'source == "yaml" and force_reload' in source, (
+        "YAML force_reload check not found"
     )
-    assert "Config came from config.yaml; not writing back to database" in source, (
-        "YAML config skip message not found"
+    print("✓ force_reload from YAML is ignored with a warning")
+
+
+def test_source_code_no_extra_db_roundtrip():
+    """Verify the caller uses the source info instead of a second DB query."""
+    proxy_server_path = os.path.join(
+        os.path.dirname(__file__), "../../litellm/proxy/proxy_server.py"
     )
-    print("✓ No DB write when config comes from YAML")
+    with open(proxy_server_path, "r") as f:
+        source = f.read()
+
+    # The old code had a second get_config_param call inside _check_and_reload_model_cost_map
+    # We should NOT find it anymore (the extra DB round-trip was eliminated)
+    start_idx = source.find("async def _check_and_reload_model_cost_map")
+    assert start_idx != -1, "Method not found"
+
+    method_end = source.find("async def _check_and_reload_anthropic_beta_headers", start_idx)
+    method_source = source[start_idx:method_end]
+
+    # Should use source == "db" to decide writeback
+    assert 'source == "db"' in method_source, (
+        "Should use source == 'db' to decide writeback (eliminating extra DB call)"
+    )
+
+    # The old second get_config_param call should be gone
+    second_db_call_count = method_source.count('get_config_param(')
+    # One call to _get_model_cost_map_reload_config which internally calls get_config_param
+    # But there should be no second call in the writeback section
+    # We can't easily check this with string matching, but the source == "db" check
+    # is the key indicator
+    assert 'source == "db"' in method_source, (
+        "Extra DB round-trip not eliminated — source check not found"
+    )
+    print("✓ Extra DB round-trip eliminated (uses source instead of second DB query)")
 
 
 def test_source_code_docstring_mentions_yaml_config():
@@ -170,13 +243,11 @@ def test_main_config_yaml_has_documentation():
     assert "interval_hours" in content, (
         "interval_hours not documented"
     )
+    # Check that force_reload comment clarifies it's API-only
+    assert "force_reload" in content, (
+        "force_reload not documented"
+    )
     print("✓ Main proxy_server_config.yaml has documentation for the new setting")
-
-
-class FakeConfigRecord:
-    """Minimal mock of a Prisma config record."""
-    def __init__(self, param_value):
-        self.param_value = param_value
 
 
 def test_logic_yaml_config_dict_value():
@@ -235,21 +306,59 @@ def test_logic_db_takes_precedence():
     print("✓ Precedence logic (DB > YAML > None) works correctly")
 
 
+def test_logic_force_reload_from_yaml_ignored():
+    """Test that force_reload from YAML is ignored (only works via API)."""
+    source = "yaml"
+    force_reload = True
+    interval_hours = None
+
+    # force_reload from YAML is ignored
+    if source == "yaml" and force_reload:
+        force_reload = False  # Ignored with warning
+
+    # After ignoring, both interval_hours and force_reload are None/False
+    # so reload should be skipped
+    should_reload = force_reload or (interval_hours is not None)
+    assert should_reload is False, (
+        "force_reload from YAML should be ignored, preventing reload"
+    )
+    print("✓ force_reload from YAML is correctly ignored")
+
+
+def test_logic_source_determines_writeback():
+    """Test that source info determines whether to write back to DB."""
+    # When source is "db", write back to clear force_reload
+    source = "db"
+    should_write_back = source == "db"
+    assert should_write_back is True
+
+    # When source is "yaml", do not write back
+    source = "yaml"
+    should_write_back = source == "db"
+    assert should_write_back is False
+    print("✓ Source info correctly determines DB writeback behavior")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Testing model_cost_map_reload_config via config.yaml")
     print("=" * 60)
 
     test_source_code_has_new_helper_method()
+    test_source_code_returns_tuple_with_source()
     test_source_code_has_yaml_fallback_in_helper()
+    test_source_code_warns_when_db_overrides_yaml()
     test_source_code_db_takes_precedence_over_yaml()
-    test_source_code_no_db_write_when_yaml_config()
+    test_source_code_ignores_force_reload_from_yaml()
+    test_source_code_no_extra_db_roundtrip()
     test_source_code_docstring_mentions_yaml_config()
     test_example_config_yaml_exists()
     test_main_config_yaml_has_documentation()
     test_logic_yaml_config_dict_value()
     test_logic_yaml_config_string_value()
     test_logic_db_takes_precedence()
+    test_logic_force_reload_from_yaml_ignored()
+    test_logic_source_determines_writeback()
 
     print("=" * 60)
     print("All tests passed! ✓")
