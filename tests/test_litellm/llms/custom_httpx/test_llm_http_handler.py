@@ -777,6 +777,7 @@ def _make_responses_handler_call(signed_body):
     from litellm.types.router import GenericLiteLLMParams
 
     provider_config = MagicMock()
+    provider_config.requires_streaming_response_api_transport = False
     provider_config.validate_environment.return_value = {}
     provider_config.get_complete_url.return_value = (
         "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
@@ -884,6 +885,196 @@ def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
     assert post_kwargs.get("data") == b'{"input": "hi"}'
     assert "json" not in post_kwargs
     assert "stream" in post_kwargs
+
+
+def test_responses_handler_forces_provider_stream_transport():
+    from unittest.mock import MagicMock, patch
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    provider_config = MagicMock()
+    provider_config.requires_streaming_response_api_transport = True
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://chatgpt.test/responses"
+    provider_config.transform_responses_api_request.return_value = {"input": "hi"}
+    provider_config.sign_request.return_value = ({}, None)
+
+    completed_response = MagicMock()
+    completed_response.output = [{"type": "message"}]
+    mock_stream = MagicMock()
+    mock_stream.__iter__.return_value = iter([])
+    mock_stream._get_completed_response_object.return_value = completed_response
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_client.post.return_value = MagicMock()
+
+    handler = BaseLLMHTTPHandler()
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.SyncResponsesAPIStreamingIterator",
+        return_value=mock_stream,
+    ):
+        handler.response_api_handler(
+            model="gpt-5.4-mini",
+            input="hi",
+            responses_api_provider_config=provider_config,
+            response_api_optional_request_params={},
+            custom_llm_provider="chatgpt",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=MagicMock(),
+            client=mock_client,
+            _is_async=False,
+        )
+
+    provider_config.sign_request.assert_called_once()
+    signed_request = provider_config.sign_request.call_args.kwargs["request_data"]
+    assert signed_request["stream"] is True
+    assert provider_config.sign_request.call_args.kwargs["stream"] is True
+
+    post_kwargs = mock_client.post.call_args.kwargs
+    assert post_kwargs["stream"] is True
+    assert post_kwargs["json"]["stream"] is True
+
+
+
+
+@pytest.mark.asyncio
+async def test_async_responses_handler_forces_provider_stream_transport():
+    from unittest.mock import MagicMock, patch
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    provider_config = MagicMock()
+    provider_config.requires_streaming_response_api_transport = True
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://chatgpt.test/responses"
+    provider_config.transform_responses_api_request.return_value = {"input": "hi"}
+    provider_config.sign_request.return_value = ({}, None)
+
+    completed_response = MagicMock()
+    completed_response.output = [{"type": "message"}]
+    mock_stream = MagicMock()
+    mock_stream.__aiter__.return_value = iter([])
+    mock_stream._get_completed_response_object.return_value = completed_response
+
+    mock_client = MagicMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=MagicMock())
+
+    handler = BaseLLMHTTPHandler()
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.ResponsesAPIStreamingIterator",
+        return_value=mock_stream,
+    ):
+        result = await handler.async_response_api_handler(
+            model="gpt-5.4-mini",
+            input="hi",
+            responses_api_provider_config=provider_config,
+            response_api_optional_request_params={},
+            custom_llm_provider="chatgpt",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=MagicMock(),
+            client=mock_client,
+        )
+
+    assert result is completed_response
+    signed_request = provider_config.sign_request.call_args.kwargs["request_data"]
+    assert signed_request["stream"] is True
+    assert provider_config.sign_request.call_args.kwargs["stream"] is True
+
+    post_kwargs = mock_client.post.await_args.kwargs
+    assert post_kwargs["stream"] is True
+    assert post_kwargs["json"]["stream"] is True
+
+
+def test_responses_handler_returns_iterator_for_user_stream_when_forced_transport():
+    from unittest.mock import MagicMock, patch
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    provider_config = MagicMock()
+    provider_config.requires_streaming_response_api_transport = True
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://chatgpt.test/responses"
+    provider_config.transform_responses_api_request.return_value = {"input": "hi"}
+    provider_config.sign_request.return_value = ({}, None)
+
+    mock_stream = MagicMock()
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_client.post.return_value = MagicMock()
+
+    handler = BaseLLMHTTPHandler()
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.SyncResponsesAPIStreamingIterator",
+        return_value=mock_stream,
+    ):
+        result = handler.response_api_handler(
+            model="gpt-5.4-mini",
+            input="hi",
+            responses_api_provider_config=provider_config,
+            response_api_optional_request_params={"stream": True},
+            custom_llm_provider="chatgpt",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=MagicMock(),
+            client=mock_client,
+            fake_stream=True,
+        )
+
+    assert result is mock_stream
+    mock_stream.__iter__.assert_not_called()
+    signed_request = provider_config.sign_request.call_args.kwargs["request_data"]
+    assert signed_request["stream"] is True
+    assert provider_config.sign_request.call_args.kwargs["stream"] is True
+    assert mock_client.post.call_args.kwargs["stream"] is True
+
+
+
+@pytest.mark.asyncio
+async def test_async_responses_handler_returns_iterator_for_user_stream_when_forced_transport():
+    from unittest.mock import MagicMock, patch
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    provider_config = MagicMock()
+    provider_config.requires_streaming_response_api_transport = True
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://chatgpt.test/responses"
+    provider_config.transform_responses_api_request.return_value = {"input": "hi"}
+    provider_config.sign_request.return_value = ({}, None)
+
+    mock_stream = MagicMock()
+    mock_client = MagicMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=MagicMock())
+
+    handler = BaseLLMHTTPHandler()
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.ResponsesAPIStreamingIterator",
+        return_value=mock_stream,
+    ):
+        result = await handler.async_response_api_handler(
+            model="gpt-5.4-mini",
+            input="hi",
+            responses_api_provider_config=provider_config,
+            response_api_optional_request_params={"stream": True},
+            custom_llm_provider="chatgpt",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=MagicMock(),
+            client=mock_client,
+            fake_stream=True,
+        )
+
+    assert result is mock_stream
+    mock_stream.__aiter__.assert_not_called()
+    signed_request = provider_config.sign_request.call_args.kwargs["request_data"]
+    assert signed_request["stream"] is True
+    assert provider_config.sign_request.call_args.kwargs["stream"] is True
+    assert mock_client.post.await_args.kwargs["stream"] is True
 
 
 def _make_compact_handler_call(signed_body, is_async):

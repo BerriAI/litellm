@@ -1,7 +1,7 @@
 import os
 import sys
 from typing import Optional
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -10,14 +10,25 @@ sys.path.insert(0, os.path.abspath("../.."))
 from litellm.completion_extras.litellm_responses_transformation.handler import (
     ResponsesToCompletionBridgeHandler,
 )
+from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+    _build_responses_kwargs,
+)
+from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
+    LiteLLMAnthropicToResponsesAPIAdapter,
+)
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     InputTokensDetails,
     OutputTokensDetails,
+    ResponseCompletedEvent,
     ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 """
@@ -67,6 +78,333 @@ def test_should_collect_response_from_stream():
 
     assert collected.id == "resp-1"
     assert collected._hidden_params.get("headers") == {"x-test": "1"}
+
+
+def test_streaming_iterator_recovers_output_item_and_text_chunks():
+    mock_response = Mock()
+    mock_response.headers = {}
+    mock_logging_obj = Mock()
+    mock_logging_obj.model_call_details = {"litellm_params": {}}
+    iterator = BaseResponsesAPIStreamingIterator(
+        response=mock_response,
+        model="gpt-5.4-mini",
+        responses_api_provider_config=Mock(spec=BaseResponsesAPIConfig),
+        logging_obj=mock_logging_obj,
+        litellm_metadata={},
+        custom_llm_provider="chatgpt",
+    )
+
+    # No completed response and no recovered chunks are both no-ops.
+    iterator._recover_completed_response_output()
+    empty_response = ResponsesAPIResponse.model_construct(
+        id="resp-empty",
+        created_at=0,
+        output=[],
+        object="response",
+        model="gpt-5.4-mini",
+    )
+    iterator.completed_response = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=empty_response,
+    )
+    iterator._recover_completed_response_output()
+    assert empty_response.output == []
+
+    iterator._record_output_chunk(
+        {
+            "type": "response.output_text.done",
+            "output_index": 1,
+            "content_index": 0,
+            "item_id": "msg_text_only",
+            "text": "hello from text done",
+        }
+    )
+    iterator._record_output_chunk(
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "id": "msg_item",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "hello from output item",
+                    }
+                ],
+            },
+        }
+    )
+    iterator._recover_completed_response_output()
+
+    assert empty_response.output[0]["content"][0]["text"] == ("hello from output item")
+    assert empty_response.output[1]["content"][0]["text"] == "hello from text done"
+
+
+def test_streaming_iterator_recovery_preserves_existing_output():
+    mock_response = Mock()
+    mock_response.headers = {}
+    mock_logging_obj = Mock()
+    mock_logging_obj.model_call_details = {"litellm_params": {}}
+    iterator = BaseResponsesAPIStreamingIterator(
+        response=mock_response,
+        model="gpt-5.4-mini",
+        responses_api_provider_config=Mock(spec=BaseResponsesAPIConfig),
+        logging_obj=mock_logging_obj,
+        litellm_metadata={},
+        custom_llm_provider="chatgpt",
+    )
+    response = ResponsesAPIResponse.model_construct(
+        id="resp-existing",
+        created_at=0,
+        output=[{"type": "message", "content": []}],
+        object="response",
+        model="gpt-5.4-mini",
+    )
+    iterator.completed_response = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=response,
+    )
+    iterator._record_output_chunk(
+        {
+            "type": "response.output_text.done",
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_ignored",
+            "text": "ignored",
+        }
+    )
+    iterator._recover_completed_response_output()
+
+    assert response.output == [{"type": "message", "content": []}]
+
+
+def test_adapter_direct_system_and_developer_messages_to_developer_input():
+    adapter = LiteLLMAnthropicToResponsesAPIAdapter()
+
+    system_result = adapter.translate_messages_to_responses_input(
+        [{"role": "system", "content": "Follow policy."}]
+    )
+    assert system_result == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "Follow policy."}],
+        }
+    ]
+
+    developer_result = adapter.translate_messages_to_responses_input(
+        [
+            {
+                "role": "developer",
+                "content": [
+                    {"type": "text", "text": "Be brief."},
+                    {"type": "image", "source": {}},
+                ],
+            }
+        ]
+    )
+    assert developer_result == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "Be brief."}],
+        }
+    ]
+
+
+def test_adapter_build_kwargs_uses_developer_input_for_chatgpt_system():
+    kwargs = _build_responses_kwargs(
+        max_tokens=128,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="gpt-5.5",
+        system=[{"type": "text", "text": "Follow policy."}],
+        extra_kwargs={"custom_llm_provider": "chatgpt"},
+    )
+
+    assert "instructions" not in kwargs
+    assert kwargs["input"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "Follow policy."}],
+    }
+    assert kwargs["input"][1]["role"] == "user"
+
+
+def test_adapter_build_kwargs_keeps_openai_system_as_instructions():
+    kwargs = _build_responses_kwargs(
+        max_tokens=128,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="gpt-5.5",
+        system="Follow policy.",
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+
+    assert kwargs["instructions"] == "Follow policy."
+    assert kwargs["input"][0]["role"] == "user"
+
+
+def test_chatgpt_responses_transforms_system_roles_only_for_list_input():
+    from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
+
+    config = ChatGPTResponsesAPIConfig()
+    assert config._transform_system_roles_to_developer("plain input") == "plain input"
+
+    request = config.transform_responses_api_request(
+        model="chatgpt/gpt-5.5",
+        input=[
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "Follow policy."}],
+            },
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "Already developer."}],
+            },
+            "raw item",
+        ],
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["input"][0]["role"] == "developer"
+    assert request["input"][1]["role"] == "developer"
+    assert request["input"][2] == "raw item"
+
+
+def _forced_stream_provider_config():
+    provider_config = Mock()
+    provider_config.requires_streaming_response_api_transport = True
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://chatgpt.test/responses"
+    provider_config.transform_responses_api_request.return_value = {"input": "hi"}
+    provider_config.sign_request.return_value = ({}, None)
+    provider_config.get_error_class.side_effect = (
+        lambda error_message, status_code, headers: RuntimeError(error_message)
+    )
+    return provider_config
+
+
+def test_response_handler_forced_stream_requires_completed_response():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    provider_config = _forced_stream_provider_config()
+    mock_stream = MagicMock()
+    mock_stream.__iter__.return_value = iter([])
+    mock_stream._get_completed_response_object.return_value = None
+    mock_client = Mock(spec=HTTPHandler)
+    mock_client.post.return_value = Mock()
+
+    with pytest.raises(RuntimeError, match="Stream ended without a completed response"):
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                "litellm.llms.custom_httpx.llm_http_handler"
+                ".SyncResponsesAPIStreamingIterator",
+                Mock(return_value=mock_stream),
+            )
+            BaseLLMHTTPHandler().response_api_handler(
+                model="gpt-5.5",
+                input="hi",
+                responses_api_provider_config=provider_config,
+                response_api_optional_request_params={},
+                custom_llm_provider="chatgpt",
+                litellm_params=GenericLiteLLMParams(),
+                logging_obj=Mock(),
+                client=mock_client,
+                fake_stream=True,
+            )
+
+    assert provider_config.sign_request.call_args.kwargs["stream"] is True
+    assert mock_client.post.call_args.kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_async_response_handler_forced_stream_requires_completed_response():
+    from unittest.mock import AsyncMock
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    provider_config = _forced_stream_provider_config()
+    mock_stream = MagicMock()
+    mock_stream.__aiter__.return_value = []
+    mock_stream._get_completed_response_object.return_value = None
+    mock_client = Mock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=Mock())
+
+    with pytest.raises(RuntimeError, match="Stream ended without a completed response"):
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                "litellm.llms.custom_httpx.llm_http_handler"
+                ".ResponsesAPIStreamingIterator",
+                Mock(return_value=mock_stream),
+            )
+            await BaseLLMHTTPHandler().async_response_api_handler(
+                model="gpt-5.5",
+                input="hi",
+                responses_api_provider_config=provider_config,
+                response_api_optional_request_params={},
+                custom_llm_provider="chatgpt",
+                litellm_params=GenericLiteLLMParams(),
+                logging_obj=Mock(),
+                client=mock_client,
+                fake_stream=True,
+            )
+
+    assert provider_config.sign_request.call_args.kwargs["stream"] is True
+    assert mock_client.post.await_args.kwargs["stream"] is True
+
+
+def test_streaming_iterator_logs_inner_completed_response_object():
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.success_handler = Mock()
+    logging_obj.async_success_handler = Mock()
+    iterator = BaseResponsesAPIStreamingIterator(
+        response=Mock(headers={}),
+        model="gpt-5.5",
+        responses_api_provider_config=Mock(spec=BaseResponsesAPIConfig),
+        logging_obj=logging_obj,
+        litellm_metadata={},
+        custom_llm_provider="chatgpt",
+    )
+    iterator._persist_completed_response_before_logging = False
+    response = ResponsesAPIResponse.model_construct(
+        id="resp-log",
+        created_at=0,
+        output=[{"type": "message", "content": []}],
+        object="response",
+        model="gpt-5.5",
+    )
+    iterator.completed_response = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=response,
+    )
+
+    import importlib
+
+    streaming_iterator_module = importlib.import_module(
+        "litellm.responses.streaming_iterator"
+    )
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        run_async = Mock()
+        executor = Mock()
+        monkeypatch.setattr(streaming_iterator_module, "run_async_function", run_async)
+        monkeypatch.setattr(streaming_iterator_module, "executor", executor)
+        iterator._log_completed_response(is_async=False)
+
+    success_call = next(
+        call
+        for call in run_async.call_args_list
+        if call.kwargs.get("async_function") is logging_obj.async_success_handler
+    )
+    assert success_call.kwargs["result"].id == "resp-log"
+    assert executor.submit.call_args.kwargs["result"].id == "resp-log"
 
 
 def create_mock_completion_response(

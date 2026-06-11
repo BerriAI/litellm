@@ -156,6 +156,27 @@ class TestPerDeploymentNumRetries:
         router._update_kwargs_before_fallbacks(model="test-model", kwargs=kwargs)
         assert kwargs["num_retries"] == 7  # Uses global
 
+    def test_null_request_num_retries_uses_global_default(self):
+        """
+        Test that explicit num_retries=None does not leak into retry arithmetic.
+        """
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "test-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "api_key": "test-key",
+                    },
+                },
+            ],
+            num_retries=2,
+        )
+
+        kwargs = {"num_retries": None}
+        router._update_kwargs_before_fallbacks(model="test-model", kwargs=kwargs)
+        assert kwargs["num_retries"] == 2
+
     def test_set_deployment_num_retries_with_string_value(self):
         """
         Test that _set_deployment_num_retries_on_exception handles string values

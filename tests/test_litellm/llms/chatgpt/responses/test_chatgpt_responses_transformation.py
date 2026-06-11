@@ -27,6 +27,8 @@ class TestChatGPTResponsesAPITransformation:
         [
             "chatgpt/gpt-5.4",
             "chatgpt/gpt-5.4-pro",
+            "chatgpt/gpt-5.4-mini",
+            "chatgpt/gpt-5.5",
             "chatgpt/gpt-5.3-chat-latest",
             "chatgpt/gpt-5.3-instant",
             "chatgpt/gpt-5.3-codex",
@@ -42,6 +44,11 @@ class TestChatGPTResponsesAPITransformation:
         assert config is not None
         assert isinstance(config, ChatGPTResponsesAPIConfig)
         assert config.custom_llm_provider == LlmProviders.CHATGPT
+
+    def test_chatgpt_requires_streaming_response_api_transport(self):
+        config = ChatGPTResponsesAPIConfig()
+
+        assert config.requires_streaming_response_api_transport is True
 
     @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
     def test_chatgpt_responses_endpoint_url(self, mock_authenticator_class):
@@ -106,6 +113,31 @@ class TestChatGPTResponsesAPITransformation:
         assert request["stream"] is True
         assert "reasoning.encrypted_content" in request["include"]
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
+
+    def test_chatgpt_responses_transforms_system_input_to_developer(self):
+        config = ChatGPTResponsesAPIConfig()
+
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.5",
+            input=[
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": "Follow policy."}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Hello"}],
+                },
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"][0]["role"] == "developer"
+        assert request["input"][1]["role"] == "user"
 
     @pytest.mark.parametrize(
         "model_name",

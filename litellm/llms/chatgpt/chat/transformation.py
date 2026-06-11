@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, cast
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -40,6 +40,24 @@ class ChatGPTConfig(OpenAIConfig):
                 message=str(e),
             )
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str
+    ) -> List[AllMessageValues]:
+        transformed_messages: List[AllMessageValues] = []
+        for message in messages:
+            if message.get("role") == "system":
+                transformed_messages.append(
+                    cast(AllMessageValues, {**message, "role": "developer"})
+                )
+            else:
+                transformed_messages.append(message)
+        return transformed_messages
+
+    def translate_developer_role_to_system_role(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        return messages
 
     def validate_environment(
         self,

@@ -3039,7 +3039,8 @@ class Router:
         - litellm_trace_id
         - metadata
         """
-        kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+        if kwargs.get("num_retries") is None:
+            kwargs["num_retries"] = self.num_retries
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
         model_group_alias: Optional[str] = None
         if self._get_model_from_alias(model=model):

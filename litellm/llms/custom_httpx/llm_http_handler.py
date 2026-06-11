@@ -2288,6 +2288,15 @@ class BaseLLMHTTPHandler:
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
+        force_provider_stream = (
+            getattr(
+                responses_api_provider_config,
+                "requires_streaming_response_api_transport",
+                False,
+            )
+            is True
+        )
+        transport_stream = stream or force_provider_stream
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -2302,6 +2311,8 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
+        if force_provider_stream:
+            data["stream"] = True
 
         if extra_body:
             data.update(extra_body)
@@ -2319,12 +2330,13 @@ class BaseLLMHTTPHandler:
         request_context["litellm_params"] = dict(litellm_params)
 
         is_stream_request = bool(stream)
-        if is_stream_request and fake_stream is True:
+        if is_stream_request and fake_stream is True and not force_provider_stream:
             stream, data = self._prepare_fake_stream_request(
                 stream=stream,
                 data=data,
                 fake_stream=fake_stream,
             )
+            transport_stream = stream
 
         # Sign after the body is final (post-transform/normalize/extra_body and post
         # fake-stream prep) so signed bytes match what we send. No-op for providers
@@ -2336,7 +2348,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=litellm_params.api_key,
             model=model,
-            stream=stream,
+            stream=transport_stream,
             fake_stream=fake_stream,
         )
         body_kwargs: Dict[str, Any] = (
@@ -2355,16 +2367,16 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            if is_stream_request:
+            if is_stream_request or force_provider_stream:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
-                    stream=stream,
+                    stream=transport_stream,
                     **body_kwargs,
                 )
-                if fake_stream is True:
+                if fake_stream is True and not force_provider_stream:
                     return MockResponsesAPIStreamingIterator(
                         response=response,
                         model=model,
@@ -2376,7 +2388,7 @@ class BaseLLMHTTPHandler:
                         call_type=CallTypes.responses.value,
                     )
 
-                return SyncResponsesAPIStreamingIterator(
+                response_iterator = SyncResponsesAPIStreamingIterator(
                     response=response,
                     model=model,
                     logging_obj=logging_obj,
@@ -2386,6 +2398,15 @@ class BaseLLMHTTPHandler:
                     request_data=request_context,
                     call_type=CallTypes.responses.value,
                 )
+                if is_stream_request:
+                    return response_iterator
+
+                for _ in response_iterator:
+                    pass
+                completed_response = response_iterator._get_completed_response_object()
+                if completed_response is None:
+                    raise ValueError("Stream ended without a completed response")
+                return completed_response
             else:
                 response = sync_httpx_client.post(
                     url=api_base,
@@ -2450,6 +2471,15 @@ class BaseLLMHTTPHandler:
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
+        force_provider_stream = (
+            getattr(
+                responses_api_provider_config,
+                "requires_streaming_response_api_transport",
+                False,
+            )
+            is True
+        )
+        transport_stream = stream or force_provider_stream
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -2464,6 +2494,8 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
+        if force_provider_stream:
+            data["stream"] = True
 
         if extra_body:
             data.update(extra_body)
@@ -2481,12 +2513,13 @@ class BaseLLMHTTPHandler:
         request_context["litellm_params"] = dict(litellm_params)
 
         is_stream_request = bool(stream)
-        if is_stream_request and fake_stream is True:
+        if is_stream_request and fake_stream is True and not force_provider_stream:
             stream, data = self._prepare_fake_stream_request(
                 stream=stream,
                 data=data,
                 fake_stream=fake_stream,
             )
+            transport_stream = stream
 
         headers, signed_body = responses_api_provider_config.sign_request(
             headers=headers,
@@ -2495,7 +2528,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=litellm_params.api_key,
             model=model,
-            stream=stream,
+            stream=transport_stream,
             fake_stream=fake_stream,
         )
         body_kwargs: Dict[str, Any] = (
@@ -2514,17 +2547,17 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            if is_stream_request:
+            if is_stream_request or force_provider_stream:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
-                    stream=stream,
+                    stream=transport_stream,
                     **body_kwargs,
                 )
 
-                if fake_stream is True:
+                if fake_stream is True and not force_provider_stream:
                     return MockResponsesAPIStreamingIterator(
                         response=response,
                         model=model,
@@ -2536,8 +2569,7 @@ class BaseLLMHTTPHandler:
                         call_type=CallTypes.responses.value,
                     )
 
-                # Return the streaming iterator
-                return ResponsesAPIStreamingIterator(
+                response_iterator = ResponsesAPIStreamingIterator(
                     response=response,
                     model=model,
                     logging_obj=logging_obj,
@@ -2547,6 +2579,15 @@ class BaseLLMHTTPHandler:
                     request_data=request_context,
                     call_type=CallTypes.responses.value,
                 )
+                if is_stream_request:
+                    return response_iterator
+
+                async for _ in response_iterator:
+                    pass
+                completed_response = response_iterator._get_completed_response_object()
+                if completed_response is None:
+                    raise ValueError("Stream ended without a completed response")
+                return completed_response
             else:
                 response = await async_httpx_client.post(
                     url=api_base,

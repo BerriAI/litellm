@@ -35,6 +35,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     OutputTextDeltaEvent,
+    OutputTextDoneEvent,
 )
 
 
@@ -96,6 +97,164 @@ class TestBaseResponsesAPIStreamingIterator:
         assert len(chunks) == 1
         assert chunks[0].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
         assert iterator.completed_response is not None
+
+    def test_recovers_empty_completed_response_output_from_text_done(self):
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+        completed_response = ResponsesAPIResponse.model_construct(
+            id="resp-1",
+            created_at=0,
+            output=[],
+            object="response",
+            model="gpt-5.4-mini",
+        )
+
+        text_done_event = OutputTextDoneEvent.model_construct(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            text="hello from streamed text",
+        )
+        completed_event = ResponseCompletedEvent.model_construct(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=completed_response,
+        )
+        mock_config.transform_streaming_response.side_effect = [
+            text_done_event,
+            completed_event,
+        ]
+
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.4-mini",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            litellm_metadata={},
+            custom_llm_provider="chatgpt",
+        )
+        with patch.object(iterator, "_handle_logging_completed_response"):
+            iterator._process_chunk(
+                json.dumps(
+                    {
+                        "type": "response.output_text.done",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "item_id": "msg_1",
+                        "text": "hello from streamed text",
+                    }
+                )
+            )
+            iterator._process_chunk(
+                json.dumps(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-1",
+                            "created_at": 0,
+                            "output": [],
+                            "object": "response",
+                            "model": "gpt-5.4-mini",
+                        },
+                    }
+                )
+            )
+
+        assert completed_response.output[0]["content"][0]["text"] == (
+            "hello from streamed text"
+        )
+
+
+    def test_recover_completed_response_output_from_output_item_done(self):
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+
+        response = ResponsesAPIResponse.model_construct(
+            id="resp-1",
+            created_at=0,
+            output=[],
+            object="response",
+            model="gpt-5.4-mini",
+        )
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.4-mini",
+            responses_api_provider_config=Mock(spec=BaseResponsesAPIConfig),
+            logging_obj=mock_logging_obj,
+            litellm_metadata={},
+            custom_llm_provider="chatgpt",
+        )
+        iterator.completed_response = ResponseCompletedEvent.model_construct(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=response,
+        )
+
+        iterator._record_output_chunk(
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "hello from output item",
+                        }
+                    ],
+                },
+            }
+        )
+        iterator._recover_completed_response_output()
+
+        assert response.output[0]["content"][0]["text"] == "hello from output item"
+
+    def test_recover_completed_response_output_is_noop_when_unneeded(self):
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.4-mini",
+            responses_api_provider_config=Mock(spec=BaseResponsesAPIConfig),
+            logging_obj=mock_logging_obj,
+            litellm_metadata={},
+            custom_llm_provider="chatgpt",
+        )
+
+        iterator._recover_completed_response_output()
+
+        response = ResponsesAPIResponse.model_construct(
+            id="resp-1",
+            created_at=0,
+            output=[{"type": "message"}],
+            object="response",
+            model="gpt-5.4-mini",
+        )
+        iterator.completed_response = ResponseCompletedEvent.model_construct(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=response,
+        )
+        iterator._record_output_chunk(
+            {
+                "type": "response.output_text.done",
+                "output_index": 0,
+                "content_index": 0,
+                "item_id": "msg_1",
+                "text": "ignored",
+            }
+        )
+        iterator._recover_completed_response_output()
+
+        assert response.output == [{"type": "message"}]
 
     def test_process_chunk_with_response_completed_event(self):
         """

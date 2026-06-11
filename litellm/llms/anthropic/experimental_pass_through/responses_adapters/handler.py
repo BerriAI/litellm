@@ -70,7 +70,11 @@ def _build_responses_kwargs(
         request_data["output_format"] = output_format
 
     anthropic_request = AnthropicMessagesRequest(**request_data)  # type: ignore[typeddict-item]
-    responses_kwargs = _ADAPTER.translate_request(anthropic_request)
+    custom_llm_provider = (extra_kwargs or {}).get("custom_llm_provider")
+    responses_kwargs = _ADAPTER.translate_request(
+        anthropic_request,
+        use_developer_role_for_system=custom_llm_provider == "chatgpt",
+    )
 
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
@@ -84,7 +88,7 @@ def _build_responses_kwargs(
         normalized = normalize_reasoning_effort_value(
             effort,
             model=model,
-            custom_llm_provider=(extra_kwargs or {}).get("custom_llm_provider"),
+            custom_llm_provider=custom_llm_provider,
         )
         if normalized != effort:
             responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}

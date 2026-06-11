@@ -6,7 +6,7 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Sequence, Union, cast
 
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
@@ -53,10 +53,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     def translate_messages_to_responses_input(  # noqa: PLR0915
         self,
-        messages: List[
+        messages: Sequence[
             Union[
                 AnthropicMessagesUserMessageParam,
                 AnthopicMessagesAssistantMessageParam,
+                Dict[str, Any],
             ]
         ],
     ) -> List[Dict[str, Any]]:
@@ -76,7 +77,31 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             role = m["role"]
             content = m.get("content")
 
-            if role == "user":
+            if role in ("system", "developer"):
+                if isinstance(content, str):
+                    input_items.append(
+                        {
+                            "type": "message",
+                            "role": "developer",
+                            "content": [{"type": "input_text", "text": content}],
+                        }
+                    )
+                elif isinstance(content, list):
+                    developer_parts = [
+                        {"type": "input_text", "text": block.get("text", "")}
+                        for block in content
+                        if isinstance(block, dict) and block.get("type") == "text"
+                    ]
+                    if developer_parts:
+                        input_items.append(
+                            {
+                                "type": "message",
+                                "role": "developer",
+                                "content": developer_parts,
+                            }
+                        )
+
+            elif role == "user":
                 if isinstance(content, str):
                     input_items.append(
                         {
@@ -295,9 +320,37 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             result["summary"] = "detailed"
         return result
 
+    def _apply_system_to_responses_kwargs(
+        self,
+        responses_kwargs: Dict[str, Any],
+        system: Any,
+        use_developer_role_for_system: bool,
+    ) -> None:
+        if not system:
+            return
+
+        if use_developer_role_for_system:
+            developer_messages: List[Dict[str, Any]] = []
+            if isinstance(system, (str, list)):
+                developer_messages.append({"role": "developer", "content": system})
+            responses_kwargs["input"] = (
+                self.translate_messages_to_responses_input(developer_messages)
+                + responses_kwargs["input"]
+            )
+        elif isinstance(system, str):
+            responses_kwargs["instructions"] = system
+        elif isinstance(system, list):
+            text_parts = [
+                b.get("text", "")
+                for b in system
+                if isinstance(b, dict) and b.get("type") == "text"
+            ]
+            responses_kwargs["instructions"] = "\n".join(filter(None, text_parts))
+
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
+        use_developer_role_for_system: bool = False,
     ) -> Dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -319,18 +372,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             "input": self.translate_messages_to_responses_input(messages_list),
         }
 
-        # system -> instructions
-        system = anthropic_request.get("system")
-        if system:
-            if isinstance(system, str):
-                responses_kwargs["instructions"] = system
-            elif isinstance(system, list):
-                text_parts = [
-                    b.get("text", "")
-                    for b in system
-                    if isinstance(b, dict) and b.get("type") == "text"
-                ]
-                responses_kwargs["instructions"] = "\n".join(filter(None, text_parts))
+        # system -> instructions by default. ChatGPT's Responses transport expects
+        # system/developer directives as input messages, so that path opts into
+        # developer-role conversion.
+        self._apply_system_to_responses_kwargs(
+            responses_kwargs=responses_kwargs,
+            system=anthropic_request.get("system"),
+            use_developer_role_for_system=use_developer_role_for_system,
+        )
 
         # max_tokens -> max_output_tokens
         max_tokens = anthropic_request.get("max_tokens")

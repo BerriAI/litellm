@@ -38,6 +38,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.CHATGPT
 
+    @property
+    def requires_streaming_response_api_transport(self) -> bool:
+        return True
+
     def validate_environment(
         self,
         headers: dict,
@@ -60,6 +64,19 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         return {**default_headers, **headers}
 
+    @staticmethod
+    def _transform_system_roles_to_developer(input: Any) -> Any:
+        if not isinstance(input, list):
+            return input
+
+        transformed_input = []
+        for item in input:
+            if isinstance(item, dict) and item.get("role") == "system":
+                transformed_input.append({**item, "role": "developer"})
+            else:
+                transformed_input.append(item)
+        return transformed_input
+
     def transform_responses_api_request(
         self,
         model: str,
@@ -68,6 +85,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
+        input = self._transform_system_roles_to_developer(input)
         request = super().transform_responses_api_request(
             model,
             input,

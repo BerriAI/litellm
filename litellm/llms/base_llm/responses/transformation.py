@@ -246,6 +246,11 @@ class BaseResponsesAPIConfig(ABC):
         """Returns True if litellm should fake a stream for the given model and stream value"""
         return False
 
+    @property
+    def requires_streaming_response_api_transport(self) -> bool:
+        """Return True when the provider requires SSE transport for Responses API calls."""
+        return False
+
     def supports_native_websocket(self) -> bool:
         """
         Returns True if the provider has a native WebSocket endpoint for Responses API.

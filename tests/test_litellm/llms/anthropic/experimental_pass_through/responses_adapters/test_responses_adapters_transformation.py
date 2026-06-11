@@ -191,6 +191,40 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
 
+    def test_system_message_becomes_developer_input(self):
+        """ChatGPT Responses accepts developer input messages, not system roles."""
+        messages = [{"role": "system", "content": "Follow the policy."}]
+        result = _translate_messages(messages)
+        assert result == [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "Follow the policy."}],
+            }
+        ]
+
+    def test_developer_message_with_text_blocks_is_preserved(self):
+        messages = [
+            {
+                "role": "developer",
+                "content": [
+                    {"type": "text", "text": "Be brief."},
+                    {"type": "text", "text": "Use tools."},
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": "Be brief."},
+                    {"type": "input_text", "text": "Use tools."},
+                ],
+            }
+        ]
+
     def test_user_list_text_block(self):
         """User message with text content block maps to input_text."""
         messages = [
@@ -744,6 +778,36 @@ class TestTranslateRequestBroaderCoverage:
         )
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["instructions"] == "Only text matters."
+
+    def test_system_string_becomes_developer_input_when_requested(self):
+        req = _make_request(system="You are a helpful assistant.")
+        kwargs = _ADAPTER.translate_request(req, use_developer_role_for_system=True)
+        assert "instructions" not in kwargs
+        assert kwargs["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "You are a helpful assistant."}
+            ],
+        }
+
+    def test_system_list_becomes_developer_input_when_requested(self):
+        req = _make_request(
+            system=[
+                {"type": "text", "text": "Be concise."},
+                {"type": "text", "text": "Be helpful."},
+            ]
+        )
+        kwargs = _ADAPTER.translate_request(req, use_developer_role_for_system=True)
+        assert "instructions" not in kwargs
+        assert kwargs["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Be concise."},
+                {"type": "input_text", "text": "Be helpful."},
+            ],
+        }
 
     def test_max_tokens_mapped_to_max_output_tokens(self):
         req = _make_request(max_tokens=512)

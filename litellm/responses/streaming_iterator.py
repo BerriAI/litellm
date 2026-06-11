@@ -25,6 +25,10 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.responses.sse_output_recovery import (
+    record_output_item_chunk,
+    record_output_text_chunk,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
@@ -77,6 +81,8 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_cache_hit: Optional[bool] = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
+        self._streamed_output_items: Dict[int, Dict[str, Any]] = {}
+        self._text_only_output_items: Dict[int, Dict[str, Any]] = {}
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -237,6 +243,8 @@ class BaseResponsesAPIStreamingIterator:
                                     )
                                     setattr(item, "encrypted_content", wrapped_content)
 
+                self._record_output_chunk(parsed_chunk=parsed_chunk)
+
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type = getattr(openai_responses_api_chunk, "type", None)
                 openai_types = _get_openai_response_types()
@@ -246,6 +254,7 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     self.completed_response = openai_responses_api_chunk
+                    self._recover_completed_response_output()
                     # Add cost to usage object if include_cost_in_streaming_usage is True
                     if (
                         litellm.include_cost_in_streaming_usage
@@ -304,13 +313,13 @@ class BaseResponsesAPIStreamingIterator:
         # to chat completion format (prompt_tokens/completion_tokens) for internal logging
         # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
         # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
-        logging_response = self.completed_response
-        if self.completed_response is not None and hasattr(
-            self.completed_response, "model_dump"
-        ):
+        logging_response = (
+            self._get_completed_response_object() or self.completed_response
+        )
+        if logging_response is not None and hasattr(logging_response, "model_dump"):
             try:
-                logging_response = type(self.completed_response).model_validate(
-                    self.completed_response.model_dump()
+                logging_response = type(logging_response).model_validate(
+                    logging_response.model_dump()
                 )
             except Exception:
                 # Fallback to original if serialization fails
@@ -347,6 +356,32 @@ class BaseResponsesAPIStreamingIterator:
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""
         pass
+
+    def _record_output_chunk(self, parsed_chunk: Dict[str, Any]) -> None:
+        event_type = parsed_chunk.get("type")
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            record_output_item_chunk(
+                parsed_chunk=parsed_chunk,
+                output_items=self._streamed_output_items,
+            )
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+            record_output_text_chunk(
+                parsed_chunk=parsed_chunk,
+                output_items=self._streamed_output_items,
+                text_only_items=self._text_only_output_items,
+            )
+
+    def _recover_completed_response_output(self) -> None:
+        response_obj = self._get_completed_response_object()
+        if response_obj is None or getattr(response_obj, "output", None):
+            return
+
+        merged_items: Dict[int, Dict[str, Any]] = {**self._text_only_output_items}
+        merged_items.update(self._streamed_output_items)
+        if not merged_items:
+            return
+
+        response_obj.output = [item for _, item in sorted(merged_items.items())]
 
     def _handle_logging_failed_response(self):
         """
