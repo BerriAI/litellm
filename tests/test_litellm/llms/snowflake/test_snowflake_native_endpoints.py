@@ -469,8 +469,8 @@ class TestAnthropicConfigResponse:
         assert result.choices[0].finish_reason == "tool_calls"
         tool_calls = result.choices[0].message.tool_calls
         assert len(tool_calls) == 1
-        assert tool_calls[0]["function"]["name"] == "get_weather"
-        assert json.loads(tool_calls[0]["function"]["arguments"]) == {"city": "Paris"}
+        assert tool_calls[0].function.name == "get_weather"
+        assert json.loads(tool_calls[0].function.arguments) == {"city": "Paris"}
 
 
 # ─── Model detection helper ────────────────────────────────────────────────

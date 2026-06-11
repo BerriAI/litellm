@@ -15,7 +15,9 @@ import httpx
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     Choices,
+    Function,
     Message,
     ModelResponse,
     Usage,
@@ -275,7 +277,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         resolved_max = max_completion_tokens or max_tokens
 
         body: dict = {
-            "model": model,
+            "model": model.removeprefix("snowflake/"),
             "messages": messages,
             "stream": stream,
             **optional_params,
@@ -428,14 +430,14 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 text_content += block.get("text", "")
             elif block.get("type") == "tool_use":
                 tool_calls.append(
-                    {
-                        "id": block.get("id", ""),
-                        "type": "function",
-                        "function": {
-                            "name": block.get("name", ""),
-                            "arguments": json.dumps(block.get("input", {})),
-                        },
-                    }
+                    ChatCompletionMessageToolCall(
+                        id=block.get("id", ""),
+                        type="function",
+                        function=Function(
+                            name=block.get("name", ""),
+                            arguments=json.dumps(block.get("input", {})),
+                        ),
+                    )
                 )
 
         _stop_reason_map = {
@@ -450,7 +452,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         message = Message(content=text_content or None, role="assistant")
         if tool_calls:
-            message.tool_calls = tool_calls  # type: ignore
+            message.tool_calls = tool_calls
 
         choice = Choices(
             finish_reason=finish_reason,
