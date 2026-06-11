@@ -392,22 +392,90 @@ class TestLangfuseOtelIntegration:
         # Should return an empty dict
         assert result == {}
 
-    def test_construct_dynamic_otel_endpoint_with_host(self):
-        """Per-key langfuse_host is turned into a normalized OTLP base endpoint."""
+    def test_construct_dynamic_otel_endpoint_with_allowlisted_host(self):
+        """An allow-listed per-key langfuse_host is turned into the OTLP base endpoint."""
         from litellm.types.utils import StandardCallbackDynamicParams
 
         logger = LangfuseOtelLogger()
 
-        eu = logger.construct_dynamic_otel_endpoint(
-            StandardCallbackDynamicParams(langfuse_host="https://cloud.langfuse.com")
-        )
-        assert eu == "https://cloud.langfuse.com/api/public/otel"
+        with patch.dict(
+            os.environ,
+            {"LANGFUSE_ALLOWED_DYNAMIC_HOSTS": "https://cloud.langfuse.com"},
+        ):
+            endpoint = logger.construct_dynamic_otel_endpoint(
+                StandardCallbackDynamicParams(
+                    langfuse_host="https://cloud.langfuse.com"
+                )
+            )
+        assert endpoint == "https://cloud.langfuse.com/api/public/otel"
 
-        # scheme-less + trailing slash normalize identically to the env path
-        no_scheme = logger.construct_dynamic_otel_endpoint(
-            StandardCallbackDynamicParams(langfuse_host="us.cloud.langfuse.com/")
-        )
-        assert no_scheme == "https://us.cloud.langfuse.com/api/public/otel"
+    def test_construct_dynamic_otel_endpoint_trailing_slash_tolerated(self):
+        """Trailing slashes on the dynamic host or allowlist entries don't break matching."""
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        logger = LangfuseOtelLogger()
+
+        with patch.dict(
+            os.environ,
+            {
+                "LANGFUSE_ALLOWED_DYNAMIC_HOSTS": "https://eu.cloud.langfuse.com, https://us.cloud.langfuse.com/"
+            },
+        ):
+            endpoint = logger.construct_dynamic_otel_endpoint(
+                StandardCallbackDynamicParams(
+                    langfuse_host="https://us.cloud.langfuse.com/"
+                )
+            )
+        assert endpoint == "https://us.cloud.langfuse.com/api/public/otel"
+
+    def test_construct_dynamic_otel_endpoint_denied_when_allowlist_unset(self):
+        """No operator allowlist -> dynamic hosts are ignored (SSRF guard)."""
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        logger = LangfuseOtelLogger()
+
+        env_without_allowlist = {
+            k: v for k, v in os.environ.items() if k != "LANGFUSE_ALLOWED_DYNAMIC_HOSTS"
+        }
+        with patch.dict(os.environ, env_without_allowlist, clear=True):
+            endpoint = logger.construct_dynamic_otel_endpoint(
+                StandardCallbackDynamicParams(
+                    langfuse_host="https://attacker.internal.example"
+                )
+            )
+        assert endpoint is None
+
+    def test_construct_dynamic_otel_endpoint_denied_when_host_not_allowlisted(self):
+        """A dynamic host outside the allowlist -> ignored, env endpoint used (SSRF guard)."""
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        logger = LangfuseOtelLogger()
+
+        with patch.dict(
+            os.environ,
+            {"LANGFUSE_ALLOWED_DYNAMIC_HOSTS": "https://us.cloud.langfuse.com"},
+        ):
+            endpoint = logger.construct_dynamic_otel_endpoint(
+                StandardCallbackDynamicParams(
+                    langfuse_host="https://attacker.internal.example"
+                )
+            )
+        assert endpoint is None
+
+    def test_construct_dynamic_otel_endpoint_requires_full_url(self):
+        """Scheme-less dynamic hosts are rejected, never rewritten."""
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        logger = LangfuseOtelLogger()
+
+        with patch.dict(
+            os.environ,
+            {"LANGFUSE_ALLOWED_DYNAMIC_HOSTS": "us.cloud.langfuse.com"},
+        ):
+            endpoint = logger.construct_dynamic_otel_endpoint(
+                StandardCallbackDynamicParams(langfuse_host="us.cloud.langfuse.com")
+            )
+        assert endpoint is None
 
     def test_construct_dynamic_otel_endpoint_without_host(self):
         """No per-key host -> None, so the env endpoint is used."""
@@ -424,11 +492,15 @@ class TestLangfuseOtelIntegration:
         from litellm.types.utils import StandardCallbackDynamicParams
 
         logger = LangfuseOtelLogger()
-        endpoint = logger.construct_dynamic_otel_endpoint(
-            StandardCallbackDynamicParams(
-                langfuse_base_url="https://us.cloud.langfuse.com"
+        with patch.dict(
+            os.environ,
+            {"LANGFUSE_ALLOWED_DYNAMIC_HOSTS": "https://us.cloud.langfuse.com"},
+        ):
+            endpoint = logger.construct_dynamic_otel_endpoint(
+                StandardCallbackDynamicParams(
+                    langfuse_base_url="https://us.cloud.langfuse.com"
+                )
             )
-        )
         assert endpoint == "https://us.cloud.langfuse.com/api/public/otel"
 
     def test_construct_dynamic_otel_endpoint_base_url_preferred_over_host(self):
@@ -436,12 +508,18 @@ class TestLangfuseOtelIntegration:
         from litellm.types.utils import StandardCallbackDynamicParams
 
         logger = LangfuseOtelLogger()
-        endpoint = logger.construct_dynamic_otel_endpoint(
-            StandardCallbackDynamicParams(
-                langfuse_base_url="https://us.cloud.langfuse.com",
-                langfuse_host="https://cloud.langfuse.com",
+        with patch.dict(
+            os.environ,
+            {
+                "LANGFUSE_ALLOWED_DYNAMIC_HOSTS": "https://us.cloud.langfuse.com,https://cloud.langfuse.com"
+            },
+        ):
+            endpoint = logger.construct_dynamic_otel_endpoint(
+                StandardCallbackDynamicParams(
+                    langfuse_base_url="https://us.cloud.langfuse.com",
+                    langfuse_host="https://cloud.langfuse.com",
+                )
             )
-        )
         assert endpoint == "https://us.cloud.langfuse.com/api/public/otel"
 
     def test_get_langfuse_otel_config_with_otel_host_priority(self):
