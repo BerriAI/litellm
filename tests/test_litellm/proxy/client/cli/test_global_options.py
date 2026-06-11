@@ -113,3 +113,29 @@ class TestBaseUrlResolution:
     def test_falls_back_to_localhost_without_stored_url(self, cli_runner, monkeypatch):
         output = self._server_url_line(cli_runner, ["version"], None, monkeypatch)
         assert "LiteLLM Proxy Server URL: http://localhost:4000" in output
+
+    def test_version_flag_uses_stored_base_url(self, cli_runner, monkeypatch):
+        output = self._server_url_line(
+            cli_runner, ["--version"], "https://llm.acme.com", monkeypatch
+        )
+        assert "LiteLLM Proxy Server URL: https://llm.acme.com" in output
+
+    def test_version_flag_env_var_wins_over_stored(self, cli_runner, monkeypatch):
+        monkeypatch.setenv("LITELLM_PROXY_URL", "http://env:1234")
+        with (
+            patch(
+                "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+                return_value="1.2.3",
+            ),
+            patch(
+                "litellm.proxy.client.cli.main.get_stored_base_url",
+                return_value="https://llm.acme.com",
+            ),
+        ):
+            result = cli_runner.invoke(cli, ["--version"])
+        assert result.exit_code == 0, result.output
+        assert "LiteLLM Proxy Server URL: http://env:1234" in result.output
+
+    def test_version_flag_falls_back_to_localhost(self, cli_runner, monkeypatch):
+        output = self._server_url_line(cli_runner, ["--version"], None, monkeypatch)
+        assert "LiteLLM Proxy Server URL: http://localhost:4000" in output
