@@ -144,6 +144,30 @@ class TestOtelAnthropicMessagesOutput(unittest.TestCase):
         self.assertIn("deliberating...", out)
         self.assertIn("answer", out)
 
+    def test_empty_or_unrecognised_content_blocks_skip_output_messages_emit(self):
+        """Greptile flagged the unconditional emit as inconsistent with the
+        Responses API branch, which guards ``if output_messages:``. Mirror
+        that guard so a content list of only unknown block types doesn't
+        leave a blank assistant-message entry in observability tools."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = _base_kwargs()
+        response_obj = {
+            "content": [
+                {"type": "future_block_type_unknown_to_litellm", "payload": "..."},
+            ],
+            "role": "assistant",
+            "stop_reason": "end_turn",
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        attrs = _attr_set(mock_span)
+        self.assertNotIn("gen_ai.output.messages", attrs)
+        # stop_reason still emits even with empty parts.
+        self.assertIn("gen_ai.response.finish_reasons", attrs)
+
     def test_choices_still_takes_precedence_over_content_for_openai_shape(self):
         otel = OpenTelemetry()
         mock_span = MagicMock()

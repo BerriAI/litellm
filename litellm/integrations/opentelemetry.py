@@ -2450,17 +2450,18 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                                 }
                             )
 
-                    output_messages = [
-                        {
-                            "role": response_obj.get("role", "assistant"),
-                            "parts": parts,
-                        }
-                    ]
-                    self.safe_set_attribute(
-                        span=span,
-                        key=SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value,
-                        value=safe_dumps(output_messages),
-                    )
+                    if parts:
+                        output_messages = [
+                            {
+                                "role": response_obj.get("role", "assistant"),
+                                "parts": parts,
+                            }
+                        ]
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value,
+                            value=safe_dumps(output_messages),
+                        )
 
                     if tool_calls:
                         kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)  # type: ignore
