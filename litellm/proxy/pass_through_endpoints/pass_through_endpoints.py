@@ -296,7 +296,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
             )
         )
 
-        verbose_proxy_logger.debug("\nResponse from Litellm:\n{}".format(response))
+        verbose_proxy_logger.debug("\nResponse from Litellm:\n%s", response)
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -809,9 +809,10 @@ async def pass_through_request(  # noqa: PLR0915
         else:
             _parsed_body = await _read_request_body(request)
         verbose_proxy_logger.debug(
-            "Pass through endpoint sending request to \nURL {}\nheaders: {}\nbody: {}\n".format(
-                url, headers, _parsed_body
-            )
+            "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
+            url,
+            headers,
+            _parsed_body,
         )
 
         ### COLLECT GUARDRAILS FOR PASSTHROUGH ENDPOINT ###
