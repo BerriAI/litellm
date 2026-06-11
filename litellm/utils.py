@@ -3015,6 +3015,19 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         # custom pricing on subsequent cost lookups.
         if existing_model.get("litellm_provider") is None:
             existing_model.pop("litellm_provider", None)
+        # Same pattern for cost fields (#30198): ``_get_model_info_helper``
+        # synthesizes ``input_cost_per_token`` / ``output_cost_per_token``
+        # = 0 when they are absent from the raw entry. Writing those zeros
+        # back flips a sparse entry from "no cost keys" (priced via name)
+        # to "cost keys = 0" (free), which makes
+        # ``_is_cost_explicitly_configured`` return True and silently
+        # disables budget enforcement on the next re-registration.
+        _raw_entry = (
+            litellm.model_cost.get(model_cost_key) or litellm.model_cost.get(key) or {}
+        )
+        for _cost_field in ("input_cost_per_token", "output_cost_per_token"):
+            if _cost_field not in _raw_entry and _cost_field not in value:
+                existing_model.pop(_cost_field, None)
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
