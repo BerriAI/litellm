@@ -396,6 +396,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         headers: dict,
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: Optional[Any] = None,
+        custom_llm_provider: Optional[str] = None,
     ) -> dict:
         (
             input_items,
@@ -461,6 +462,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             **sanitized_litellm_params,
             "client": client,
         }
+
+        if custom_llm_provider is not None:
+            # completion() already resolved the provider and stripped one routing
+            # prefix off the model. Hand both to responses() and tell it not to
+            # re-resolve, otherwise get_llm_provider strips a second prefix.
+            request_data["custom_llm_provider"] = custom_llm_provider
+            request_data["_provider_already_resolved"] = True
 
         verbose_logger.debug(
             f"Chat provider: Final request model={api_model}, input_items={len(input_items)}"

@@ -180,6 +180,7 @@ class ResponsesToCompletionBridgeHandler:
             headers=headers,
             litellm_logging_obj=logging_obj,
             client=kwargs.get("client"),
+            custom_llm_provider=custom_llm_provider,
         )
 
         # Pin the resolved provider so `responses()` doesn't re-run
@@ -272,6 +273,7 @@ class ResponsesToCompletionBridgeHandler:
                 litellm_params=litellm_params,
                 headers=headers,
                 litellm_logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
         except Exception as e:
             raise e
