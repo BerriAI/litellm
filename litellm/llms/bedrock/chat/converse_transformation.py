@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     make_valid_bedrock_tool_name,
 )
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
@@ -88,14 +89,6 @@ BEDROCK_COMPUTER_USE_TOOLS = [
     "computer_",
     "bash_",
     "text_editor_",
-]
-
-# Beta header patterns that are not supported by Bedrock Converse API
-# These will be filtered out to prevent errors
-UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
-    "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
-    "prompt-caching",  # Prompt caching not supported in Converse API
-    "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
 
 
@@ -1254,6 +1247,25 @@ class AmazonConverseConfig(BaseConfig):
 
         return {}
 
+    def _apply_parallel_tool_use_config(
+        self, model: str, additional_request_params: dict
+    ) -> None:
+        """Merge _parallel_tool_use_config into additional_request_params for Claude 4.5+ models."""
+        parallel_tool_use_config = additional_request_params.pop(
+            "_parallel_tool_use_config", None
+        )
+        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
+            for key, value in parallel_tool_use_config.items():
+                if (
+                    key in additional_request_params
+                    and isinstance(additional_request_params[key], dict)
+                    and isinstance(value, dict)
+                ):
+                    additional_request_params[key].update(value)
+                else:
+                    additional_request_params[key] = value
+        additional_request_params.pop("parallel_tool_calls", None)
+
     def _prepare_request_params(
         self, optional_params: dict, model: str, drop_params: bool = False
     ) -> Tuple[dict, dict, dict, Optional[OutputConfigBlock]]:
@@ -1335,22 +1347,7 @@ class AmazonConverseConfig(BaseConfig):
             k: v for k, v in inference_params.items() if k in total_supported_params
         }
 
-        # Handle parallel_tool_calls configuration
-        parallel_tool_use_config = additional_request_params.pop(
-            "_parallel_tool_use_config", None
-        )
-        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
-            for key, value in parallel_tool_use_config.items():
-                if (
-                    key in additional_request_params
-                    and isinstance(additional_request_params[key], dict)
-                    and isinstance(value, dict)
-                ):
-                    additional_request_params[key].update(value)
-                else:
-                    additional_request_params[key] = value
-
-        additional_request_params.pop("parallel_tool_calls", None)
+        self._apply_parallel_tool_use_config(model, additional_request_params)
 
         # Only set the topK value in for models that support it
         additional_request_params.update(
@@ -1360,6 +1357,10 @@ class AmazonConverseConfig(BaseConfig):
         # Filter out internal/MCP-related parameters that shouldn't be sent to the API
         # These are LiteLLM internal parameters, not API parameters
         additional_request_params = filter_internal_params(additional_request_params)
+
+        # Remove Anthropic-specific body params that Bedrock doesn't support
+        # (these features are enabled via anthropic-beta headers instead)
+        additional_request_params.pop("context_management", None)
 
         # Filter out non-serializable objects (exceptions, callables, logging objects, etc.)
         # from additional_request_params to prevent JSON serialization errors
@@ -1533,15 +1534,16 @@ class AmazonConverseConfig(BaseConfig):
                 if ANTHROPIC_EFFORT_BETA_HEADER not in anthropic_beta_list:
                     anthropic_beta_list.append(ANTHROPIC_EFFORT_BETA_HEADER)
 
-            # Bedrock Converse: compact_20260112 edits only (+ beta header).
             AmazonConverseConfig._filter_context_management_for_bedrock_converse(
                 additional_request_params, anthropic_beta_list
             )
-
-        # Set anthropic_beta in additional_request_params if we have any beta features
-        # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
         if anthropic_beta_list and base_model.startswith("anthropic"):
-            additional_request_params["anthropic_beta"] = anthropic_beta_list
+            filtered_betas = filter_and_transform_beta_headers(
+                beta_headers=anthropic_beta_list,
+                provider="bedrock_converse",
+            )
+            if filtered_betas:
+                additional_request_params["anthropic_beta"] = filtered_betas
 
         return bedrock_tools, anthropic_beta_list
 
@@ -1611,15 +1613,23 @@ class AmazonConverseConfig(BaseConfig):
                 )
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
-        # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
+        # This prevents Anthropic errors:
+        # - "Expected thinking or redacted_thinking, but found tool_use" (assistant with tool_calls)
+        # - "Expected thinking or redacted_thinking, but found text" (assistant with text content)
         #
         # IMPORTANT: Only drop thinking if NO assistant messages have thinking_blocks.
         # If any message has thinking_blocks, we must keep thinking enabled, otherwise
         # Related issues: https://github.com/BerriAI/litellm/issues/14194
+        # Lazy import to avoid circular dependency (utils -> bedrock -> utils)
+        from litellm.utils import last_assistant_message_has_no_thinking_blocks
+
         if (
             optional_params.get("thinking") is not None
             and messages is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+            and (
+                last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+                or last_assistant_message_has_no_thinking_blocks(messages)
+            )
             and not any_assistant_message_has_thinking_blocks(messages)
         ):
             if litellm.modify_params:
