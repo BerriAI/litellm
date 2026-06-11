@@ -32,6 +32,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
   const [metadataJson, setMetadataJson] = useState("{}");
   const [selectedProvider, setSelectedProvider] = useState("bedrock");
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+  const vertexEngineId = Form.useWatch("vertex_engine_id", form);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -230,8 +231,16 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                     </a>
                   </li>
                   <li>Pick a supported location: global, us, or eu</li>
-                  <li>Copy the data store ID from the Vertex AI Search console</li>
-                  <li>Enter the data store ID in the Vector Store ID field below</li>
+                  <li>
+                    For most data store types (Cloud Storage, BigQuery, Media): copy the data store ID and enter it in
+                    the Vector Store ID field below.
+                  </li>
+                  <li>
+                    For website, healthcare, and connector-based sources (Drive, Gmail, Slack, Jira, etc.): create a
+                    search app on top of the data store, then copy the <strong>Engine ID</strong> and enter it in the
+                    Engine ID field. The Vector Store ID is still required as the LiteLLM-side name for this record, but
+                    it isn't used in the GCP URL when Engine ID is set.
+                  </li>
                 </ol>
               </div>
             }
@@ -258,7 +267,9 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
               selectedProvider === "vertex_rag_engine"
                 ? "6917529027641081856 (Get corpus ID from Vertex AI console)"
                 : selectedProvider === "vertex_ai/search_api"
-                  ? "my-datastore_1234567890 (Get data store ID from Vertex AI Search console)"
+                  ? vertexEngineId
+                    ? "Any identifier you'll use to reference this in LiteLLM"
+                    : "my-datastore_1234567890 (Get data store ID from Vertex AI Search console)"
                   : "Enter vector store ID from your provider"
             }
           />

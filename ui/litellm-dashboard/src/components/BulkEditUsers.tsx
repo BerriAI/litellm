@@ -1,15 +1,5 @@
 import React, { useState } from "react";
-import {
-  Modal,
-  Typography,
-  Divider,
-  Table,
-  Select,
-  InputNumber,
-  Card,
-  Space,
-  Checkbox,
-} from "antd";
+import { Modal, Typography, Divider, Table, Select, InputNumber, Card, Space, Checkbox } from "antd";
 import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "./networking";
 import { UserEditView } from "./user_edit_view";
 import NotificationsManager from "./molecules/notifications_manager";

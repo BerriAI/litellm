@@ -486,6 +486,14 @@ def _count_messages(
                     use_default_image_token_count,
                     default_token_count,
                 )
+            elif key == "search_results" and isinstance(value, list):
+                from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                    extract_search_results_text,
+                )
+
+                search_results_text = extract_search_results_text(value)
+                if search_results_text:
+                    num_tokens += params.count_function(search_results_text)
             else:
                 # Skip unsupported keys instead of raising an error
                 continue
@@ -764,11 +772,29 @@ def _format_function_definitions(tools):
     lines.append("namespace functions {")
     lines.append("")
     for tool in tools:
+        if not isinstance(tool, dict):
+            continue
         function = tool.get("function")
+        if not isinstance(function, dict):
+            # Anthropic tool shape → OpenAI function dict for token counting.
+            params = tool.get("input_schema") or tool.get("parameters") or {}
+            if not isinstance(params, dict):
+                params = {}
+            function = {
+                "name": tool.get("name"),
+                "description": tool.get("description"),
+                "parameters": params,
+            }
+        function_name = function.get("name")
+        if not function_name:
+            # Skip malformed tools missing a name to avoid emitting
+            # ``type None = ...`` which would produce inaccurate token counts.
+            continue
         if function_description := function.get("description"):
             lines.append(f"// {function_description}")
-        function_name = function.get("name")
-        parameters = function.get("parameters", {})
+        parameters = function.get("parameters") or {}
+        if not isinstance(parameters, dict):
+            parameters = {}
         properties = parameters.get("properties")
         if properties and properties.keys():
             lines.append(f"type {function_name} = (_: {{")

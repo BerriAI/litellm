@@ -38,7 +38,7 @@ describe("S3VectorsConfig", () => {
     render(<S3VectorsConfig {...defaultProps} />);
 
     expect(
-      screen.getByText(/AWS S3 Vectors allows you to store and query vector embeddings directly in S3/)
+      screen.getByText(/AWS S3 Vectors allows you to store and query vector embeddings directly in S3/),
     ).toBeInTheDocument();
     expect(screen.getByText(/Vector buckets and indexes will be automatically created/)).toBeInTheDocument();
     expect(screen.getByText(/Vector dimensions are auto-detected/)).toBeInTheDocument();

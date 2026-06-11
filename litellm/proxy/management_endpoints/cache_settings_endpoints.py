@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import (
     AUDIT_ACTIONS,
     LiteLLM_AuditLogs,
@@ -26,6 +27,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
+from litellm.repositories.table_repositories import CacheConfigRepository
 from litellm.types.management_endpoints import (
     CACHE_SETTINGS_FIELDS,
     REDIS_TYPE_DESCRIPTIONS,
@@ -33,6 +36,10 @@ from litellm.types.management_endpoints import (
 )
 
 router = APIRouter()
+
+# Cache fields holding credentials. Masked on read so plaintext Redis /
+# Sentinel passwords never leave the server in a GET response.
+_CACHE_SENSITIVE_FIELDS: set = {"password", "sentinel_password"}
 
 
 _REDACTED_VALUE = "***REDACTED***"
@@ -154,8 +161,12 @@ class CacheSettingsManager:
         import json
 
         try:
-            cache_config = await prisma_client.db.litellm_cacheconfig.find_unique(
-                where={"id": "cache_config"}
+            cache_config = await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: CacheConfigRepository(prisma_client).table.find_unique(
+                    where={"id": "cache_config"}
+                ),
+                reason="init_cache_settings_in_db_lookup_failure",
             )
             if cache_config is not None and cache_config.cache_settings:
                 # Parse cache settings JSON
@@ -269,7 +280,7 @@ async def get_cache_settings(
         # Try to get cache settings from database
         current_values = {}
         if prisma_client is not None:
-            cache_config = await prisma_client.db.litellm_cacheconfig.find_unique(
+            cache_config = await CacheConfigRepository(prisma_client).table.find_unique(
                 where={"id": "cache_config"}
             )
             if cache_config is not None and cache_config.cache_settings:
@@ -295,7 +306,11 @@ async def get_cache_settings(
                     else:
                         decrypted_settings["redis_type"] = "node"
 
-                current_values = decrypted_settings
+                # Mask credential fields so the GET response never carries
+                # plaintext Redis / Sentinel passwords off the server.
+                current_values = mask_sensitive_keys(
+                    decrypted_settings, _CACHE_SENSITIVE_FIELDS
+                )
 
         # Update field values with current values
         for field in cache_fields:
@@ -408,7 +423,7 @@ async def update_cache_settings(
 
         # Snapshot the prior settings (key set only — values get redacted in
         # the audit row) so the audit-log entry shows which fields changed.
-        existing_row = await prisma_client.db.litellm_cacheconfig.find_unique(
+        existing_row = await CacheConfigRepository(prisma_client).table.find_unique(
             where={"id": "cache_config"}
         )
         before_settings: Optional[Dict[str, Any]] = None
@@ -425,7 +440,7 @@ async def update_cache_settings(
         )
 
         # Save to database
-        await prisma_client.db.litellm_cacheconfig.upsert(
+        await CacheConfigRepository(prisma_client).table.upsert(
             where={"id": "cache_config"},
             data={
                 "create": {

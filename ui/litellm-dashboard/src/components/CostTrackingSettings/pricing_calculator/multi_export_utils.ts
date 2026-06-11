@@ -212,7 +212,9 @@ export const exportMultiToPDF = (multiResult: MultiModelResult): void => {
             <div class="value purple">${formatCostForExport(multiResult.totals.monthly_cost)}</div>
           </div>
         </div>
-        ${multiResult.totals.margin_per_request > 0 ? `
+        ${
+          multiResult.totals.margin_per_request > 0
+            ? `
         <div class="summary-grid" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;">
           <div class="summary-item">
             <div class="label">Margin/Request</div>
@@ -227,7 +229,9 @@ export const exportMultiToPDF = (multiResult: MultiModelResult): void => {
             <div class="value" style="color: #faad14;">${formatCostForExport(multiResult.totals.monthly_margin)}</div>
           </div>
         </div>
-        ` : ""}
+        `
+            : ""
+        }
       </div>
 
       <h2>Model Breakdown</h2>
@@ -249,12 +253,8 @@ export const exportMultiToPDF = (multiResult: MultiModelResult): void => {
 
 export const exportMultiToCSV = (multiResult: MultiModelResult): void => {
   const validEntries = multiResult.entries.filter((e) => e.result !== null);
-  
-  const rows: string[][] = [
-    ["LLM Multi-Model Cost Estimate Report"],
-    ["Generated", new Date().toLocaleString()],
-    [""],
-  ];
+
+  const rows: string[][] = [["LLM Multi-Model Cost Estimate Report"], ["Generated", new Date().toLocaleString()], [""]];
 
   // Summary section
   rows.push(
@@ -265,7 +265,7 @@ export const exportMultiToCSV = (multiResult: MultiModelResult): void => {
     ["Margin Per Request", multiResult.totals.margin_per_request.toString()],
     ["Daily Margin", multiResult.totals.daily_margin?.toString() || "-"],
     ["Monthly Margin", multiResult.totals.monthly_margin?.toString() || "-"],
-    [""]
+    [""],
   );
 
   // Summary table header
@@ -314,4 +314,3 @@ export const exportMultiToCSV = (multiResult: MultiModelResult): void => {
   document.body.removeChild(a);
   window.URL.revokeObjectURL(url);
 };
-

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Set
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import SpendLogToolIndexRepository
 
 
 def _add_tool_calls_to_set(tool_calls: Any, out: Set[str]) -> None:
@@ -141,7 +142,7 @@ async def process_spend_logs_tool_usage(
                 }
             )
         if index_data:
-            await prisma_client.db.litellm_spendlogtoolindex.create_many(
+            await SpendLogToolIndexRepository(prisma_client).table.create_many(
                 data=index_data,
                 skip_duplicates=True,
             )

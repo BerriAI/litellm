@@ -23,16 +23,6 @@ export function getLogFilterOptions(accessToken: string): FilterOption[] {
       ],
     },
     {
-      name: "Model",
-      label: "Model",
-      customComponent: PaginatedModelSelect,
-    },
-    {
-      name: FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL,
-      label: "Public model / search tool",
-      isSearchable: false,
-    },
-    {
       name: "Key Alias",
       label: "Key Alias",
       customComponent: PaginatedKeyAliasSelect,
@@ -64,13 +54,23 @@ export function getLogFilterOptions(accessToken: string): FilterOption[] {
       },
     },
     {
+      name: "Error Message",
+      label: "Error Message",
+      isSearchable: false,
+    },
+    {
       name: "Key Hash",
       label: "Key Hash",
       isSearchable: false,
     },
     {
-      name: "Error Message",
-      label: "Error Message",
+      name: "Model",
+      label: "Model",
+      customComponent: PaginatedModelSelect,
+    },
+    {
+      name: FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL,
+      label: "Public model / search tool",
       isSearchable: false,
     },
   ];

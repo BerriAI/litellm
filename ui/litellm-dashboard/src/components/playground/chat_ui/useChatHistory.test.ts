@@ -15,9 +15,7 @@ describe("useChatHistory", () => {
         result.current.updateTextUI("assistant", "Hello", "gpt-4");
       });
 
-      expect(result.current.chatHistory).toEqual([
-        { role: "assistant", content: "Hello", model: "gpt-4" },
-      ]);
+      expect(result.current.chatHistory).toEqual([{ role: "assistant", content: "Hello", model: "gpt-4" }]);
     });
 
     it("should append to the last assistant message", () => {
@@ -30,9 +28,7 @@ describe("useChatHistory", () => {
         result.current.updateTextUI("assistant", " world");
       });
 
-      expect(result.current.chatHistory).toEqual([
-        { role: "assistant", content: "Hello world", model: "gpt-4" },
-      ]);
+      expect(result.current.chatHistory).toEqual([{ role: "assistant", content: "Hello world", model: "gpt-4" }]);
     });
 
     it("should not overwrite model on subsequent chunks", () => {
