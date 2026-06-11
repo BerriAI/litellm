@@ -7106,15 +7106,15 @@ async def async_data_generator(  # noqa: PLR0915
                 chunk = chunk.decode("utf-8", errors="replace")
                 if is_raw_sse_stream:
                     raw_sse_buffer += chunk
-                    if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
-                        raise ValueError(
-                            "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
-                        )
                     while True:
                         frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
                         if frame is None:
                             break
                         yield frame
+                    if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
+                        raise ValueError(
+                            "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
+                        )
                     continue
                 if chunk.startswith(("data:", "event:", ":")):
                     yield (
@@ -7125,15 +7125,15 @@ async def async_data_generator(  # noqa: PLR0915
                     continue
             elif isinstance(chunk, str) and is_raw_sse_stream:
                 raw_sse_buffer += chunk
-                if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
-                    raise ValueError(
-                        "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
-                    )
                 while True:
                     frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
                     if frame is None:
                         break
                     yield frame
+                if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
+                    raise ValueError(
+                        "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
+                    )
                 continue
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk

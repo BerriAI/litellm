@@ -5476,6 +5476,67 @@ async def test_async_data_generator_errors_when_raw_sse_frame_exceeds_buffer_lim
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_bytes", [True, False])
+async def test_async_data_generator_checks_raw_sse_buffer_limit_after_complete_frames(
+    as_bytes,
+):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    complete_frame = 'data: {"candidates": [{"content": "ok"}]}\n\n'
+    partial_frame = "data: "
+    raw_chunk = complete_frame + partial_frame
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-3.5-flash",
+        "_litellm_skip_openai_stream_done": True,
+        "_litellm_raw_sse_stream": True,
+    }
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield raw_chunk.encode("utf-8") if as_bytes else raw_chunk
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
+        patch("litellm.proxy.proxy_server._MAX_RAW_SSE_BUFFER_CHARS", 8),
+        patch.object(ProxyLogging, "_fire_deferred_stream_logging"),
+    ):
+        yielded_data = []
+        async for data in async_data_generator(
+            mock_response, mock_user_api_key_dict, mock_request_data
+        ):
+            yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert yielded_text[0] == complete_frame
+    assert "ended before a complete frame delimiter" in yielded_text[1]
+    assert "[DONE]" not in "".join(yielded_text)
+    mock_proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_async_data_generator_google_genai_stream_omits_openai_done():
     """
     google-genai SDK streamGenerateContent?alt=sse must not receive data: [DONE].
