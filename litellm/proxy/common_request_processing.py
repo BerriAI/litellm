@@ -1572,6 +1572,21 @@ class ProxyBaseLLMRequestProcessing:
                         response=completed_obj,
                         user_api_key_dict=user_api_key_dict,
                     )
+                else:
+                    # Silent skip caused #30210: the proxy's Router wrapper
+                    # of the responses streaming iterator wasn't propagating
+                    # ``completed_response``, so this hook recorded nothing
+                    # and follow-up /v1/containers/<id>/files calls 403'd
+                    # for non-admin keys with no proxy-side hint. Log a
+                    # warning so future regressions of the same shape
+                    # surface in operator logs.
+                    verbose_proxy_logger.warning(
+                        "Container ownership recording skipped on streaming /v1/responses: "
+                        "no completed_response on stream iterator %s. Any code_interpreter "
+                        "container created in this call will return 403 on follow-up file "
+                        "lookups for non-admin keys.",
+                        type(original_stream_response).__name__,
+                    )
             except Exception as e:
                 verbose_proxy_logger.exception(
                     "Container ownership recording failed after streaming responses call: %s",
