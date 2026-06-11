@@ -1328,6 +1328,18 @@ class ProxyBaseLLMRequestProcessing:
                             status_code=response.status_code,  # type: ignore[union-attr]
                             headers=custom_headers,
                         )
+                elif route_type == "agenerate_content_stream":
+                    if self._is_streaming_response(response):
+                        if asyncio.iscoroutine(response):
+                            generator = await response
+                        else:
+                            generator = response
+
+                        return StreamingResponse(
+                            content=generator,  # type: ignore[arg-type]
+                            status_code=status.HTTP_200_OK,
+                            headers=custom_headers,
+                        )
                 elif route_type == "anthropic_messages":
                     # Check if response is actually a streaming response (async generator)
                     # Non-streaming responses (dict) should be returned directly
