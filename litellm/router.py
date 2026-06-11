@@ -9960,20 +9960,6 @@ class Router:
         deployments = self.get_model_list(model_name=model) or []
         return self._are_all_deployments_blocked(deployments=deployments)
 
-    @staticmethod
-    def _raise_model_blocked_error(model: str) -> None:
-        raise litellm.PermissionDeniedError(
-            message="Model is blocked",
-            model=model,
-            llm_provider="",
-            response=httpx.Response(
-                status_code=403,
-                request=httpx.Request(
-                    method="POST", url="https://github.com/BerriAI/litellm"
-                ),
-            ),
-        )
-
     def _get_team_specific_model(
         self, deployment: DeploymentTypedDict, team_id: Optional[str] = None
     ) -> Optional[str]:
@@ -10902,8 +10888,6 @@ class Router:
             healthy_deployments = _pre_cooldown_deployments
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
-        if len(healthy_deployments) == 0 and self._is_model_fully_blocked(model):
-            self._raise_model_blocked_error(model=model)
 
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
@@ -11339,8 +11323,6 @@ class Router:
             healthy_deployments = _pre_cooldown_deployments
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
-        if len(healthy_deployments) == 0 and self._is_model_fully_blocked(model):
-            self._raise_model_blocked_error(model=model)
 
         # filter pre-call checks
         if self.enable_pre_call_checks and messages is not None:
@@ -11509,8 +11491,6 @@ class Router:
         pass_through_deployments = self._filter_blocked_deployments(
             pass_through_deployments
         )
-        if len(pass_through_deployments) == 0 and self._is_model_fully_blocked(model):
-            self._raise_model_blocked_error(model=model)
 
         # 5. Apply pre-call checks (if enabled)
         if self.enable_pre_call_checks and messages is not None:

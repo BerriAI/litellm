@@ -1,7 +1,5 @@
 """Unit tests for Router block helper methods (coverage gate)."""
 
-import pytest
-import litellm
 from litellm import Router
 
 
@@ -57,12 +55,3 @@ class TestIsModelFullyBlocked:
     def test_unblocked_deployment_returns_false(self):
         router = _make_router("gpt-4o", blocked=False)
         assert router._is_model_fully_blocked("gpt-4o") is False
-
-
-class TestRaiseModelBlockedError:
-    def test_raises_permission_denied_error(self):
-        router = _make_router("gpt-4o")
-        with pytest.raises(litellm.PermissionDeniedError) as exc_info:
-            router._raise_model_blocked_error("gpt-4o")
-        assert exc_info.value.status_code == 403
-        assert "Model is blocked" in str(exc_info.value)

@@ -9,6 +9,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.types.router import RouterRateLimitError
 
 
 def _setup_model_block_mocks(monkeypatch, *, updated_blocked: bool):
@@ -145,7 +146,7 @@ async def test_model_block_endpoint_requires_proxy_admin(monkeypatch):
     model_table.update.assert_not_awaited()
 
 
-def test_router_returns_403_when_model_is_fully_blocked():
+def test_router_returns_no_healthy_deployment_when_model_is_fully_blocked():
     router = litellm.Router(
         model_list=[
             {
@@ -161,11 +162,11 @@ def test_router_returns_403_when_model_is_fully_blocked():
         ]
     )
 
-    with pytest.raises(litellm.PermissionDeniedError) as exc_info:
+    with pytest.raises(RouterRateLimitError) as exc_info:
         router.get_available_deployment(model="gpt-4o", request_kwargs={})
 
-    assert exc_info.value.status_code == 403
-    assert "Model is blocked" in exc_info.value.message
+    assert "No deployments available for selected model" in str(exc_info.value)
+    assert "Passed model=gpt-4o" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

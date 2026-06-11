@@ -1,6 +1,7 @@
 import asyncio
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
+import httpx
 from fastapi import HTTPException, status
 
 import litellm
@@ -57,7 +58,17 @@ def _raise_if_model_fully_blocked(
         llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
     )
     if llm_router._are_all_deployments_blocked(deployments):
-        llm_router._raise_model_blocked_error(model=model_name)
+        raise litellm.PermissionDeniedError(
+            message="Model is blocked",
+            model=model_name,
+            llm_provider="",
+            response=httpx.Response(
+                status_code=403,
+                request=httpx.Request(
+                    method="POST", url="https://github.com/BerriAI/litellm"
+                ),
+            ),
+        )
 
 
 ROUTE_ENDPOINT_MAPPING = {
