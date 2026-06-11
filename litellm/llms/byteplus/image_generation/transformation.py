@@ -70,6 +70,11 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
         # BytePlus rejects sizes under 3,686,400 px (e.g. the OpenAI 1024x1024
         # default). Apply a valid default when size is not provided.
         optional_params.setdefault("size", DEFAULT_IMAGE_SIZE)
+        # Default to base64 output when the caller does not specify a format.
+        # BytePlus otherwise returns a signed URL, but several OpenAI-compatible
+        # clients (e.g. LibreChat's image_gen_oai tool) only read `b64_json`
+        # from the response and would otherwise see an empty image.
+        optional_params.setdefault("response_format", "b64_json")
         return optional_params
 
     def get_complete_url(
