@@ -495,7 +495,6 @@ class RealTimeStreaming:
     ) -> bool:
         """Return True if any callback would run for one of ``event_hooks``."""
         from litellm.integrations.custom_guardrail import CustomGuardrail
-        from litellm.types.guardrails import GuardrailEventHooks
 
         return any(
             isinstance(cb, CustomGuardrail)
