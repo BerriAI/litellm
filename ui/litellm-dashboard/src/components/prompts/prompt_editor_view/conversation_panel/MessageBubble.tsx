@@ -3,7 +3,7 @@ import { RobotOutlined, UserOutlined } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
-import ResponseMetrics from "../../../playground/chat_ui/ResponseMetrics";
+import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
 import { Message } from "./types";
 
 interface MessageBubbleProps {
