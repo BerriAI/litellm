@@ -5489,3 +5489,134 @@ async def test_create_mcp_client_sampling_enabled():
 
     client = await manager._create_mcp_client(server=server)
     assert client._sampling_callback is not None
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool():
+    """REST server_id + unprefixed tool name must not use global tool-name mapping."""
+    from mcp.types import TextContent
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    api_key_server = MCPServer(
+        server_id="api-key-server-id",
+        name="echo_api_key",
+        server_name="echo_api_key",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="abc123",
+    )
+    oauth_server = MCPServer(
+        server_id="oauth-server-id",
+        name="echo_oauth_m2m",
+        server_name="echo_oauth_m2m",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        token_url="http://127.0.0.1:8080/token",
+        client_id="client",
+        client_secret="secret",
+    )
+
+    mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+        "echo"
+    ] = oauth_server.name
+
+    captured: dict = {}
+
+    async def fake_handle_managed_mcp_tool(**kwargs):
+        captured.update(kwargs)
+        return mcp_module.CallToolResult(
+            content=[TextContent(type="text", text="ok")],
+            isError=False,
+        )
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=oauth_server,
+        ),
+        patch.object(
+            mcp_module,
+            "_handle_managed_mcp_tool",
+            new=fake_handle_managed_mcp_tool,
+        ),
+        patch.object(
+            mcp_module.MCPRequestHandler,
+            "is_tool_allowed",
+            return_value=True,
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=None,
+        ),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="echo",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[api_key_server, oauth_server],
+            start_time=datetime.now(),
+            requested_server_id=api_key_server.server_id,
+        )
+
+    assert captured["server_name"] == "echo_api_key"
+    assert captured["name"] == "echo"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_rest_prefixed_tool_still_validates_server_id():
+    """Prefixed REST tool names must still match the requested server_id."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    api_key_server = MCPServer(
+        server_id="api-key-server-id",
+        name="echo_api_key",
+        server_name="echo_api_key",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="abc123",
+    )
+    oauth_server = MCPServer(
+        server_id="oauth-server-id",
+        name="echo_oauth_m2m",
+        server_name="echo_oauth_m2m",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        token_url="http://127.0.0.1:8080/token",
+        client_id="client",
+        client_secret="secret",
+    )
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=oauth_server,
+        ),
+        patch.object(
+            mcp_module.MCPRequestHandler,
+            "is_tool_allowed",
+            return_value=True,
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=None,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="echo_oauth_m2m-echo",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[api_key_server, oauth_server],
+            start_time=datetime.now(),
+            requested_server_id=api_key_server.server_id,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error"] == "tool_server_mismatch"
