@@ -635,9 +635,12 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
             }
             usage = None
             if usage_data:
+                input_t = usage_data.get("input_tokens", 0)
+                output_t = usage_data.get("output_tokens", 0)
                 usage = ChatCompletionUsageBlock(
-                    prompt_tokens=usage_data.get("input_tokens", 0),
-                    completion_tokens=usage_data.get("output_tokens", 0),
+                    prompt_tokens=input_t,
+                    completion_tokens=output_t,
+                    total_tokens=input_t + output_t,
                 )
             return GenericStreamingChunk(
                 text="",
