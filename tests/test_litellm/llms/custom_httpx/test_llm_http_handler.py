@@ -81,6 +81,41 @@ def test_prepare_fake_stream_request():
     assert result_data["messages"] == [{"role": "user", "content": "Hello"}]
 
 
+def test_response_api_handler_streams_when_provider_transform_adds_stream():
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.transform_responses_api_request.return_value = {
+        "model": "gpt-5.3-codex",
+        "input": "hi",
+        "stream": True,
+    }
+    config.sign_request.return_value = ({}, None)
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+    logging_obj = Mock()
+
+    handler.response_api_handler(
+        model="gpt-5.3-codex",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        client=client,
+    )
+
+    assert client.post.call_args.kwargs["stream"] is True
+    assert client.post.call_args.kwargs["json"]["stream"] is True
+
+
 def test_get_agentic_loop_settings_defaults_and_overrides():
     handler = BaseLLMHTTPHandler()
 
