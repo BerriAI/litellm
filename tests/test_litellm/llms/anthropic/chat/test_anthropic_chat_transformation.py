@@ -4608,6 +4608,31 @@ def test_streaming_iterator_passthrough_when_name_not_in_map():
     assert tool_calls[0]["function"]["name"] == "plain_tool"
 
 
+def test_streaming_iterator_emits_content_none_for_non_text_chunks():
+    """Non-text streaming chunks (tool_use content_block_start, etc.) should
+    emit delta.content=None rather than empty string, so the client SDK
+    reconstructs assistant messages with content=None instead of content=''."""
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    iterator = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+    )
+    chunk = {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+            "type": "tool_use",
+            "id": "toolu_1",
+            "name": "get_weather",
+            "input": {},
+        },
+    }
+    parsed = iterator.chunk_parser(chunk=chunk)
+    # delta.content should be None, not ''
+    assert parsed.choices[0].delta.content is None
+
+
 # ---------------------------------------------------------------------------
 # transform_request: end-to-end sanitization regression coverage
 # ---------------------------------------------------------------------------
