@@ -65,3 +65,6 @@ class DashScopeResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return f"{api_base}/responses"
 
         return f"{api_base}/v1/responses"
+
+    def supports_native_websocket(self) -> bool:
+        return False

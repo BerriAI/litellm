@@ -172,3 +172,7 @@ def test_dashscope_validate_environment_requires_api_key(monkeypatch):
         config.validate_environment(
             headers={}, model="qwen-max", litellm_params=GenericLiteLLMParams()
         )
+
+
+def test_dashscope_does_not_support_native_websocket():
+    assert DashScopeResponsesAPIConfig().supports_native_websocket() is False
