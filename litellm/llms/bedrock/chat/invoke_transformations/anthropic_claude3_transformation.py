@@ -11,7 +11,10 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.chat.transformation import (
+    AnthropicConfig,
+    RESPONSE_FORMAT_TOOL_NAME,
+)
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -66,6 +69,24 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def get_supported_openai_params(self, model: str) -> List[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
+    @staticmethod
+    def _bedrock_invoke_supports_native_output_format(model: str) -> bool:
+        """Whether AWS Bedrock invoke accepts native ``output_format`` for
+        ``model`` today.
+
+        Reads ``supports_native_structured_output`` from
+        ``model_prices_and_context_window.json`` via the same
+        ``_supports_factory`` path the Converse transformer uses. Set the
+        flag to ``false`` on a Bedrock model entry to force the
+        synthetic-tool-injection workaround; ``true`` (the default for
+        Claude 4.5+) lets the native field flow to the wire body.
+        """
+        return _supports_factory(
+            model=model,
+            custom_llm_provider="bedrock",
+            key="supports_native_structured_output",
+        )
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -73,14 +94,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        # Force tool-based structured outputs for Bedrock Invoke
-        # (similar to VertexAI fix in #19201)
-        # Bedrock Invoke doesn't support output_format parameter
-        original_model = model
-        if "response_format" in non_default_params:
-            # Use a model name that forces tool-based approach
-            model = "claude-3-sonnet-20240229"
-
         # Clamp ``reasoning_effort`` to the Bedrock effort ceiling before the
         # parent mapping converts it to ``output_config.effort`` and the
         # downstream effort gate runs. Mirrors the converse path's
@@ -89,8 +102,36 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # requests degrade ``xhigh`` -> ``max`` rather than 400-ing on
         # models like Opus 4.6 that don't natively advertise xhigh.
         self._clamp_adaptive_reasoning_effort_for_bedrock(
-            model=original_model, params=non_default_params
+            model=model, params=non_default_params
         )
+
+        # For models that don't yet support native ``output_format`` on
+        # Bedrock invoke (per the ``supports_native_structured_output`` flag
+        # on the model's entry in ``model_prices_and_context_window.json``),
+        # pop ``response_format`` BEFORE delegating to the parent so the
+        # parent doesn't emit ``output_format``. We inject the synthetic
+        # ``json_tool_call`` tool ourselves after the parent returns, using
+        # the same public helpers the parent's tool-injection branch uses.
+        #
+        # Letting the parent see the real model name preserves correct
+        # ``_is_adaptive_thinking_model`` / effort-mapping behavior. The
+        # previous workaround spoofed ``model = "claude-3-sonnet-20240229"``
+        # to force the tool-injection branch; that side-effect poisoned the
+        # adaptive-thinking lookup when ``response_format`` was combined
+        # with ``reasoning_effort``, producing legacy
+        # ``thinking.enabled+budget`` bodies that AWS opus-4-7/4-8 reject
+        # with:
+        #   "thinking.type.enabled is not supported for this model.
+        #    Use thinking.type.adaptive and output_config.effort ..."
+        rf = None
+        if (
+            "response_format" in non_default_params
+            and not self._bedrock_invoke_supports_native_output_format(model)
+        ):
+            rf = non_default_params["response_format"]
+            non_default_params = {
+                k: v for k, v in non_default_params.items() if k != "response_format"
+            }
 
         optional_params = AnthropicConfig.map_openai_params(
             self,
@@ -100,8 +141,24 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             drop_params,
         )
 
-        # Restore original model name
-        model = original_model
+        if rf is not None:
+            is_thinking = self.is_thinking_enabled(non_default_params)
+            tool = self.map_response_format_to_anthropic_tool(
+                rf, optional_params, is_thinking
+            )
+            if tool is not None:
+                optional_params = self._add_tools_to_optional_params(
+                    optional_params=optional_params, tools=[tool]
+                )
+                if not is_thinking:
+                    # AWS rejects ``tool_choice`` forcing alongside thinking,
+                    # so only set it when thinking is off. Mirrors
+                    # ``AnthropicConfig.map_openai_params`` line ~1493.
+                    optional_params["tool_choice"] = {
+                        "name": RESPONSE_FORMAT_TOOL_NAME,
+                        "type": "tool",
+                    }
+                optional_params["json_mode"] = True
 
         return optional_params
 
@@ -215,7 +272,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
-        output_format = anthropic_request.pop("output_format", None)
+        # Only strip ``output_format`` for models that don't natively support
+        # it on Bedrock invoke (per ``supports_native_structured_output`` in
+        # ``model_prices_and_context_window.json``). For everything else
+        # (opus-4-6, sonnet-4-5/4-6, haiku-4-5, ...) AWS accepts the field
+        # natively — leave it in the wire body and let the
+        # structured-outputs-2025-11-13 beta header gate it (added in
+        # ``_compute_bedrock_invoke_beta_headers``).
+        if not self._bedrock_invoke_supports_native_output_format(model):
+            output_format = anthropic_request.pop("output_format", None)
+        else:
+            output_format = None
         output_config_format = pop_bedrock_invoke_output_config_format(
             anthropic_request
         )
@@ -278,6 +345,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
         )
         beta_set.update(auto_betas)
+
+        # When the wire body carries native ``output_format``, AWS Bedrock
+        # invoke requires the gating beta header. The header itself must
+        # also be enabled for ``provider="bedrock"`` in
+        # ``litellm/anthropic_beta_headers_config.json`` to survive
+        # ``filter_and_transform_beta_headers``.
+        if optional_params.get("output_format") is not None:
+            beta_set.add("structured-outputs-2025-11-13")
 
         if tool_search_used and not (
             programmatic_tool_calling_used or input_examples_used

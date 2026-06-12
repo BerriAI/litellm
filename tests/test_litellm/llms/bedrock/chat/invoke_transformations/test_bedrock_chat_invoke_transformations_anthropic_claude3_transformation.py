@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import sys
@@ -502,10 +501,18 @@ def test_bedrock_chat_invoke_checks_output_config_support_with_bedrock_provider(
             headers={},
         )
 
-    mock_supports_factory.assert_called_once_with(
+    # Two distinct flag lookups now happen (both scoped to bedrock provider):
+    #   - supports_native_structured_output (decides whether to strip output_format)
+    #   - supports_output_config             (decides whether to strip output_config)
+    mock_supports_factory.assert_any_call(
         model="us.anthropic.claude-opus-4-7",
         custom_llm_provider="bedrock",
         key="supports_output_config",
+    )
+    mock_supports_factory.assert_any_call(
+        model="us.anthropic.claude-opus-4-7",
+        custom_llm_provider="bedrock",
+        key="supports_native_structured_output",
     )
     assert result["output_config"] == {"effort": "high"}
 
@@ -545,3 +552,209 @@ def test_output_format_removed_from_bedrock_invoke_request():
     assert (
         "output_format" not in result
     ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+
+
+# -----------------------------------------------------------------------
+# Native ``output_format`` vs tool-injection — Bedrock invoke per-model
+# -----------------------------------------------------------------------
+# AWS Bedrock invoke accepts native ``output_format`` for Claude 4.5+ except
+# opus-4-7 and opus-4-8 (verified Jun 2026). For those two, LiteLLM falls
+# back to the synthetic ``json_tool_call`` tool. For every other Claude 4.5+
+# model the native field flows to AWS, and the gating beta header
+# ``structured-outputs-2025-11-13`` is auto-added.
+
+_REVENUE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "revenue_b": {"type": "number"},
+        "yoy_growth_pct": {"type": "number"},
+    },
+    "required": ["revenue_b", "yoy_growth_pct"],
+}
+
+_OPENAI_RESPONSE_FORMAT_JSON_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {"name": "RevenueData", "schema": _REVENUE_SCHEMA},
+}
+
+
+def _build_invoke_request(
+    model: str,
+    non_default_params: dict,
+    *,
+    bedrock_supports_native_output_format: bool,
+) -> dict:
+    """Run map_openai_params + transform_request with the in-module
+    ``_supports_factory`` patched so the native-``output_format`` capability
+    lookup is deterministic regardless of remote model_cost state.
+
+    ``bedrock_supports_native_output_format`` is what
+    ``_bedrock_invoke_supports_native_output_format(model)`` should return —
+    i.e. the value of ``supports_native_structured_output`` for ``model``'s
+    Bedrock entry in ``model_prices_and_context_window.json``.
+    """
+
+    def fake_supports_factory(model, custom_llm_provider, key):
+        if key == "supports_native_structured_output":
+            return bedrock_supports_native_output_format
+        # supports_output_config is True for opus-4-X in the cost map; preserve
+        # that so the downstream output_config strip behaves as in production.
+        if key == "supports_output_config":
+            return True
+        return False
+
+    config = AmazonAnthropicClaudeConfig()
+    messages = [{"role": "user", "content": "test"}]
+
+    with patch(
+        "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        side_effect=fake_supports_factory,
+    ):
+        optional_params = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        return config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_response_format_emits_native_output_format_for_opus_4_6_invoke():
+    """Models AWS accepts native ``output_format`` for must receive it on the wire
+    (no synthetic tool-injection) plus the gating beta header."""
+    result = _build_invoke_request(
+        model="anthropic.claude-opus-4-6-v1",
+        non_default_params={"response_format": _OPENAI_RESPONSE_FORMAT_JSON_SCHEMA},
+        bedrock_supports_native_output_format=True,
+    )
+
+    assert "output_format" in result, (
+        f"opus-4-6 invoke should keep native output_format on the wire; "
+        f"got keys: {sorted(result.keys())}"
+    )
+    assert result["output_format"].get("type") == "json_schema"
+
+    assert "tools" not in result, (
+        f"opus-4-6 invoke with native output_format must NOT inject json_tool_call; "
+        f"got tools={result.get('tools')!r}"
+    )
+    assert "tool_choice" not in result
+
+    beta = result.get("anthropic_beta", [])
+    assert "structured-outputs-2025-11-13" in beta, (
+        f"structured-outputs-2025-11-13 beta header must be present when "
+        f"output_format is sent; got anthropic_beta={beta!r}"
+    )
+
+
+def test_response_format_uses_tool_workaround_for_opus_4_7_invoke():
+    """opus-4-7's Bedrock entry has ``supports_native_structured_output: false``
+    — AWS rejects native ``output_format`` here, so LiteLLM must fall back to
+    the synthetic ``json_tool_call`` tool."""
+    result = _build_invoke_request(
+        model="anthropic.claude-opus-4-7",
+        non_default_params={"response_format": _OPENAI_RESPONSE_FORMAT_JSON_SCHEMA},
+        bedrock_supports_native_output_format=False,
+    )
+
+    assert "output_format" not in result, (
+        f"opus-4-7 invoke must NOT send native output_format (AWS rejects); "
+        f"got output_format={result.get('output_format')!r}"
+    )
+
+    tools = result.get("tools") or []
+    assert any(
+        t.get("name") == "json_tool_call" for t in tools
+    ), f"opus-4-7 invoke must inject json_tool_call tool; got tools={tools!r}"
+    assert (
+        result.get("tool_choice", {}).get("name") == "json_tool_call"
+    ), "opus-4-7 invoke must force tool_choice to json_tool_call (no thinking)"
+
+    beta = result.get("anthropic_beta", [])
+    assert (
+        "structured-outputs-2025-11-13" not in beta
+    ), "structured-outputs beta must NOT be set when output_format is absent"
+
+
+def test_response_format_plus_reasoning_preserves_adaptive_thinking_on_opus_4_7():
+    """Regression test for the model-spoof side-effect: when ``response_format`` is
+    combined with ``reasoning_effort``, the previous workaround spoofed the model
+    name and corrupted ``_is_adaptive_thinking_model`` to return False, producing
+    legacy ``thinking.enabled+budget_tokens`` that AWS opus-4-7 rejects. After the
+    fix, the real model name flows through and adaptive thinking is preserved."""
+    result = _build_invoke_request(
+        model="anthropic.claude-opus-4-7",
+        non_default_params={
+            "response_format": _OPENAI_RESPONSE_FORMAT_JSON_SCHEMA,
+            "reasoning_effort": "medium",
+        },
+        bedrock_supports_native_output_format=False,
+    )
+
+    # Tool injection still happens (AWS rejects native output_format on 4-7)
+    tools = result.get("tools") or []
+    assert any(t.get("name") == "json_tool_call" for t in tools), (
+        f"opus-4-7 invoke must still inject json_tool_call when reasoning is on; "
+        f"got tools={tools!r}"
+    )
+
+    # No tool_choice — AWS rejects forcing alongside thinking
+    assert (
+        "tool_choice" not in result
+    ), f"AWS rejects tool_choice forcing when thinking is on; got tool_choice={result.get('tool_choice')!r}"
+
+    # Modern adaptive-thinking interface (NOT legacy enabled+budget)
+    thinking = result.get("thinking") or {}
+    assert (
+        thinking.get("type") == "adaptive"
+    ), f"opus-4-7 requires thinking.type=adaptive; got thinking={thinking!r}"
+    assert (
+        "budget_tokens" not in thinking
+    ), f"opus-4-7 rejects budget_tokens; got thinking={thinking!r}"
+
+    output_config = result.get("output_config") or {}
+    assert output_config.get("effort") == "medium", (
+        f"opus-4-7 requires output_config.effort alongside adaptive thinking; "
+        f"got output_config={output_config!r}"
+    )
+
+
+def test_response_format_plus_reasoning_uses_native_with_adaptive_on_opus_4_6():
+    """Combined case for a model AWS accepts native output_format on — both
+    ``output_format`` (structured output) and ``thinking.adaptive +
+    output_config.effort`` (reasoning) coexist in the wire body, no tools."""
+    result = _build_invoke_request(
+        model="anthropic.claude-opus-4-6-v1",
+        non_default_params={
+            "response_format": _OPENAI_RESPONSE_FORMAT_JSON_SCHEMA,
+            "reasoning_effort": "medium",
+        },
+        bedrock_supports_native_output_format=True,
+    )
+
+    assert "output_format" in result
+    assert result["output_format"].get("type") == "json_schema"
+
+    thinking = result.get("thinking") or {}
+    assert (
+        thinking.get("type") == "adaptive"
+    ), f"opus-4-6 should use adaptive thinking; got thinking={thinking!r}"
+    assert "budget_tokens" not in thinking
+
+    output_config = result.get("output_config") or {}
+    assert output_config.get("effort") == "medium"
+
+    assert "tools" not in result, (
+        f"opus-4-6 with native output_format must not inject tools; "
+        f"got tools={result.get('tools')!r}"
+    )
+
+    beta = result.get("anthropic_beta", [])
+    assert "structured-outputs-2025-11-13" in beta

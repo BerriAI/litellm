@@ -371,7 +371,13 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
 
 
 def test_output_config_format_translated_to_native_output_config_converse():
-    """``output_config.format`` becomes Bedrock ``outputConfig`` and is not forwarded raw."""
+    """``output_config.format`` becomes Bedrock ``outputConfig`` and is not forwarded raw.
+
+    Uses ``us.anthropic.claude-opus-4-6-v1`` because it has
+    ``supports_native_structured_output: true`` in the model registry. opus-4-7
+    no longer does — AWS doesn't accept native structured output on Bedrock
+    invoke or converse for that model.
+    """
     config = AmazonConverseConfig()
     schema = {
         "type": "object",
@@ -379,13 +385,13 @@ def test_output_config_format_translated_to_native_output_config_converse():
     }
 
     result = config._transform_request(
-        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        model="bedrock/converse/us.anthropic.claude-opus-4-6-v1",
         messages=[{"role": "user", "content": "hi"}],
         optional_params={
             "maxTokens": 256,
             "thinking": {"type": "adaptive"},
             "output_config": {
-                "effort": "xhigh",
+                "effort": "high",
                 "format": {"type": "json_schema", "schema": schema},
             },
         },
@@ -394,7 +400,7 @@ def test_output_config_format_translated_to_native_output_config_converse():
     )
 
     additional = result.get("additionalModelRequestFields", {})
-    assert additional.get("output_config") == {"effort": "xhigh"}
+    assert additional.get("output_config") == {"effort": "high"}
     assert "format" not in additional["output_config"]
     assert result["outputConfig"]["textFormat"]["type"] == "json_schema"
     parsed_schema = json.loads(
