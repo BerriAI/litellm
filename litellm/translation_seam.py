@@ -289,9 +289,16 @@ def to_model_response_stream(body: Body, stream_id: str):
         setattr(chunk, "usage", Usage(**cast(Dict[str, Any], usage_payload)))
     choices = body.get("choices")
     first = choices[0] if isinstance(choices, list) and choices else None
-    if isinstance(first, dict) and first.get("finish_reason") is None:
-        # v1 sets citations only on content chunks, never the finish chunk
-        # nor the choices=[] usage chunk.
+    if (
+        "citations" not in body
+        and isinstance(first, dict)
+        and first.get("finish_reason") is None
+    ):
+        # v1 sets citations only on content chunks (None when the wire chunk
+        # carried none), never the finish chunk nor the choices=[] usage
+        # chunk. A wire-carried value (perplexity) already rode the body via
+        # the extras passthrough and must not be clobbered by the preset
+        # (pinned by the wave-2a perplexity citations stream row).
         setattr(chunk, "citations", None)
     return chunk
 

@@ -8,7 +8,11 @@ inbound family, each chunk maps to one ``wire_chunk`` event carrying the
 chunk normalized to the SDK-dump shape (every delta key present, ``None``
 when absent), and the ``openai`` chunk dialect in the inbound fold owns the
 wrapper's stateful behavior (first-chunk role, empty-chunk suppression, the
-choices=[] usage passthrough). Shapes a v2-sent request cannot trigger
+choices=[] usage passthrough). Top-level extras ride the chunk verbatim;
+note for dialect authors: the SEAM (``to_model_response_stream``) presets
+``citations: None`` on content chunks ONLY when the body lacks the key, so a
+wire-carried citations value (perplexity) survives — pinned by the wave-2a
+perplexity citations stream row. Shapes a v2-sent request cannot trigger
 (multiple choices, ``function_call`` deltas, logprobs, audio) are loud error
 values.
 """

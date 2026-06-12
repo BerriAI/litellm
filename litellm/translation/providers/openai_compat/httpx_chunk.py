@@ -1,0 +1,282 @@
+"""The ONE httpx chunk-dialect normalizer behind every dict-path stream parser.
+
+v1's httpx providers decode streams through ``BaseModelResponseIterator``
+subclasses whose ``chunk_parser`` rebuilds a ``ModelResponseStream`` from the
+wire dict — the shared consequences (extras and ``system_fingerprint``
+dropped, the dict-path tool_call ``type: "function"`` default, usage withheld
+from content/finish chunks and attached only to the ``choices: []`` tail,
+the reasoning -> reasoning_content rewrite) are ONE mechanism here,
+parameterized by a frozen ``HttpxChunkPolicy`` instead of pasted per provider
+(critic-wave2a M2 — the openai N3 -> azure N1 -> grok M3 ``make_parse_line``
+trajectory, applied one level up at the chunk seam). Consumers compose
+``make_parse_event(policy)`` and feed it to ``make_parse_line``:
+
+- xai: ``reasoning="rename"`` (the base handler pops ``delta.reasoning`` into
+  ``reasoning_content``), value-check error chunks, no required envelope
+  keys, the xai usage fold hook (reasoning fold + total normalize).
+- cometapi: ``reasoning="copy_both"`` (v1 assigns WITHOUT popping, so both
+  keys reach the Delta), key-presence error chunks, strict
+  id/created/model/choices envelope (v1 KeyErrors -> CometAPIException).
+- wave 2b (groq: rename with pop semantics == "rename"; openrouter:
+  UNCONDITIONAL — every delta gains the key): extend ``ReasoningMode`` with
+  the new Literal value and its arm IN THE SAME COMMIT as the consumer and
+  its differential rows — never a third copy of this file's machinery, and
+  never an arm without a consumer (the placeholder-arm rule).
+
+Shapes a v2-sent request cannot trigger (multiple choices, ``function_call``
+deltas, logprobs, unknown delta/tool_call keys) are loud error values.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Literal
+
+from expression import Error, Ok, Result
+from expression.collections import Block
+
+from ...errors import BoundaryError, TranslationError
+from ...ir import JsonBlob, PlainJson, StreamEvent
+
+_EventResult = Result[StreamEvent | None, TranslationError]
+ParseEvent = Callable[[PlainJson], _EventResult]
+
+ReasoningMode = Literal["rename", "copy_both"]
+"""How a wire ``delta.reasoning`` reaches the emitted delta: "rename" emits
+``reasoning_content`` only (xai; groq's pop has the same output), "copy_both"
+keeps the original key beside the copy (cometapi). Native
+``reasoning_content`` deltas pass through verbatim in every mode."""
+
+_DELTA_KEYS = (
+    "content",
+    "function_call",
+    "refusal",
+    "role",
+    "tool_calls",
+    "reasoning",
+    "reasoning_content",
+)
+
+
+@dataclass(frozen=True)
+class HttpxChunkPolicy:
+    reasoning: ReasoningMode
+    error_on_key_presence: bool = False
+    """True mirrors a v1 ``if "error" in chunk:`` raise (cometapi); False
+    mirrors the value check (xai's ``get("error") is not None``)."""
+    required_keys: tuple[str, ...] = ()
+    """Envelope keys whose ABSENCE is loud (v1 chunk_parsers that subscript
+    the chunk raise KeyError); empty for parsers that ``.get`` everything."""
+    missing_keys_reason: Callable[[Sequence[str]], str] | None = None
+    """Names the v1 raise for a required-keys miss; must be set whenever
+    ``required_keys`` is non-empty."""
+    fold_usage: Callable[[PlainJson], PlainJson | TranslationError] | None = None
+    """Per-chunk usage rewrite (the xai reasoning fold); None passes a dict
+    usage through verbatim. Either way usage is attached ONLY to the
+    ``choices: []`` tail — v1's wrapper strips it from every emitted
+    content/finish chunk and re-synthesizes the final usage chunk."""
+
+
+def _envelope_error(
+    policy: HttpxChunkPolicy, event: dict[str, PlainJson]
+) -> TranslationError | None:
+    error_present = (
+        "error" in event
+        if policy.error_on_key_presence
+        else event.get("error") is not None
+    )
+    if error_present:
+        return _boundary(f"provider stream error: {event.get('error')!r}")
+    missing = [key for key in policy.required_keys if key not in event]
+    if not missing:
+        return None
+    reason = (
+        policy.missing_keys_reason(missing)
+        if policy.missing_keys_reason is not None
+        else f"stream chunk missing {missing!r}"
+    )
+    return _boundary(reason)
+
+
+def make_parse_event(policy: HttpxChunkPolicy) -> ParseEvent:
+    def parse_event(event: PlainJson) -> _EventResult:
+        if not isinstance(event, dict):
+            return Error(_boundary("stream chunk is not an object"))
+        envelope_error = _envelope_error(policy, event)
+        if envelope_error is not None:
+            return Error(envelope_error)
+        choices = event.get("choices")
+        if not isinstance(choices, list):
+            return Error(_boundary("stream chunk 'choices' is missing"))
+        if len(choices) > 1:
+            return Error(
+                TranslationError.of_unsupported(
+                    "multiple stream choices (n > 1); unreachable for v2-sent requests"
+                )
+            )
+        usage = _usage_value(policy, event.get("usage"))
+        if isinstance(usage, TranslationError):
+            return Error(usage)
+        normalized_choices: list[PlainJson] = []
+        if len(choices) == 1:
+            normalized = _normalize_choice(policy, choices[0])
+            if isinstance(normalized, TranslationError):
+                return Error(normalized)
+            normalized_choices = [normalized]
+        identifier = event.get("id")
+        chunk: dict[str, PlainJson] = {
+            # No extras passthrough and no system_fingerprint: the v1
+            # chunk_parser rebuilds keep only id/created/usage/model/choices.
+            "id": identifier if isinstance(identifier, str) else None,
+            "system_fingerprint": None,
+            "choices": normalized_choices,
+            "usage": usage if len(normalized_choices) == 0 else None,
+        }
+        return Ok(StreamEvent.of_wire_chunk(JsonBlob(value=chunk)))
+
+    return parse_event
+
+
+def _usage_value(
+    policy: HttpxChunkPolicy, raw_usage: PlainJson
+) -> PlainJson | TranslationError:
+    if policy.fold_usage is not None:
+        return policy.fold_usage(raw_usage)
+    return raw_usage if isinstance(raw_usage, dict) else None
+
+
+def _boundary(reason: str) -> TranslationError:
+    return TranslationError.of_boundary(BoundaryError.of(Block.of_seq([reason])))
+
+
+def _string_or_none(value: PlainJson) -> PlainJson:
+    return value if isinstance(value, str) else None
+
+
+def _normalize_choice(
+    policy: HttpxChunkPolicy, choice: PlainJson
+) -> PlainJson | TranslationError:
+    if not isinstance(choice, dict):
+        return _boundary("stream choice is not an object")
+    extra_keys = set(choice.keys()) - {"index", "delta", "logprobs", "finish_reason"}
+    if extra_keys:
+        return TranslationError.of_unsupported(
+            f"stream choice keys {sorted(extra_keys)!r}; unreachable for v2-sent requests"
+        )
+    if choice.get("logprobs") is not None:
+        return TranslationError.of_unsupported(
+            "stream logprobs; unreachable for v2-sent requests"
+        )
+    finish = choice.get("finish_reason")
+    if finish is not None and not isinstance(finish, str):
+        return _boundary("stream finish_reason is not a string")
+    if finish == "function_call":
+        return TranslationError.of_unsupported(
+            "legacy function_call stream finish; the v2 surface cannot send 'functions'"
+        )
+    raw_delta = choice.get("delta")
+    delta = raw_delta if isinstance(raw_delta, dict) else {}
+    normalized_delta = _normalize_delta(policy, delta)
+    if isinstance(normalized_delta, TranslationError):
+        return normalized_delta
+    if finish is not None and _delta_bears_content(normalized_delta):
+        return TranslationError.of_unsupported(
+            "finish chunk with a non-empty delta; v1's wrapper interleaves it"
+        )
+    index = choice.get("index")
+    return {
+        "index": index if isinstance(index, int) else 0,
+        "delta": normalized_delta,
+        "logprobs": None,
+        "finish_reason": finish,
+    }
+
+
+def _normalize_delta(
+    policy: HttpxChunkPolicy, delta: dict[str, PlainJson]
+) -> dict[str, PlainJson] | TranslationError:
+    extra_keys = set(delta.keys()) - set(_DELTA_KEYS)
+    if extra_keys:
+        return TranslationError.of_unsupported(
+            f"stream delta keys {sorted(extra_keys)!r}; unreachable for v2-sent requests"
+        )
+    if delta.get("function_call") is not None:
+        return TranslationError.of_unsupported(
+            "legacy function_call stream delta; the v2 surface cannot send 'functions'"
+        )
+    tool_calls = delta.get("tool_calls")
+    normalized_calls: PlainJson = None
+    if tool_calls is not None:
+        if not isinstance(tool_calls, list):
+            return _boundary("stream delta 'tool_calls' is not an array")
+        gathered: list[PlainJson] = []
+        for call in tool_calls:
+            normalized = _normalize_tool_call(call)
+            if isinstance(normalized, TranslationError):
+                return normalized
+            gathered = [*gathered, normalized]
+        normalized_calls = gathered
+    # provider_specific_fields: None always (the dict-path wrapper stamps the
+    # null provider field on content-bearing deltas); refusal and the
+    # reasoning keys ride set-only, mirroring Delta's set-field serialization
+    # on the dict path — v1 FORWARDS a refusal that rides a role/content
+    # delta and swallows refusal-only deltas (verifier-grok F1).
+    base: dict[str, PlainJson] = {
+        "content": _string_or_none(delta.get("content")),
+        "function_call": None,
+        "provider_specific_fields": None,
+        "role": _string_or_none(delta.get("role")),
+        "tool_calls": normalized_calls,
+    }
+    if "refusal" in delta:
+        base = {**base, "refusal": _string_or_none(delta.get("refusal"))}
+    return _reasoning_tail(policy.reasoning, delta, base)
+
+
+def _reasoning_tail(
+    mode: ReasoningMode, delta: dict[str, PlainJson], base: dict[str, PlainJson]
+) -> dict[str, PlainJson]:
+    if "reasoning" in delta:
+        value = _string_or_none(delta.get("reasoning"))
+        if mode == "copy_both":
+            # v1 cometapi assigns without popping: both keys reach the Delta
+            return {**base, "reasoning": value, "reasoning_content": value}
+        return {**base, "reasoning_content": value}
+    if "reasoning_content" in delta:
+        return {
+            **base,
+            "reasoning_content": _string_or_none(delta.get("reasoning_content")),
+        }
+    return base
+
+
+def _normalize_tool_call(call: PlainJson) -> PlainJson | TranslationError:
+    if not isinstance(call, dict):
+        return _boundary("stream tool_call is not an object")
+    extra_keys = set(call.keys()) - {"index", "id", "function", "type"}
+    if extra_keys:
+        return TranslationError.of_unsupported(
+            f"stream tool_call keys {sorted(extra_keys)!r}; unreachable for v2-sent requests"
+        )
+    raw_function = call.get("function")
+    function = raw_function if isinstance(raw_function, dict) else {}
+    index = call.get("index")
+    return {
+        "index": index if isinstance(index, int) else 0,
+        "id": _string_or_none(call.get("id")),
+        "function": {
+            "arguments": _string_or_none(function.get("arguments")),
+            "name": _string_or_none(function.get("name")),
+        },
+        # dict-path default: ChatCompletionDeltaToolCall fills "function" when
+        # the wire omits the key (the SDK path keeps None there)
+        "type": _string_or_none(call.get("type")) if "type" in call else "function",
+    }
+
+
+def _delta_bears_content(delta: dict[str, PlainJson]) -> bool:
+    content = delta.get("content")
+    return (isinstance(content, str) and len(content) > 0) or delta.get(
+        "tool_calls"
+    ) is not None

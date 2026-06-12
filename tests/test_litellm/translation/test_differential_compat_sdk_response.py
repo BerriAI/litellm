@@ -25,7 +25,7 @@ from litellm.translation.inbound.openai_chat.response import serialize_response
 from litellm.translation.providers.openai_compat.response import parse_response
 from litellm.translation_seam import build_translation_deps, to_model_response
 
-from ._compat_sdk_corpus import PROVIDERS, SPECS
+from ._compat_sdk_corpus import HTTPX_PROVIDERS, SDK_PROVIDERS, SPECS
 from .test_differential_openai_response import _RESPONSES
 
 _RESPONSE_ROWS = (
@@ -66,7 +66,12 @@ def _norm(payload: dict) -> str:
 
 
 def _rows():
-    return sorted((provider, name) for provider in PROVIDERS for name in _RESPONSE_ROWS)
+    # SDK-path members only: the preset/re-prefix arm is the SDK seam's.
+    # httpx members (cometapi) are pinned NO-prefix in their own gate file
+    # (test_differential_cometapi_response.py, the xai R4 shape).
+    return sorted(
+        (provider, name) for provider in SDK_PROVIDERS for name in _RESPONSE_ROWS
+    )
 
 
 @pytest.mark.parametrize("provider,name", _rows())
@@ -82,7 +87,7 @@ def test_preset_reprefix_matches_v1(provider: str, name: str, frozen_ambient) ->
     assert v2["model"] == f"{provider}/{wire_model}"
 
 
-@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("provider", SDK_PROVIDERS)
 def test_preset_survives_when_wire_model_missing(provider: str, frozen_ambient) -> None:
     """cdr's elif arm needs a non-None wire model; without one the preset
     {provider}/{request model} survives verbatim on both sides."""
@@ -92,3 +97,46 @@ def test_preset_survives_when_wire_model_missing(provider: str, frozen_ambient) 
     v2 = _v2_model_response(provider, raw, preset)
     assert _norm(v2) == _norm(v1)
     assert v2["model"] == preset
+
+
+def test_httpx_members_are_exactly_cometapi() -> None:
+    """The family's httpx subset is deliberate and small; growing it must
+    re-derive the response/stream gate shape (no preset, line-seam streams)
+    instead of silently inheriting the SDK rows above."""
+    assert HTTPX_PROVIDERS == ("cometapi",)
+
+
+_PERPLEXITY_CITATIONS_RESPONSE = {
+    "id": "resp-cite",
+    "object": "chat.completion",
+    "created": 1718000000,
+    "model": "sonar",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Answer [1]."},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11},
+    "citations": ["https://a.example"],
+    "search_results": [{"url": "https://a.example", "title": "A"}],
+}
+
+
+def test_perplexity_citation_enrichment_is_dormant(frozen_ambient) -> None:
+    """PerplexityChatConfig.transform_response (citation-token estimation +
+    citations->annotations) is DORMANT on the SDK path: the live normalizer
+    is convert_to_model_response_object, where top-level citations/
+    search_results survive only via the unknown-key mirror and NO
+    annotations / usage.citation_tokens exist. v2 must match the dormant
+    truth byte-identically — porting the enrichment would be inventing
+    behavior v1 doesn't execute (researcher-4 entry 1)."""
+    preset = "perplexity/sonar"
+    v1 = _v1_model_response(_PERPLEXITY_CITATIONS_RESPONSE, preset)
+    v2 = _v2_model_response("perplexity", _PERPLEXITY_CITATIONS_RESPONSE, preset)
+    assert _norm(v2) == _norm(v1)
+    assert v2["citations"] == ["https://a.example"]
+    assert v2["search_results"] == [{"url": "https://a.example", "title": "A"}]
+    assert v2["choices"][0]["message"].get("annotations") is None
+    assert "citation_tokens" not in v2["usage"]
