@@ -630,3 +630,61 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     assert key_data.metadata.key_alias == "toto-test-2"
     assert key_data.metadata.team_id == "69cd4b77-b095-4489-8c46-4f2f31d840a2"
     assert key_data.metrics.spend == 10.0
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_empty_result_set():
+    """Regression test for the empty-range 500.
+
+    When the date filter matches zero rows, Postgres still emits the
+    grand-total () grouping-set row with every SUM column NULL. The
+    endpoint must return an empty result set with zeroed totals, not
+    crash on None + None.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    mock_rows = [
+        {
+            "date": None,
+            "api_key": None,
+            "model": None,
+            "model_group": None,
+            "custom_llm_provider": None,
+            "mcp_namespaced_tool_name": None,
+            "endpoint": None,
+            "group_level": 127,
+            "spend": None,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "cache_read_input_tokens": None,
+            "cache_creation_input_tokens": None,
+            "api_requests": None,
+            "successful_requests": None,
+            "failed_requests": None,
+        }
+    ]
+    mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-06-16",
+        end_date="2026-06-16",
+        model=None,
+        api_key=None,
+    )
+
+    assert result.results == []
+    assert result.metadata.total_spend == 0.0
+    assert result.metadata.total_prompt_tokens == 0
+    assert result.metadata.total_completion_tokens == 0
+    assert result.metadata.total_tokens == 0
+    assert result.metadata.total_api_requests == 0
+    assert result.metadata.total_successful_requests == 0
+    assert result.metadata.total_failed_requests == 0
+    assert result.metadata.total_cache_read_input_tokens == 0
+    assert result.metadata.total_cache_creation_input_tokens == 0
