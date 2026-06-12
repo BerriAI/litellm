@@ -49,6 +49,15 @@ Provider = Literal[
     "nscale",
     "hyperbolic",
     "volcengine",
+    # wave-2a: compat_sdk profile rows + named gates. perplexity/sambanova/
+    # deepinfra/moonshot are SDK-path (seam preset + re-prefix applies);
+    # cometapi is httpx-path (NO model preset, bare wire model — the xai R4
+    # pin) with its own reasoning-rename stream parser.
+    "perplexity",
+    "sambanova",
+    "deepinfra",
+    "moonshot",
+    "cometapi",
 ]
 
 _SAME_FAMILY: frozenset[tuple[InboundSchema, Provider]] = frozenset(
