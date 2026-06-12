@@ -99,6 +99,18 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES["ui-theme"]).toBe("ui-theme");
     expect(MIGRATED_PAGES.logs).toBe("logs");
   });
+
+  it("maps the admin-panel, logging-and-alerts, model-hub-table, and new_usage ids to their routes", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["admin-panel"]).toBe("admin-panel");
+    expect(MIGRATED_PAGES["logging-and-alerts"]).toBe("logging-and-alerts");
+    expect(MIGRATED_PAGES["model-hub-table"]).toBe("model-hub-table");
+    // new_usage routes to /usage; the legacy ?page=usage report keeps its switch arm.
+    expect(MIGRATED_PAGES.new_usage).toBe("usage");
+    expect(MIGRATED_PAGES.usage).toBeUndefined();
+  });
 });
 
 describe("dev server (NODE_ENV=development)", () => {

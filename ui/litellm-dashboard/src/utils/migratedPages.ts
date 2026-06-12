@@ -35,6 +35,11 @@ export const MIGRATED_PAGES: Record<string, string> = {
   "transform-request": "transform-request",
   "ui-theme": "ui-theme",
   logs: "logs",
+  "admin-panel": "admin-panel",
+  "logging-and-alerts": "logging-and-alerts",
+  "model-hub-table": "model-hub-table",
+  // The modern usage dashboard; the old ?page=usage report stays on the legacy switch.
+  new_usage: "usage",
 };
 
 function uiBase(): string {
