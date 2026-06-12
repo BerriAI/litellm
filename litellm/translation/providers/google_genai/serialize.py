@@ -17,6 +17,7 @@ the message/tool converters decline.
 from __future__ import annotations
 
 import copy
+import json
 
 from expression import Error, Ok, Option, Result
 from expression.collections import Block
@@ -24,7 +25,7 @@ from typing_extensions import assert_never
 
 from ...deps import TranslationDeps
 from ...errors import TranslationError
-from ...ir import Body, ChatRequest, Message, PlainJson
+from ...ir import Body, ChatRequest, ContentBlock, Message, PlainJson
 from . import params as p
 from .messages import serialize_contents, serialize_system, with_schema_prompt
 from .schema import build_vertex_schema, strip_additional_properties, strip_strict
@@ -32,10 +33,26 @@ from .tools import serialize_tools, tool_config
 
 _SerializeResult = Result[Body, TranslationError]
 
-# Gemini's context-cache minimum is 1024 TOKENS; one token always spans at
-# least one character, so < 1024 chars of cache-marked text guarantees v1
-# skips the cache-create network call and ignores the markers.
-_CACHE_MARKER_CHAR_LIMIT = 1024
+# Gemini's context-cache minimum is 1024 TOKENS (is_prompt_caching_valid_prompt
+# runs token_counter over the continuous block from the FIRST to the LAST
+# cache-marked message, unmarked messages in between included, and v1 makes
+# the cachedContents network call at >= 1024). v2 must prove that call
+# unreachable, so the gate computes a conservative UPPER bound on whatever v1
+# could count; over-counting only widens the typed fallback:
+#
+# - a BPE token spans at least one BYTE, so UTF-8 byte length bounds the
+#   token count of any text (char length does NOT: CJK/emoji code points are
+#   multi-byte and can be multi-token);
+# - v1 charges DEFAULT_IMAGE_TOKEN_COUNT (250) per image at zero text bytes,
+#   and an unmarked image can sit inside v1's continuous block, so ANY media
+#   block anywhere in a marker-bearing request fails closed;
+# - token_counter adds per-message overhead and counts tool_use argument
+#   JSON, so argument/name bytes are folded in and every system entry and
+#   message contributes a fixed margin;
+# - the byte total spans the WHOLE request (system + all messages), a strict
+#   superset of v1's continuous cached block.
+_CACHE_MARKER_TOKEN_LIMIT = 1024
+_PER_MESSAGE_TOKEN_MARGIN = 8
 
 
 def serialize_request_vertex(
@@ -126,56 +143,74 @@ def _system_gate(
 
 
 def _cache_marker_gate(request: ChatRequest) -> TranslationError | None:
-    system_chars = sum(
-        len(entry.text) for entry in request.system if entry.cache.is_some()
+    has_marker = any(entry.cache.is_some() for entry in request.system) or any(
+        _message_has_marker(message) for message in request.messages
     )
-    message_chars = 0
+    if not has_marker:
+        return None
+    total = sum(len(entry.text.encode("utf-8")) for entry in request.system)
+    total = total + _PER_MESSAGE_TOKEN_MARGIN * (
+        len(request.system) + len(request.messages)
+    )
     for message in request.messages:
-        counted = _marked_message_chars(message)
+        counted = _message_bytes(message)
         if isinstance(counted, TranslationError):
             return counted
-        message_chars = message_chars + counted
-    if system_chars + message_chars >= _CACHE_MARKER_CHAR_LIMIT:
+        total = total + counted
+    if total >= _CACHE_MARKER_TOKEN_LIMIT:
         return TranslationError.of_unsupported(
-            "cache_control content at or above gemini's cache minimum; v1's check_and_create_cache performs network I/O"
+            "cache_control content whose conservative token bound reaches gemini's cache minimum; v1's check_and_create_cache performs network I/O"
         )
     return None
 
 
-def _block_text_chars(message: Message) -> int:
-    total = 0
-    for block in message.content:
-        if block.tag == "text":
-            total = total + len(block.text.text)
-        elif block.tag == "thinking":
-            total = total + len(block.thinking.thinking)
-        elif block.tag == "tool_result":
-            content = block.tool_result.content
-            if content.tag == "text":
-                total = total + len(content.text)
-            else:
-                total = total + sum(len(part.text) for part in content.parts)
-    return total
-
-
-def _marked_message_chars(message: Message) -> int | TranslationError:
-    has_marker = any(
+def _message_has_marker(message: Message) -> bool:
+    return any(
         (block.tag == "text" and block.text.cache.is_some())
         or (block.tag == "tool_result" and block.tool_result.cache.is_some())
         or (block.tag == "thinking" and block.thinking.cache.is_some())
+        or (block.tag == "tool_use" and block.tool_use.cache.is_some())
+        or (block.tag == "image" and block.image.cache.is_some())
         for block in message.content
     )
-    media_marked = any(
-        block.tag == "image" and block.image.cache.is_some()
-        for block in message.content
-    )
-    if media_marked:
-        return TranslationError.of_unsupported(
-            "cache_control on media blocks; v1's check_and_create_cache token-counts them (and may create a cache)"
-        )
-    if not has_marker:
-        return 0
-    return _block_text_chars(message)
+
+
+def _message_bytes(message: Message) -> int | TranslationError:
+    total = 0
+    for block in message.content:
+        counted = _block_bytes(block)
+        if isinstance(counted, TranslationError):
+            return counted
+        total = total + counted
+    return total
+
+
+def _block_bytes(block: ContentBlock) -> int | TranslationError:
+    match block.tag:
+        case "text":
+            return len(block.text.text.encode("utf-8"))
+        case "thinking":
+            return len(block.thinking.thinking.encode("utf-8"))
+        case "redacted_thinking":
+            return len(block.redacted_thinking.data.encode("utf-8"))
+        case "tool_use":
+            arguments = json.dumps(block.tool_use.arguments.value)
+            return len(block.tool_use.name.encode("utf-8")) + len(
+                arguments.encode("utf-8")
+            )
+        case "tool_result":
+            content = block.tool_result.content
+            if content.tag == "text":
+                return len(content.text.encode("utf-8"))
+            return sum(len(part.text.encode("utf-8")) for part in content.parts)
+        case "image":
+            # v1 charges DEFAULT_IMAGE_TOKEN_COUNT per image at zero text
+            # bytes, and an unmarked image can sit inside the continuous
+            # cached block; no byte bound exists, so media fails closed.
+            return TranslationError.of_unsupported(
+                "media beside cache_control markers; v1's check_and_create_cache token-counts images (and may create a cache)"
+            )
+    assert_never(block.tag)
 
 
 _StructuredEntries = dict[str, PlainJson]

@@ -88,8 +88,11 @@ translation/
 │   │   │                #   (AI Studio refuses https media + forwards
 │   │   │                #   function-call ids on gemini-3+); auth/host/api-
 │   │   │                #   version differences are envelope, never here
-│   │   ├── serialize.py # cache-marker gate (<1024 chars proves v1 skips the
-│   │   │                #   context-cache network call), 3-way structured-
+│   │   ├── serialize.py # cache-marker gate (conservative token bound:
+│   │   │                #   UTF-8 bytes + per-message margin < 1024 proves
+│   │   │                #   v1 skips the context-cache network call; any
+│   │   │                #   media beside markers fails closed), 3-way
+│   │   │                #   structured-
 │   │   │                #   output fork (responseJsonSchema regex vs
 │   │   │                #   responseSchema+propertyOrdering capability vs
 │   │   │                #   schema-as-user-message), generationConfig with
@@ -296,9 +299,11 @@ non-function tool_calls), the `user` param (model-list gated in v1),
 (v1 downloads http pdf file_ids in-transform), and `http://` image URLs. On
 streams, the trailing `choices: []` usage chunk passes through verbatim and
 the wrapper's synthesized final usage chunk stays a seam/envelope concern.
-Deliberate google fallback surfaces: cache markers at/above the 1024-char
-conservative gate (context-cache create is network I/O; below it v1 provably
-skips the call and ignores the markers), cache markers on media blocks,
+Deliberate google fallback surfaces: cache markers whose conservative token
+bound (UTF-8 bytes + per-message margin over the whole request) reaches
+gemini's 1024-token cache minimum (context-cache create is network I/O;
+below the bound v1 provably skips the call and ignores the markers), any
+media block in a marker-bearing request (v1 token-counts images at 250),
 gs:// and http:// media plus AI-Studio https media (downloads), https media
 without a recognizable extension, file/pdf parts (inbound), params outside
 the IR (n, seed, penalties, modalities, audio, web_search_options,

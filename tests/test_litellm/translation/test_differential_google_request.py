@@ -132,6 +132,29 @@ _WEATHER_TOOL = {
 
 # (alias, case, drop_params) quirks; every row references v1 in-process.
 QUIRKS = {
+    "cache_marker_cjk_sublimit": (
+        # 80 CJK chars = 240 UTF-8 bytes: under the gate's byte+margin bound,
+        # so BOTH sides ignore the marker inline (v1 token-counts < 1024 and
+        # skips the cache-create call); pins that the byte-bound gate still
+        # serves genuinely-small international cache markers.
+        "vertex_ai/gemini-2.5-pro",
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "漢" * 80,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ],
+            "params": {"max_tokens": 64},
+        },
+        False,
+    ),
     "studio_response_schema_property_ordering": (
         # supports_response_schema=True but fails the 2.x regex -> the
         # responseSchema + propertyOrdering tier of the 3-way fork.
@@ -322,6 +345,80 @@ def test_large_cache_marker_falls_back() -> None:
     result = _v2_translate("vertex_gemini", raw)
     assert result.is_error()
     assert result.error.tag == "unsupported"
+
+
+# The cache-marker gate bounds v1's TOKEN count (>= 1024 creates the context
+# cache over the network), so multi-byte text and media must fall back even
+# when the old char count looked tiny (critic-google B1).
+CACHE_GATE_FALLBACKS = {
+    "cjk_under_char_limit": {
+        # 700 chars but 2100 UTF-8 bytes; v1's token_counter can exceed 1024.
+        "model": "gemini-2.5-pro",
+        "max_tokens": 64,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "漢" * 700,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ],
+    },
+    "emoji_under_char_limit": {
+        # 400 chars but 1600 UTF-8 bytes.
+        "model": "gemini-2.5-pro",
+        "max_tokens": 64,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "🦊" * 400,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ],
+    },
+    "unmarked_image_beside_marker": {
+        # The image carries NO cache_control, but v1 token-counts it at
+        # DEFAULT_IMAGE_TOKEN_COUNT (250) inside the continuous cached block.
+        "model": "gemini-2.5-pro",
+        "max_tokens": 64,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "tiny marked text",
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+                        },
+                    },
+                ],
+            }
+        ],
+    },
+}
+
+
+@pytest.mark.parametrize("name", sorted(CACHE_GATE_FALLBACKS))
+def test_cache_gate_token_bound_falls_back(name: str) -> None:
+    raw = copy.deepcopy(CACHE_GATE_FALLBACKS[name])
+    result = _v2_translate("vertex_gemini", raw)
+    assert result.is_error(), f"{name} unexpectedly serialized"
+    assert result.error.tag == "unsupported"
+    assert "cache" in result.error.summary or "media" in result.error.summary
 
 
 def test_reasoning_effort_xhigh_falls_back() -> None:

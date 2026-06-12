@@ -536,6 +536,17 @@ def _google_request_rows(lines: list) -> int:
         lines.append(
             f"- {'IDENTICAL' if same else 'DIVERGENT'}: quirk {name} ({alias})"
         )
+    for name in sorted(req.CACHE_GATE_FALLBACKS):
+        raw = _copy.deepcopy(req.CACHE_GATE_FALLBACKS[name])
+        result = req._v2_translate("vertex_gemini", raw)
+        ok = result.is_error()
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(
+            f"- {label}: cache-marker token bound {name}"
+            " (v1's check_and_create_cache may create the context cache;"
+            " the byte+margin bound fails closed)"
+        )
     return failures
 
 
