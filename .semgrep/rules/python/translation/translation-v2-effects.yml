@@ -163,6 +163,8 @@ rules:
       # pattern would match every submodule import including parse).
       - pattern: import urllib.request
       - pattern: from urllib import request
+      # call-site catch for the bare-`import urllib` evasion
+      - pattern: urllib.request.$F(...)
       - pattern: import socket
       - pattern: from socket import $X
     metadata:

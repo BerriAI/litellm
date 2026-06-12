@@ -163,7 +163,8 @@ def _to_model_response_openai(
                     logprobs=choice.get("logprobs"),
                     enhancements=choice.get("enhancements"),
                     provider_specific_fields=cast(
-                        Any, choice.get("provider_specific_fields")
+                        Optional[Dict[str, Any]],
+                        choice.get("provider_specific_fields"),
                     ),
                 )
             )

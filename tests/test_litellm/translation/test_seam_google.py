@@ -163,3 +163,24 @@ def test_provider_error_raises_contract_not_fallback() -> None:
             messages=[{"role": "user", "content": "hi"}],
             num_retries=0,
         )
+
+
+def test_in_package_thought_mirrors_match_v1() -> None:
+    """The translation package cannot import the v1 stack, so ir.py mirrors
+    v1's __thought__ separator and params.py mirrors the derived dummy
+    signature; this seam-side test (which MAY import both) pins the drift
+    (critic-integration N4)."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        THOUGHT_SIGNATURE_SEPARATOR,
+        _get_dummy_thought_signature,
+    )
+
+    from litellm.translation.ir import (
+        THOUGHT_SIGNATURE_SEPARATOR as IR_THOUGHT_SIGNATURE_SEPARATOR,
+    )
+    from litellm.translation.providers.google_genai.params import (
+        DUMMY_THOUGHT_SIGNATURE,
+    )
+
+    assert IR_THOUGHT_SIGNATURE_SEPARATOR == THOUGHT_SIGNATURE_SEPARATOR
+    assert DUMMY_THOUGHT_SIGNATURE == _get_dummy_thought_signature()

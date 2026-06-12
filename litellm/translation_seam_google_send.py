@@ -78,17 +78,18 @@ def _prepare(
 
 
 def _route_to_v2(provider_key: GoogleProviderKey) -> bool:
-    """``dispatch.route`` is the single v1/v2 fork (CLAUDE.md); the google
-    forks go through it like the anthropic fork instead of re-deriving the
-    allowlist check inline (critic-google M2)."""
-    from litellm.translation import route
+    """``dispatch.route`` is the single v1/v2 fork (CLAUDE.md): the REAL
+    allowlist goes in and route() owns the membership decision too, so no
+    half of the fork lives inline (critic-google M2, critic-integration N6)."""
+    from typing import cast as _cast
 
-    if provider_key not in enabled_providers():
-        return False
+    from litellm.translation import route
+    from litellm.translation.dispatch import Provider
+
     decision = route(
         schema="openai_chat",
         provider=provider_key,
-        enabled_providers=frozenset({provider_key}),  # checked above
+        enabled_providers=_cast("frozenset[Provider]", enabled_providers()),
         body_touching=False,
     )
     return decision.tag == "v2"
