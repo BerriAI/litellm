@@ -15,7 +15,7 @@ import {
 } from "antd";
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ModelGroup } from "../playground/llm_calls/fetch_models";
+import { ModelGroup } from "@/components/llm_calls/fetch_models";
 
 const { Text } = Typography;
 

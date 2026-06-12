@@ -10,7 +10,7 @@ import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import MessageManager from "@/components/molecules/message_manager";
 import NotificationManager from "../../../molecules/notifications_manager";
-import { fetchAvailableModels, ModelGroup } from "../../../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { AddFallbacksModal } from "./AddFallbacksModal";
 import { FallbackGroup } from "./FallbackGroupConfig";
 import { FallbackSelectionForm } from "./FallbackSelectionForm";
