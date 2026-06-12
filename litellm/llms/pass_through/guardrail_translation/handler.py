@@ -287,6 +287,14 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         return detector(content_type)
 
     @staticmethod
+    def event_stream_media_type(provider: Optional[str]) -> Optional[str]:
+        handler_cls = _get_provider_handlers().get(provider or "")
+        getter = getattr(handler_cls, "event_stream_media_type", None)
+        if getter is None:
+            return None
+        return getter()
+
+    @staticmethod
     def _resolve_event_stream_de_anonymizer(provider: Optional[str]):
         handler_cls = _get_provider_handlers().get(provider or "")
         return getattr(handler_cls, "de_anonymize_event_stream", None)

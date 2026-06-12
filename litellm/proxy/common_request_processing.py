@@ -1360,6 +1360,7 @@ class ProxyBaseLLMRequestProcessing:
                             return Response(
                                 content=modified_bytes,
                                 status_code=status.HTTP_200_OK,
+                                media_type=self._passthrough_event_stream_media_type(),
                                 headers=response_headers,
                             )
 
@@ -1791,6 +1792,21 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         return LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
+            self.data.get("custom_llm_provider")
+        )
+
+    def _passthrough_event_stream_media_type(self) -> Optional[str]:
+        """
+        Content-type for a buffered passthrough event-stream response, resolved
+        from the provider handler so the proxy stays provider-agnostic. Mirrors
+        the upstream content-type the non-streaming path forwards, since the
+        buffered streaming generator carries no headers of its own.
+        """
+        from litellm.llms.pass_through.guardrail_translation.handler import (
+            LlmPassthroughRouteHandler,
+        )
+
+        return LlmPassthroughRouteHandler.event_stream_media_type(
             self.data.get("custom_llm_provider")
         )
 

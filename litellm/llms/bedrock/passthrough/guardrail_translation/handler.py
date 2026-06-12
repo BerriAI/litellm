@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 _CONVERSE_ACTIONS = frozenset({"converse", "converse-stream"})
 _EVENT_STREAM_CONTENT_TYPE = "vnd.amazon.eventstream"
+_EVENT_STREAM_MEDIA_TYPE = "application/vnd.amazon.eventstream"
 
 
 def _is_converse_endpoint(endpoint: str) -> bool:
@@ -215,6 +216,10 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
     @staticmethod
     def is_event_stream_content_type(content_type: str) -> bool:
         return _EVENT_STREAM_CONTENT_TYPE in content_type
+
+    @staticmethod
+    def event_stream_media_type() -> str:
+        return _EVENT_STREAM_MEDIA_TYPE
 
     @staticmethod
     async def de_anonymize_event_stream(  # noqa: PLR0915

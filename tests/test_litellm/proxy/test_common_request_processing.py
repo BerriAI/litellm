@@ -2837,4 +2837,5 @@ class TestAllmPassthroughStreamingProviderGate:
         assert isinstance(result, Response)
         assert not isinstance(result, StreamingResponse)
         assert result.body == b"modified-body"
+        assert result.headers["content-type"] == "application/vnd.amazon.eventstream"
         mock_handler.assert_awaited_once()
