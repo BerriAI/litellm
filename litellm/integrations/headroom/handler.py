@@ -90,18 +90,33 @@ class MTHeadroomAggressive(HeadroomCallback, CustomLogger):
     tool_result becomes a compression target instead of a protected one.
     """
 
-    # LiteLLM's pre-call dispatch (litellm/proxy/utils.py:1508) only invokes
-    # async_pre_call_hook when the method is defined directly on the registered
-    # class (`"async_pre_call_hook" in vars(_callback.__class__)`). If we only
-    # inherit it from HeadroomCallback, the dispatch skips us silently. So
-    # re-declare the hook here as a thin pass-through to super().
-    async def async_pre_call_hook(
+    # LiteLLM's pre-call dispatch (litellm/proxy/utils.py:1515) calls the hook
+    # with a different signature than upstream HeadroomCallback expects:
+    #   LiteLLM    : (user_api_key_dict, cache, data, call_type)
+    #   upstream HC: (user_api_key, data, call_type)
+    # We accept LiteLLM's kwargs and adapt them to upstream's signature so
+    # the parent's compress() body still runs. The user_api_key string is
+    # only used by upstream for opaque pass-through to its compressor, so a
+    # synthetic value (the hashed token) is fine.
+    #
+    # Defining this method also satisfies the dispatcher's gates:
+    #   1. `isinstance(_callback, CustomLogger)` — covered by the MRO
+    #      (we mix CustomLogger in below).
+    #   2. `"async_pre_call_hook" in vars(self.__class__)` — defining it here.
+    #   3. `cls.async_pre_call_hook != CustomLogger.async_pre_call_hook` —
+    #      this override is not the CustomLogger no-op default.
+    async def async_pre_call_hook(  # type: ignore[override]
         self,
-        user_api_key: str,
+        user_api_key_dict: Any,
+        cache: Any,
         data: dict[str, Any],
         call_type: str,
     ) -> dict[str, Any]:
-        return await super().async_pre_call_hook(user_api_key, data, call_type)
+        # upstream's hook bails for unsupported call_types itself; we just
+        # forward. Pull a stable string from user_api_key_dict for upstream's
+        # opaque key arg (it expects a str).
+        ak = getattr(user_api_key_dict, "api_key", "") if user_api_key_dict else ""
+        return await HeadroomCallback.async_pre_call_hook(self, ak, data, call_type)
 
     def _local_compress(self, messages: list[dict], model: str) -> dict[str, Any] | None:
         from headroom.compress import compress  # type: ignore[import-not-found]
