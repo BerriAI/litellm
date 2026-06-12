@@ -137,6 +137,9 @@ from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _PROXY_MaxParallelRequestsHandler_v3,
+)
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.repositories.budget_repository import BudgetRepository
@@ -2687,6 +2690,42 @@ class ProxyLogging:
             logging_obj._on_deferred_stream_complete = None
             logging_obj._deferred_stream_complete_args = None
             asyncio.create_task(_deferred_cb(*_args))
+
+    def _release_max_parallel_requests_on_disconnect(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """
+        Release the api-key max_parallel_requests slot when a streaming
+        response is cancelled mid-flight (client disconnect). Neither the
+        success nor failure logging callback fires on the resulting
+        CancelledError / GeneratorExit, so the pre-call +1 would otherwise
+        leak.
+
+        Must be called from the outermost streaming generator (the one
+        Starlette drives and closes on disconnect). A nested iterator-hook
+        generator only receives GeneratorExit when it is garbage collected,
+        which is non-deterministic, so the refund cannot live there.
+
+        Scheduled fire-and-forget (no await) because awaiting is not
+        permitted while unwinding a GeneratorExit.
+        """
+        limiter = self.get_proxy_hook("parallel_request_limiter")
+        if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
+            return
+        try:
+            asyncio.create_task(
+                limiter.async_release_max_parallel_requests_on_disconnect(
+                    user_api_key_dict
+                )
+            )
+        except RuntimeError:
+            # No running event loop (e.g. interpreter/loop shutdown); the
+            # counter's window TTL will reclaim the slot.
+            verbose_proxy_logger.warning(
+                "parallel_request_limiter_v3: could not schedule "
+                "max_parallel_requests release on disconnect; no running "
+                "event loop. Slot will be reclaimed when its window TTL expires"
+            )
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """

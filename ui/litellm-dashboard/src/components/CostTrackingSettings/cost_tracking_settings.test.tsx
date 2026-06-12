@@ -33,7 +33,7 @@ vi.mock("./pricing_calculator/index", () => ({
   default: () => <div data-testid="pricing-calculator">Pricing Calculator</div>,
 }));
 
-vi.mock("../playground/llm_calls/fetch_models", () => ({
+vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([]),
 }));
 

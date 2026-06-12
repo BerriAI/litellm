@@ -43,6 +43,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
 
         _utils.set_attributes(span, kwargs, response_obj, LangfuseLLMObsOTELAttributes)
+        span.set_attribute("langfuse.observation.type", "generation")
 
         #########################################################
         # Set Langfuse specific attributes
