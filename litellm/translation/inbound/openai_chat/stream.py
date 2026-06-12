@@ -25,7 +25,13 @@ owns only what v1's wrapper adds statefully (first emitted chunk carries
 ``role: assistant``, later roles are stripped, empty deltas are swallowed,
 the wire stream id is pinned to the first non-empty one, and the trailing
 ``choices: []`` usage chunk passes through for the seam's include_usage
-contract).
+contract). The ``azure`` dialect is the openai fold plus the wrapper's azure
+branch (streaming_handler.py:1448-1454): the model is re-read from every
+chunk that carries one, choice-level ``content_filter_results`` survives on
+content chunks (the ``StreamingChoices(**choice_json)`` rebuild) but not on
+the finish flush (default-choice ``Delta(content=None)``), and the
+empty-choices ``prompt_filter_results`` chunk is swallowed exactly like
+v1's empty-delta handling.
 """
 
 from __future__ import annotations
@@ -37,7 +43,7 @@ from typing_extensions import assert_never
 
 from ...ir import Body, PlainJson, StreamEvent
 
-ChunkDialect = Literal["anthropic", "bedrock_converse", "openai"]
+ChunkDialect = Literal["anthropic", "bedrock_converse", "openai", "azure"]
 
 
 @dataclass(frozen=True)
@@ -139,20 +145,26 @@ def _finish_chunk(state: StreamState, finish: str) -> Body:
     }
 
 
-_OPENAI_WIRE_KEYS = frozenset({"id", "system_fingerprint", "choices", "usage"})
+_OPENAI_WIRE_KEYS = frozenset({"id", "model", "system_fingerprint", "choices", "usage"})
 
 
 def _step_openai(state: StreamState, chunk: PlainJson) -> _StepResult:
-    if state.dialect != "openai" or not isinstance(chunk, dict):
+    if state.dialect not in ("openai", "azure") or not isinstance(chunk, dict):
         return state, ()  # cross-family parsers never emit wire chunks
     chunk_id = chunk.get("id")
     pinned = state.stream_id or (
         chunk_id if isinstance(chunk_id, str) and chunk_id.strip() else None
     )
-    next_state = replace(state, stream_id=pinned)
+    chunk_model = chunk.get("model")
+    model = (
+        chunk_model
+        if state.dialect == "azure" and isinstance(chunk_model, str)
+        else state.model
+    )
+    next_state = replace(state, stream_id=pinned, model=model)
     base: Body = {
         "id": pinned,
-        "model": state.model,
+        "model": model,
         "object": "chat.completion.chunk",
         "system_fingerprint": chunk.get("system_fingerprint"),
     }
@@ -219,10 +231,20 @@ def _step_openai(state: StreamState, chunk: PlainJson) -> _StepResult:
                 "delta": emitted_delta,
                 "logprobs": None,
                 "finish_reason": None,
+                # azure's choice-level filter annotation survives on content
+                # chunks (v1 rebuilds StreamingChoices from the wire choice);
+                # the finish flush above uses the default choice and drops it.
+                **_content_filter_field(choice),
             }
         ],
     }
     return replace(next_state, sent_role=True), (body,)
+
+
+def _content_filter_field(choice: dict[str, PlainJson]) -> dict[str, PlainJson]:
+    if "content_filter_results" in choice:
+        return {"content_filter_results": choice["content_filter_results"]}
+    return {}
 
 
 def _openai_chunk_non_empty(state: StreamState, delta: dict[str, PlainJson]) -> bool:
@@ -242,8 +264,8 @@ def _thinking_delta_body(
     dialect: ChunkDialect, thinking: str, signature: str | None
 ) -> dict[str, PlainJson]:
     match dialect:
-        case "anthropic" | "openai":
-            # openai-dialect streams never produce thinking deltas (the
+        case "anthropic" | "openai" | "azure":
+            # openai/azure-dialect streams never produce thinking deltas (the
             # provider parser emits wire_chunk events only); the arm exists
             # for exhaustiveness and mirrors the anthropic shape.
             block: PlainJson = {
