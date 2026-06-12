@@ -619,8 +619,10 @@ async def extract_file_creation_params(
     # Extract target_storage (simplified - just use form parameter)
     target_storage = _extract_target_storage_simple(target_storage_form)
 
-    # Extract target_model_names (simplified - just use form parameter)
+    # Extract target_model_names from the form field, then fall back to the raw form
     target_model_names = _extract_target_model_names_simple(target_model_names_form)
+    if not target_model_names:
+        target_model_names = await _extract_target_model_names_from_form(request)
 
     # Extract model parameter
     model = _extract_model_param(request, request_body)
@@ -665,6 +667,77 @@ def _extract_target_model_names_simple(
         return [str(name).strip() for name in target_model_names_form if name]
 
     return []
+
+
+def _is_target_model_names_key(key: str) -> bool:
+    return key == "target_model_names" or (
+        key.startswith("target_model_names[") and key.endswith("]")
+    )
+
+
+async def _extract_target_model_names_from_form(request: "Request") -> List[str]:
+    """
+    Collect target_model_names from the raw multipart form.
+
+    Reads ``request.form()`` directly instead of the parsed request body, which is
+    built via ``dict(form_data)`` and keeps only the last value for repeated keys.
+    The OpenAI SDK sends a list ``extra_body`` as repeated ``target_model_names[]``
+    fields, so reading the form preserves every value instead of truncating to one.
+    Indexed keys like ``target_model_names[0]`` are handled the same way.
+    """
+    form_data = await request.form()
+
+    names: List[str] = []
+    for key, value in form_data.multi_items():
+        if _is_target_model_names_key(key) and isinstance(value, str):
+            names.extend(_extract_target_model_names_simple(value))
+
+    seen = set()
+    result: List[str] = []
+    for name in names:
+        if name and name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result
+
+
+def validate_managed_files_requirement(
+    target_model_names: List[str],
+    model: Optional[str] = None,
+) -> None:
+    """
+    Enforce proxy-level managed files when litellm.require_managed_files is enabled.
+
+    Raises:
+        HTTPException: 400 if the upload would bypass the managed-files flow, i.e.
+            target_model_names is missing or a model parameter routes the request
+            through the direct provider path instead of the managed-files hook.
+    """
+    import litellm
+    from fastapi import HTTPException
+
+    if litellm.require_managed_files is not True:
+        return
+
+    if not target_model_names:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "target_model_names is required when require_managed_files is enabled "
+                "in litellm_settings. Provide one or more model aliases via the "
+                "target_model_names form field (e.g. target_model_names=my-model-alias)."
+            ),
+        )
+
+    if model:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "model is not allowed when require_managed_files is enabled in "
+                "litellm_settings. Uploads must go through managed files using "
+                "target_model_names instead of the model parameter."
+            ),
+        )
 
 
 def _extract_model_param(request: "Request", request_body: dict) -> Optional[str]:
