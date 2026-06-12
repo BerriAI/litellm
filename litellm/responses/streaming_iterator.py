@@ -1648,7 +1648,7 @@ class ManagedResponsesWebSocketHandler:
         source = self._warmup_source_params(msg_obj)
         wire_model = source.get("model") or self.model_group or self.model
         return {
-            "id": f"resp_warmup_{uuid.uuid4().hex}",
+            "id": f"{_WARMUP_RESPONSE_ID_PREFIX}{uuid.uuid4().hex}",
             "object": "response",
             "created_at": int(time.time()),
             "status": "completed",

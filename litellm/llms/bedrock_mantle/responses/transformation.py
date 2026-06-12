@@ -144,7 +144,7 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
             tool_type = tool.get("type")
             if tool_type in _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES:
                 kept.append(tool)
-            elif tool_type is not None:
+            else:
                 dropped_types.append(str(tool_type))
 
         if dropped_types:
