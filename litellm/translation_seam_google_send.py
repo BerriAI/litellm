@@ -20,7 +20,7 @@ import litellm
 
 from litellm.translation import TranslationDeps
 from litellm.translation.ir import Body
-from litellm.translation_seam import enabled_providers
+from litellm.translation_seam import HttpxJsonPort, _raw_openai_body, enabled_providers
 from litellm.translation_seam_google import (
     GoogleProviderKey,
     build_google_deps,
@@ -54,35 +54,13 @@ def _ambient_blocks_v2() -> bool:
     )
 
 
-# completion() locals that are routing/transport, not body payload.
-_NON_BODY_ARGS = frozenset(
-    {
-        "model",
-        "messages",
-        "custom_llm_provider",
-        "api_version",
-        "max_retries",
-        "stream_options",
-    }
-)
+# the shared raw-body builder carries the fixed semantics this module
+# pioneered (every caller-set param rides in; unknowns fall back typed)
+_raw_openai_body_google = _raw_openai_body
 
-
-def _raw_openai_body_google(
-    model: str,
-    messages: List["AllMessageValues"],
-    optional_param_args: Dict[str, Any],
-    non_default_params: Dict[str, Any],
-) -> Dict[str, Any]:
-    """EVERY caller-set OpenAI param rides into the parse (not the shared
-    seam's _BODY_FIELDS whitelist): anything v2 does not account for (n,
-    seed, penalties, modalities, ...) becomes a typed boundary error and
-    falls back to v1 instead of being silently dropped."""
-    named = {
-        key: value
-        for key, value in optional_param_args.items()
-        if key not in _NON_BODY_ARGS and value is not None
-    }
-    return {"model": model, "messages": messages, **named, **non_default_params}
+# the anthropic/bedrock forks' fallback timeout (httpx default ceiling v1
+# also applies when no request timeout is set)
+_DEFAULT_TIMEOUT_SECONDS = 600.0
 
 
 def _prepare(
@@ -336,13 +314,14 @@ async def _send_v2_google(
     logging_obj: "LiteLLMLoggingObj",
     model_response: "ModelResponse",
 ) -> "ModelResponse":
-    import httpx
+    import json
 
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
+    from litellm.translation.engine.http import Endpoint
     from litellm.translation.engine.pipeline import (
         response_dialect,
-        translate_chat_response,
+        send_prepared,
         wire_body,
     )
     from litellm.translation_seam import to_model_response
@@ -359,6 +338,11 @@ async def _send_v2_google(
         messages,
         wire,
     )
+    endpoint = Endpoint(
+        url=url,
+        headers=headers,
+        timeout_seconds=float(timeout) if timeout else _DEFAULT_TIMEOUT_SECONDS,
+    )
     logging_obj.pre_call(
         input=messages,
         api_key="",
@@ -368,34 +352,34 @@ async def _send_v2_google(
             "headers": dict(headers),
         },
     )
-    async with httpx.AsyncClient(
-        timeout=float(timeout) if timeout else 600.0
-    ) as client:
-        raw = await client.post(url, headers=dict(headers), json=dict(wire))
+    # the engine's injected-HttpPort send (one skeleton shared with the
+    # anthropic fork), not a third hand-rolled httpx client (critic-google M2)
+    result = await send_prepared(
+        prepared, provider_key, deps, HttpxJsonPort(), endpoint
+    )
+    if result.is_error():
+        error = result.error
+        if error.tag == "provider_http":
+            logging_obj.post_call(
+                input=messages,
+                api_key="",
+                original_response=error.provider_http.text,
+                additional_args={"complete_input_dict": wire},
+            )
+            raise VertexAIError(
+                status_code=error.provider_http.status_code,
+                message=error.provider_http.text,
+                headers=dict(error.provider_http.headers),
+            )
+        raise VertexAIError(status_code=500, message=error.summary)
+    body = result.ok
     logging_obj.post_call(
         input=messages,
         api_key="",
-        original_response=raw.text,
+        original_response=json.dumps(body, default=str),
         additional_args={"complete_input_dict": wire},
     )
-    if raw.status_code < 200 or raw.status_code >= 300:
-        raise VertexAIError(
-            status_code=raw.status_code, message=raw.text, headers=raw.headers
-        )
-    try:
-        payload = raw.json()
-    except ValueError as parse_error:
-        raise VertexAIError(
-            status_code=422,
-            message=f"non-JSON google response: {raw.text[:200]}",
-            headers=raw.headers,
-        ) from parse_error
-    result = translate_chat_response(payload, prepared.request, provider_key, deps)
-    if result.is_error():
-        raise VertexAIError(
-            status_code=500, message=result.error.summary, headers=raw.headers
-        )
     dialect = response_dialect(provider_key)
     if dialect == "gemini":
-        return to_model_response_google(result.ok, model_response)
-    return to_model_response(result.ok, model_response, usage_style=dialect)
+        return to_model_response_google(body, model_response)
+    return to_model_response(body, model_response, usage_style=dialect)

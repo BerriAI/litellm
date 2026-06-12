@@ -584,20 +584,16 @@ async def _send_v2_bedrock(
     )
 
 
-_BODY_FIELDS = (
-    "temperature",
-    "top_p",
-    "max_tokens",
-    "max_completion_tokens",
-    "stop",
-    "stream",
-    "tools",
-    "tool_choice",
-    "parallel_tool_calls",
-    "response_format",
-    "user",
-    "reasoning_effort",
-    "thinking",
+# completion() locals that are routing/transport, not body payload.
+_NON_BODY_ARGS = frozenset(
+    {
+        "model",
+        "messages",
+        "custom_llm_provider",
+        "api_version",
+        "max_retries",
+        "stream_options",
+    }
 )
 
 
@@ -605,13 +601,16 @@ def _raw_openai_body(
     model: str, messages: list, optional_param_args: dict, non_default_params: dict
 ) -> dict:
     """Rebuild the caller's OpenAI-shape body from completion()'s pre-mapping
-    locals. Provider-specific extras (non_default_params, e.g. top_k) ride
-    along verbatim: anything v2 does not account for becomes a typed
-    unsupported error and falls back to v1 -- the fail-closed allowlist."""
+    locals. EVERY caller-set OpenAI param rides into the parse (the google
+    branch's fixed semantics, unified across all seam forks): anything v2
+    does not account for (n, seed, penalties, modalities, ...) becomes a
+    typed boundary error and falls back to v1 instead of being silently
+    dropped by a whitelist. Provider-specific extras (non_default_params,
+    e.g. top_k) ride along verbatim."""
     named = {
-        key: optional_param_args.get(key)
-        for key in _BODY_FIELDS
-        if optional_param_args.get(key) is not None
+        key: value
+        for key, value in optional_param_args.items()
+        if key not in _NON_BODY_ARGS and value is not None
     }
     return {"model": model, "messages": messages, **named, **non_default_params}
 
