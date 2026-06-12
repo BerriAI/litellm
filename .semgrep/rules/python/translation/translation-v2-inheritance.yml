@@ -1,0 +1,91 @@
+# litellm/translation composition-over-inheritance, encoded (06-quality-team.md
+# tenet: composition over inheritance). Scoped to the translation package.
+#
+# A provider is a module of pure functions; behavior is composed, never
+# inherited. The only legitimate bases are structural/declarative ones:
+# Protocol ports, ABC port definitions, pydantic wire models (BaseModel and
+# the package's single-level WireModel base), NamedTuple/TypedDict records,
+# and the Enum family. errors.py is excluded by path: it is the one module
+# allowed to define error machinery, including Exception subclasses if the
+# seam contract ever needs them.
+#
+# Engine semantics this encoding relies on (verified against semgrep
+# 1.157.0): `class $C($B): ...` matches any class with at least one
+# positional base and binds $B to the FIRST base only. So the first rule
+# fully checks single-base classes, and the second rule closes the
+# multi-base hole by banning multiple inheritance outright -- which is what
+# the tenet wants anyway. A justified exception (e.g. a str+Enum mixin on
+# py3.10) carries an inline `# nosemgrep: <rule-id>` with a reason.
+#
+# First-run measurement (2026-06-12): 25 classes with bases in the tree
+# (HttpPort(Protocol); WireModel(BaseModel); 23x single-base WireModel
+# subclasses), zero findings -- false-positive rate 0, rule enabled.
+
+rules:
+  - id: translation-no-inheritance
+    message: >
+      inheritance: class with a non-declarative base inside
+      litellm/translation. Compose pure functions instead of subclassing;
+      allowed bases are Protocol/ABC ports, pydantic wire models
+      (BaseModel/WireModel), NamedTuple/TypedDict, and Enum kinds (tenets:
+      composition over inheritance).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - litellm/translation
+      exclude:
+        # the one module allowed to define error machinery (Exception bases)
+        - litellm/translation/errors.py
+    patterns:
+      - pattern: |
+          class $C($B):
+            ...
+      - metavariable-pattern:
+          metavariable: $B
+          patterns:
+            - pattern-not: Protocol
+            - pattern-not: typing.Protocol
+            - pattern-not: Protocol[...]
+            - pattern-not: typing.Protocol[...]
+            - pattern-not: ABC
+            - pattern-not: abc.ABC
+            - pattern-not: BaseModel
+            - pattern-not: pydantic.BaseModel
+            - pattern-not: WireModel
+            - pattern-not: NamedTuple
+            - pattern-not: typing.NamedTuple
+            - pattern-not: TypedDict
+            - pattern-not: typing.TypedDict
+            - pattern-not: Enum
+            - pattern-not: enum.Enum
+            - pattern-not: StrEnum
+            - pattern-not: enum.StrEnum
+            - pattern-not: IntEnum
+            - pattern-not: enum.IntEnum
+            - pattern-not: IntFlag
+            - pattern-not: enum.IntFlag
+    metadata:
+      category: correctness
+      tags: [python, translation-v2, composition-over-inheritance]
+      confidence: HIGH
+
+  - id: translation-no-multiple-inheritance
+    message: >
+      multiple inheritance inside litellm/translation. One declarative base
+      at most; compose behavior with functions instead of mixins (tenets:
+      composition over inheritance).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - litellm/translation
+      exclude:
+        - litellm/translation/errors.py
+    pattern: |
+      class $C($B1, $B2):
+        ...
+    metadata:
+      category: correctness
+      tags: [python, translation-v2, composition-over-inheritance]
+      confidence: HIGH

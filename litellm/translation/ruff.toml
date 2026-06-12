@@ -4,6 +4,12 @@
 # module-global rebinding (PLW0603). Inherits the repo config; ruff's
 # hierarchical discovery applies this file to this subtree automatically,
 # so the repo-wide `ruff check` enforces it with no extra wiring.
+#
+# Match/union hygiene (tenet: tagged unions + match over branching on
+# types): ruff 0.15 has no use-match-over-isinstance rule, so exhaustiveness
+# stays with pyright (reportMatchNotExhaustive + assert_never). What IS
+# deterministic here: E721 (no `type(x) ==` branching), SIM101 (no
+# duplicated isinstance chains), FURB168 (no isinstance None checks).
 
 extend = "../../ruff.toml"
 preview = true
@@ -15,6 +21,9 @@ extend-select = [
     "PLR0915",
     "ANN",
     "PLW0603",
+    "E721",
+    "SIM101",
+    "FURB168",
 ]
 
 [lint.mccabe]
