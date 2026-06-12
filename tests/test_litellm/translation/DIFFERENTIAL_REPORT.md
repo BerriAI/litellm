@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: 4f60ebdc9a
+- commit: 18d2832d95
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -1499,8 +1499,10 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: stop_list
 - IDENTICAL: stream_true
 - IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
 - IDENTICAL: text
 - IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
 - IDENTICAL: tools_auto
 - FALLBACK (v1 raises UnsupportedParamsError): amazon_nova:parallel_tool_calls (parallel_tool_calls)
 - FALLBACK (v1 raises UnsupportedParamsError): amazon_nova:response_format (response_format)
@@ -1517,11 +1519,14 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: parallel_tool_calls_false
 - IDENTICAL: reasoning_effort_served
 - IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
 - IDENTICAL: stop_list
 - IDENTICAL: stream_true
 - IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
 - IDENTICAL: text
 - IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
 - IDENTICAL: tools_auto
 - FALLBACK (v1 raises UnsupportedParamsError): bedrock_mantle:reasoning_effort_non_reasoning_model (reasoning_effort on non-reasoning bedrock_mantle model)
 - FALLBACK (v1 serves it): bedrock_mantle:both_max_tokens_keys (both max_tokens and max_completion_tokens)
@@ -1536,11 +1541,14 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: max_completion_tokens
 - IDENTICAL: parallel_tool_calls_false
 - IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
 - IDENTICAL: stop_list
 - IDENTICAL: stream_true
 - IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
 - IDENTICAL: text
 - IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
 - IDENTICAL: tools_auto
 - FALLBACK (v1 raises UnsupportedParamsError): cometapi:reasoning_effort (reasoning_effort)
 - FALLBACK (v1 serves it): cometapi:both_max_tokens_keys (both max_tokens and max_completion_tokens)
@@ -1556,11 +1564,14 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: max_completion_tokens
 - IDENTICAL: parallel_tool_calls_false
 - IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
 - IDENTICAL: stop_list
 - IDENTICAL: stream_true
 - IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
 - IDENTICAL: text
 - IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
 - IDENTICAL: tools_auto
 - FALLBACK (v1 raises UnsupportedParamsError): compactifai:reasoning_effort (reasoning_effort)
 - FALLBACK (v1 serves it): compactifai:both_max_tokens_keys (both max_tokens and max_completion_tokens)
@@ -1575,11 +1586,14 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: max_completion_tokens
 - IDENTICAL: parallel_tool_calls_false
 - IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
 - IDENTICAL: stop_list
 - IDENTICAL: stream_true
 - IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
 - IDENTICAL: text
 - IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
 - IDENTICAL: tools_auto
 - FALLBACK (v1 raises UnsupportedParamsError): datarobot:reasoning_effort (reasoning_effort)
 - FALLBACK (v1 serves it): datarobot:both_max_tokens_keys (both max_tokens and max_completion_tokens)
@@ -1595,6 +1609,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: stop_list
 - IDENTICAL: stream_true
 - IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
 - IDENTICAL: text
 - FALLBACK (v1 raises UnsupportedParamsError): gradient_ai:parallel_tool_calls (parallel_tool_calls)
 - FALLBACK (v1 raises UnsupportedParamsError): gradient_ai:reasoning_effort (reasoning_effort)
@@ -1612,11 +1627,14 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: max_completion_tokens
 - IDENTICAL: parallel_tool_calls_false
 - IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
 - IDENTICAL: stop_list
 - IDENTICAL: stream_true
 - IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
 - IDENTICAL: text
 - IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
 - IDENTICAL: tools_auto
 - FALLBACK (v1 raises UnsupportedParamsError): heroku:reasoning_effort (reasoning_effort)
 - FALLBACK (v1 serves it): heroku:both_max_tokens_keys (both max_tokens and max_completion_tokens)
@@ -1632,11 +1650,14 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: max_completion_tokens
 - IDENTICAL: parallel_tool_calls_false
 - IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
 - IDENTICAL: stop_list
 - IDENTICAL: stream_true
 - IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
 - IDENTICAL: text
 - IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
 - IDENTICAL: tools_auto
 - FALLBACK (v1 raises UnsupportedParamsError): lemonade:reasoning_effort (reasoning_effort)
 - FALLBACK (v1 serves it): lemonade:both_max_tokens_keys (both max_tokens and max_completion_tokens)
@@ -1651,11 +1672,14 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: max_completion_tokens
 - IDENTICAL: parallel_tool_calls_false
 - IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
 - IDENTICAL: stop_list
 - IDENTICAL: stream_true
 - IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
 - IDENTICAL: text
 - IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
 - IDENTICAL: tools_auto
 - FALLBACK (v1 raises UnsupportedParamsError): minimax:reasoning_effort (reasoning_effort)
 - FALLBACK (v1 serves it): minimax:both_max_tokens_keys (both max_tokens and max_completion_tokens)
@@ -1672,11 +1696,14 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: max_completion_tokens
 - IDENTICAL: parallel_tool_calls_false
 - IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
 - IDENTICAL: stop_list
 - IDENTICAL: stream_true
 - IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
 - IDENTICAL: text
 - IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
 - IDENTICAL: tools_auto
 - FALLBACK (v1 raises UnsupportedParamsError): ovhcloud:reasoning_effort (reasoning_effort)
 - FALLBACK (v1 serves it): ovhcloud:both_max_tokens_keys (both max_tokens and max_completion_tokens)
