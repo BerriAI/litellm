@@ -1,8 +1,10 @@
 """
 Amazon Bedrock Mantle - Responses API backend.
 
-gpt-5.5 / gpt-5.4 on Mantle are exposed ONLY on the `/openai/v1/responses`
-path (not the standard `/v1/responses`). Payloads and SSE follow the OpenAI
+Mantle serves Responses on two upstream paths: gpt frontier models (gpt-5.5 /
+gpt-5.4) on `/openai/v1/responses`, and everything else that supports Responses
+(e.g. gpt-oss) on the standard `/v1/responses`. The gate picks the path per
+model and injects it via `use_openai_path`. Payloads and SSE follow the OpenAI
 Responses spec, so this config inherits OpenAIResponsesAPIConfig and overrides
 only the endpoint URL and authentication.
 
@@ -48,9 +50,14 @@ _MANTLE_HOST_RE = re.compile(
 
 
 class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
-    def __init__(self, aws_signer: Optional[BaseAWSLLM] = None):
+    def __init__(
+        self,
+        aws_signer: Optional[BaseAWSLLM] = None,
+        use_openai_path: bool = True,
+    ):
         super().__init__()
         self._aws_signer = aws_signer or BaseAWSLLM()
+        self.use_openai_path = use_openai_path
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -94,7 +101,8 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # single resolved region so aws_region_name wins; preserve custom proxy hosts.
         if _MANTLE_HOST_RE.match(base):
             base = f"https://bedrock-mantle.{region}.api.aws"
-        return f"{base}/openai/v1/responses"
+        path = "/openai/v1/responses" if self.use_openai_path else "/v1/responses"
+        return f"{base}{path}"
 
     def validate_environment(
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
@@ -107,6 +115,8 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        if litellm_params.aws_bedrock_project_id:
+            headers["OpenAI-Project"] = litellm_params.aws_bedrock_project_id
         return headers
 
     def supports_native_file_search(self) -> bool:

@@ -183,7 +183,10 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     # Check the first call argument
     call_args_sql = mock_db.execute_raw.call_args_list[0][0][0]
     assert 'DELETE FROM "LiteLLM_SpendLogs"' in call_args_sql
-    assert 'WHERE "request_id" IN' in call_args_sql
+    # must match on the full composite identity: on a partitioned table
+    # request_id alone is not unique, and deleting by it would let a client
+    # reusing x-litellm-call-id take out a fresh row alongside the expired one
+    assert 'WHERE ("request_id", "startTime") IN' in call_args_sql
 
 
 @pytest.mark.asyncio
@@ -217,6 +220,109 @@ async def test_cleanup_old_spend_logs_retention_period_cutoff():
     assert (
         abs((cutoff_date - expected_cutoff).total_seconds()) < 1
     )  # Allow 1 second difference for test execution time
+
+
+@pytest.mark.asyncio
+async def test_cleanup_drops_partitions_when_enabled_and_partitioned():
+    """
+    With use_spend_logs_partitioning enabled and a partitioned table, cleanup
+    must reclaim disk by dropping partitions AND still delete expired rows the
+    drops cannot reach (DEFAULT partition, cutoff-spanning partitions), so
+    retention is never bypassed.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.execute_raw = AsyncMock(return_value=0)
+
+    partition_manager = MagicMock()
+    partition_manager.is_partitioned = AsyncMock(return_value=True)
+    partition_manager.ensure_partitions = AsyncMock(return_value=["p1"])
+    partition_manager.drop_partitions_older_than = AsyncMock(
+        return_value=["LiteLLM_SpendLogs_p20260601"]
+    )
+
+    cleaner = SpendLogCleanup(
+        general_settings={
+            "maximum_spend_logs_retention_period": "7d",
+            "use_spend_logs_partitioning": True,
+        },
+        partition_manager=partition_manager,
+    )
+    cleaner.pod_lock_manager = MagicMock()
+    cleaner.pod_lock_manager.redis_cache = None
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    partition_manager.ensure_partitions.assert_awaited_once()
+    partition_manager.drop_partitions_older_than.assert_awaited_once()
+    delete_sql = mock_prisma_client.db.execute_raw.call_args_list[0][0][0]
+    assert 'DELETE FROM "LiteLLM_SpendLogs"' in delete_sql
+
+
+@pytest.mark.asyncio
+async def test_cleanup_uses_delete_when_partitioning_not_enabled():
+    """
+    Even against a partitioned table, the partition path must stay off until
+    use_spend_logs_partitioning is explicitly enabled, so existing deployments
+    see zero behavior change. The catalog must not even be queried.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[10, 0])
+
+    partition_manager = MagicMock()
+    partition_manager.is_partitioned = AsyncMock(return_value=True)
+    partition_manager.ensure_partitions = AsyncMock()
+    partition_manager.drop_partitions_older_than = AsyncMock()
+
+    cleaner = SpendLogCleanup(
+        general_settings={"maximum_spend_logs_retention_period": "7d"},
+        partition_manager=partition_manager,
+    )
+    cleaner.pod_lock_manager = MagicMock()
+    cleaner.pod_lock_manager.redis_cache = None
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    partition_manager.is_partitioned.assert_not_awaited()
+    partition_manager.drop_partitions_older_than.assert_not_awaited()
+    delete_sql = mock_prisma_client.db.execute_raw.call_args_list[0][0][0]
+    assert 'DELETE FROM "LiteLLM_SpendLogs"' in delete_sql
+
+
+@pytest.mark.asyncio
+async def test_cleanup_uses_delete_when_not_partitioned():
+    """
+    With the feature enabled but the table not actually partitioned (script not
+    run yet), cleanup must keep using the batched DELETE path.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[10, 0])
+
+    partition_manager = MagicMock()
+    partition_manager.is_partitioned = AsyncMock(return_value=False)
+    partition_manager.drop_partitions_older_than = AsyncMock()
+
+    cleaner = SpendLogCleanup(
+        general_settings={
+            "maximum_spend_logs_retention_period": "7d",
+            "use_spend_logs_partitioning": True,
+        },
+        partition_manager=partition_manager,
+    )
+    cleaner.pod_lock_manager = MagicMock()
+    cleaner.pod_lock_manager.redis_cache = None
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    partition_manager.drop_partitions_older_than.assert_not_awaited()
+    assert mock_prisma_client.db.execute_raw.await_count == 2
+    delete_sql = mock_prisma_client.db.execute_raw.call_args_list[0][0][0]
+    assert 'DELETE FROM "LiteLLM_SpendLogs"' in delete_sql
 
 
 @pytest.mark.asyncio
