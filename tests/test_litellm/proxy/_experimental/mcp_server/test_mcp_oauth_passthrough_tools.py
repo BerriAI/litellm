@@ -89,6 +89,76 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
 
 
 @pytest.mark.asyncio
+async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
+    manager = MCPServerManager()
+    delegated_server = MCPServer(
+        server_id="oauth1",
+        name="delegated_docs",
+        url="https://upstream/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+    )
+
+    response = httpx.Response(
+        status_code=401,
+        headers={"www-authenticate": 'Bearer resource_metadata="https://upstream"'},
+        request=httpx.Request("GET", "https://upstream/mcp"),
+    )
+    upstream_error = httpx.HTTPStatusError(
+        "401", request=response.request, response=response
+    )
+
+    mock_client = MagicMock()
+    mock_client.list_tools = AsyncMock(side_effect=upstream_error)
+
+    with pytest.raises(MCPUpstreamAuthError) as exc_info:
+        await manager._fetch_tools_with_timeout(
+            mock_client, delegated_server.name, server=delegated_server
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.www_authenticate == (
+        'Bearer resource_metadata="https://upstream"'
+    )
+    assert exc_info.value.server_name == "delegated_docs"
+    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_from_client_credentials_oauth2_keeps_swallow_behavior():
+    manager = MCPServerManager()
+    m2m_server = MCPServer(
+        server_id="oauth-m2m",
+        name="m2m_docs",
+        url="https://upstream/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+        oauth2_flow="client_credentials",
+    )
+
+    response = httpx.Response(
+        status_code=401,
+        headers={"www-authenticate": 'Bearer resource_metadata="https://upstream"'},
+        request=httpx.Request("GET", "https://upstream/mcp"),
+    )
+    upstream_error = httpx.HTTPStatusError(
+        "401", request=response.request, response=response
+    )
+
+    mock_client = MagicMock()
+    mock_client.list_tools = AsyncMock(side_effect=upstream_error)
+
+    tools = await manager._fetch_tools_with_timeout(
+        mock_client, m2m_server.name, server=m2m_server
+    )
+
+    assert tools == []
+    mock_client.list_tools.assert_awaited_with(raise_on_error=False)
+
+
+@pytest.mark.asyncio
 async def test_fetch_tools_from_passthrough_returns_tools_on_success():
     manager = MCPServerManager()
     passthrough_server = MCPServer(

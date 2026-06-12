@@ -522,6 +522,290 @@ async def test_transcription_captured_in_backend_to_client():
 
 
 @pytest.mark.asyncio
+async def test_transcription_session_captures_usage_and_skips_response_create():
+    """
+    For a transcription-only session (session.type == "transcription", e.g.
+    gpt-realtime-whisper), the completed event's audio-duration usage must be
+    captured for cost and response.create must NOT be sent to the backend.
+    """
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    session_created = json.dumps(
+        {
+            "type": "session.created",
+            "session": {
+                "type": "transcription",
+                "audio": {
+                    "input": {"transcription": {"model": "gpt-realtime-whisper"}}
+                },
+            },
+        }
+    ).encode()
+    completed = json.dumps(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "hello world",
+            "item_id": "item_1",
+            "usage": {"type": "duration", "seconds": 12.0},
+        }
+    ).encode()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[session_created, completed, ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    await streaming.backend_to_client_send_messages()
+
+    assert streaming._is_transcription_session is True
+
+    captured = [
+        m
+        for m in streaming.messages
+        if m.get("type") == "conversation.item.input_audio_transcription.completed"
+    ]
+    assert len(captured) == 1, "completed usage event must be captured for cost"
+    assert captured[0]["usage"]["seconds"] == 12.0
+
+    # Transcript still forwarded to the client.
+    client_ws.send_text.assert_any_call(completed.decode())
+
+    # No response.create — transcription sessions have no assistant turn.
+    sent_to_backend = [
+        json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
+    ]
+    assert all(
+        e.get("type") != "response.create" for e in sent_to_backend
+    ), f"transcription session must not trigger response.create, got: {sent_to_backend}"
+
+
+@pytest.mark.asyncio
+async def test_non_transcription_completed_event_still_triggers_response_create():
+    """
+    Regression guard: a normal (non-transcription) session with no guardrails must
+    keep triggering response.create on a completed transcription event.
+    """
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    completed = json.dumps(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "hi",
+            "item_id": "item_1",
+        }
+    ).encode()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=[completed, ConnectionClosed(None, None)])
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    await streaming.backend_to_client_send_messages()
+
+    assert streaming._is_transcription_session is False
+    sent_to_backend = [
+        json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
+    ]
+    assert any(e.get("type") == "response.create" for e in sent_to_backend)
+
+
+def test_client_session_update_marks_transcription_session():
+    """A client session.update with type=transcription flags the session."""
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    assert streaming._is_transcription_session is False
+    streaming._collect_user_input_from_client_event(
+        json.dumps({"type": "session.update", "session": {"type": "transcription"}})
+    )
+    assert streaming._is_transcription_session is True
+
+
+@pytest.mark.asyncio
+async def test_transcription_session_update_enforces_authorized_flat_model():
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming = RealTimeStreaming(
+        MagicMock(),
+        backend_ws,
+        MagicMock(),
+        model="gpt-realtime-whisper",
+        force_transcription_model="gpt-realtime-whisper",
+    )
+
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "session.update",
+                "session": {
+                    "type": "transcription",
+                    "input_audio_transcription": {
+                        "model": "restricted-transcription-model",
+                        "language": "en",
+                    },
+                },
+            }
+        )
+    )
+
+    sent = json.loads(backend_ws.send.await_args.args[0])
+    assert sent["session"]["input_audio_transcription"] == {
+        "model": "gpt-realtime-whisper",
+        "language": "en",
+    }
+    assert streaming._is_transcription_session is True
+
+
+@pytest.mark.asyncio
+async def test_transcription_session_update_enforces_authorized_nested_model():
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming = RealTimeStreaming(
+        MagicMock(),
+        backend_ws,
+        MagicMock(),
+        model="gpt-realtime-whisper",
+        force_transcription_model="gpt-realtime-whisper",
+    )
+
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "session.update",
+                "session": {
+                    "type": "transcription",
+                    "audio": {
+                        "input": {
+                            "transcription": {
+                                "model": "restricted-transcription-model",
+                                "prompt": "domain words",
+                            },
+                            "format": {"type": "audio/pcm", "rate": 24000},
+                        }
+                    },
+                },
+            }
+        )
+    )
+
+    sent = json.loads(backend_ws.send.await_args.args[0])
+    assert sent["session"]["audio"]["input"]["transcription"] == {
+        "model": "gpt-realtime-whisper",
+        "prompt": "domain words",
+    }
+    assert sent["session"]["audio"]["input"]["format"] == {
+        "type": "audio/pcm",
+        "rate": 24000,
+    }
+    assert streaming._is_transcription_session is True
+
+
+@pytest.mark.asyncio
+async def test_normal_realtime_session_keeps_nested_transcription_model():
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming = RealTimeStreaming(
+        MagicMock(),
+        backend_ws,
+        MagicMock(),
+        model="gpt-4o-realtime-preview",
+    )
+
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "session.update",
+                "session": {
+                    "type": "realtime",
+                    "audio": {
+                        "input": {
+                            "transcription": {
+                                "model": "whisper-1",
+                                "language": "en",
+                            }
+                        }
+                    },
+                },
+            }
+        )
+    )
+
+    sent = json.loads(backend_ws.send.await_args.args[0])
+    assert sent["session"]["audio"]["input"]["transcription"] == {
+        "model": "whisper-1",
+        "language": "en",
+    }
+    assert streaming._is_transcription_session is False
+
+
+def test_detect_transcription_session_from_backend_transcription_session_events():
+    """Backend transcription_session.created/updated events flag the session."""
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    assert streaming._is_transcription_session is False
+    streaming._detect_transcription_session_from_backend(
+        {"type": "transcription_session.created"}
+    )
+    assert streaming._is_transcription_session is True
+
+    streaming2 = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    streaming2._detect_transcription_session_from_backend(
+        {"type": "transcription_session.updated"}
+    )
+    assert streaming2._is_transcription_session is True
+
+
+def test_detect_transcription_session_from_backend_session_created_with_type():
+    """Backend session.created with type=transcription flags the session."""
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    streaming._detect_transcription_session_from_backend(
+        {"type": "session.created", "session": {"type": "transcription"}}
+    )
+    assert streaming._is_transcription_session is True
+
+
+def test_detect_transcription_session_from_backend_ignores_non_transcription():
+    """Backend session.created without type=transcription does not flag the session."""
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    streaming._detect_transcription_session_from_backend(
+        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}}
+    )
+    assert streaming._is_transcription_session is False
+
+
+def test_capture_transcription_usage_deduplicates_when_already_stored():
+    """
+    When the event is already in messages (logged via store_message), it must not
+    be appended a second time by _capture_transcription_usage.
+    """
+    import litellm
+
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    # Add the event type to the default logged list so _should_store_message returns True.
+    streaming.logged_real_time_event_types = [
+        "conversation.item.input_audio_transcription.completed"
+    ]
+    event = {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "usage": {"type": "duration", "seconds": 5.0},
+    }
+    streaming.store_message(json.dumps(event))
+    initial_count = len(streaming.messages)
+    streaming._capture_transcription_usage(event)
+    assert len(streaming.messages) == initial_count  # no duplicate
+
+
+@pytest.mark.asyncio
 async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup():
     websocket = MagicMock()
     backend_ws = MagicMock()

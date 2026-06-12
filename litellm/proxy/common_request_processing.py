@@ -2075,6 +2075,17 @@ class ProxyBaseLLMRequestProcessing:
                     )
                 )
                 yield serialize_chunk(chunk)
+        except (asyncio.CancelledError, GeneratorExit):
+            # Client disconnected mid-stream. CancelledError / GeneratorExit
+            # are BaseException and bypass the success/failure logging
+            # callbacks that release the pre-call max_parallel_requests +1;
+            # release it here. This is the outermost generator Starlette closes
+            # on disconnect, so the nested iterator hook (which only sees
+            # GeneratorExit on GC) cannot own the refund.
+            proxy_logging_obj._release_max_parallel_requests_on_disconnect(
+                user_api_key_dict
+            )
+            raise
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(

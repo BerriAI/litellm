@@ -15,13 +15,14 @@ import datetime
 import json
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
+    BlockModelRequest,
     CommonProxyErrors,
     LiteLLM_ProxyModelTable,
     LiteLLM_TeamTable,
@@ -329,6 +330,168 @@ async def patch_model(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
         )
+
+
+async def _set_model_blocked_status(
+    data: BlockModelRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    blocked: bool,
+    action: Literal["blocked", "unblocked"],
+    litellm_changed_by: Optional[str],
+) -> Optional[LiteLLM_ProxyModelTable]:
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        llm_router,
+        prisma_client,
+        store_model_in_db,
+    )
+
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        if store_model_in_db is not True:
+            raise ProxyException(
+                message="Model updates only supported for DB-stored models",
+                type=ProxyErrorTypes.validation_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param=None,
+            )
+
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise ProxyException(
+                message="Only proxy admins can change a model's blocked flag.",
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param="blocked",
+            )
+
+        db_model = await get_db_model(
+            model_id=data.model_id,
+            prisma_client=prisma_client,
+        )
+
+        if db_model is None:
+            if (
+                llm_router
+                and llm_router.get_deployment(model_id=data.model_id) is not None
+            ):
+                raise ProxyException(
+                    message="Cannot edit config-based model. Store model in DB via /model/new first.",
+                    type=ProxyErrorTypes.validation_error.value,
+                    code=status.HTTP_400_BAD_REQUEST,
+                    param=None,
+                )
+            raise ProxyException(
+                message=f"Model {data.model_id} not found on proxy.",
+                type=ProxyErrorTypes.not_found_error,
+                code=status.HTTP_404_NOT_FOUND,
+                param=None,
+            )
+
+        updated_model = await ModelRepository(prisma_client).table.update(
+            where={"model_id": data.model_id},
+            data={
+                "blocked": blocked,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_at": cast(str, get_utc_datetime()),
+            },
+        )
+
+        await clear_cache()
+
+        asyncio.create_task(
+            create_object_audit_log(
+                object_id=data.model_id,
+                action=action,
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                before_value=db_model.model_dump_json(exclude_none=True),
+                after_value=(
+                    updated_model.model_dump_json(exclude_none=True)
+                    if isinstance(updated_model, BaseModel)
+                    else None
+                ),
+                litellm_changed_by=litellm_changed_by,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+            )
+        )
+
+        return updated_model
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in model {action}: {str(e)}")
+
+        if isinstance(e, (HTTPException, ProxyException)):
+            raise e
+
+        raise ProxyException(
+            message=f"Error updating model blocked status: {str(e)}",
+            type=ProxyErrorTypes.internal_server_error,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        )
+
+
+@router.post(
+    "/model/block",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def block_model(
+    data: BlockModelRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+) -> Optional[LiteLLM_ProxyModelTable]:
+    """
+    Block a DB-stored model deployment from serving requests.
+
+    Parameters:
+    - model_id: str - The model deployment id to block.
+    """
+    return await _set_model_blocked_status(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        blocked=True,
+        action="blocked",
+        litellm_changed_by=litellm_changed_by,
+    )
+
+
+@router.post(
+    "/model/unblock",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def unblock_model(
+    data: BlockModelRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+) -> Optional[LiteLLM_ProxyModelTable]:
+    """
+    Unblock a DB-stored model deployment so it can serve requests again.
+
+    Parameters:
+    - model_id: str - The model deployment id to unblock.
+    """
+    return await _set_model_blocked_status(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        blocked=False,
+        action="unblocked",
+        litellm_changed_by=litellm_changed_by,
+    )
 
 
 ################################# Helper Functions #################################

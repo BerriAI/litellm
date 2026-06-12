@@ -43,6 +43,7 @@ from typing import (
     Type,
 )
 from litellm.types.integrations.datadog import DatadogInitParams
+from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -154,10 +155,12 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gitlab",
     "cloudzero",
     "focus",
+    "mavvrik",
     "vantage",
     "posthog",
     "levo",
     "compression_interception",
+    "newrelic",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -412,6 +415,7 @@ s3_callback_params: Optional[Dict] = None
 s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
+newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
@@ -1373,6 +1377,7 @@ from .search.main import *
 from .realtime_api.main import (
     _arealtime,
     acreate_realtime_client_secret,
+    acreate_realtime_transcription_session,
     arealtime_calls,
 )
 from .responses.main import _aresponses_websocket

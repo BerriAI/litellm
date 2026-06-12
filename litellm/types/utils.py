@@ -533,6 +533,7 @@ CallTypesLiteral = Literal[
     "acreate_skill",
     "acreate_realtime_client_secret",
     "arealtime_calls",
+    "acreate_realtime_transcription_session",
 ]
 
 # Mapping of API routes to their corresponding call types
@@ -2493,6 +2494,7 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     litellm_call_id: Optional[str]
     model_alias_map: Optional[dict]
     metadata: Optional[dict]
+    litellm_metadata: Optional[dict]
     model_info: Optional[dict]
     proxy_server_request: Optional[dict]
     acompletion: Optional[bool]

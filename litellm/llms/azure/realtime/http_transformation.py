@@ -40,6 +40,13 @@ class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
         version = api_version or get_secret_str("AZURE_API_VERSION") or "2024-12-17"
         return f"{base}/openai/realtime/calls?api-version={version}"
 
+    def get_transcription_session_url(
+        self, api_base: Optional[str], model: str, api_version: Optional[str] = None
+    ) -> str:
+        base = self.get_api_base(api_base).rstrip("/")
+        version = api_version or get_secret_str("AZURE_API_VERSION") or "2024-12-17"
+        return f"{base}/openai/realtime/transcription_sessions?api-version={version}"
+
     def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:
         return {
             "api-key": ephemeral_key,

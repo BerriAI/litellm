@@ -2552,6 +2552,7 @@ if MCP_AVAILABLE:
                 standard_logging_mcp_tool_call
             )
             litellm_logging_obj.model = f"MCP: {name}"
+            litellm_logging_obj.model_call_details["model"] = f"MCP: {name}"
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
         if mcp_server is None:
@@ -3426,6 +3427,8 @@ if MCP_AVAILABLE:
                     )
                     if stored_oauth_headers:
                         continue
+                    if getattr(server, "delegate_auth_to_upstream", False) is True:
+                        continue
 
                 request = StarletteRequest(scope)
                 base_url = get_request_base_url(request)
@@ -3960,7 +3963,7 @@ if MCP_AVAILABLE:
                     ):
                         _stateful_session_locks.pop(active_request_session_id, None)
         except MCPUpstreamAuthError as e:
-            # Pass-through server returned 401 — surface it to the client so
+            # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
             raise e.to_http_exception(
                 base_url=get_request_base_url(StarletteRequest(scope)),
@@ -4076,7 +4079,7 @@ if MCP_AVAILABLE:
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
         except MCPUpstreamAuthError as e:
-            # Pass-through server returned 401 — surface it to the client so
+            # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
             raise e.to_http_exception(
                 base_url=get_request_base_url(StarletteRequest(scope)),
