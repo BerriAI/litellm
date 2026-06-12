@@ -39,9 +39,12 @@ def explicit_stream_false(raw: _Raw) -> TranslationError | None:
 
 def carries_cache_control(value: object, depth: int = 0) -> bool:
     """Recursive ``cache_control`` scan over a raw subtree (messages/tools).
-    The shared mechanism behind the azure guard's verbatim-forward arm and
-    the openrouter guard's cache-capable-model arm (wave-2b-alpha lift of
-    azure/guard.py's private copy — one scan, two policies)."""
+    The ONE mechanism behind every marker-policy guard arm: azure's
+    verbatim-forward arm, openrouter's cache-capable-model arm, compat_sdk's
+    ``cache_control_preserved`` (dashscope/zai, and minimax via compat_httpx),
+    and google_genai's name-beside-marker arm (critic-wave2b-alpha MAJOR-1
+    completed the lift: the former compat_sdk and google_genai copies import
+    this one — never re-fork it)."""
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         # exhaustion must never ADMIT a request: treat the unscannable tail
         # as if it carried the marker (fall back to v1)

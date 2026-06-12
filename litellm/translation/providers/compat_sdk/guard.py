@@ -36,7 +36,7 @@ from types import MappingProxyType
 from typing import cast
 
 from ...errors import TranslationError
-from ..openai_compat.guard import explicit_stream_false
+from ..openai_compat.guard import carries_cache_control, explicit_stream_false
 from ..openai_compat.guard import (
     unsupported_request_shapes as openai_unsupported_request_shapes,
 )
@@ -44,29 +44,10 @@ from .params import ALLOWED, CompatSdkProvider
 
 _Raw = Mapping[str, object]
 _RawGuardFn = Callable[[_Raw], TranslationError | None]
-_MAX_DEPTH = 16
 
 
 def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
     return explicit_stream_false(raw) or openai_unsupported_request_shapes(raw)
-
-
-def carries_cache_control(value: object, depth: int = 0) -> bool:
-    if depth > _MAX_DEPTH:
-        # exhaustion must never ADMIT a request: treat the unscannable tail
-        # as if it carried the marker (fall back to v1)
-        return True
-    if isinstance(value, Mapping):
-        mapping = cast(Mapping[str, object], value)
-        if "cache_control" in mapping:
-            return True
-        return any(carries_cache_control(item, depth + 1) for item in mapping.values())
-    if isinstance(value, Sequence) and not isinstance(value, str):
-        return any(
-            carries_cache_control(item, depth + 1)
-            for item in cast(Sequence[object], value)
-        )
-    return False
 
 
 def cache_control_preserved(raw: _Raw, provider: str) -> TranslationError | None:
