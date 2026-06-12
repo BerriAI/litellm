@@ -10,7 +10,9 @@ arm; each cohere event maps to one ``wire_chunk`` carrying the generic
 payload the shared ``generic`` chunk dialect folds:
 
 - ``type == "content-delta"`` -> text (v1's dict/str content fork; a non-str
-  ``text`` value is loud — v1's Delta validation raises on it);
+  ``text`` value is loud — v1 SILENTLY SWALLOWS the chunk, the named
+  PINNED DIVERGENCE row, critic M2: the old prose claiming "v1's Delta
+  validation raises" contradicted the branch's own pin);
 - ``type == "tool-call-delta"`` -> one tool_call entry, id/name/arguments
   defaulting to ``""`` (v1's ``.get(..., "")``); ``tool-call-start`` events
   match NO v1 arm and are swallowed;
@@ -36,6 +38,7 @@ v1's chunk_parser raises ValueError out of the iterator on each.
 from __future__ import annotations
 
 import json
+import math
 from types import MappingProxyType
 
 from expression import Error, Ok, Result
@@ -155,6 +158,10 @@ def _index_reason(event: dict[str, PlainJson]) -> str | None:
     if "index" not in event:
         return None
     index = event.get("index")
+    if isinstance(index, float) and not math.isfinite(index):
+        # json.loads ACCEPTS NaN/Infinity literals, so the corner is
+        # wire-reachable: v1's int() raises ValueError/OverflowError
+        return f"non-finite cohere chunk index {index!r} (v1 raises)"
     if isinstance(index, (bool, int, float)):
         return None
     if isinstance(index, str):
@@ -196,8 +203,9 @@ def _content_delta_text(event: dict[str, PlainJson]) -> str | TranslationError:
         text = content.get("text")
         if not isinstance(text, str):
             return _boundary(
-                "cohere content-delta text is not a string (v1's Delta "
-                "validation raises on it)"
+                "cohere content-delta text is not a string (v1 silently "
+                "swallows the chunk — the named PINNED DIVERGENCE row; "
+                "fail-closed on a failure path)"
             )
         return text
     if isinstance(content, str):
@@ -295,16 +303,43 @@ def _message_end(
         return _boundary("cohere message-end usage.tokens is not an object (v1 raises)")
     prompt = tokens.get("input_tokens", 0)
     completion = tokens.get("output_tokens", 0)
-    if not isinstance(prompt, (bool, int, float)) or not isinstance(
-        completion, (bool, int, float)
-    ):
-        return _boundary(
-            "cohere message-end token counts are not numeric (v1 raises "
-            "building ChatCompletionUsageBlock)"
-        )
+    total = _added_tokens(prompt, completion)
+    if isinstance(total, TranslationError):
+        return total
     usage: PlainJson = {
         "prompt_tokens": prompt,
         "completion_tokens": completion,
-        "total_tokens": prompt + completion,
+        "total_tokens": total,
     }
     return finish, usage
+
+
+def _added_tokens(
+    prompt: PlainJson, completion: PlainJson
+) -> PlainJson | TranslationError:
+    """Mirror v1's raw ``input_tokens + output_tokens`` (the
+    ChatCompletionUsageBlock is a TypedDict — NO validation): numeric pairs
+    add and SERVE. A str+str pair CONCATENATES in v1 ("5" + "3" -> "53")
+    and v1 SERVES the stream end to end (the include_usage final chunk
+    lax-coerces the parts and re-sums the total) — that corner falls back
+    so v1 serves it, the SAME deliberate decision as the response-side
+    ``_int_token`` (critic M1: the old reason here falsely claimed
+    "v1 raises building ChatCompletionUsageBlock"). Pairs the ``+`` itself
+    rejects (str+int, None, objects) are loud — that TypeError IS v1's
+    raise."""
+    if isinstance(prompt, (bool, int, float)) and isinstance(
+        completion, (bool, int, float)
+    ):
+        return prompt + completion
+    if isinstance(prompt, str) and isinstance(completion, str):
+        return _boundary(
+            "cohere message-end token counts are both strings (v1 SERVES "
+            "the concatenated total through its TypedDict and re-summed "
+            "include_usage chunk; deliberately left to v1, the response "
+            "side's _int_token decision)"
+        )
+    return _boundary(
+        "cohere message-end token counts are neither numeric nor a str+str "
+        "pair (v1 raises — the raw input_tokens + output_tokens TypeError, "
+        "or the wrapper's Usage validation on non-scalar values)"
+    )

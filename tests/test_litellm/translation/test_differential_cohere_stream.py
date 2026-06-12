@@ -304,6 +304,27 @@ _LOUD_CHUNKS = {
         {"index": "x", "type": "content-delta"},
         "index",
     ),
+    # critic-wave2b-beta N4: json.loads accepts NaN/Infinity literals, so
+    # the corner is wire-reachable — v1's int(chunk.get("index", 0)) raises
+    # ValueError/OverflowError on them.
+    "non_finite_index": (
+        {"index": float("inf"), "type": "content-delta"},
+        "non-finite",
+    ),
+    # critic M1's flip side: only pairs the raw + (or the wrapper's Usage
+    # validation) rejects stay loud — a str+int mix TypeErrors in v1.
+    "mixed_type_token_counts": (
+        {
+            "event": "message-end",
+            "data": {
+                "delta": {
+                    "finish_reason": "COMPLETE",
+                    "usage": {"tokens": {"input_tokens": "5", "output_tokens": 3}},
+                }
+            },
+        },
+        "neither numeric nor a str+str pair",
+    ),
 }
 
 
@@ -337,6 +358,35 @@ def test_non_string_text_pinned_divergence(frozen_ambient) -> None:
     result = parse_event(copy.deepcopy(event))
     assert result.is_error()
     assert "not a string" in result.error.summary
+
+
+def test_string_token_counts_fall_back_where_v1_serves(frozen_ambient) -> None:
+    """critic M1: ChatCompletionUsageBlock is a TypedDict — v1's raw ``+``
+    CONCATENATES a str+str pair (input "5" + output "3" -> "53") and v1
+    SERVES the stream end to end (the include_usage final chunk lax-coerces
+    the parts and RE-SUMS the total: 5/3/8 — probed; the "53" never
+    survives the wrapper). v2 falls back so v1 serves it — the SAME
+    deliberate decision as the response side's _int_token — and the old
+    FALSE "v1 raises building ChatCompletionUsageBlock" reason is gone."""
+    events = [
+        {"type": "content-delta", "delta": {"message": {"content": {"text": "Hi"}}}},
+        {
+            "event": "message-end",
+            "data": {
+                "delta": {
+                    "finish_reason": "COMPLETE",
+                    "usage": {"tokens": {"input_tokens": "5", "output_tokens": "3"}},
+                }
+            },
+        },
+    ]
+    v1 = _v1_chunks(events, stream_options={"include_usage": True})
+    assert v1[-1]["usage"]["prompt_tokens"] == 5
+    assert v1[-1]["usage"]["completion_tokens"] == 3
+    assert v1[-1]["usage"]["total_tokens"] == 8, "v1 stopped re-summing; re-decide"
+    result = parse_event(copy.deepcopy(events[1]))
+    assert result.is_error()
+    assert "v1 SERVES" in result.error.summary, result.error.summary
 
 
 def test_non_string_finish_defaults_to_stop_like_v1(frozen_ambient) -> None:

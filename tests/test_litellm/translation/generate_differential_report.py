@@ -807,6 +807,50 @@ def _cohere_rows(lines: list) -> int:
         + "non-str content.text — v1 silently swallows the chunk, v2 errors"
         " loudly naming the shape (re-decide if either half stops holding)"
     )
+    for name in sorted(stream._LOUD_CHUNKS):
+        event, fragment = stream._LOUD_CHUNKS[name]
+        result = stream.parse_event(copy.deepcopy(event))
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                stream._v1_chunks([copy.deepcopy(event)])
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 raises)' if ok else 'DIVERGENT'}: {name}")
+    str_tokens_event = {
+        "event": "message-end",
+        "data": {
+            "delta": {
+                "finish_reason": "COMPLETE",
+                "usage": {"tokens": {"input_tokens": "5", "output_tokens": "3"}},
+            }
+        },
+    }
+    result = stream.parse_event(copy.deepcopy(str_tokens_event))
+    served = stream._v1_chunks(
+        [
+            {
+                "type": "content-delta",
+                "delta": {"message": {"content": {"text": "Hi"}}},
+            },
+            copy.deepcopy(str_tokens_event),
+        ],
+        stream_options={"include_usage": True},
+    )
+    ok = (
+        result.is_error()
+        and "v1 SERVES" in result.error.summary
+        and served[-1]["usage"]["total_tokens"] == 8
+    )
+    failures += 0 if ok else 1
+    lines.append(
+        f"- {'FALLBACK (v1 serves)' if ok else 'DIVERGENT'}: str+str"
+        " message-end token counts (v1 concatenates then re-sums in its"
+        " include_usage chunk; deliberately left to v1 — the response-side"
+        " _int_token decision, critic M1)"
+    )
     return failures
 
 
