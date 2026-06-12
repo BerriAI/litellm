@@ -73,43 +73,8 @@ def step(state: StreamState, event: StreamEvent) -> _StepResult:
             return replace(state, model=state.model or event.start.model), ()
         case "text_delta":
             return _emit(state, {"content": event.text_delta.text})
-        case "tool_use_start":
-            started = replace(state, tool_index=state.tool_index + 1)
-            return _emit(
-                started,
-                {
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": event.tool_use_start.id,
-                            "type": "function",
-                            "function": {
-                                "name": event.tool_use_start.name,
-                                "arguments": "",
-                            },
-                            "index": started.tool_index,
-                        }
-                    ],
-                },
-            )
-        case "tool_args_delta":
-            return _emit(
-                state,
-                {
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": None,
-                            "type": "function",
-                            "function": {
-                                "name": None,
-                                "arguments": event.tool_args_delta.partial_json,
-                            },
-                            "index": max(state.tool_index, 0),
-                        }
-                    ],
-                },
-            )
+        case "tool_use_start" | "tool_args_delta":
+            return _tool_event_step(state, event)
         case "thinking_delta":
             return _emit(
                 state,
@@ -133,6 +98,45 @@ def step(state: StreamState, event: StreamEvent) -> _StepResult:
         case "chunk":
             return _gemini_chunk_step(state, event.chunk)
     assert_never(event.tag)
+
+
+def _tool_event_step(state: StreamState, event: StreamEvent) -> _StepResult:
+    if event.tag == "tool_use_start":
+        started = replace(state, tool_index=state.tool_index + 1)
+        return _emit(
+            started,
+            {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": event.tool_use_start.id,
+                        "type": "function",
+                        "function": {
+                            "name": event.tool_use_start.name,
+                            "arguments": "",
+                        },
+                        "index": started.tool_index,
+                    }
+                ],
+            },
+        )
+    return _emit(
+        state,
+        {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": None,
+                    "type": "function",
+                    "function": {
+                        "name": None,
+                        "arguments": event.tool_args_delta.partial_json,
+                    },
+                    "index": max(state.tool_index, 0),
+                }
+            ],
+        },
+    )
 
 
 def _finish_chunk(state: StreamState, finish: str) -> Body:
