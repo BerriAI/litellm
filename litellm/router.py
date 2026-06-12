@@ -562,6 +562,7 @@ class Router:
         else:
             self.max_fallbacks = litellm.ROUTER_MAX_FALLBACKS
 
+        self._explicit_timeout = timeout  # None when user did not pass timeout
         self.timeout = timeout or litellm.request_timeout
         self.stream_timeout = stream_timeout
 
@@ -3225,9 +3226,25 @@ class Router:
 
         kwargs["model_info"] = model_info
 
-        kwargs["timeout"] = self._get_timeout(
-            kwargs=kwargs, data=deployment["litellm_params"]
-        )
+        if function_name == "_ageneric_api_call_with_fallbacks":
+            from litellm.passthrough.timeout_utils import (
+                resolve_llm_passthrough_timeout,
+            )
+
+            _router_timeout = (
+                float(self._explicit_timeout)
+                if isinstance(self._explicit_timeout, (int, float))
+                else None
+            )
+            kwargs["timeout"] = resolve_llm_passthrough_timeout(
+                kwargs=kwargs,
+                litellm_params=deployment["litellm_params"],
+                router_timeout=_router_timeout,
+            )
+        else:
+            kwargs["timeout"] = self._get_timeout(
+                kwargs=kwargs, data=deployment["litellm_params"]
+            )
 
         self._update_kwargs_with_default_litellm_params(
             kwargs=kwargs, metadata_variable_name=metadata_variable_name
