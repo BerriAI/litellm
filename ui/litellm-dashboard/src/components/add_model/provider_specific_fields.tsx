@@ -180,6 +180,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
 
   const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
+  const lastInferredApiVersionRef = React.useRef<string | null>(null);
 
   const handleApiBaseChange = React.useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -189,8 +190,15 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
 
       const apiVersion = getApiVersionFromApiBase(event.target.value);
       if (apiVersion) {
+        lastInferredApiVersionRef.current = apiVersion;
         form.setFieldsValue({ api_version: apiVersion });
+        return;
       }
+
+      if (form.getFieldValue("api_version") === lastInferredApiVersionRef.current) {
+        form.setFieldsValue({ api_version: "" });
+      }
+      lastInferredApiVersionRef.current = null;
     },
     [form, hasApiVersionField],
   );
