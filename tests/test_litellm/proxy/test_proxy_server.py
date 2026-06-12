@@ -2320,6 +2320,36 @@ async def test_custom_ui_sso_sign_in_handler_config_loading():
 
 
 @pytest.mark.asyncio
+async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeypatch):
+    """
+    max_budget configured as os.environ/MAX_BUDGET resolves to a string;
+    load_config must coerce it to float so the startup check
+    `litellm.max_budget > 0` doesn't raise TypeError.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("MAX_BUDGET", "10")
+    test_config = {
+        "model_list": [],
+        "litellm_settings": {"max_budget": "os.environ/MAX_BUDGET"},
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original_max_budget = litellm.max_budget
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert isinstance(litellm.max_budget, float)
+        assert litellm.max_budget == 10.0
+        assert litellm.max_budget > 0
+    finally:
+        litellm.max_budget = original_max_budget
+
+
+@pytest.mark.asyncio
 async def test_load_environment_variables_direct_and_os_environ():
     """
     Test _load_environment_variables method with direct values and os.environ/ prefixed values
@@ -3810,14 +3840,15 @@ async def test_model_info_v1_oci_secrets_not_leaked():
 
     # Mock the llm_router to return our test data
     mock_router = MagicMock()
+    mock_router.model_list = [mock_model_data]
     mock_router.get_model_names.return_value = ["oci-grok-test"]
     mock_router.get_model_access_groups.return_value = {}
-    mock_router.get_model_list.return_value = [mock_model_data]
 
     # Mock global variables
     with (
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
         patch("litellm.proxy.proxy_server.llm_model_list", [mock_model_data]),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {"infer_model_from_keys": False},
@@ -4292,6 +4323,111 @@ async def test_init_sso_settings_in_db_empty_settings():
 
         # Verify empty dictionary
         assert uppercased_settings == {}
+
+
+@pytest.mark.asyncio
+async def test_init_sso_settings_in_db_retries_on_transport_error():
+    """`_init_sso_settings_in_db` self-heals across one ClientNotConnectedError
+    via call_with_db_reconnect_retry — mirrors the auth-path behavior so
+    startup/reload bursts don't spam the log."""
+    import prisma
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_sso_config = MagicMock()
+    mock_sso_config.sso_settings = {"GOOGLE_CLIENT_ID": "xxx"}
+
+    invocations: list = []
+
+    async def _flaky_find_unique(**kwargs):
+        invocations.append(None)
+        if len(invocations) == 1:
+            raise prisma.errors.ClientNotConnectedError()
+        return mock_sso_config
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        side_effect=_flaky_find_unique
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    with patch.object(
+        proxy_config, "_decrypt_and_set_db_env_variables"
+    ) as mock_decrypt:
+        await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+
+    assert len(invocations) == 2
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
+    assert reconnect_kwargs["reason"] == "init_sso_settings_in_db_lookup_failure"
+    mock_decrypt.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_init_sso_settings_in_db_propagates_when_reconnect_fails():
+    """When reconnect returns False (cooldown / lock contention), the original
+    ClientNotConnectedError is caught by the function's `except Exception` and
+    logged — no retry storm, no crash."""
+    import prisma
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        side_effect=prisma.errors.ClientNotConnectedError()
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    # Should NOT raise — the function's own try/except swallows the propagated error.
+    await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_init_hashicorp_vault_config_override_retries_on_transport_error():
+    """`_init_hashicorp_vault_config_override` self-heals across one
+    ClientNotConnectedError via call_with_db_reconnect_retry."""
+    import prisma
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._last_hashicorp_vault_config = None
+
+    invocations: list = []
+
+    async def _flaky_find_unique(**kwargs):
+        invocations.append(None)
+        if len(invocations) == 1:
+            raise prisma.errors.ClientNotConnectedError()
+        return None  # No config in DB → function returns early after retry.
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_configoverrides.find_unique = AsyncMock(
+        side_effect=_flaky_find_unique
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    await proxy_config._init_hashicorp_vault_config_override(
+        prisma_client=mock_prisma_client
+    )
+
+    assert len(invocations) == 2
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
+    assert (
+        reconnect_kwargs["reason"]
+        == "init_hashicorp_vault_config_override_lookup_failure"
+    )
 
 
 def test_update_config_fields_uppercases_env_vars(monkeypatch):
@@ -6474,7 +6610,12 @@ async def test_increment_spend_counters_finalizes_none_cost_reservation():
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_invalidates_bad_reserved_counter_without_failing():
+async def test_increment_spend_counters_falls_back_to_direct_increment_on_bad_reserved_counter():
+    """When the reservation reconcile fails, the reserved counters are
+    invalidated and the actual response cost must still be written via the
+    direct increment fallback. Leaving the counter at ``None`` lets the next
+    request reseed a stale value from the DB and silently stops budget gating,
+    which is the bug this fix addresses."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import increment_spend_counters
 
@@ -6515,7 +6656,7 @@ async def test_increment_spend_counters_invalidates_bad_reserved_counter_without
             counter_cache.in_memory_cache.get_cache(
                 key="spend:key:key-bad-reserved-counter"
             )
-            is None
+            == 0.25
         )
     finally:
         ps.spend_counter_cache = orig_counter

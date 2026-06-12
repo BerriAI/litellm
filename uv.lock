@@ -3307,6 +3307,11 @@ dependencies = [
 caching = [
     { name = "diskcache" },
 ]
+cli = [
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "rich" },
+]
 extra-proxy = [
     { name = "a2a-sdk" },
     { name = "azure-identity" },
@@ -3538,10 +3543,13 @@ requires-dist = [
     { name = "pyroscope-io", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.8.16,<1.0" },
     { name = "python-dotenv", specifier = ">=1.0.0,<2.0" },
     { name = "python-multipart", marker = "extra == 'proxy'", specifier = ">=0.0.27,<1.0" },
+    { name = "pyyaml", marker = "extra == 'cli'", specifier = ">=6.0.3,<7.0" },
     { name = "pyyaml", marker = "extra == 'proxy'", specifier = ">=6.0.3,<7.0" },
     { name = "redisvl", marker = "python_full_version < '3.14' and extra == 'extra-proxy'", specifier = ">=0.4.1,<1.0" },
+    { name = "requests", marker = "extra == 'cli'", specifier = ">=2.32.0,<3.0" },
     { name = "resend", marker = "extra == 'extra-proxy'", specifier = ">=2.23.0,<3.0" },
     { name = "restrictedpython", marker = "extra == 'proxy'", specifier = ">=8.1,<9.0" },
+    { name = "rich", marker = "extra == 'cli'", specifier = ">=13.9.4,<14.0" },
     { name = "rich", marker = "extra == 'proxy'", specifier = ">=13.9.4,<14.0" },
     { name = "rq", marker = "extra == 'proxy'", specifier = ">=2.7.0,<3.0" },
     { name = "semantic-router", marker = "python_full_version < '3.14' and extra == 'semantic-router'", specifier = ">=0.1.15,<1.0" },
@@ -3555,7 +3563,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.21.0,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
 ]
-provides-extras = ["proxy", "extra-proxy", "utils", "caching", "semantic-router", "mlflow", "grpc", "stt-nvidia-riva", "google", "proxy-runtime"]
+provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "semantic-router", "mlflow", "grpc", "stt-nvidia-riva", "google", "proxy-runtime"]
 
 [package.metadata.requires-dev]
 ci = [

@@ -4970,17 +4970,143 @@ class TestGatewayCreateInitializationOptions:
         try:
             from litellm.proxy._experimental.mcp_server.mcp_context import (
                 _mcp_gateway_initialize_instructions,
+                _mcp_gateway_server_name,
             )
             from litellm.proxy._experimental.mcp_server.server import server
         except ImportError:
             pytest.skip("MCP server not available")
 
-        tok = _mcp_gateway_initialize_instructions.set(None)
+        instructions_token = _mcp_gateway_initialize_instructions.set(None)
+        server_name_token = _mcp_gateway_server_name.set(None)
         try:
             opts = server.create_initialization_options()
             assert getattr(opts, "instructions", None) is None
+            assert opts.server_name == "litellm-mcp-server"
         finally:
-            _mcp_gateway_initialize_instructions.reset(tok)
+            _mcp_gateway_initialize_instructions.reset(instructions_token)
+            _mcp_gateway_server_name.reset(server_name_token)
+
+    @pytest.mark.asyncio
+    async def test_scoped_request_uses_configured_server_alias(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _gateway_initialize_instructions_request_scope,
+                global_mcp_server_manager,
+                server,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scoped_server = MCPServer(
+            server_id="server-123",
+            name="upstream-server",
+            alias="grafana",
+            transport=MCPTransport.http,
+            url="https://example.com/mcp",
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[scoped_server],
+            ),
+            patch.object(
+                global_mcp_server_manager,
+                "_ensure_upstream_initialize_instructions_cached",
+                new_callable=AsyncMock,
+            ),
+        ):
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth=None,
+                mcp_servers=["grafana"],
+                client_ip=None,
+                scoped_server_endpoint=True,
+            ):
+                assert server.create_initialization_options().server_name == "grafana"
+
+        assert (
+            server.create_initialization_options().server_name == "litellm-mcp-server"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sse_handler_scopes_server_name_from_single_server_path(self):
+        try:
+            from litellm.proxy._experimental.mcp_server import server as mcp_server
+            from litellm.proxy._experimental.mcp_server.server import (
+                global_mcp_server_manager,
+                handle_sse_mcp,
+                server,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scoped_server = MCPServer(
+            server_id="server-123",
+            name="upstream-server",
+            alias="grafana",
+            transport=MCPTransport.http,
+            url="https://example.com/mcp",
+        )
+        captured = {}
+
+        async def record_request(scope, receive, send):
+            captured["server_name"] = server.create_initialization_options().server_name
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/grafana",
+            "headers": [],
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(
+                    UserAPIKeyAuth(api_key="sk-test"),
+                    None,
+                    ["grafana"],
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[scoped_server],
+            ),
+            patch.object(
+                global_mcp_server_manager,
+                "_ensure_upstream_initialize_instructions_cached",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                mcp_server.sse_session_manager,
+                "handle_request",
+                side_effect=record_request,
+            ),
+        ):
+            await handle_sse_mcp(scope, AsyncMock(), AsyncMock())
+
+        assert captured["server_name"] == "grafana"
+        assert (
+            server.create_initialization_options().server_name == "litellm-mcp-server"
+        )
 
     def test_contextvar_set_injects_instructions(self):
         """When ContextVar has a value, it appears in InitializationOptions."""
@@ -5363,3 +5489,84 @@ async def test_create_mcp_client_sampling_enabled():
 
     client = await manager._create_mcp_client(server=server)
     assert client._sampling_callback is not None
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_sets_model_in_model_call_details():
+    """Regression test: MCP tools/call spend logs persisted with model="".
+
+    execute_mcp_tool set logging_obj.model only; the spend-log writer reads
+    model_call_details["model"], which stays None when function_setup builds
+    the logging object without a "model" kwarg.
+    """
+    import uuid
+    from datetime import timezone
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.utils import Rules, function_setup
+
+    user = UserAPIKeyAuth(
+        api_key="sk-user",
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    fake_server = MagicMock()
+    fake_server.name = "openapi-petstore"
+    fake_server.is_byok = False
+    fake_server.auth_type = None
+    fake_server.mcp_info = None
+    fake_server.server_id = "srv-1"
+    fake_server.server_name = "openapi-petstore"
+
+    fake_tool = MagicMock()
+    fake_tool.name = "list_pets"
+
+    start_time = datetime.now(timezone.utc)
+    litellm_logging_obj, _ = function_setup(
+        original_function="call_mcp_tool",
+        rules_obj=Rules(),
+        start_time=start_time,
+        litellm_call_id=str(uuid.uuid4()),
+        name="list_pets",
+        arguments={"limit": 10},
+    )
+    assert litellm_logging_obj.model_call_details.get("model") is None
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=fake_server,
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "pre_call_tool_check",
+            new=AsyncMock(return_value={}),
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=fake_tool,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+            return_value=True,
+        ),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="list_pets",
+            arguments={"limit": 10},
+            allowed_mcp_servers=[fake_server],
+            start_time=start_time,
+            user_api_key_auth=user,
+            litellm_logging_obj=litellm_logging_obj,
+        )
+
+    assert litellm_logging_obj.model_call_details["model"] == "MCP: list_pets"
+    assert litellm_logging_obj.model == "MCP: list_pets"

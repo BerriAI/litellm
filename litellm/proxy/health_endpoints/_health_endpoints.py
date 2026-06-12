@@ -130,6 +130,7 @@ services = Union[
         "generic_api",
         "arize",
         "galileo",
+        "newrelic",
         "sqs",
     ],
     str,
@@ -208,6 +209,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "generic_api",
             "arize",
             "galileo",
+            "newrelic",
             "sqs",
         ]:
             raise HTTPException(
@@ -324,6 +326,26 @@ async def health_services_endpoint(  # noqa: PLR0915
             return {
                 "status": "success",
                 "message": "Mock LLM request made - check langfuse.",
+            }
+        elif service == "newrelic":
+            if not _is_proxy_admin(user_api_key_dict):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Only proxy admins can trigger the New Relic test event."
+                    },
+                )
+            from litellm.integrations.newrelic.newrelic import NewRelicLogger
+
+            newrelic_logger = NewRelicLogger()
+            response = await newrelic_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "New Relic is healthy — test event sent"
+                ),
             }
 
         if service == "webhook":

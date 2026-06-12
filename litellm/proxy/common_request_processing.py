@@ -1953,12 +1953,26 @@ class ProxyBaseLLMRequestProcessing:
                 code=status.HTTP_400_BAD_REQUEST,
                 headers=headers,
             )
+        # Extract status_code from the exception if it carries one.
+        # Provider exceptions (NotFoundError, BadRequestError, GeminiError,
+        # VertexAIError, etc.) all have a status_code attribute reflecting
+        # the upstream API response. Use it to return the correct HTTP code
+        # instead of defaulting to 500.
+        _exc_status_code = getattr(e, "status_code", None)
+        if (
+            _exc_status_code is not None
+            and isinstance(_exc_status_code, int)
+            and 400 <= _exc_status_code <= 599
+        ):
+            _code = _exc_status_code
+        else:
+            _code = status.HTTP_500_INTERNAL_SERVER_ERROR
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             openai_code=getattr(e, "code", None),
-            code=getattr(e, "status_code", 500),
+            code=_code,
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )
@@ -2065,6 +2079,17 @@ class ProxyBaseLLMRequestProcessing:
                     )
                 )
                 yield serialize_chunk(chunk)
+        except (asyncio.CancelledError, GeneratorExit):
+            # Client disconnected mid-stream. CancelledError / GeneratorExit
+            # are BaseException and bypass the success/failure logging
+            # callbacks that release the pre-call max_parallel_requests +1;
+            # release it here. This is the outermost generator Starlette closes
+            # on disconnect, so the nested iterator hook (which only sees
+            # GeneratorExit on GC) cannot own the refund.
+            proxy_logging_obj._release_max_parallel_requests_on_disconnect(
+                user_api_key_dict
+            )
+            raise
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(

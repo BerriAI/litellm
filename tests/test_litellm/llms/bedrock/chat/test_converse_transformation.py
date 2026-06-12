@@ -5386,3 +5386,45 @@ def test_converse_top_k_zero_forwarded_on_models_that_accept_it():
     )
 
     assert result["additionalModelRequestFields"]["top_k"] == 0
+
+
+@pytest.mark.asyncio
+async def test_grounding_source_and_query_rendered_as_text():
+    """grounding_source / query content blocks must render as plain text on the
+    generate path (the model needs to see the RAG context + question). The bedrock
+    converse dispatch silently drops unrecognised content types, so these would
+    otherwise vanish from the prompt."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "grounding_source", "text": "Tokyo is the capital of Japan."},
+                {"type": "query", "text": "What is the capital of Japan?"},
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    )
+
+    assert result == async_result
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    user_content = result[0]["content"]
+    assert {"text": "Tokyo is the capital of Japan."} in user_content
+    assert {"text": "What is the capital of Japan?"} in user_content
