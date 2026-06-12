@@ -739,11 +739,15 @@ row — pipeline already splices the family's exported
 `SERIALIZERS`/`GUARDS` (and compat_httpx `PARSERS`) tables whole (one
 `**` line per table per FAMILY; never add per-provider rows for a family
 member; guard overrides go in the family's `_OVERRIDES`, the complete
-`GUARDS` table derives from `ALLOWED`). HEADROOM: compat_sdk/params.py is
-near the 720 hard cap — it is FULL; new FAMILIES (the wave-1b openai_like
-shims, the httpx no-prefix group) get their OWN family package per
-researcher-4, never more rows in that file (critic-wave2a M3) — and the
-registration-completeness gate
+`GUARDS` table derives from `ALLOWED`). The shared supported-list checker
+is `compat_sdk/checks.py`: IMPORT it (`from ..compat_sdk import checks`),
+NEVER copy `_CHECKS` or its helpers into a new family — copies of that
+machinery get rejected, exactly like the httpx_chunk normalizer's
+(critic-wave2a M3; critic-longtail NIT-6). HEADROOM: compat_sdk/params.py
+is near the 720 hard cap — it is FULL; new FAMILIES (the wave-1b
+openai_like shims, the httpx no-prefix group) get their OWN family package
+per researcher-4, never more rows in that file (critic-wave2a M3) — and
+the registration-completeness gate
 (`test_differential_compat_sdk_request.py`) fails any registered provider
 without a differential corpus row — for BOTH families. To add a provider with its own wire
 format: write `providers/<name>/`, register it in

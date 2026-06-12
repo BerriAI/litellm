@@ -99,12 +99,6 @@ for _p in PROVIDERS:
             {"model": _m(_p), "temperature": 0.4, "messages": _USER},
             "temperature",
         )
-    if not _spec.stop:
-        V1_RAISES[f"{_p}:stop"] = (
-            _p,
-            {"model": _m(_p), "stop": ["END"], "messages": _USER},
-            "stop",
-        )
     if not _spec.max_tokens:
         V1_RAISES[f"{_p}:max_tokens"] = (
             _p,

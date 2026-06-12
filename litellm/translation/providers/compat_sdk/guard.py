@@ -3,9 +3,10 @@
 The shared explicit ``stream: false`` arm runs first: on this path
 ``completion()`` forwards the caller's False into ``get_optional_params``
 (non-default against the ``None`` default), it lands in optional_params,
-and the SDK serializes the key onto the wire — and the family's httpx
-member (cometapi) keeps the key on the wire the same way, so the arm
-covers both paths — while the IR cannot represent absent-vs-false
+and the SDK serializes the key onto the wire — and the compat_httpx
+family (whose guard.py composes this default; cometapi moved there at the
+sibling merge) keeps the key on the wire the same way, so the arm
+covers both families — while the IR cannot represent absent-vs-false
 (verified in-process at HEAD for both; the same arm the azure and xai
 guards compose).
 
