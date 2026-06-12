@@ -516,3 +516,80 @@ async def test_model_info_v1_litellm_model_id_team_id_without_db_fails_fast(
     assert exc_info.value.status_code == 500
     assert "DB not connected" in exc_info.value.detail["error"]
     router.get_deployment.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_litellm_model_id_include_team_models_filters_inaccessible(
+    monkeypatch,
+):
+    """`litellm_model_id` + `include_team_models` must drop a model the caller cannot
+    use instead of returning it unconditionally from the single-model lookup."""
+    team_row = _team_row()
+
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.model_dump.return_value = team_row
+    router.get_deployment.return_value = deployment
+
+    async def _fake_populate(**kwargs):
+        for model in kwargs["all_models"]:
+            model["model_info"]["direct_access"] = False
+            model["model_info"]["access_via_team_ids"] = []
+        return kwargs["all_models"]
+
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "llm_model_list", [team_row])
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(ps, "_get_proxy_model_info", lambda model: team_row)
+    monkeypatch.setattr(ps, "_populate_team_access_on_models", _fake_populate)
+
+    caller = UserAPIKeyAuth(
+        user_id="u", user_role=LitellmUserRoles.INTERNAL_USER, team_models=[]
+    )
+    resp = await ps.model_info_v1(
+        user_api_key_dict=caller,
+        litellm_model_id="byok-id-1",
+        include_team_models=True,
+    )
+
+    assert resp["data"] == []
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_litellm_model_id_team_id_applies_team_filter(monkeypatch):
+    """`litellm_model_id` + `teamId` must run the teamId filter on the single model
+    rather than returning it regardless of the team's access."""
+    team_row = _team_row()
+
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.model_dump.return_value = team_row
+    router.get_deployment.return_value = deployment
+
+    async def _fake_populate(**kwargs):
+        return kwargs["all_models"]
+
+    team_filter = AsyncMock(return_value=[])
+
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "llm_model_list", [team_row])
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(ps, "_get_proxy_model_info", lambda model: team_row)
+    monkeypatch.setattr(ps, "_populate_team_access_on_models", _fake_populate)
+    monkeypatch.setattr(ps, "_filter_models_by_team_id", team_filter)
+
+    admin = UserAPIKeyAuth(
+        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
+    )
+    resp = await ps.model_info_v1(
+        user_api_key_dict=admin,
+        litellm_model_id="byok-id-1",
+        teamId="other-team",
+    )
+
+    assert resp["data"] == []
+    team_filter.assert_awaited_once()
+    assert team_filter.await_args.kwargs["team_id"] == "other-team"
+    assert team_filter.await_args.kwargs["all_models"] == [team_row]

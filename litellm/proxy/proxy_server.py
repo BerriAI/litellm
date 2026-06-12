@@ -12763,16 +12763,25 @@ async def model_info_v1(  # noqa: PLR0915
         _deployment_info_dict = _get_proxy_model_info(
             model=deployment_info.model_dump(exclude_none=True)
         )
+        single_model_list: List[dict] = [_deployment_info_dict]
         if prisma_client is not None:
-            _deployment_info_dict = (
-                await _populate_team_access_on_models(
-                    user_api_key_dict=user_api_key_dict,
+            single_model_list = await _populate_team_access_on_models(
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                llm_router=llm_router,
+                all_models=single_model_list,
+            )
+            if include_team_models:
+                single_model_list = _filter_models_to_user_accessible(single_model_list)
+            if teamId is not None and teamId.strip():
+                single_model_list = await _filter_models_by_team_id(
+                    all_models=single_model_list,
+                    team_id=teamId.strip(),
                     prisma_client=prisma_client,
                     llm_router=llm_router,
-                    all_models=[_deployment_info_dict],
+                    user_api_key_dict=user_api_key_dict,
                 )
-            )[0]
-        return {"data": [_deployment_info_dict]}
+        return {"data": single_model_list}
 
     # Return router deployments (same source as /v2/model/info), not wildcard-
     # expanded model names from get_complete_model_list(). Team-scoped rows
