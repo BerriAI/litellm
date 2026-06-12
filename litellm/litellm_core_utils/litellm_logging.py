@@ -3418,23 +3418,37 @@ class Logging(LiteLLMLoggingBaseClass):
             (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
         ):
             ## return unified Usage object
-            if isinstance(result.response.usage, ResponseAPIUsage):
+            # On the streaming /v1/responses path ``result.response`` may be a
+            # plain dict (the base response models allow extra fields), so read
+            # ``usage`` defensively instead of assuming an object attribute,
+            # which otherwise raises ``'dict' object has no attribute 'usage'``
+            # and drops the spend log for streamed responses (#29913).
+            response = result.response
+            usage = (
+                response.get("usage")
+                if isinstance(response, dict)
+                else getattr(response, "usage", None)
+            )
+            if isinstance(usage, ResponseAPIUsage) or (
+                isinstance(usage, dict)
+                and ResponseAPILoggingUtils._is_response_api_usage(usage)
+            ):
                 transformed_usage = (
                     ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                        result.response.usage
+                        usage
                     )
                 )
                 # Set as dict instead of Usage object so model_dump() serializes it correctly
-                setattr(
-                    result.response,
-                    "usage",
-                    (
-                        transformed_usage.model_dump()
-                        if hasattr(transformed_usage, "model_dump")
-                        else dict(transformed_usage)
-                    ),
+                new_usage = (
+                    transformed_usage.model_dump()
+                    if hasattr(transformed_usage, "model_dump")
+                    else dict(transformed_usage)
                 )
-            return result.response
+                if isinstance(response, dict):
+                    response["usage"] = new_usage
+                else:
+                    setattr(response, "usage", new_usage)
+            return response
         else:
             return None
 
