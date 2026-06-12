@@ -26,7 +26,13 @@ stays litellm's — v1 ignores the cohere response id and stamps
 Fail-closed arms reproduce v1's raises: a non-dict body (v1's TypedDict
 splat raises -> CohereError 422), a missing ``message`` or ``usage`` key
 (v1 KeyErrors out of the transform), non-dict content items (v1
-AttributeErrors on ``.get``).
+AttributeErrors on ``.get``), the hostile citation shapes (truthy non-list
+citations/sources, non-dict citation/source/document entries — v1's
+unguarded ``.get`` chain AttributeErrors on each), and a tool_call without
+a ``function`` key (v1's Message constructor TypeErrors). Citation VALUE
+types the typed construction rejects (non-int start/end, non-str
+title/url) fall back instead — v1 attaches the unvalidated TypedDict via
+plain setattr and SERVES it, bytes v2's pydantic seam cannot reproduce.
 """
 
 from __future__ import annotations
@@ -74,23 +80,15 @@ def parse_response(raw: PlainJson, request: ChatRequest) -> _ParseResult:
     if isinstance(text, TranslationError):
         return Error(text)
     annotations = _annotations(message.get("citations"))
+    if isinstance(annotations, TranslationError):
+        return Error(annotations)
     tool_calls = _indexed_tool_calls(message.get("tool_calls"))
     if isinstance(tool_calls, TranslationError):
         return Error(tool_calls)
-    tokens_raw = usage.get("tokens", {})
-    if not isinstance(tokens_raw, dict):
-        return Error(
-            _boundary(
-                "cohere v2 usage.tokens is present but not an object (v1 "
-                "AttributeErrors on .get)"
-            )
-        )
-    prompt = _int_token(tokens_raw, "input_tokens")
-    if isinstance(prompt, TranslationError):
-        return Error(prompt)
-    completion = _int_token(tokens_raw, "output_tokens")
-    if isinstance(completion, TranslationError):
-        return Error(completion)
+    counts = _usage_counts(usage)
+    if isinstance(counts, TranslationError):
+        return Error(counts)
+    prompt, completion = counts
     wire_message = _wire_message(text, tool_calls, annotations)
     body: dict[str, PlainJson] = {
         "object": "chat.completion",
@@ -148,6 +146,22 @@ def _joined_text(content: PlainJson) -> str | None | TranslationError:
     return "".join(parts)
 
 
+def _usage_counts(usage: dict[str, PlainJson]) -> tuple[int, int] | TranslationError:
+    tokens_raw = usage.get("tokens", {})
+    if not isinstance(tokens_raw, dict):
+        return _boundary(
+            "cohere v2 usage.tokens is present but not an object (v1 "
+            "AttributeErrors on .get)"
+        )
+    prompt = _int_token(tokens_raw, "input_tokens")
+    if isinstance(prompt, TranslationError):
+        return prompt
+    completion = _int_token(tokens_raw, "output_tokens")
+    if isinstance(completion, TranslationError):
+        return completion
+    return prompt, completion
+
+
 def _int_token(tokens: dict[str, PlainJson], key: str) -> int | TranslationError:
     """v1 reads ``usage.tokens.get(key, 0)`` and feeds the value into
     ``prompt + completion`` and ``Usage(...)``: an ABSENT key is 0; ints and
@@ -178,6 +192,12 @@ def _indexed_tool_calls(
     for index, tool in enumerate(tool_calls):
         if not isinstance(tool, dict):
             return _boundary("cohere v2 tool_call is not an object (v1 raises)")
+        if "function" not in tool:
+            return _boundary(
+                "cohere v2 tool_call has no 'function' key (v1's Message "
+                "constructor raises TypeError; typed here so the raise "
+                "never escapes the seam untyped)"
+            )
         indexed = [*indexed, {**tool, "index": index}]
     return indexed
 
@@ -202,45 +222,105 @@ def _wire_message(
     return message
 
 
-def _annotations(citations: PlainJson) -> list[PlainJson] | None:
-    """Mirror ``_translate_citations_to_openai_annotations`` (one annotation
-    per document source; non-document sources skipped; sources-less
-    citations skipped). Falsy citations (None/[]) yield None — v1 only
-    attaches annotations when the citations list is truthy."""
-    if not isinstance(citations, list) or not citations:
+def _annotations(citations: PlainJson) -> list[PlainJson] | None | TranslationError:
+    """Mirror ``_translate_citations_to_openai_annotations`` FAIL-CLOSED (one
+    annotation per document source; non-document and document-less sources
+    skipped; sources-less citations skipped). Falsy citations (None/[]/"")
+    yield None — v1 only attaches annotations when the value is truthy. Every
+    shape v1's unguarded ``.get`` chain AttributeErrors on is a typed
+    boundary error here (truthy non-list citations, non-dict citation entry,
+    truthy non-list sources, non-dict source, present non-dict document
+    under type "document"), and annotation VALUE types the seam's typed
+    Message construction validates (start/end int, title/url str) fall back
+    where v1 serves the unvalidated TypedDict via plain setattr."""
+    if not citations:
         return None
+    if not isinstance(citations, list):
+        return _boundary(
+            "cohere v2 message.citations is truthy but not a list (v1 "
+            "iterates it and AttributeErrors on citation.get)"
+        )
     annotations: list[PlainJson] = []
     for citation in citations:
         if not isinstance(citation, dict):
-            continue
-        sources = citation.get("sources")
-        if not isinstance(sources, list) or not sources:
-            continue
+            return _boundary(
+                "cohere v2 citation entry is not an object (v1 "
+                "AttributeErrors on citation.get)"
+            )
+        sources = citation.get("sources", [])
+        if not sources:
+            continue  # v1's falsy gate: the citation is skipped, served
+        if not isinstance(sources, list):
+            return _boundary(
+                "cohere v2 citation.sources is truthy but not a list (v1 "
+                "iterates it and AttributeErrors on source.get)"
+            )
         for source in sources:
-            if not isinstance(source, dict):
-                continue
-            document = source.get("document")
-            if source.get("type") != "document" or not isinstance(document, dict):
-                continue
-            url = source.get("url") or f"source:{source.get('id', 'unknown')}"
-            annotations = [
-                *annotations,
-                {
-                    "type": "url_citation",
-                    "url_citation": {
-                        "start_index": citation.get("start", 0),
-                        "end_index": citation.get("end", 0),
-                        "title": document.get("title", ""),
-                        "url": url,
-                    },
-                },
-            ]
+            annotation = _source_annotation(citation, source)
+            if isinstance(annotation, TranslationError):
+                return annotation
+            if annotation is not None:
+                annotations = [*annotations, annotation]
     return annotations or None
+
+
+def _source_annotation(
+    citation: dict[str, PlainJson], source: PlainJson
+) -> PlainJson | None | TranslationError:
+    if not isinstance(source, dict):
+        return _boundary(
+            "cohere v2 citation source is not an object (v1 AttributeErrors "
+            "on source.get)"
+        )
+    if source.get("type") != "document" or "document" not in source:
+        return None  # v1 skips non-document and document-less sources, served
+    document = source["document"]
+    if not isinstance(document, dict):
+        return _boundary(
+            "cohere v2 citation document is not an object (v1 "
+            "AttributeErrors on document.get)"
+        )
+    start = citation.get("start", 0)
+    end = citation.get("end", 0)
+    title = document.get("title", "")
+    url = source.get("url") or f"source:{source.get('id', 'unknown')}"
+    if not _is_int(start) or not _is_int(end) or not isinstance(title, str):
+        return _boundary(
+            "cohere v2 citation start/end/title value type fails the typed "
+            "annotation construction (v1 SERVES the unvalidated TypedDict "
+            "via plain setattr; v2's Message validation would raise)"
+        )
+    if not isinstance(url, str):
+        return _boundary(
+            "cohere v2 citation source url is truthy but not a string (v1 "
+            "SERVES the unvalidated TypedDict via plain setattr; v2's "
+            "Message validation would raise)"
+        )
+    return {
+        "type": "url_citation",
+        "url_citation": {
+            "start_index": start,
+            "end_index": end,
+            "title": title,
+            "url": url,
+        },
+    }
+
+
+def _is_int(value: PlainJson) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _semantic_blocks(
     text: str | None, tool_calls: list[dict[str, PlainJson]] | None
 ) -> list[ContentBlock] | TranslationError:
+    """The IR blocks are deliberately LENIENT where the wire body beside them
+    is strict (critic-wave2b-beta N3): v1 SERVES non-str tool id/name and
+    unparseable argument strings VERBATIM on the wire (probed — only a
+    missing ``function`` key raises, gated in ``_indexed_tool_calls``), so
+    failing closed here would fall back on shapes v1 serves. Nothing reads
+    ``ChatResponse.content`` on the openai construction arm today; a future
+    consumer must re-derive these defaults against the wire truth."""
     blocks: list[ContentBlock] = []
     if tool_calls is None and isinstance(text, str) and text:
         blocks = [ContentBlock.of_text(Text(text=text, cache=Nothing))]

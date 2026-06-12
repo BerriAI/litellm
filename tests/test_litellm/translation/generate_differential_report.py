@@ -727,6 +727,18 @@ def _cohere_rows(lines: list) -> int:
                 pass
         failures += 0 if ok else 1
         lines.append(f"- {'FALLBACK (v1 raises)' if ok else 'DIVERGENT'}: {name}")
+    for name in sorted(resp._V1_SERVES_FALLBACKS):
+        raw, fragment = resp._V1_SERVES_FALLBACKS[name]
+        result = resp._v2_parse(raw)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            v1 = resp._v1_model_response(copy.deepcopy(raw))
+            ok = bool(v1["choices"][0]["message"].get("annotations"))
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 serves the unvalidated annotation)' if ok else 'DIVERGENT'}:"
+            f" {name}"
+        )
     lines += [
         "",
         "## cohere v2: streams (v1 bare-JSON line replay through"

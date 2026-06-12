@@ -132,6 +132,19 @@ _RESPONSES = {
     },
 }
 
+
+def _with_citations(citations) -> dict:
+    return {
+        "id": "x",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "ok"}],
+            "citations": citations,
+        },
+        "usage": {"tokens": {"input_tokens": 1, "output_tokens": 2}},
+    }
+
+
 # v1 RAISES out of transform_response on these shapes (KeyError /
 # AttributeError / TypeError / the TypedDict-splat CohereError 422); v2 must
 # be a loud typed error, never a served response.
@@ -176,6 +189,123 @@ _LOUD = {
             "usage": {"tokens": {"input_tokens": "3"}},
         },
         "not an integer",
+    ),
+    # The verifier-wave2b-beta F1 class: hostile citation shapes where v1's
+    # _translate_citations_to_openai_annotations AttributeErrors out of
+    # transform_response while the old skip-arms silently served an
+    # annotation-less body.
+    "citation_entry_int": (_with_citations([5]), "citation entry is not an object"),
+    "citation_entry_string": (
+        _with_citations(["x"]),
+        "citation entry is not an object",
+    ),
+    "citations_dict": (_with_citations({"a": 1}), "not a list"),
+    "citations_string": (_with_citations("abc"), "not a list"),
+    "sources_dict": (
+        _with_citations([{"start": 0, "end": 1, "sources": {"k": "v"}}]),
+        "sources is truthy but not a list",
+    ),
+    "sources_string": (
+        _with_citations([{"start": 0, "end": 1, "sources": "xy"}]),
+        "sources is truthy but not a list",
+    ),
+    "source_entry_int": (
+        _with_citations([{"start": 0, "end": 1, "sources": [7]}]),
+        "source is not an object",
+    ),
+    "document_non_dict": (
+        _with_citations(
+            [
+                {
+                    "start": 0,
+                    "end": 1,
+                    "sources": [{"type": "document", "document": 9, "id": "s"}],
+                }
+            ]
+        ),
+        "document is not an object",
+    ),
+    # F8's untyped escape: a tool_call without a function key crashes BOTH
+    # sides with the identical Message TypeError — typed here so the raise
+    # never escapes v2's parse as a seam crash.
+    "tool_call_missing_function": (
+        {
+            "id": "x",
+            "message": {
+                "role": "assistant",
+                "tool_calls": [{"id": "t1", "type": "function"}],
+            },
+            "usage": {"tokens": {"input_tokens": 1, "output_tokens": 1}},
+        },
+        "no 'function' key",
+    ),
+}
+
+# verifier-wave2b-beta F8: citation VALUE types v1 SERVES (the annotations
+# ride a TypedDict attached by plain setattr — no validation on the non-tool
+# path) but v2's typed Message construction would reject with a raw
+# ValidationError. v2 falls back at the typed boundary instead; v1 serves.
+_V1_SERVES_FALLBACKS = {
+    "citation_start_string": (
+        _with_citations(
+            [
+                {
+                    "start": "a",
+                    "end": 1,
+                    "sources": [
+                        {"type": "document", "document": {"title": "t"}, "id": "s"}
+                    ],
+                }
+            ]
+        ),
+        "start/end/title value type",
+    ),
+    "citation_end_bool": (
+        _with_citations(
+            [
+                {
+                    "start": 0,
+                    "end": True,
+                    "sources": [
+                        {"type": "document", "document": {"title": "t"}, "id": "s"}
+                    ],
+                }
+            ]
+        ),
+        "start/end/title value type",
+    ),
+    "citation_title_int": (
+        _with_citations(
+            [
+                {
+                    "start": 0,
+                    "end": 1,
+                    "sources": [
+                        {"type": "document", "document": {"title": 7}, "id": "s"}
+                    ],
+                }
+            ]
+        ),
+        "start/end/title value type",
+    ),
+    "citation_url_int": (
+        _with_citations(
+            [
+                {
+                    "start": 0,
+                    "end": 1,
+                    "sources": [
+                        {
+                            "type": "document",
+                            "document": {"title": "t"},
+                            "id": "s",
+                            "url": 5,
+                        }
+                    ],
+                }
+            ]
+        ),
+        "url is truthy but not a string",
     ),
 }
 
@@ -258,3 +388,20 @@ def test_loud_shapes_error_on_both_sides(name: str, frozen_ambient) -> None:
     assert fragment in result.error.summary, result.error.summary
     with pytest.raises(Exception):
         _v1_model_response(copy.deepcopy(raw))
+
+
+@pytest.mark.parametrize("name", sorted(_V1_SERVES_FALLBACKS))
+def test_unvalidated_citation_values_fall_back_where_v1_serves(
+    name: str, frozen_ambient
+) -> None:
+    """F8: v1 serves the unvalidated annotation (plain setattr); v2's typed
+    Message construction would raise a RAW ValidationError out of the seam —
+    so the parse falls back typed and v1 keeps serving. If v1 ever starts
+    validating, the serve assertion fails and the row must be re-decided."""
+    raw, fragment = _V1_SERVES_FALLBACKS[name]
+    result = _v2_parse(raw)
+    assert result.is_error(), f"{name} unexpectedly parsed"
+    assert fragment in result.error.summary, result.error.summary
+    v1 = _v1_model_response(copy.deepcopy(raw))
+    annotations = v1["choices"][0]["message"].get("annotations")
+    assert annotations, f"{name}: v1 stopped serving the annotation; re-decide"
