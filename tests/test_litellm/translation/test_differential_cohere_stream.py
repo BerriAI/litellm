@@ -399,6 +399,20 @@ def test_non_string_finish_defaults_to_stop_like_v1(frozen_ambient) -> None:
     assert v2[-1]["choices"][0]["finish_reason"] == "stop"
 
 
+def test_generic_dialect_non_dict_payload_is_a_loud_wiring_bug() -> None:
+    """critic-wave2b-beta N1: the generic fold step must never silently
+    drop a non-dict payload — an impossible shape is a wiring bug and must
+    be loud (the _as_block_dialect rule two screens up in the same file)."""
+    from litellm.translation.errors import TranslationError
+    from litellm.translation.inbound.openai_chat.stream import step as _step
+    from litellm.translation.ir import JsonBlob, StreamEvent
+
+    state = initial_state(MODEL, dialect="generic")
+    stepped = _step(state, StreamEvent.of_wire_chunk(JsonBlob(value=5)))
+    assert isinstance(stepped, TranslationError)
+    assert "wiring bug" in stepped.summary
+
+
 def test_non_json_line_is_loud_on_both_sides(frozen_ambient) -> None:
     """No data:/[DONE] framing on this wire: v1 json.loads every line and
     raises RuntimeError on a non-JSON one."""

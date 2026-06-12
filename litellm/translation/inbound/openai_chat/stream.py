@@ -341,7 +341,12 @@ def _step_generic(state: StreamState, payload: PlainJson) -> _StepResult:
       else "stop") and, under include_usage, a usage chunk with
       token-counter ESTIMATES — re-derive both before flag-on streaming."""
     if not isinstance(payload, dict):
-        return state, ()  # the generic parsers only emit dict payloads
+        # the generic parsers only emit dict payloads: anything else is a
+        # wiring bug and must be loud, never silently dropped (the
+        # _as_block_dialect rule; critic-wave2b-beta N1)
+        return TranslationError.of_unsupported(
+            "generic chunk dialect received a non-object payload; wiring bug"
+        )
     text = payload.get("text")
     tool_call = payload.get("tool_call")
     provider_fields = payload.get("provider_fields")
