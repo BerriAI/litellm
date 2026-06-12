@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: b64b732772
+- commit: c6dfb86247
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -129,6 +129,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 ## openai_compat: streams (v1 CustomStreamWrapper over SDK chunks vs v2 fold)
 
 - IDENTICAL: empty_keepalive_swallowed
+- IDENTICAL: service_tier_wire_carried
 - IDENTICAL: text
 - IDENTICAL: text_no_leading_role
 - IDENTICAL: tools
@@ -444,6 +445,10 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 raises UnsupportedParamsError): together_ai:reasoning_effort (reasoning_effort)
 - FALLBACK (v1 raises UnsupportedParamsError): together_ai:response_format_on_non_fc_model (response_format)
 - FALLBACK (v1 raises UnsupportedParamsError): together_ai:tools_on_non_fc_model (tools)
+- FALLBACK (v1 raises ValueError): together_ai:plain_text_on_gpt35_16k_name (ValueError)
+- FALLBACK (v1 raises ValueError): together_ai:plain_text_on_gpt4_name (ValueError)
+- FALLBACK (v1 raises ValueError): together_ai:response_format_on_gpt4_name (ValueError)
+- FALLBACK (v1 raises ValueError): together_ai:temperature_only_on_gpt4_name (ValueError)
 - FALLBACK (v1 serves it): together_ai:both_max_tokens_keys (both max_tokens and max_completion_tokens)
 - FALLBACK (v1 serves it): together_ai:explicit_stream_false (explicit stream: false)
 - FALLBACK (v1 serves it): together_ai:message_name_field (message name field)

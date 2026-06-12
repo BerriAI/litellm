@@ -131,6 +131,12 @@ STREAMS = {
         _chunk(_delta(content="ok")),
         _chunk(_delta(), finish="stop"),
     ],
+    "service_tier_wire_carried": [
+        # the other F1 direction: a wire-CARRIED service_tier value must
+        # override the parser's None preset on both sides
+        {**_chunk(_delta(role="assistant", content="hi")), "service_tier": "default"},
+        {**_chunk(_delta(), finish="stop"), "service_tier": "default"},
+    ],
 }
 
 _USAGE = {
@@ -194,17 +200,12 @@ def test_v2_stream_matches_v1(name: str, frozen_ambient) -> None:
 
 
 def test_wire_carried_service_tier_overrides_the_preset(frozen_ambient) -> None:
-    """Both directions of the F1 fix: the de-biased STREAMS rows above pin
+    """Both directions of the F1 fix: the de-biased STREAMS rows pin
     key-absent wire chunks (v1's SDK materializes service_tier=None; the v2
-    parser presets it), and this row pins that a wire-CARRIED value rides
-    through the preset verbatim on both sides."""
-    events = [
-        {**_chunk(_delta(role="assistant", content="hi")), "service_tier": "default"},
-        {**_chunk(_delta(), finish="stop"), "service_tier": "default"},
-    ]
-    v1 = _v1_chunks(events)
-    v2 = _v2_chunks(events)
-    assert _norm(v2) == _norm(v1)
+    parser presets it), and this one pins that a wire-CARRIED value rides
+    through the preset verbatim on both sides (parity itself is the
+    parametrized STREAMS row)."""
+    v2 = _v2_chunks(STREAMS["service_tier_wire_carried"])
     assert all(chunk["service_tier"] == "default" for chunk in v2)
 
 
