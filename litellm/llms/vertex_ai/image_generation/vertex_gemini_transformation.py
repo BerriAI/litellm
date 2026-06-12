@@ -253,6 +253,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         if tools := optional_params.get("tools"):
             request_body["tools"] = tools
+        if tool_config := optional_params.get("toolConfig"):
+            request_body["toolConfig"] = tool_config
 
         return request_body
 

@@ -157,6 +157,26 @@ class TestVertexAIGeminiImageGenerationConfig:
         )
         assert request["tools"] == [{"googleSearch": {}}]
 
+    def test_transform_image_generation_request_forwards_tool_config(self):
+        """Test request transformation forwards toolConfig side-effects from tool mapping"""
+        mapped = self.config.map_openai_params(
+            {"tools": [{"googleMaps": {"latitude": 37.7, "longitude": -122.4}}]},
+            {},
+            "gemini-3.1-flash-image-preview",
+            False,
+        )
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image-preview",
+            prompt="Generate an image of a coffee shop nearby",
+            optional_params=mapped,
+            litellm_params={},
+            headers={},
+        )
+        assert request["tools"] == [{"googleMaps": {}}]
+        assert request["toolConfig"] == {
+            "retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}
+        }
+
     def test_transform_image_generation_request_with_candidate_count(self):
         """Test request transformation with candidate_count"""
         request = self.config.transform_image_generation_request(

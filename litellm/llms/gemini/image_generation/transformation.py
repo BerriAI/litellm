@@ -148,6 +148,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             }
             if tools := optional_params.get("tools"):
                 request_body["tools"] = tools
+            if tool_config := optional_params.get("toolConfig"):
+                request_body["toolConfig"] = tool_config
             return request_body
         else:
             # For other Imagen models, use the original Imagen format

@@ -276,6 +276,19 @@ def test_gemini_image_generation_preserves_tool_config_side_effect():
         "retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}
     }
 
+    request = config.transform_image_generation_request(
+        model="gemini-3.1-flash-image-preview",
+        prompt="Generate an image of a coffee shop nearby",
+        optional_params=mapped,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["tools"] == [{"googleMaps": {}}]
+    assert request["toolConfig"] == {
+        "retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}
+    }
+
 
 def test_gemini_image_generation_usage_without_output_details_treats_output_as_image():
     config = GoogleImageGenConfig()
