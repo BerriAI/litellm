@@ -4850,15 +4850,34 @@ async def team_model_add(
             detail={"error": "Only proxy admin or team admin can modify team models"},
         )
 
-    updated_models = add_new_models_to_team(team_obj=team_obj, new_models=data.models)
-    # Update team. `include` mirrors the relations the auth path consumes
-    # off the cached team object so that `_refresh_cached_team` doesn't
-    # null them out — see object_permission_utils.validate_key_search_tools_against_team
-    # and the MCP/agent authz paths, which treat a missing object_permission
-    # as "no team-level restriction".
+    # Atomic array append with dedup at the database level so concurrent
+    # BYOK model creates don't overwrite each other's team.models entries.
+    # When the team currently has models=[] (unrestricted access), the
+    # CASE expression inserts the 'all-proxy-models' sentinel first.
+    models_to_add = list(data.models)
+    await prisma_client.db.execute_raw(
+        'UPDATE "LiteLLM_TeamTable" '
+        "SET models = ("
+        "  SELECT ARRAY(SELECT DISTINCT unnest("
+        "    CASE WHEN cardinality(COALESCE(models, ARRAY[]::text[])) = 0 "
+        "         THEN ARRAY['all-proxy-models']::text[] "
+        "         ELSE models "
+        "    END || $1::text[]"
+        "  ))"
+        ") "
+        "WHERE team_id = $2",
+        models_to_add,
+        data.team_id,
+    )
+    # Re-fetch via update (write-routed) instead of find_unique (read-routed)
+    # to avoid returning stale data from a read replica. The models column
+    # was already set by execute_raw above; this just retrieves the row from
+    # the writer and lets Prisma bump updated_at.
+    # `include` mirrors the relations the auth path consumes off the cached
+    # team object so that `_refresh_cached_team` doesn't null them out.
     updated_team = await TeamRepository(prisma_client).table.update(
         where={"team_id": data.team_id},
-        data={"models": updated_models},
+        data={"updated_at": datetime.now(timezone.utc)},
         include={"object_permission": True},  # type: ignore
     )
 

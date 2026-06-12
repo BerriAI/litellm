@@ -18,9 +18,9 @@ import {
 } from "./networking";
 import { Plugin } from "./claude_code_plugins/types";
 import SkillHubDashboard from "./AIHub/SkillHubDashboard";
-import { generateCodeSnippet } from "./playground/chat_ui/CodeSnippets";
-import { getEndpointType } from "./playground/chat_ui/mode_endpoint_mapping";
-import { MessageType } from "./playground/chat_ui/types";
+import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
+import { getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
+import { MessageType } from "@/components/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 
 const { TabPane } = Tabs;
