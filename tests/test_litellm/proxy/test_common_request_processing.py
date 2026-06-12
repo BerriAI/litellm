@@ -2800,20 +2800,26 @@ class TestEventStreamAllmPassthroughRoute:
 class TestAllmPassthroughStreamingProviderGate:
     """
     Regression: the streaming-buffer gate for allm_passthrough_route must only
-    fire for providers that have an event-stream guardrail handler (Bedrock).
+    fire for provider+endpoint pairs that have an event-stream guardrail handler
+    able to rewrite frames (Bedrock converse-stream).
 
     A non-Bedrock streaming passthrough response must keep streaming even when a
     post-call guardrail is registered globally, instead of being silently
-    buffered into a non-streaming Response. Bedrock must still be buffered so the
-    converse-stream de-anonymization handler can rewrite frames.
+    buffered into a non-streaming Response. A Bedrock endpoint the Converse
+    handler cannot rewrite (e.g. invoke-with-response-stream) must also keep
+    streaming. Only converse-stream is buffered so its frames can be
+    de-anonymized.
     """
 
-    def _build_processing_obj(self, custom_llm_provider: str) -> ProxyBaseLLMRequestProcessing:
+    def _build_processing_obj(
+        self, custom_llm_provider: str, endpoint: str = ""
+    ) -> ProxyBaseLLMRequestProcessing:
         logging_obj = MagicMock()
         logging_obj.litellm_call_id = "call-123"
         logging_obj.cost_breakdown = None
         data = {
             "custom_llm_provider": custom_llm_provider,
+            "endpoint": endpoint,
             "litellm_logging_obj": logging_obj,
         }
         return ProxyBaseLLMRequestProcessing(data=data)
@@ -2874,8 +2880,12 @@ class TestAllmPassthroughStreamingProviderGate:
         assert streamed == chunks
 
     @pytest.mark.asyncio
-    async def test_bedrock_stream_is_buffered_through_handler(self, monkeypatch):
-        processing_obj = self._build_processing_obj("bedrock")
+    async def test_bedrock_converse_stream_is_buffered_through_handler(
+        self, monkeypatch
+    ):
+        processing_obj = self._build_processing_obj(
+            "bedrock", "model/us.amazon.nova-lite-v1:0/converse-stream"
+        )
         chunks = [b"raw-1", b"raw-2"]
 
         with patch.object(
@@ -2898,3 +2908,30 @@ class TestAllmPassthroughStreamingProviderGate:
         assert result.body == b"modified-body"
         assert result.headers["content-type"] == "application/vnd.amazon.eventstream"
         mock_handler.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_bedrock_invoke_stream_is_not_buffered(self, monkeypatch):
+        processing_obj = self._build_processing_obj(
+            "bedrock", "model/us.amazon.nova-lite-v1:0/invoke-with-response-stream"
+        )
+        chunks = [b"raw-1", b"raw-2"]
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails",
+            return_value=False,
+        ), patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails_for_passthrough",
+            return_value=True,
+        ), patch(
+            "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
+            "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
+            new=AsyncMock(return_value=b"modified-body"),
+        ) as mock_handler:
+            result = await self._run(processing_obj, monkeypatch, chunks)
+
+        assert isinstance(result, StreamingResponse)
+        streamed = [chunk async for chunk in result.body_iterator]
+        assert streamed == chunks
+        mock_handler.assert_not_awaited()

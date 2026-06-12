@@ -190,22 +190,35 @@ class TestDeAnonymizeEventStream:
 
 
 class TestSupportsEventStreamDeAnonymization:
-    def test_bedrock_is_supported(self):
+    def test_bedrock_converse_stream_is_supported(self):
         assert (
-            LlmPassthroughRouteHandler.supports_event_stream_de_anonymization("bedrock")
+            LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
+                "bedrock", "model/us.amazon.nova-lite-v1:0/converse-stream"
+            )
             is True
+        )
+
+    def test_bedrock_invoke_stream_is_not_supported(self):
+        assert (
+            LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
+                "bedrock",
+                "model/us.amazon.nova-lite-v1:0/invoke-with-response-stream",
+            )
+            is False
         )
 
     def test_unknown_provider_is_not_supported(self):
         assert (
             LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
-                "anthropic"
+                "anthropic", "model/foo/converse-stream"
             )
             is False
         )
 
     def test_missing_provider_is_not_supported(self):
         assert (
-            LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(None)
+            LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
+                None, "model/foo/converse-stream"
+            )
             is False
         )

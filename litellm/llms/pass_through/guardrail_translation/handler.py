@@ -300,11 +300,16 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         return getattr(handler_cls, "de_anonymize_event_stream", None)
 
     @staticmethod
-    def supports_event_stream_de_anonymization(provider: Optional[str]) -> bool:
-        return (
-            LlmPassthroughRouteHandler._resolve_event_stream_de_anonymizer(provider)
-            is not None
+    def supports_event_stream_de_anonymization(
+        provider: Optional[str], endpoint: Optional[str]
+    ) -> bool:
+        handler_cls = _get_provider_handlers().get(provider or "")
+        endpoint_check = getattr(
+            handler_cls, "event_stream_endpoint_is_de_anonymizable", None
         )
+        if endpoint_check is None:
+            return False
+        return endpoint_check(endpoint or "")
 
     @staticmethod
     async def de_anonymize_event_stream(

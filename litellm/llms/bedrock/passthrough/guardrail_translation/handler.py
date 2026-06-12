@@ -222,6 +222,10 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         return _EVENT_STREAM_MEDIA_TYPE
 
     @staticmethod
+    def event_stream_endpoint_is_de_anonymizable(endpoint: str) -> bool:
+        return _is_converse_endpoint(endpoint)
+
+    @staticmethod
     async def de_anonymize_event_stream(  # noqa: PLR0915
         body_bytes: bytes,
         proxy_logging_obj: "ProxyLogging",
