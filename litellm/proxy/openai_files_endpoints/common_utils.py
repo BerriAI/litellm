@@ -5,8 +5,6 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
-from starlette.datastructures import UploadFile
-
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
@@ -621,11 +619,10 @@ async def extract_file_creation_params(
     # Extract target_storage (simplified - just use form parameter)
     target_storage = _extract_target_storage_simple(target_storage_form)
 
-    # Extract target_model_names from form field, then fall back to request body
-    # (OpenAI SDK sends list extra_body as target_model_names[] in multipart form)
+    # Extract target_model_names from the form field, then fall back to the raw form
     target_model_names = _extract_target_model_names_simple(target_model_names_form)
-    if not target_model_names and request_body:
-        target_model_names = _extract_target_model_names_from_request_body(request_body)
+    if not target_model_names:
+        target_model_names = await _extract_target_model_names_from_form(request)
 
     # Extract model parameter
     model = _extract_model_param(request, request_body)
@@ -672,39 +669,29 @@ def _extract_target_model_names_simple(
     return []
 
 
-def _parse_target_model_names_value(value) -> List[str]:
-    """Parse a target_model_names value from form or JSON body."""
-    if value is None or isinstance(value, UploadFile):
-        return []
-    if isinstance(value, list):
-        return [str(name).strip() for name in value if str(name).strip()]
-    if isinstance(value, str):
-        return _extract_target_model_names_simple(value)
-    return [str(value).strip()] if str(value).strip() else []
+def _is_target_model_names_key(key: str) -> bool:
+    return key == "target_model_names" or (
+        key.startswith("target_model_names[") and key.endswith("]")
+    )
 
 
-def _extract_target_model_names_from_request_body(request_body: dict) -> List[str]:
+async def _extract_target_model_names_from_form(request: "Request") -> List[str]:
     """
-    Extract target_model_names from parsed request body.
+    Collect target_model_names from the raw multipart form.
 
-    Supports:
-    - target_model_names (string or list)
-    - target_model_names[] (OpenAI SDK list extra_body in multipart form)
-    - target_model_names[0], target_model_names[1], ...
+    Reads ``request.form()`` directly instead of the parsed request body, which is
+    built via ``dict(form_data)`` and keeps only the last value for repeated keys.
+    The OpenAI SDK sends a list ``extra_body`` as repeated ``target_model_names[]``
+    fields, so reading the form preserves every value instead of truncating to one.
+    Indexed keys like ``target_model_names[0]`` are handled the same way.
     """
+    form_data = await request.form()
+
     names: List[str] = []
+    for key, value in form_data.multi_items():
+        if _is_target_model_names_key(key) and isinstance(value, str):
+            names.extend(_extract_target_model_names_simple(value))
 
-    for key in ("target_model_names", "target_model_names[]"):
-        if key in request_body:
-            names.extend(_parse_target_model_names_value(request_body[key]))
-
-    for key, value in request_body.items():
-        if key.startswith("target_model_names[") and key not in {
-            "target_model_names[]",
-        }:
-            names.extend(_parse_target_model_names_value(value))
-
-    # Preserve order while deduplicating
     seen = set()
     result: List[str] = []
     for name in names:
