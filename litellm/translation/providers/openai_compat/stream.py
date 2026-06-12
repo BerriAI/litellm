@@ -43,11 +43,6 @@ _ENVELOPE_KEYS = frozenset(
     }
 )
 
-_FINISH_VALUES: frozenset[str] = frozenset(
-    {"stop", "length", "tool_calls", "content_filter"}
-)
-
-
 def parse_line(line: str) -> _EventResult:
     stripped = line.strip()
     if not stripped.startswith("data:"):
@@ -127,10 +122,17 @@ def _normalize_choice(choice: PlainJson) -> PlainJson | TranslationError:
             "stream logprobs; unreachable for v2-sent requests"
         )
     finish = choice.get("finish_reason")
-    if finish is not None and finish not in _FINISH_VALUES:
+    if finish is not None and not isinstance(finish, str):
+        return _boundary("stream finish_reason is not a string")
+    if finish == "function_call":
         return TranslationError.of_unsupported(
-            f"stream finish_reason {finish!r}; unreachable for v2-sent requests"
+            "legacy function_call stream finish; the v2 surface cannot send 'functions'"
         )
+    # Any other finish string rides through verbatim (post-send leniency, the
+    # PR #30138 boundary): the fold emits it raw and the shared
+    # StreamingChoices envelope runs v1's live map_finish_reason on BOTH
+    # sides, so quirky compat finishes normalize identically instead of
+    # erroring after the request was billed.
     raw_delta = choice.get("delta")
     delta = raw_delta if isinstance(raw_delta, dict) else {}
     normalized_delta = _normalize_delta(delta)

@@ -226,14 +226,51 @@ def test_usage_chunk_passthrough_pins_the_seam_contract(frozen_ambient) -> None:
     )
 
 
+def test_compat_finish_reason_rides_and_maps_like_v1(frozen_ambient) -> None:
+    """Post-send leniency (PR #30138 boundary): a quirky compat finish string
+    must not error after the request was billed. v1's production seam is the
+    SDK's lenient construct_type (the SDK does not validate API responses),
+    so the v1 replay uses it here; both sides then normalize the finish
+    through the shared StreamingChoices map_finish_reason."""
+    from openai._models import construct_type
+
+    events = [
+        _chunk(_delta(role="assistant", content="hi")),
+        _chunk(_delta(), finish="eos"),
+    ]
+    logging = Logging(
+        model=MODEL,
+        messages=[{"role": "user", "content": "stream"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="diff-openai-stream-lenient",
+        function_id="diff-openai-stream-lenient",
+    )
+    sdk_chunks = (
+        construct_type(value=copy.deepcopy(event), type_=ChatCompletionChunk)
+        for event in events
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=sdk_chunks,
+        model=MODEL,
+        custom_llm_provider="openai",
+        logging_obj=logging,
+    )
+    v1 = [chunk.model_dump() for chunk in wrapper]
+    v2 = _v2_chunks(events)
+    assert _norm(v2) == _norm(v1)
+    assert v1[-1]["choices"][0]["finish_reason"] == "stop"
+
+
 _UNSUPPORTED_CHUNKS = {
     "function_call_delta": (
         _chunk(_delta(function_call={"name": "f", "arguments": ""})),
         "function_call",
     ),
-    "unknown_finish_reason": (
+    "function_call_finish_reason": (
         _chunk(_delta(), finish="function_call"),
-        "finish_reason",
+        "function_call",
     ),
     "multiple_choices": (
         _chunk(

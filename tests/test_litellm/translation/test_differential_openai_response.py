@@ -166,6 +166,41 @@ _RESPONSES = {
         ],
         "usage": {"completion_tokens": 5, "prompt_tokens": 7, "total_tokens": 12},
     },
+    "compat_finish_reason_mapped": {
+        # post-send leniency: "eos" (HF/Together style) rides the wire body
+        # raw and BOTH sides map it through the live map_finish_reason
+        # (-> "stop", native value stashed in provider_specific_fields).
+        "id": "chatcmpl-L1",
+        "object": "chat.completion",
+        "created": 1718000005,
+        "model": MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "eos",
+                "logprobs": None,
+                "message": {"content": "done", "role": "assistant"},
+            }
+        ],
+        "usage": {"completion_tokens": 5, "prompt_tokens": 7, "total_tokens": 12},
+    },
+    "compat_finish_reason_unmapped": {
+        # an unmapped provider string defaults to "stop" with the native
+        # value stashed, on both sides (v1 map_finish_reason's fallback).
+        "id": "chatcmpl-L2",
+        "object": "chat.completion",
+        "created": 1718000006,
+        "model": MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "quirky_provider_reason",
+                "logprobs": None,
+                "message": {"content": "done", "role": "assistant"},
+            }
+        ],
+        "usage": {"completion_tokens": 5, "prompt_tokens": 7, "total_tokens": 12},
+    },
     "think_tag_extraction": {
         "id": "chatcmpl-K1",
         "object": "chat.completion",

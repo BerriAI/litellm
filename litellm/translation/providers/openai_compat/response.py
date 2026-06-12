@@ -64,10 +64,6 @@ _MODEL_RESPONSE_FIELDS = frozenset(
     {"choices", "created", "id", "model", "object", "system_fingerprint", "usage"}
 )
 
-_FINISH_VALUES: frozenset[str] = frozenset(
-    {"stop", "length", "tool_calls", "content_filter"}
-)
-
 _REASONING_TAG_PATTERN = re.compile(
     r"<(?:think|thinking|budget:thinking)>(.*?)</(?:think|thinking|budget:thinking)>(.*)",
     re.DOTALL,
@@ -89,10 +85,11 @@ def parse_response(raw: PlainJson, request: ChatRequest) -> _ParseResult:
     finish = _finish_reason(choice, normalized)
     if isinstance(finish, TranslationError):
         return Error(finish)
+    wire_finish, semantic_finish = finish
     blocks = _semantic_blocks(normalized)
     if isinstance(blocks, TranslationError):
         return Error(blocks)
-    body = _outbound_body(raw, choice, normalized, finish)
+    body = _outbound_body(raw, choice, normalized, wire_finish)
     model = raw.get("model")
     response_id = raw.get("id")
     return Ok(
@@ -100,7 +97,7 @@ def parse_response(raw: PlainJson, request: ChatRequest) -> _ParseResult:
             id=response_id if isinstance(response_id, str) else "",
             model=model if isinstance(model, str) else request.model,
             content=Block.of_seq(blocks),
-            finish=finish,
+            finish=semantic_finish,
             usage=_semantic_usage(raw.get("usage")),
             synthesized_json_content=False,
             wire=Some(JsonBlob(value=body)),
@@ -220,7 +217,17 @@ def _extract_reasoning(
 
 def _finish_reason(
     choice: dict[str, PlainJson], normalized: dict[str, PlainJson]
-) -> FinishReason | TranslationError:
+) -> tuple[str, FinishReason] | TranslationError:
+    """Returns (wire finish string, semantic IR finish).
+
+    Post-send leniency (the PR #30138 boundary, integrator sign-off at
+    integration): the request is already sent and billed, so a quirky compat
+    finish value must not become an outage. The NATIVE string rides the wire
+    body verbatim and the seam's ``Choices.__init__`` runs v1's live
+    ``map_finish_reason`` (table lookup, unmapped -> "stop", native value
+    stashed in provider_specific_fields) — v2 inherits v1's lenient mapping
+    with no mirror table. The semantic IR field mirrors v1's unmapped
+    default; no outbound dialect consumes it on this same-family path."""
     raw_finish = choice.get("finish_reason")
     if raw_finish is None and choice.get("finish_details") is not None:
         return TranslationError.of_unsupported(
@@ -230,18 +237,22 @@ def _finish_reason(
     tool_calls = normalized.get("tool_calls")
     if finish == "stop" and isinstance(tool_calls, list) and len(tool_calls) > 0:
         finish = "tool_calls"
-    if finish not in _FINISH_VALUES:
-        return TranslationError.of_unsupported(
-            f"finish_reason {finish!r}; unreachable for v2-sent requests"
-        )
-    return finish  # type: ignore[return-value]
+    return finish, _semantic_finish(finish)
+
+
+def _semantic_finish(finish: str) -> FinishReason:
+    match finish:
+        case "stop" | "length" | "tool_calls" | "content_filter":
+            return finish
+        case _:
+            return "stop"
 
 
 def _outbound_body(
     raw: dict[str, PlainJson],
     choice: dict[str, PlainJson],
     normalized: dict[str, PlainJson],
-    finish: FinishReason,
+    finish: str,
 ) -> dict[str, PlainJson]:
     choice_fields = {key: choice[key] for key in choice.keys() - _CHOICES_FIELDS}
     body: dict[str, PlainJson] = {
