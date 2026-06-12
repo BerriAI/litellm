@@ -73,6 +73,11 @@ from ..providers.google_genai import (
 from ..providers.google_genai import (
     unsupported_request_shapes as google_unsupported_request_shapes,
 )
+from ..providers.hosted_vllm import parse_response as hosted_vllm_parse_response
+from ..providers.hosted_vllm import serialize_request as hosted_vllm_serialize_request
+from ..providers.hosted_vllm import (
+    unsupported_request_shapes as hosted_vllm_unsupported_request_shapes,
+)
 from ..providers.openai_compat import parse_response as openai_compat_parse_response
 from ..providers.openai_compat import (
     serialize_request as openai_compat_serialize_request,
@@ -128,6 +133,7 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         # NOT family members; each package owns its serializer).
         "deepseek": deepseek_serialize_request,
         "openrouter": openrouter_serialize_request,
+        "hosted_vllm": hosted_vllm_serialize_request,
     }
 )
 
@@ -165,6 +171,7 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # obligation pinned in its response gate).
         "deepseek": deepseek_parse_response,
         "openrouter": openrouter_parse_response,
+        "hosted_vllm": hosted_vllm_parse_response,
     }
 )
 
@@ -198,6 +205,7 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # stream.py, composed from the shared httpx_chunk factory).
         "deepseek": _OPENAI_DIALECT,
         "openrouter": _OPENAI_DIALECT,
+        "hosted_vllm": _OPENAI_DIALECT,
     }
 )
 
@@ -225,6 +233,7 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         # guard composes the shared openai guard with its provider arms).
         "deepseek": deepseek_unsupported_request_shapes,
         "openrouter": openrouter_unsupported_request_shapes,
+        "hosted_vllm": hosted_vllm_unsupported_request_shapes,
     }
 )
 

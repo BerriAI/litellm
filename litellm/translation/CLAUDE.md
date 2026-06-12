@@ -345,6 +345,25 @@ translation/
 │   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
 │   │                    #   OpenAIChatCompletionStreamingHandler) +
 │   │                    #   make_parse_line; "xai" chunk dialect
+│   ├── hosted_vllm/     # wave-2b-alpha own module (httpx dedicated elif
+│   │   │                #   main.py:2619, transforms LIVE, bare wire model)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   │                #   (its custom-tool / assistant-thinking_blocks
+│   │   │                #   arms double as this provider's rewrite
+│   │   │                #   fallbacks; file parts fall back inbound)
+│   │   ├── params.py    # base list + thinking/reasoning_effort
+│   │   │                #   (UNCONDITIONAL — no capability fork)
+│   │   ├── serialize.py # openai_compat body + recursive tools cleaning
+│   │   │                #   (strict any-depth; additionalProperties only
+│   │   │                #   when false) + the thinking budget-band rewrite
+│   │   │                #   (>=10000 high / >=5000 medium / >=2000 low /
+│   │   │                #   else minimal; disabled+adaptive dropped;
+│   │   │                #   explicit reasoning_effort WINS)
+│   │   ├── response.py  # shared openai parser re-export (no v1 override;
+│   │   │                #   NO hosted_vllm/ prefix)
+│   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
+│   │                    #   handler); joins the ONE error-chunk PINNED
+│   │                    #   DIVERGENCE row
 │   ├── openrouter/      # wave-2b-alpha own module (httpx dedicated elif
 │   │   │                #   main.py:3354, transforms LIVE, bare wire model)
 │   │   ├── guard.py     # explicit stream:false + the cache-capable-model
@@ -529,7 +548,7 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to sixty-seven providers out — `anthropic`,
+OpenAI-chat-in to sixty-eight providers out — `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
@@ -546,7 +565,7 @@ route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `datarobot`, `gradient_ai`, `ovhcloud`, `lemonade`), the five wave-2a
 providers (`perplexity`, `sambanova`, `deepinfra`, `moonshot` on the SDK
 path, `cometapi` on the httpx path), and the wave-2b-alpha own modules
-(`deepseek`, `openrouter`) — request, response, and stream
+(`deepseek`, `openrouter`, `hosted_vllm`) — request, response, and stream
 translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk
@@ -796,6 +815,23 @@ test_v1_cost_hidden_param_is_the_fork_obligation and the report's
 SEAM CONTRACT row). The envelope (HTTP-Referer/X-Title headers, the
 litellm.OpenrouterConfig class-attr extra_body merge in the elif) stays
 fork scope.
+Deliberate wave-2b-alpha (hosted_vllm) fallback surfaces (each names the
+v1 path): custom-type tools (the shared openai guard — v1 synthesizes
+function tools from them, asserted in-process); assistant
+`thinking_blocks` (the shared openai guard — v1 prepends them as content
+blocks); `file` content parts (inbound boundary — v1 converts video files
+to `video_url` blocks); top_k (the extra_body crossing, wire-proven);
+user (model-list gated); explicit stream:false (guard arm). SERVED,
+never fallbacks: reasoning_effort verbatim (UNCONDITIONALLY in v1's
+list — no capability fork), the thinking budget-band rewrite (>=10000
+high / >=5000 medium / >=2000 low / else-incl.-absent minimal; disabled
+and adaptive DROPPED; an explicit reasoning_effort WINS — all pinned by
+IDENTICAL rows), and the recursive tools cleaning (`strict` removed at
+every depth and any value; `additionalProperties` removed ONLY when
+false — contrast xai's function-level-only strip). hosted_vllm fork
+obligations: NO model preset (bare wire model); streams fold
+providers/hosted_vllm.parse_line (the FAMILY policy; the base-handler
+error-chunk PINNED DIVERGENCE covers it) with the "xai" chunk dialect.
 Streaming-seam obligations carried from wave 2a (verifier-wave2a W1/W2 —
 no impact while streaming stays on v1, pinned by
 `test_reasoning_stream_seam_obligation_canary`): the SDK family's openai

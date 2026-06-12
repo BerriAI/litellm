@@ -118,6 +118,9 @@ Provider = Literal[
     # obligation (its response gate pins it).
     "deepseek",
     "openrouter",
+    # hosted_vllm: bare wire model too; thinking serves through v1's
+    # deterministic budget-band rewrite, tools cleaned recursively.
+    "hosted_vllm",
 ]
 
 NeverPortProvider = Literal[
