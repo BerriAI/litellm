@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: 5eae6d3e55
+- commit: 0c6531018c
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -1810,7 +1810,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - SEAM CONTRACT: lemonade usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: minimax usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: ovhcloud usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
-- PINNED DIVERGENCE (fail-closed on a failure path): mid-stream {'error': ...} chunks — v1's BASE handler silently swallows them (no error surface in the emitted sequence; asserted in-process for all nine base-handler members AND the wave-2b-alpha own-module base-handler consumers, per their dedicated stream gates), v2's family parser surfaces a LOUD typed boundary error naming the chunk (test_error_chunk_divergence_two_sided; cometapi differs: its v1 handler RAISES and its policy row mirrors the raise — see the cometapi stream rows below)
+- PINNED DIVERGENCE (fail-closed on a failure path): mid-stream {'error': ...} chunks — v1's BASE handler silently swallows them (no error surface in the emitted sequence; asserted in-process for all nine base-handler members AND the wave-2b-alpha own-module base-handler consumers AND mistral, whose v1 iterator subclasses the base handler — sibling-merge sweep — per their dedicated stream gates), v2's family parser surfaces a LOUD typed boundary error naming the chunk (test_error_chunk_divergence_two_sided; cometapi differs: its v1 handler RAISES and its policy row mirrors the raise — see the cometapi stream rows below)
 
 ## cometapi: responses (v1 CometAPIConfig.transform_response over httpx — LIVE on the dedicated elif, main.py:2547 — vs v2 shared openai parser with NO model preset; bare wire model, the xai R4 pin)
 
@@ -2418,7 +2418,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 raises MidStreamFallbackError): error chunk (loud on both sides — the truthy-value check)
 - FALLBACK (v1 raises APIError): non-str delta reasoning (the F6 groq-local pre-step; the wrapper epilogue join TypeErrors in v1)
 - FALLBACK (v1 raises APIError): non-str delta reasoning_content (the F6 groq-local pre-step; the wrapper epilogue join TypeErrors in v1)
-- INTEGRATOR-FLIP HANDOFF (current behavior guarded): non-str refusal — v1 forwards 7, the SHARED httpx_chunk factory nulls it; the fix belongs to the alpha fix round's concurrent httpx_chunk edit (verifier-wave2b-alpha F1) — the sibling-merge integrator flips this row and the gate test to v1 parity
+- IDENTICAL: non-str refusal forwarded VERBATIM (the wave-2b-beta F6 INTEGRATOR-FLIP handoff, discharged at the sibling merge: the shared httpx_chunk factory used to null what v1 forwards; the refusal-on-finish half is the loud finish-chunk fallback where v1 silently drops the value — test_refusal_on_finish_chunk_is_loud_where_v1_drops_it)
 
 ## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)
 
