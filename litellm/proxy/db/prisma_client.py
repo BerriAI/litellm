@@ -339,9 +339,14 @@ class PrismaWrapper:
             kwargs["http"] = http_client
         if self._recreate_uses_datasource:
             kwargs["datasource"] = {"url": new_db_url}
-        self._original_prisma = Prisma(**kwargs)
 
-        await self._original_prisma.connect()
+        new_prisma = Prisma(**kwargs)
+        # Swap only after connect() succeeds. If connect() raises or is cancelled
+        # (e.g. asyncio.wait_for timeout on the auth path's 2s budget), leaving a
+        # half-built client installed would poison every subsequent query with
+        # ClientNotConnectedError until process restart -- see issue #28322.
+        await new_prisma.connect()
+        self._original_prisma = new_prisma
 
     async def start_token_refresh_task(self) -> None:
         """
