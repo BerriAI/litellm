@@ -170,6 +170,45 @@ _LOUD = {
         },
         "not a list",
     ),
+    # verifier-wave2b-beta F3: the old arms coerced-and-served both shapes —
+    # a non-str thinking text (v1's "\n".join TypeError) and an empty
+    # content list (v1's truthy gate skips the collapse; cdr raises
+    # "Invalid response object" on Message(content=[])).
+    "non_string_thinking_text": (
+        {
+            **_BASE,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": [{"type": "text", "text": 5}],
+                            },
+                            {"type": "text", "text": "answer"},
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        "thinking text is not a string",
+    ),
+    "empty_content_list": (
+        {
+            **_BASE,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": []},
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        "content list is empty",
+    ),
 }
 
 

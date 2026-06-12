@@ -15,9 +15,12 @@ in-process at HEAD):
   (v1 overwrites, never joins — the two_text_blocks pin); blocks of any
   other type are silently ignored.
 
-Malformed list shapes (non-dict blocks, a non-list ``thinking`` value) are
-loud boundary errors — v1's unguarded ``.get`` chains raise out of the
-transform on each.
+Malformed list shapes are loud boundary errors naming v1's raise: non-dict
+blocks and a non-list ``thinking`` value (v1's unguarded ``.get`` chains),
+a non-str thinking ``text`` (v1's ``"\\n".join`` TypeError), and an EMPTY
+content list (v1's truthiness gate skips the collapse and
+``convert_to_model_response_object`` raises "Invalid response object" on
+``Message(content=[])`` — verifier-wave2b-beta F3).
 """
 
 from __future__ import annotations
@@ -71,6 +74,12 @@ def _pre_step_choice(choice: PlainJson) -> PlainJson | TranslationError:
         return {**choice, "message": {**message, "content": None}}
     if not isinstance(content, list):
         return choice
+    if not content:
+        # v1's truthiness gate SKIPS the collapse on an empty list and the
+        # un-collapsed Message(content=[]) raises out of
+        # convert_to_model_response_object ("Invalid response object") —
+        # the old isinstance-only arm collapsed [] to "" and SERVED it.
+        return _boundary("response content list is empty")
     collapsed = _collapse_content_list(content)
     if isinstance(collapsed, TranslationError):
         return collapsed
@@ -113,5 +122,9 @@ def _collapse_thinking(block: dict[str, PlainJson]) -> str | TranslationError:
             return _boundary("response thinking item is not an object")
         if item.get("type") == "text":
             text = item.get("text", "")
-            texts = [*texts, text if isinstance(text, str) else ""]
+            if not isinstance(text, str):
+                # the old arm coerced to "" and SERVED; v1's "\n".join
+                # raises TypeError out of the transform
+                return _boundary("response thinking text is not a string")
+            texts = [*texts, text]
     return "\n".join(texts)

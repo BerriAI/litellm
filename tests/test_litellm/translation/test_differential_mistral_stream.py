@@ -241,6 +241,38 @@ _LOUD_CHUNKS = {
         _chunk({"content": "x", "made_up_key": 1}),
         "stream delta keys",
     ),
+    # verifier-wave2b-beta F3: the old arm coerced the non-str thinking text
+    # to "" and SERVED a stripped chunk (with the mixed shape it served
+    # reasoning_content "ok"); v1's pre-step except-arm replays the
+    # still-list content and the wrapper raises MidStreamFallbackError.
+    "non_string_thinking_text": (
+        _chunk(
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": [{"type": "text", "text": 5}]}
+                ],
+            }
+        ),
+        "thinking text is not a string",
+    ),
+    "non_string_thinking_text_beside_ok_text": (
+        _chunk(
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": [
+                            {"type": "text", "text": 5},
+                            {"type": "text", "text": "ok"},
+                        ],
+                    }
+                ],
+            }
+        ),
+        "thinking text is not a string",
+    ),
 }
 
 

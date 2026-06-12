@@ -139,7 +139,12 @@ def _thinking_text(thinking: list[PlainJson]) -> str | TranslationError:
             return _boundary("stream thinking item is not an object")
         if item.get("type") == "text":
             text = item.get("text", "")
-            parts = [*parts, text if isinstance(text, str) else ""]
+            if not isinstance(text, str):
+                # the old arm coerced to "" and SERVED a stripped chunk;
+                # v1's pre-step except-arm replays the still-list content
+                # and the wrapper raises MidStreamFallbackError
+                return _boundary("stream thinking text is not a string")
+            parts = [*parts, text]
     return "".join(parts)
 
 
