@@ -141,6 +141,9 @@ describe("legacyKeyForPathname", () => {
     // Resolves to the sidebar key api_ref, not the hyphenated alias, so highlighting works.
     expect(legacyKeyForPathname("/ui/api-reference")).toBe("api_ref");
     expect(legacyKeyForPathname("/ui/api-reference/")).toBe("api_ref");
+    // Same for skills: the claude-code-plugins alias maps to the same segment,
+    // and first-match-wins iteration must keep returning the sidebar key.
+    expect(legacyKeyForPathname("/ui/skills")).toBe("skills");
   });
 
   it("returns null for a not-yet-migrated path", async () => {
