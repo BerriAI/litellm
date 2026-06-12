@@ -1969,6 +1969,9 @@ if TYPE_CHECKING:
     from .llms.dashscope.rerank.transformation import (
         DashScopeRerankConfig as DashScopeRerankConfig,
     )
+    from .llms.dashscope.responses.transformation import (
+        DashScopeResponsesAPIConfig as DashScopeResponsesAPIConfig,
+    )
     from .llms.moonshot.chat.transformation import (
         MoonshotChatConfig as MoonshotChatConfig,
     )
