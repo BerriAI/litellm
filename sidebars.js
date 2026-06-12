@@ -1043,6 +1043,7 @@ const sidebars = {
         "providers/stability",
         "providers/synthetic",
         "providers/snowflake",
+        "providers/tensormesh",
         "providers/togetherai",
         "providers/topaz",
         "providers/triton-inference-server",
