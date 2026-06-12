@@ -1751,20 +1751,30 @@ class ProxyBaseLLMRequestProcessing:
                 return True
         return False
 
-    @staticmethod
-    def _has_post_call_guardrails_for_passthrough() -> bool:
+    def _has_post_call_guardrails_for_passthrough(self) -> bool:
         """
-        True when any guardrail runs at post_call for passthrough responses.
+        True when a post_call guardrail will actually run for THIS request.
 
-        Unlike _has_post_call_guardrails, an event_hook=None guardrail counts:
-        should_run_guardrail treats it as matching every hook (post_call
-        included), so skipping the passthrough buffer here would forward the
-        raw upstream body and bypass that guardrail's output processing.
+        Mirrors the gate in ProxyLogging.post_call_success_hook
+        (should_run_guardrail against the request's merged guardrails) so that a
+        guardrail registered globally but not configured for this key/team does
+        not force the passthrough stream to be buffered into a single
+        non-streaming response. An event_hook=None guardrail still counts here
+        because should_run_guardrail treats it as matching every hook.
         """
+        from litellm.proxy.proxy_server import llm_router
+        from litellm.proxy.utils import _check_and_merge_model_level_guardrails
+
+        guardrail_data = _check_and_merge_model_level_guardrails(
+            data=self.data, llm_router=llm_router
+        )
         for cb in litellm.callbacks:
             if not isinstance(cb, CustomGuardrail):
                 continue
-            if cb._event_hook_is_event_type(GuardrailEventHooks.post_call):
+            if cb.should_run_guardrail(
+                data=guardrail_data,
+                event_type=GuardrailEventHooks.post_call,
+            ):
                 return True
         return False
 
