@@ -16,6 +16,8 @@ ambiguous post-IR (empty user text) fail closed.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from types import MappingProxyType
 
 from expression import Nothing
 from expression.collections import Block
@@ -45,24 +47,26 @@ _ContentsResult = list[PlainJson] | TranslationError
 
 # v1's known-extension mime sniff for https URLs
 # (_get_image_mime_type_from_url); anything else would force a download.
-_URL_MIME_TYPES: dict[str, str] = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".webp": "image/webp",
-    ".mp4": "video/mp4",
-    ".mov": "video/mov",
-    ".mpeg": "video/mpeg",
-    ".mpg": "video/mpg",
-    ".avi": "video/avi",
-    ".wmv": "video/wmv",
-    ".mpegps": "video/mpegps",
-    ".flv": "video/flv",
-    ".mp3": "audio/mp3",
-    ".wav": "audio/wav",
-    ".mpga": "audio/mpeg",
-    ".pdf": "application/pdf",
-}
+_URL_MIME_TYPES: Mapping[str, str] = MappingProxyType(
+    {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".mp4": "video/mp4",
+        ".mov": "video/mov",
+        ".mpeg": "video/mpeg",
+        ".mpg": "video/mpg",
+        ".avi": "video/avi",
+        ".wmv": "video/wmv",
+        ".mpegps": "video/mpegps",
+        ".flv": "video/flv",
+        ".mp3": "audio/mp3",
+        ".wav": "audio/wav",
+        ".mpga": "audio/mpeg",
+        ".pdf": "application/pdf",
+    }
+)
 
 _GEMINI_FILES_PREFIX = "https://generativelanguage.googleapis.com/v1beta/files/"
 
@@ -233,7 +237,7 @@ def _thinking_part(thinking: Thinking) -> PlainJson | None:
     if signature is None:
         return None  # v1 only forwards thinking blocks that carry a signature
     try:
-        decoded = json.loads(thinking.thinking)
+        decoded: PlainJson = json.loads(thinking.thinking)
     except ValueError:
         decoded = None
     if isinstance(decoded, dict):
@@ -249,10 +253,8 @@ def _function_call_part(
         return TranslationError.of_unsupported(
             "non-object tool_call arguments; v1 forwards them to json.loads verbatim"
         )
-    function_call: dict[str, PlainJson] = {
-        "name": tool_use.name,
-        "args": dict(arguments),
-    }
+    args_copy: dict[str, PlainJson] = dict(arguments)
+    function_call: dict[str, PlainJson] = {"name": tool_use.name, "args": args_copy}
     clean_id, _, signature_suffix = tool_use.id.partition(THOUGHT_SIGNATURE_SEPARATOR)
     if forwards_function_call_id(model, target) and clean_id:
         function_call = {**function_call, "id": clean_id}
@@ -331,9 +333,9 @@ def _tool_result_text(result: ToolResult) -> str | TranslationError:
 
 def _response_payload(content_str: str) -> PlainJson:
     stripped = content_str.strip()
-    if stripped.startswith("{") or stripped.startswith("["):
+    if stripped.startswith(("{", "[")):
         try:
-            parsed = json.loads(content_str)
+            parsed: PlainJson = json.loads(content_str)
         except ValueError:
             return {"content": content_str}
         if isinstance(parsed, dict):

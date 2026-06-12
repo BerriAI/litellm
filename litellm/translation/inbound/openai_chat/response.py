@@ -215,9 +215,7 @@ def _gemini_body(response: ChatResponse) -> Body:
     body: Body = {
         "object": "chat.completion",
         "model": response.model,
-        "choices": [
-            {"index": 0, "finish_reason": response.finish, "message": message}
-        ],
+        "choices": [{"index": 0, "finish_reason": response.finish, "message": message}],
         "usage": _gemini_usage_json(response.usage),
     }
     if response.id:
@@ -278,9 +276,7 @@ def _thought_signatures(content: Block[ContentBlock]) -> list[PlainJson]:
         if block.tag == "thinking":
             match block.thinking.signature:
                 case Option(tag="some", some=signature):
-                    signatures.append(  # nosemgrep: translation-no-mutation
-                        signature
-                    )
+                    signatures.append(signature)  # nosemgrep: translation-no-mutation
                 case _:
                     pass
         elif block.tag == "tool_use":

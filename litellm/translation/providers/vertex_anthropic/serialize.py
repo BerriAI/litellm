@@ -24,7 +24,7 @@ from ...errors import TranslationError
 from ...ir import Body, ChatRequest
 from ..anthropic import params as anthropic_params
 from ..anthropic import serialize_request as anthropic_serialize_request
-from ..bedrock_invoke.serialize import _RESPONSE_FORMAT_SPOOF_MODEL
+from ..bedrock_invoke.serialize import RESPONSE_FORMAT_SPOOF_MODEL
 
 _SerializeResult = Result[Body, TranslationError]
 
@@ -49,7 +49,7 @@ def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _Serialize
             )
         )
     mapped = (
-        replace(request, model=_RESPONSE_FORMAT_SPOOF_MODEL)
+        replace(request, model=RESPONSE_FORMAT_SPOOF_MODEL)
         if request.response_format.is_some()
         else request
     )

@@ -29,7 +29,9 @@ _SerializeResult = Result[Body, TranslationError]
 
 ANTHROPIC_VERSION = "bedrock-2023-05-31"
 
-_RESPONSE_FORMAT_SPOOF_MODEL = "claude-3-sonnet-20240229"
+# Shared with providers/vertex_anthropic: both routes force structured
+# outputs onto the json-tool strategy by spoofing this mapping model.
+RESPONSE_FORMAT_SPOOF_MODEL = "claude-3-sonnet-20240229"
 
 
 def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _SerializeResult:
@@ -56,7 +58,7 @@ def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _Serialize
             )
         )
     mapped = (
-        replace(request, model=_RESPONSE_FORMAT_SPOOF_MODEL)
+        replace(request, model=RESPONSE_FORMAT_SPOOF_MODEL)
         if request.response_format.is_some()
         else request
     )

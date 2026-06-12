@@ -197,9 +197,7 @@ QUIRKS = {
         "vertex_ai/gemini-2.5-pro",
         {
             "messages": [_USER],
-            "params": {
-                "tools": [{"type": "function", "function": {"name": "ping"}}]
-            },
+            "params": {"tools": [{"type": "function", "function": {"name": "ping"}}]},
         },
         False,
     ),

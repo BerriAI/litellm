@@ -1,11 +1,12 @@
 """Serialize the IR onto the generateContent wire format.
 
 ONE serializer family for both google routes; the ``target`` parameter is the
-researcher-2 drift list and nothing else: AI Studio drops ``top_k`` (or fails
-like v1 without drop_params), refuses https media (v1 downloads it), and
-forwards function-call ids on gemini-3+; vertex passes https media through as
-``file_data`` and would attach ``labels`` (not expressible in the IR). Auth,
-hosts, and API versions are envelope and never appear here.
+researcher-2 drift list and nothing else: AI Studio refuses https media (v1
+downloads it) and forwards function-call ids on gemini-3+; vertex passes
+https media through as ``file_data`` and would attach ``labels`` (not
+expressible in the IR). top_k rides BOTH routes (it is a provider kwarg, not
+a gated OpenAI param — verified against v1 in-process). Auth, hosts, and API
+versions are envelope and never appear here.
 
 Fail-closed shapes (each names the v1 path): cache markers that could reach
 ``check_and_create_cache``'s network call, gemini-3 thinking budgets (read an
@@ -75,7 +76,14 @@ def _serialize(
     contents = _contents(messages, request, target)
     if isinstance(contents, TranslationError):
         return Error(contents)
+    return _assemble_body(request, contents, generation_config)
 
+
+def _assemble_body(
+    request: ChatRequest,
+    contents: list[PlainJson],
+    generation_config: dict[str, PlainJson],
+) -> _SerializeResult:
     body: Body = {"contents": contents}
     system_instruction = serialize_system(request.system)
     if system_instruction is not None:
@@ -105,7 +113,9 @@ def _contents(
     return serialize_contents(messages, request.model, target)
 
 
-def _system_gate(request: ChatRequest, deps: TranslationDeps) -> TranslationError | None:
+def _system_gate(
+    request: ChatRequest, deps: TranslationDeps
+) -> TranslationError | None:
     if len(request.system) == 0:
         return None
     if deps.capability_flag(request.model, "supports_system_messages") is True:
@@ -215,7 +225,7 @@ def _json_schema_entries(
     # v1 response_schema_prompt consults litellm.custom_prompt_dict; the seam
     # only routes here when that ambient dict is empty, so the default prompt
     # applies (str(dict) formatting AND the trailing spaces included).
-    prompt = "Use this JSON schema: \n    ```json \n    {}\n    ```".format(built)
+    prompt = f"Use this JSON schema: \n    ```json \n    {built}\n    ```"
     return Ok((entries, prompt))
 
 

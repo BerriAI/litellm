@@ -127,6 +127,30 @@ def _too_deep(depth: int) -> TranslationError | None:
     return None
 
 
+def _convert_anyof_members(
+    anyof: list[PlainJson],
+) -> list[PlainJson] | TranslationError:
+    """v1 mutates the list during iteration (anyof.remove inside the for
+    loop); this filter form only differs for multiple adjacent nulls."""
+    empty_member: PlainJson = {"type": "object"}
+    kept: list[PlainJson] = [
+        (empty_member if a == {} else a)
+        for a in anyof
+        if not (isinstance(a, dict) and a.get("type") == "null")
+    ]
+    had_null = any(isinstance(a, dict) and a.get("type") == "null" for a in anyof)
+    if len(kept) == 0:
+        return TranslationError.of_unsupported(
+            "anyOf with only null members; v1 raises ValueError"
+        )
+    if had_null:
+        nullable: list[PlainJson] = [
+            {**a, "nullable": True} if isinstance(a, dict) else a for a in kept
+        ]
+        return nullable
+    return kept
+
+
 def _convert_anyof_null(schema: PlainJson, depth: int) -> _SchemaResult:
     deep = _too_deep(depth)
     if deep is not None:
@@ -136,42 +160,31 @@ def _convert_anyof_null(schema: PlainJson, depth: int) -> _SchemaResult:
     out: dict[str, PlainJson] = dict(schema)
     anyof = schema.get("anyOf")
     if isinstance(anyof, list):
-        # v1 mutates the list during iteration (anyof.remove inside the for
-        # loop); this filter form only differs for multiple adjacent nulls.
-        kept = [
-            ({"type": "object"} if a == {} else a)
-            for a in anyof
-            if not (isinstance(a, dict) and a.get("type") == "null")
-        ]
-        had_null = any(isinstance(a, dict) and a.get("type") == "null" for a in anyof)
-        if len(kept) == 0:
-            return TranslationError.of_unsupported(
-                "anyOf with only null members; v1 raises ValueError"
-            )
-        if had_null:
-            kept = [
-                {**a, "nullable": True} if isinstance(a, dict) else a for a in kept
-            ]
-        out = {**out, "anyOf": kept}
-    for key in ("properties", "items"):
-        child = out.get(key)
-        if key == "properties" and isinstance(child, dict):
-            new_props: dict[str, PlainJson] = {}
-            for name, value in child.items():
-                converted = _convert_anyof_null(value, depth + 1)
-                if isinstance(converted, TranslationError):
-                    return converted
-                new_props = {**new_props, name: converted}
-            out = {**out, "properties": new_props}
-        elif key == "items" and child is not None:
-            converted = _convert_anyof_null(child, depth + 1)
+        members = _convert_anyof_members(anyof)
+        if isinstance(members, TranslationError):
+            return members
+        out = {**out, "anyOf": members}
+    props = out.get("properties")
+    if isinstance(props, dict):
+        new_props: dict[str, PlainJson] = {}
+        for name, value in props.items():
+            converted = _convert_anyof_null(value, depth + 1)
             if isinstance(converted, TranslationError):
                 return converted
-            out = {**out, "items": converted}
+            new_props = {**new_props, name: converted}
+        out = {**out, "properties": new_props}
+    items = out.get("items")
+    if items is not None:
+        converted = _convert_anyof_null(items, depth + 1)
+        if isinstance(converted, TranslationError):
+            return converted
+        out = {**out, "items": converted}
     return out
 
 
-def _split_type_array(schema: dict[str, PlainJson], types: list[PlainJson]) -> dict[str, PlainJson]:
+def _split_type_array(
+    schema: dict[str, PlainJson], types: list[PlainJson]
+) -> dict[str, PlainJson]:
     any_of: list[PlainJson] = []
     for t in types:
         if not isinstance(t, str):
@@ -207,44 +220,47 @@ def _convert_types(schema: PlainJson, depth: int) -> _SchemaResult:
         out = _split_type_array(out, type_val)
     elif isinstance(type_val, list) and len(type_val) == 1:
         out = {**out, "type": type_val[0]}
-    for key in ("properties", "items", "anyOf"):
-        child = out.get(key)
-        if key == "properties" and isinstance(child, dict):
-            new_props: dict[str, PlainJson] = {}
-            for name, value in child.items():
-                converted = _convert_types(value, depth + 1)
-                if isinstance(converted, TranslationError):
-                    return converted
-                new_props = {**new_props, name: converted}
-            out = {**out, "properties": new_props}
-        elif key == "items" and child is not None:
-            converted = _convert_types(child, depth + 1)
+    return _convert_types_children(out, depth)
+
+
+def _convert_types_children(out: dict[str, PlainJson], depth: int) -> _SchemaResult:
+    props = out.get("properties")
+    if isinstance(props, dict):
+        new_props: dict[str, PlainJson] = {}
+        for name, value in props.items():
+            converted = _convert_types(value, depth + 1)
             if isinstance(converted, TranslationError):
                 return converted
-            out = {**out, "items": converted}
-        elif key == "anyOf" and isinstance(child, list):
-            members: list[PlainJson] = []
-            for member in child:
-                converted = _convert_types(member, depth + 1)
-                if isinstance(converted, TranslationError):
-                    return converted
-                members = [*members, converted]
-            out = {**out, "anyOf": members}
+            new_props = {**new_props, name: converted}
+        out = {**out, "properties": new_props}
+    items = out.get("items")
+    if items is not None:
+        converted = _convert_types(items, depth + 1)
+        if isinstance(converted, TranslationError):
+            return converted
+        out = {**out, "items": converted}
+    anyof = out.get("anyOf")
+    if isinstance(anyof, list):
+        members: list[PlainJson] = []
+        for member in anyof:
+            converted = _convert_types(member, depth + 1)
+            if isinstance(converted, TranslationError):
+                return converted
+            members = [*members, converted]
+        out = {**out, "anyOf": members}
     return out
 
 
 def _map_children(
-    schema: dict[str, PlainJson], transform: "Callable[[PlainJson], PlainJson]"
+    schema: dict[str, PlainJson], transform: Callable[[PlainJson], PlainJson]
 ) -> dict[str, PlainJson]:
     """Apply ``transform`` to properties values and items (v1's shared
     recursion shape for the enum fixes)."""
-    out = dict(schema)
+    out: dict[str, PlainJson] = dict(schema)
     props = out.get("properties")
     if isinstance(props, dict):
-        out = {
-            **out,
-            "properties": {name: transform(value) for name, value in props.items()},
-        }
+        mapped: PlainJson = {name: transform(value) for name, value in props.items()}
+        out = {**out, "properties": mapped}
     items = out.get("items")
     if items is not None:
         out = {**out, "items": transform(items)}
@@ -254,10 +270,11 @@ def _map_children(
 def _fix_enum_empty_strings(schema: PlainJson) -> PlainJson:
     if not isinstance(schema, dict):
         return schema
-    out = dict(schema)
+    out: dict[str, PlainJson] = dict(schema)
     enum = out.get("enum")
     if isinstance(enum, list):
-        out = {**out, "enum": [None if v == "" else v for v in enum]}
+        fixed: list[PlainJson] = [None if v == "" else v for v in enum]
+        out = {**out, "enum": fixed}
     return _map_children(out, _fix_enum_empty_strings)
 
 
@@ -275,7 +292,7 @@ def _anyof_has_string(anyof: PlainJson) -> bool:
 def _fix_enum_types(schema: PlainJson) -> PlainJson:
     if not isinstance(schema, dict):
         return schema
-    out = dict(schema)
+    out: dict[str, PlainJson] = dict(schema)
     if isinstance(out.get("enum"), list):
         schema_type = out.get("type")
         keep = (
@@ -292,41 +309,45 @@ def _process_items(schema: PlainJson, depth: int) -> _SchemaResult:
         return deep
     if not isinstance(schema, dict):
         return schema
-    out = dict(schema)
+    out: dict[str, PlainJson] = dict(schema)
     type_val = out.get("type")
     if (
         isinstance(type_val, str)
         and type_val.lower() == "array"
         and ("items" not in out or out.get("items") == {})
     ):
-        out = {**out, "items": {"type": "object"}}
+        object_items: PlainJson = {"type": "object"}
+        out = {**out, "items": object_items}
     new_out: dict[str, PlainJson] = {}
     for key, value in out.items():
-        if isinstance(value, dict):
-            child = _process_items(value, depth + 1)
-            if isinstance(child, TranslationError):
-                return child
-            new_out = {**new_out, key: child}
-        elif isinstance(value, list):
-            members: list[PlainJson] = []
-            for item in value:
-                if isinstance(item, dict):
-                    child = _process_items(item, depth + 1)
-                    if isinstance(child, TranslationError):
-                        return child
-                    members = [*members, child]
-                else:
-                    members = [*members, item]
-            new_out = {**new_out, key: members}
-        else:
-            new_out = {**new_out, key: value}
+        child = _process_items_value(value, depth)
+        if isinstance(child, TranslationError):
+            return child
+        new_out = {**new_out, key: child}
     return new_out
+
+
+def _process_items_value(value: PlainJson, depth: int) -> _SchemaResult:
+    if isinstance(value, dict):
+        return _process_items(value, depth + 1)
+    if isinstance(value, list):
+        members: list[PlainJson] = []
+        for item in value:
+            if isinstance(item, dict):
+                child = _process_items(item, depth + 1)
+                if isinstance(child, TranslationError):
+                    return child
+                members = [*members, child]
+            else:
+                members = [*members, item]
+        return members
+    return value
 
 
 def _add_object_type(schema: PlainJson) -> PlainJson:
     if not isinstance(schema, dict):
         return schema
-    out = dict(schema)
+    out: dict[str, PlainJson] = dict(schema)
     if (
         "type" not in out
         and "anyOf" not in out
@@ -344,25 +365,20 @@ def _add_object_type(schema: PlainJson) -> PlainJson:
                 "type": "object",
             }
         else:
-            out = {
-                **out,
-                "type": "object",
-                "properties": {
-                    name: _add_object_type(value) for name, value in props.items()
-                },
+            converted_props: PlainJson = {
+                name: _add_object_type(value) for name, value in props.items()
             }
+            out = {**out, "type": "object", "properties": converted_props}
     items = out.get("items")
     if items is not None:
         out = {**out, "items": _add_object_type(items)}
     for key in ("anyOf", "oneOf", "allOf"):
         values = out.get(key)
         if isinstance(values, list):
-            out = {
-                **out,
-                key: [
-                    _add_object_type(v) if isinstance(v, dict) else v for v in values
-                ],
-            }
+            converted_members: PlainJson = [
+                _add_object_type(v) if isinstance(v, dict) else v for v in values
+            ]
+            out = {**out, key: converted_members}
     return out
 
 
@@ -420,7 +436,7 @@ def _with_property_ordering(schema: dict[str, PlainJson], depth: int) -> _Schema
     deep = _too_deep(depth)
     if deep is not None:
         return deep
-    out = dict(schema)
+    out: dict[str, PlainJson] = dict(schema)
     props = out.get("properties")
     if isinstance(props, dict):
         new_props: dict[str, PlainJson] = {}
@@ -429,12 +445,15 @@ def _with_property_ordering(schema: dict[str, PlainJson], depth: int) -> _Schema
                 child = _with_property_ordering(value, depth + 1)
                 if isinstance(child, TranslationError):
                     return child
-                new_props = {**new_props, name: child}
+                ordered_child: PlainJson = child if isinstance(child, dict) else value
+                new_props = {**new_props, name: ordered_child}
             else:
                 new_props = {**new_props, name: value}
-        out = {**out, "properties": new_props}
+        props_json: PlainJson = new_props
+        out = {**out, "properties": props_json}
         if "propertyOrdering" not in out:
-            out = {**out, "propertyOrdering": list(props.keys())}
+            ordering: PlainJson = list(props.keys())
+            out = {**out, "propertyOrdering": ordering}
     items = out.get("items")
     if isinstance(items, dict):
         child = _with_property_ordering(items, depth + 1)

@@ -157,9 +157,7 @@ def _gemini_chunk_step(state: StreamState, chunk: CompositeChunk) -> _StepResult
     Usage is withheld exactly like v1 without ``stream_options``."""
     text = chunk.text.default_value(None)
     reasoning = chunk.reasoning.default_value(None)
-    has_payload = (
-        text is not None or reasoning is not None or len(chunk.tool_calls) > 0
-    )
+    has_payload = text is not None or reasoning is not None or len(chunk.tool_calls) > 0
     tool_index = state.tool_index
     bodies: tuple[Body, ...] = ()
     sent_role = state.sent_role
@@ -174,7 +172,7 @@ def _gemini_chunk_step(state: StreamState, chunk: CompositeChunk) -> _StepResult
                 "index": tool_index,
             }
             entries = [*entries, entry]
-        signatures = list(chunk.signatures)
+        signatures: list[PlainJson] = list(chunk.signatures)
         delta: dict[str, PlainJson] = {
             "role": None if sent_role else "assistant",
             "content": text,
@@ -227,6 +225,11 @@ def _thinking_delta_body(
     dialect: ChunkDialect, thinking: str, signature: str | None
 ) -> dict[str, PlainJson]:
     match dialect:
+        case "gemini":
+            # Unreachable: the gemini dialect rides composite chunk events,
+            # never per-block thinking deltas; the anthropic shape is a
+            # harmless placeholder that keeps the match exhaustive.
+            return {"content": "", "reasoning_content": thinking}
         case "anthropic":
             block: PlainJson = {
                 "type": "thinking",

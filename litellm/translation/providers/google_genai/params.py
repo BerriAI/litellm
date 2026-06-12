@@ -13,6 +13,8 @@ wire body is snapshotted, never normalized.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from types import MappingProxyType
 
 from expression import Option
 from typing_extensions import assert_never
@@ -46,15 +48,17 @@ THOUGHT_SIGNATURE_SEPARATOR = "__thought__"
 DUMMY_THOUGHT_SIGNATURE = "c2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3I="
 
 # v1 _FINISH_REASON_MAP rows reachable for gemini finishReason values.
-FINISH_MAP: dict[str, FinishReason] = {
-    "STOP": "stop",
-    "MAX_TOKENS": "length",
-    "FINISH_REASON_UNSPECIFIED": "stop",
-    "MALFORMED_FUNCTION_CALL": "stop",
-    "TOO_MANY_TOOL_CALLS": "stop",
-    "MALFORMED_RESPONSE": "stop",
-    "LANGUAGE": "content_filter",
-}
+FINISH_MAP: Mapping[str, FinishReason] = MappingProxyType(
+    {
+        "STOP": "stop",
+        "MAX_TOKENS": "length",
+        "FINISH_REASON_UNSPECIFIED": "stop",
+        "MALFORMED_FUNCTION_CALL": "stop",
+        "TOO_MANY_TOOL_CALLS": "stop",
+        "MALFORMED_RESPONSE": "stop",
+        "LANGUAGE": "content_filter",
+    }
+)
 
 # finishReasons v1 treats as content-policy flags (get_flagged_finish_reasons):
 # the non-stream transform returns a synthetic flagged response there.

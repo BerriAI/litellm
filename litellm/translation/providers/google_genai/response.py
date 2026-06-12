@@ -12,6 +12,9 @@ path.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
+
 from expression import Error, Nothing, Ok, Option, Result, Some
 from expression.collections import Block
 
@@ -44,39 +47,9 @@ def parse_response(raw: PlainJson, request: ChatRequest) -> _ParseResult:
         return Error(_boundary("response body is not a JSON object"))
     if "error" in raw:
         return Error(_boundary(f"provider error payload: {raw['error']!r}"))
-    feedback = raw.get("promptFeedback")
-    if isinstance(feedback, dict) and "blockReason" in feedback:
-        return Error(
-            TranslationError.of_unsupported(
-                "promptFeedback.blockReason responses take v1's _handle_blocked_response path"
-            )
-        )
-    candidates = raw.get("candidates")
-    if not isinstance(candidates, list) or len(candidates) == 0:
-        return Error(_boundary("response has no candidates"))
-    if len(candidates) > 1:
-        return Error(
-            TranslationError.of_unsupported(
-                "multiple candidates (n > 1); v1 emits multiple choices"
-            )
-        )
-    candidate = candidates[0]
-    if not isinstance(candidate, dict):
-        return Error(_boundary("candidate is not an object"))
-    finish_raw = candidate.get("finishReason")
-    if isinstance(finish_raw, str) and finish_raw in p.FLAGGED_FINISH_REASONS:
-        return Error(
-            TranslationError.of_unsupported(
-                "content-policy finishReason; v1 takes _handle_content_policy_violation"
-            )
-        )
-    for key in _UNSUPPORTED_CANDIDATE_KEYS:
-        if key in candidate:
-            return Error(
-                TranslationError.of_unsupported(
-                    f"candidate {key}; v1's metadata extraction handles it"
-                )
-            )
+    candidate = _single_candidate(raw)
+    if isinstance(candidate, TranslationError):
+        return Error(candidate)
     content = candidate.get("content")
     parts = content.get("parts") if isinstance(content, dict) else None
     if not isinstance(parts, list):
@@ -87,6 +60,7 @@ def parse_response(raw: PlainJson, request: ChatRequest) -> _ParseResult:
     usage = parse_usage_metadata(raw.get("usageMetadata"))
     if isinstance(usage, TranslationError):
         return Error(usage)
+    finish_raw = candidate.get("finishReason")
     has_tools = any(block.tag == "tool_use" for block in blocks)
     finish = p.map_finish(
         finish_raw if isinstance(finish_raw, str) else None, has_tools
@@ -102,6 +76,37 @@ def parse_response(raw: PlainJson, request: ChatRequest) -> _ParseResult:
             synthesized_json_content=False,
         )
     )
+
+
+def _single_candidate(
+    raw: dict[str, PlainJson],
+) -> dict[str, PlainJson] | TranslationError:
+    feedback = raw.get("promptFeedback")
+    if isinstance(feedback, dict) and "blockReason" in feedback:
+        return TranslationError.of_unsupported(
+            "promptFeedback.blockReason responses take v1's _handle_blocked_response path"
+        )
+    candidates = raw.get("candidates")
+    if not isinstance(candidates, list) or len(candidates) == 0:
+        return _boundary("response has no candidates")
+    if len(candidates) > 1:
+        return TranslationError.of_unsupported(
+            "multiple candidates (n > 1); v1 emits multiple choices"
+        )
+    candidate = candidates[0]
+    if not isinstance(candidate, dict):
+        return _boundary("candidate is not an object")
+    finish_raw = candidate.get("finishReason")
+    if isinstance(finish_raw, str) and finish_raw in p.FLAGGED_FINISH_REASONS:
+        return TranslationError.of_unsupported(
+            "content-policy finishReason; v1 takes _handle_content_policy_violation"
+        )
+    for key in _UNSUPPORTED_CANDIDATE_KEYS:
+        if key in candidate:
+            return TranslationError.of_unsupported(
+                f"candidate {key}; v1's metadata extraction handles it"
+            )
+    return candidate
 
 
 def _boundary(reason: str) -> TranslationError:
@@ -174,13 +179,15 @@ def _function_call_block(part: dict[str, PlainJson]) -> ContentBlock | Translati
     )
 
 
-_MODALITY_KEYS = {
-    "TEXT": "text",
-    "DOCUMENT": "text",
-    "AUDIO": "audio",
-    "IMAGE": "image",
-    "VIDEO": "video",
-}
+_MODALITY_KEYS: Mapping[str, str] = MappingProxyType(
+    {
+        "TEXT": "text",
+        "DOCUMENT": "text",
+        "AUDIO": "audio",
+        "IMAGE": "image",
+        "VIDEO": "video",
+    }
+)
 
 
 def _modality_totals(details: PlainJson) -> dict[str, int]:
