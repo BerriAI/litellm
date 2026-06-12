@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import ToolModal from "../tool_modal";
-import NotificationsManager from "../../molecules/notifications_manager";
-import { createPromptCall, updatePromptCall, getPromptInfo } from "../../networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { createPromptCall, updatePromptCall, getPromptInfo } from "@/components/networking";
 import { PromptType, PromptEditorViewProps, Tool } from "./types";
 import { convertToDotPrompt, parseExistingPrompt } from "./utils";
 import PromptEditorHeader from "./PromptEditorHeader";

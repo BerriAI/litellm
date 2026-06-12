@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Text } from "@tremor/react";
 import { Input } from "antd";
 import { SettingsIcon } from "lucide-react";
-import ModelSelector from "../../common_components/ModelSelector";
+import ModelSelector from "@/components/common_components/ModelSelector";
 
 interface ModelConfigCardProps {
   model: string;
