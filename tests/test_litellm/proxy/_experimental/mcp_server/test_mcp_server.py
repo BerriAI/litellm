@@ -5896,3 +5896,70 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
 
     assert captured["server_name"] == "rest_target"
     assert captured["name"] == "list_things"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_rest_prefix_retry_resolution_still_enforces_server_id():
+    """A managed tool resolved via the requested server's prefix must still honor the server_id guard."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    requested_server = MCPServer(
+        server_id="api-key-server-id",
+        name="echo_api_key",
+        server_name="echo_api_key",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="abc123",
+    )
+    prefix_owner = MCPServer(
+        server_id="prefix-owner-id",
+        name="known_prefix",
+        server_name="known_prefix",
+        url="http://127.0.0.1:5116/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.bearer_token,
+        authentication_token="secret",
+    )
+
+    def resolve_only_when_requested_prefix_added(tool_name):
+        if tool_name == "known_prefix-echo":
+            return None
+        return prefix_owner
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={
+                requested_server.server_id: requested_server,
+                prefix_owner.server_id: prefix_owner,
+            },
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            side_effect=resolve_only_when_requested_prefix_added,
+        ),
+        patch.object(
+            mcp_module.MCPRequestHandler,
+            "is_tool_allowed",
+            return_value=True,
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=None,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="known_prefix-echo",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[requested_server, prefix_owner],
+            start_time=datetime.now(),
+            requested_server_id=requested_server.server_id,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error"] == "tool_server_mismatch"
