@@ -1,6 +1,6 @@
 "use client";
 
-import { MemoryView } from "@/components/MemoryView";
+import { MemoryView } from "./components/MemoryView";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function Memory() {
