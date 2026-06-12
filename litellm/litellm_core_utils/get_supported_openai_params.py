@@ -299,8 +299,10 @@ def get_supported_openai_params(  # noqa: PLR0915
             request_type == "embeddings"
             and litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(model)
         ):
-            return litellm.VoyageMultimodalEmbeddingConfig().get_supported_openai_params(
-                model=model
+            return (
+                litellm.VoyageMultimodalEmbeddingConfig().get_supported_openai_params(
+                    model=model
+                )
             )
         return litellm.VoyageEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "infinity":
