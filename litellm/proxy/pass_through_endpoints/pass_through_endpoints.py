@@ -696,7 +696,10 @@ def _carry_guardrail_logging_info(
     metadata.setdefault("standard_logging_guardrail_information", list(entries))
 
 
-from litellm.passthrough.timeout_utils import resolve_pass_through_request_timeout
+from litellm.passthrough.timeout_utils import (
+    DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
+    resolve_pass_through_request_timeout,
+)
 
 
 async def pass_through_request(  # noqa: PLR0915
