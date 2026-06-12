@@ -22204,6 +22204,11 @@ export interface components {
              */
             pass_through_endpoints?: components["schemas"]["PassThroughGenericEndpoint"][] | null;
             /**
+             * Pass Through Request Timeout
+             * @description Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.
+             */
+            pass_through_request_timeout?: number | null;
+            /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
@@ -27993,6 +27998,11 @@ export interface components {
              * @description The URL to which requests for this path should be forwarded.
              */
             target: string;
+            /**
+             * Timeout
+             * @description Upstream request timeout in seconds for this pass-through endpoint. If unset, uses general_settings.pass_through_request_timeout (default 600).
+             */
+            timeout?: number | null;
         };
         /**
          * PassThroughGuardrailSettings
