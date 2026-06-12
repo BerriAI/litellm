@@ -249,6 +249,26 @@ class TestVoyageMultimodalEmbeddings:
         )
         assert optional_params.get("output_dimension") == 1024
 
+    def test_get_supported_openai_params_voyage_routes_multimodal(self):
+        from litellm.litellm_core_utils.get_supported_openai_params import (
+            get_supported_openai_params,
+        )
+
+        multimodal_params = get_supported_openai_params(
+            model="voyage-multimodal-3.5",
+            custom_llm_provider="voyage",
+            request_type="embeddings",
+        )
+        assert multimodal_params == ["dimensions"]
+
+        standard_params = get_supported_openai_params(
+            model="voyage-3.5",
+            custom_llm_provider="voyage",
+            request_type="embeddings",
+        )
+        assert "dimensions" in standard_params
+        assert "encoding_format" in standard_params
+
     def test_passthrough_non_content_input(self):
         from litellm.llms.voyage.embedding.transformation_multimodal import (
             VoyageMultimodalEmbeddingConfig,
