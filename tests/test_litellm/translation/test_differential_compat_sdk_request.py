@@ -25,6 +25,7 @@ from litellm.translation import translate_chat_request
 from litellm.translation.dispatch import Provider
 from litellm.translation.engine import pipeline
 from litellm.translation.providers import compat_sdk
+from litellm.translation.providers.compat_sdk import json_registry
 from litellm.translation.providers.compat_sdk import params as csp
 
 from ._compat_sdk_corpus import (
@@ -689,7 +690,7 @@ _REASONING_CAPABILITY_GATES = {
 
 
 def _base_family_allowed(model: str) -> frozenset[str]:
-    allowed = csp._BASE_LIST
+    allowed = csp.BASE_LIST
     if model in _RF_NAME_GATED:
         return allowed - {"response_format"}
     return allowed
@@ -712,8 +713,8 @@ def _v2_allowed(provider: str, model: str, deps) -> frozenset[str]:
         return csp.nvidia_nim_allowed(model)
     if provider in csp.JSON_REGISTRY_PROVIDERS:
         allowed = _base_family_allowed(model)
-        if not csp.supports_json_provider_tools(model, deps, provider):
-            allowed = allowed - csp._JSON_TOOL_KEYS
+        if not json_registry.supports_json_provider_tools(model, deps, provider):
+            allowed = allowed - json_registry._JSON_TOOL_KEYS
         return allowed
     if provider == "perplexity":
         return (
@@ -736,7 +737,7 @@ def _v2_allowed(provider: str, model: str, deps) -> frozenset[str]:
     if provider == "moonshot" and csp._MOONSHOT_THINKING_PREVIEW in model:
         return _base_family_allowed(model) - frozenset({"tools", "tool_choice"})
     allowed = csp.ALLOWED[provider]
-    if allowed == csp._BASE_LIST:
+    if allowed == csp.BASE_LIST:
         return _base_family_allowed(model)
     return allowed
 
@@ -1000,7 +1001,7 @@ def test_publicai_tools_served_on_fc_capable_model() -> None:
 
 
 def test_json_rename_set_mirrors_providers_json_at_head() -> None:
-    """The _JSON_RENAME frozenset in compat_sdk/serialize.py must track
+    """The JSON_RENAME frozenset in compat_sdk/json_registry.py must track
     providers.json param_mappings (the mapping arm runs FIRST in the dynamic
     config's map), and the registered JSON cohort must be exactly the enum
     members of the registry at HEAD."""
@@ -1010,7 +1011,7 @@ def test_json_rename_set_mirrors_providers_json_at_head() -> None:
     import litellm as litellm_module
     from litellm.types.utils import LlmProviders
 
-    from litellm.translation.providers.compat_sdk.serialize import _JSON_RENAME
+    from litellm.translation.providers.compat_sdk.json_registry import JSON_RENAME
 
     registry_path = (
         Path(litellm_module.__file__).parent / "llms" / "openai_like" / "providers.json"
@@ -1024,7 +1025,7 @@ def test_json_rename_set_mirrors_providers_json_at_head() -> None:
     enum_names = {provider.value for provider in LlmProviders}
     enum_members = {slug for slug in registry if slug in enum_names}
     assert set(csp.JSON_REGISTRY_PROVIDERS) == enum_members
-    assert _JSON_RENAME == renames & enum_members
+    assert JSON_RENAME == renames & enum_members
     for slug in csp.JSON_REGISTRY_PROVIDERS:
         # no JSON provider carries the (currently dead) temperature
         # constraints arm or a chat-relevant special_handling beyond

@@ -220,6 +220,18 @@ translation/
 │   │   │                #   dedicated legacy wrapper branch
 │   │   │                #   (handle_baseten_chunk), so it stays a typed v1
 │   │   │                #   fallback (canary-pinned).
+│   │   ├── checks.py    # the generic supported-list checker BOTH compat
+│   │   │                #   families compose: unsupported_against (the
+│   │   │                #   _check_valid_arg mirror incl. the top_k
+│   │   │                #   extra_body default arm), BASE_LIST,
+│   │   │                #   base_list_unsupported, the user notes
+│   │   │                #   (critic-wave1b M3 concept split)
+│   │   ├── json_registry.py # the providers.json mechanism: the dynamic
+│   │   │                #   JSONProviderConfig fc-capability fork + the
+│   │   │                #   param_mappings JSON_RENAME set, co-located so
+│   │   │                #   the mirror test reconciles ONE module;
+│   │   │                #   membership (JSON_REGISTRY_PROVIDERS) stays
+│   │   │                #   beside ALLOWED in params.py
 │   │   ├── params.py    # per-provider supported-list truths as pure gates
 │   │   │                #   (v1 RAISES-unless-drop_params on anything off
 │   │   │                #   the list); capability gates read deps over the
@@ -280,8 +292,9 @@ translation/
 │   │   │                #   lemonade (param config unregistered at HEAD;
 │   │   │                #   the elif threads LemonadeChatConfig explicitly
 │   │   │                #   — facts canary)
-│   │   ├── params.py    # per-provider allowed sets over the compat_sdk
-│   │   │                #   checker (gradient_ai's own map RAISES even on
+│   │   ├── params.py    # per-provider allowed sets over the shared
+│   │   │                #   compat_sdk/checks.py checker (gradient_ai's
+│   │   │                #   own map RAISES even on
 │   │   │                #   user; bedrock_mantle reasoning is capability-
 │   │   │                #   gated; amazon_nova's static list serves
 │   │   │                #   reasoning_effort unconditionally)

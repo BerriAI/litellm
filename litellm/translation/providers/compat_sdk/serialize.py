@@ -49,6 +49,8 @@ from ...errors import TranslationError
 from ...ir import Body, ChatRequest, PlainJson
 from ..openai_compat.serialize import assemble_body
 from . import params as p
+from .checks import base_list_unsupported
+from .json_registry import JSON_RENAME, json_registry_unsupported
 
 _SerializeResult = Result[Body, TranslationError]
 Serializer = Callable[[ChatRequest, TranslationDeps], _SerializeResult]
@@ -133,36 +135,16 @@ def _with_deltas(
 
 def _base_list_gate(provider: str) -> _GateFn:
     def gate(request: ChatRequest, deps: TranslationDeps) -> str | None:
-        return p.base_list_unsupported(request, deps, provider)
+        return base_list_unsupported(request, deps, provider)
 
     return gate
 
 
 def _json_registry_gate(provider: str) -> _GateFn:
     def gate(request: ChatRequest, deps: TranslationDeps) -> str | None:
-        return p.json_registry_unsupported(request, deps, provider)
+        return json_registry_unsupported(request, deps, provider)
 
     return gate
-
-
-# providers.json ``param_mappings`` carrying max_completion_tokens ->
-# max_tokens at HEAD (the mapping arm runs FIRST in JSONProviderConfig.
-# map_openai_params, before the supported-list copy loop); the drift gate
-# re-derives this set from providers.json in the request differential.
-_JSON_RENAME = frozenset(
-    {
-        "publicai",
-        "xiaomi_mimo",
-        "synthetic",
-        "apertis",
-        "nano-gpt",
-        "poe",
-        "chutes",
-        "charity_engine",
-        "neosantara",
-        "tensormesh",
-    }
-)
 
 
 def _flatten_text_content_lists(body: Body) -> Body:
@@ -340,7 +322,7 @@ _PROFILE_ROWS: tuple[CompatProfile, ...] = (
         CompatProfile(
             provider=provider,
             unsupported=_json_registry_gate(provider),
-            rename_max_completion_tokens=provider in _JSON_RENAME,
+            rename_max_completion_tokens=provider in JSON_RENAME,
         )
         for provider in p.JSON_REGISTRY_PROVIDERS
     ),

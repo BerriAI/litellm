@@ -25,7 +25,7 @@ from typing import Literal
 
 from ...deps import TranslationDeps
 from ...ir import ChatRequest
-from ..compat_sdk.params import (
+from ..compat_sdk.checks import (
     BASE_LIST,
     base_list_unsupported,
     unsupported_against,
