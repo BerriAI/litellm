@@ -23,6 +23,7 @@ import time
 
 import pytest
 
+from litellm.exceptions import BadRequestError, MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.cometapi.chat.transformation import (
@@ -41,7 +42,13 @@ MODEL = "gpt-4o-mini"
 WIRE_MODEL = "gpt-4o-mini-2024-07-18"
 
 
-def _chunk(delta=None, finish=None, usage=None, choices=None, **extra):
+def _chunk(
+    delta: dict[str, object] | None = None,
+    finish: str | None = None,
+    usage: dict[str, int] | None = None,
+    choices: list[dict[str, object]] | None = None,
+    **extra: object,
+) -> dict[str, object]:
     payload = {
         "id": "chunk-1",
         "object": "chat.completion.chunk",
@@ -127,7 +134,10 @@ USAGE_STREAM = [
 ]
 
 
-def _v1_chunks(events: list, stream_options=None) -> list:
+def _v1_chunks(
+    events: list[dict[str, object]],
+    stream_options: dict[str, bool] | None = None,
+) -> list[dict[str, object]]:
     lines = [f"data: {json.dumps(event)}" for event in copy.deepcopy(events)]
     lines.append("data: [DONE]")
     handler = CometAPIChatCompletionStreamingHandler(
@@ -152,7 +162,7 @@ def _v1_chunks(events: list, stream_options=None) -> list:
     return [chunk.model_dump() for chunk in wrapper]
 
 
-def _v2_chunks(events: list) -> list:
+def _v2_chunks(events: list[dict[str, object]]) -> list[dict[str, object]]:
     lines = [f"data: {json.dumps(event)}" for event in copy.deepcopy(events)]
     lines.append("data: [DONE]")
     folded = fold_lines(lines, parse_line, initial_state(MODEL, dialect="xai"))
@@ -163,7 +173,7 @@ def _v2_chunks(events: list) -> list:
     ]
 
 
-def _norm(chunks: list) -> str:
+def _norm(chunks: list[dict[str, object]]) -> str:
     return json.dumps(chunks, sort_keys=True, default=str)
 
 
@@ -230,7 +240,16 @@ def test_v2_line_and_event_folds_agree(frozen_ambient) -> None:
 _LOUD_CHUNKS = {
     "error_chunk": (
         {"error": {"message": "boom", "code": 500}},
-        "provider stream error chunk",
+        "provider stream error",
+    ),
+    "missing_choices": (
+        {
+            "id": "chunk-1",
+            "object": "chat.completion.chunk",
+            "created": 1718000000,
+            "model": WIRE_MODEL,
+        },
+        "KeyError",
     ),
     "missing_id": (
         {
@@ -278,14 +297,21 @@ _LOUD_CHUNKS = {
 @pytest.mark.parametrize("name", sorted(_LOUD_CHUNKS))
 def test_loud_chunk_shapes_error_on_both_sides(name: str, frozen_ambient) -> None:
     """v1 RAISES out of the iterator on error chunks and on chunks missing
-    id/created/model (KeyError -> CometAPIException); v2 must be a loud
-    error value, never a served chunk. The two unreachable shapes
+    any required envelope key (KeyError -> CometAPIException), with the
+    exact mapped exception types pinned (critic-wave2a N4); v2 must be a
+    loud error value, never a served chunk. The two unreachable shapes
     (n>1, unknown delta keys) are v2-side typed errors like every family
     parser."""
     event, reason_fragment = _LOUD_CHUNKS[name]
     result = parse_event(copy.deepcopy(event))
     assert result.is_error(), f"{name} unexpectedly parsed"
     assert reason_fragment in result.error.summary, result.error.summary
-    if name in ("error_chunk", "missing_id", "missing_created", "missing_model"):
-        with pytest.raises(Exception):
+    if name == "error_chunk":
+        # the wrapper maps the in-stream CometAPIException onto the
+        # mid-stream fallback contract
+        with pytest.raises(MidStreamFallbackError):
+            _v1_chunks([event])
+    elif name.startswith("missing_"):
+        # chunk_parser's KeyError -> CometAPIException(400) -> BadRequestError
+        with pytest.raises(BadRequestError):
             _v1_chunks([event])
