@@ -1637,6 +1637,39 @@ async def test_call_mcp_tool_user_unauthorized_access():
 
 
 @pytest.mark.asyncio
+async def test_execute_mcp_tool_unauthorized_does_not_leak_server_credentials():
+    """The 403 for an unauthorized tool must not leak server credentials.
+
+    Regression test: the 403 detail used to interpolate the full list of allowed
+    ``MCPServer`` configs into the error returned to the caller, exposing
+    ``authentication_token`` / ``client_secret`` / AWS secrets in plaintext.
+    """
+    from litellm.proxy._experimental.mcp_server.server import execute_mcp_tool
+
+    secret = "sk-super-secret-mcp-token"
+    allowed_server = MCPServer(
+        server_id="allowed_server",
+        name="allowed_server",
+        transport="http",
+        authentication_token=secret,
+    )
+
+    # Call a tool whose server prefix is not in the allowed list.
+    with pytest.raises(HTTPException) as exc_info:
+        await execute_mcp_tool(
+            name="restricted_server-some_tool",
+            arguments={},
+            allowed_mcp_servers=[allowed_server],
+            start_time=datetime.now(),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "not allowed" in str(exc_info.value.detail).lower()
+    # The credential must not appear anywhere in the response detail.
+    assert secret not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_list_tools_filters_by_key_team_permissions():
     """Test that list_tools filters tools based on key/team mcp_tool_permissions"""
     try:
