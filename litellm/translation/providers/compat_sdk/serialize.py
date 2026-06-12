@@ -133,14 +133,14 @@ def _with_deltas(
     return {**body, **extras} if extras else body
 
 
-def _base_list_gate(provider: str) -> _GateFn:
+def _base_list_gate(provider: p.CompatSdkProvider) -> _GateFn:
     def gate(request: ChatRequest, deps: TranslationDeps) -> str | None:
         return base_list_unsupported(request, deps, provider)
 
     return gate
 
 
-def _json_registry_gate(provider: str) -> _GateFn:
+def _json_registry_gate(provider: p.CompatSdkProvider) -> _GateFn:
     def gate(request: ChatRequest, deps: TranslationDeps) -> str | None:
         return json_registry_unsupported(request, deps, provider)
 

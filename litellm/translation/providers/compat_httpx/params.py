@@ -162,7 +162,7 @@ def minimax_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | No
     ) or unsupported_response_format(request)
 
 
-def _base_gate(provider: str) -> _GateFn:
+def _base_gate(provider: CompatHttpxProvider) -> _GateFn:
     def gate(request: ChatRequest, deps: TranslationDeps) -> str | None:
         return base_list_unsupported(request, deps, provider)
 

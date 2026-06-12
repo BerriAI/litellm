@@ -6,7 +6,7 @@ the disjointness test makes promotion a deliberate two-file edit, and the
 seam-level test proves each name falls back typed, never raising.
 """
 
-from typing import get_args
+from typing import cast, get_args
 
 from litellm.translation import Route, route
 from litellm.translation.dispatch import NEVER_PORT, Provider
@@ -111,12 +111,16 @@ def test_never_port_providers_fall_back_typed_at_the_seam() -> None:
     raw = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
     every_registered = frozenset(get_args(Provider))
     for provider in sorted(NEVER_PORT):
-        result = translate_chat_request(raw, provider, deps)  # type: ignore[arg-type]
+        # deliberately illegal input: the negative path NEEDS a never-port
+        # name where a Provider is expected; cast carries that intent
+        # without masking real arg-type regressions (critic-wave1b N4)
+        illegal = cast(Provider, provider)
+        result = translate_chat_request(raw, illegal, deps)
         assert result.is_error(), provider
         assert "no v2 chat serializer" in result.error.summary, provider
         decision = route(
             schema="openai_chat",
-            provider=provider,  # type: ignore[arg-type]
+            provider=illegal,
             enabled_providers=every_registered,
             body_touching=False,
         )

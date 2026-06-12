@@ -14,22 +14,27 @@ HEAD.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ...deps import TranslationDeps
 from ...ir import ChatRequest
 from ..openai_compat.params import unsupported_response_format
 from .checks import BASE_LIST, unsupported_against, user_note
 
+if TYPE_CHECKING:
+    from .params import CompatSdkProvider
+
 _JSON_TOOL_KEYS = frozenset({"tools", "tool_choice", "parallel_tool_calls"})
 
 
 def supports_json_provider_tools(
-    model: str, deps: TranslationDeps, provider: str
+    model: str, deps: TranslationDeps, provider: CompatSdkProvider
 ) -> bool:
     return deps.supports_capability(f"{provider}/{model}", "supports_function_calling")
 
 
 def json_registry_unsupported(
-    request: ChatRequest, deps: TranslationDeps, provider: str
+    request: ChatRequest, deps: TranslationDeps, provider: CompatSdkProvider
 ) -> str | None:
     """The dynamic ``JSONProviderConfig`` (openai_like/dynamic_config.py):
     base GPT list minus tools/tool_choice/parallel_tool_calls unless

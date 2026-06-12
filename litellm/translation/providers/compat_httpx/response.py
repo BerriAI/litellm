@@ -40,9 +40,10 @@ from dataclasses import replace
 from types import MappingProxyType
 from typing import Literal
 
-from expression import Ok, Result, Some
+from expression import Error, Ok, Result, Some
+from expression.collections import Block
 
-from ...errors import TranslationError
+from ...errors import BoundaryError, TranslationError
 from ...ir import ChatRequest, ChatResponse, JsonBlob, PlainJson
 from ..openai_compat.response import parse_response as openai_parse_response
 from .params import CompatHttpxProvider
@@ -77,7 +78,19 @@ def _direct_parser(prefix: str | None) -> ResponseParser:
 def _verbatim_wire(
     response: ChatResponse, raw: PlainJson, request: ChatRequest, prefix: str | None
 ) -> _ParseResult:
-    body: dict[str, PlainJson] = dict(raw) if isinstance(raw, dict) else {}
+    if not isinstance(raw, dict):
+        # Unreachable: openai_parse_response rejected non-dict bodies before
+        # this bind runs. Fail CLOSED if it ever becomes reachable — the old
+        # `else {}` arm would have ridden an empty wire body into
+        # ModelResponse(**{}) (critic-wave1b N5).
+        return Error(
+            TranslationError.of_boundary(
+                BoundaryError.of(
+                    Block.of_seq(["non-dict response body reached _verbatim_wire"])
+                )
+            )
+        )
+    body: dict[str, PlainJson] = dict(raw)
     if prefix is not None:
         model = f"{prefix}/{request.model}"
         body = {**body, "model": model}
