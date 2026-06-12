@@ -1,6 +1,6 @@
 import datetime as real_datetime
-import json
 import os
+import smtplib
 import sys
 
 import pytest
@@ -397,10 +397,13 @@ class TestCreateSmtpConnection:
         from litellm.proxy.utils import _create_smtp_connection
 
         monkeypatch.delenv("SMTP_USE_SSL", raising=False)
-        with patch("smtplib.SMTP_SSL") as mock_smtp_ssl, patch(
-            "smtplib.SMTP"
-        ) as mock_smtp:
-            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=465)
+        with (
+            patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
+            patch("smtplib.SMTP") as mock_smtp,
+        ):
+            result = _create_smtp_connection(
+                smtp_host="mail.example.com", smtp_port=465
+            )
 
         mock_smtp.assert_not_called()
         assert result is mock_smtp_ssl.return_value
@@ -416,11 +419,45 @@ class TestCreateSmtpConnection:
         from litellm.proxy.utils import _create_smtp_connection
 
         monkeypatch.delenv("SMTP_USE_SSL", raising=False)
-        with patch("smtplib.SMTP_SSL") as mock_smtp_ssl, patch(
-            "smtplib.SMTP"
-        ) as mock_smtp:
-            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=587)
+        with (
+            patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
+            patch("smtplib.SMTP") as mock_smtp,
+        ):
+            result = _create_smtp_connection(
+                smtp_host="mail.example.com", smtp_port=587
+            )
 
         mock_smtp_ssl.assert_not_called()
         assert result is mock_smtp.return_value
         mock_smtp.assert_called_once_with(host="mail.example.com", port=587)
+
+
+class TestSendEmailStartTls:
+    @pytest.mark.asyncio
+    async def test_starttls_uses_verified_context(self, monkeypatch):
+        import ssl
+
+        from litellm.proxy.utils import send_email
+
+        monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+        monkeypatch.setenv("SMTP_PORT", "587")
+        monkeypatch.setenv("SMTP_SENDER_EMAIL", "sender@example.com")
+        monkeypatch.delenv("SMTP_TLS", raising=False)
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+
+        mock_server = MagicMock(spec=smtplib.SMTP)
+        with patch(
+            "litellm.proxy.utils._create_smtp_connection"
+        ) as mock_create_connection:
+            mock_create_connection.return_value.__enter__.return_value = mock_server
+            await send_email(
+                receiver_email="receiver@example.com",
+                subject="test",
+                html="<p>test</p>",
+            )
+
+        _, kwargs = mock_server.starttls.call_args
+        context = kwargs["context"]
+        assert isinstance(context, ssl.SSLContext)
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True

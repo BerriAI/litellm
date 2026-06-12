@@ -5205,7 +5205,7 @@ async def send_email(
             if not isinstance(server, smtplib.SMTP_SSL) and (
                 os.getenv("SMTP_TLS", "True") != "False"
             ):
-                server.starttls()
+                server.starttls(context=ssl.create_default_context())
 
             # Login to your email account only if smtp_username and smtp_password are provided
             if smtp_username and smtp_password:
