@@ -349,6 +349,51 @@ class TestVertexAIGeminiImageGenerationConfig:
             == "test_signature_abc123"
         )
 
+    def test_transform_image_generation_response_tracks_web_search_requests(self):
+        """Grounding queries are carried onto usage so search spend can be billed"""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "base64_encoded_image_data",
+                                }
+                            }
+                        ]
+                    },
+                    "groundingMetadata": {
+                        "webSearchQueries": ["eiffel tower", "paris skyline"]
+                    },
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 93,
+                "candidatesTokenCount": 17,
+                "totalTokenCount": 110,
+            },
+        }
+        mock_response.headers = {}
+
+        from litellm.types.utils import ImageResponse
+
+        result = self.config.transform_image_generation_response(
+            model="gemini-2.5-flash-image",
+            raw_response=mock_response,
+            model_response=ImageResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.usage.web_search_requests == 2
+
 
 class TestVertexAIImagenImageGenerationConfig:
     def setup_method(self):

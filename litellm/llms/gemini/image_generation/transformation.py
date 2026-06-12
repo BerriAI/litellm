@@ -7,6 +7,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 )
 from litellm.llms.gemini.common_utils import (
     get_gemini_image_generation_config,
+    get_gemini_image_web_search_requests,
     is_gemini_image_model,
     map_gemini_image_tools_params,
     map_openai_image_params_to_gemini,
@@ -226,6 +227,11 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             if "usageMetadata" in response_data:
                 model_response.usage = transform_gemini_image_usage(
                     response_data["usageMetadata"]
+                )
+            web_search_requests = get_gemini_image_web_search_requests(response_data)
+            if web_search_requests and model_response.usage is not None:
+                setattr(
+                    model_response.usage, "web_search_requests", web_search_requests
                 )
         else:
             # Original Imagen format - predictions with generated images

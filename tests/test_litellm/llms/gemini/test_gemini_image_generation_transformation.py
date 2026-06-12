@@ -332,3 +332,90 @@ def test_gemini_image_generation_usage_without_output_details_treats_output_as_i
     usage = result.model_dump()["usage"]
     assert usage["completion_tokens_details"]["text_tokens"] == 0
     assert usage["completion_tokens_details"]["image_tokens"] == 1716
+
+
+def test_gemini_image_generation_response_tracks_web_search_requests():
+    config = GoogleImageGenConfig()
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "fake-image",
+                                }
+                            }
+                        ]
+                    },
+                    "groundingMetadata": {
+                        "webSearchQueries": ["latest iphone", "iphone colors"]
+                    },
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 35,
+                "candidatesTokenCount": 1716,
+                "totalTokenCount": 1751,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 35}],
+            },
+        },
+    )
+
+    result = config.transform_image_generation_response(
+        model="gemini-3.1-flash-image-preview",
+        raw_response=raw_response,
+        model_response=ImageResponse(data=[]),
+        logging_obj=None,
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.usage.web_search_requests == 2
+
+
+def test_gemini_image_generation_response_without_grounding_has_no_web_search_requests():
+    config = GoogleImageGenConfig()
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "fake-image",
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 35,
+                "candidatesTokenCount": 1716,
+                "totalTokenCount": 1751,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 35}],
+            },
+        },
+    )
+
+    result = config.transform_image_generation_response(
+        model="gemini-3.1-flash-image-preview",
+        raw_response=raw_response,
+        model_response=ImageResponse(data=[]),
+        logging_obj=None,
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert getattr(result.usage, "web_search_requests", None) is None
