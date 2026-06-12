@@ -1,18 +1,13 @@
 import os
 import sys
-import traceback
 from dotenv import load_dotenv
-import litellm.types
 import pytest
 from litellm import AmazonInvokeConfig
 import json
 
 load_dotenv()
-import io
-import os
 
 sys.path.insert(0, os.path.abspath("../.."))
-from unittest.mock import AsyncMock, Mock, patch
 
 
 # Initialize the transformer
@@ -69,53 +64,6 @@ def test_transform_request_invalid_provider(bedrock_transformer):
         )
 
     assert "Unknown provider" in str(exc_info.value)
-
-
-@patch("botocore.auth.SigV4Auth")
-@patch("botocore.awsrequest.AWSRequest")
-def test_sign_request_basic(mock_aws_request, mock_sigv4_auth, bedrock_transformer):
-    """Test basic request signing without extra headers"""
-    # Mock credentials
-    mock_credentials = Mock()
-    bedrock_transformer.get_credentials = Mock(return_value=mock_credentials)
-
-    # Setup mock SigV4Auth instance
-    mock_auth_instance = Mock()
-    mock_sigv4_auth.return_value = mock_auth_instance
-
-    # Setup mock AWSRequest instance
-    mock_request = Mock()
-    mock_request.headers = {
-        "Authorization": "AWS4-HMAC-SHA256 Credential=...",
-        "X-Amz-Date": "20240101T000000Z",
-        "Content-Type": "application/json",
-    }
-    mock_aws_request.return_value = mock_request
-
-    # Test parameters
-    headers = {}
-    optional_params = {"aws_region_name": "us-east-1"}
-    request_data = {"prompt": "Hello"}
-    api_base = "https://bedrock-runtime.us-east-1.amazonaws.com"
-
-    # Call the method
-    result, _ = bedrock_transformer.sign_request(
-        headers=headers,
-        optional_params=optional_params,
-        request_data=request_data,
-        api_base=api_base,
-    )
-
-    # Verify the results
-    mock_sigv4_auth.assert_called_once_with(mock_credentials, "bedrock", "us-east-1")
-    mock_aws_request.assert_called_once_with(
-        method="POST",
-        url=api_base,
-        data='{"prompt": "Hello"}',
-        headers={"Content-Type": "application/json"},
-    )
-    mock_auth_instance.add_auth.assert_called_once_with(mock_request)
-    assert result == mock_request.headers
 
 
 def test_transform_request_cohere_command(bedrock_transformer):

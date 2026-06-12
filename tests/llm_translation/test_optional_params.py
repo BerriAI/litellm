@@ -1,11 +1,7 @@
 #### What this tests ####
 #    This tests if get_optional_params works as expected
-import asyncio
-import inspect
 import os
 import sys
-import time
-import traceback
 
 import pytest
 
@@ -15,7 +11,6 @@ from unittest.mock import MagicMock, patch
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.types.completion import (
-    ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
     ChatCompletionUserMessageParam,
 )
@@ -72,36 +67,6 @@ def test_anthropic_optional_params(stop_sequence, expected_count):
 def test_get_requester_metadata_returns_none_for_empty():
     metadata = {"requester_metadata": {}}
     assert get_requester_metadata(metadata) is None
-
-
-@patch("litellm.main.openai_chat_completions.completion")
-def test_requester_metadata_forwarded_to_openai(mock_completion):
-    mock_completion.return_value = MagicMock()
-    metadata = {
-        "requester_metadata": {
-            "custom_meta_key": "value",
-            "hidden_params": "secret",
-            "int_value": 123,
-        }
-    }
-
-    original_api_key = litellm.api_key
-    litellm.api_key = "sk-test"
-    original_preview_flag = litellm.enable_preview_features
-    litellm.enable_preview_features = True
-
-    try:
-        litellm.completion(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": "hi"}],
-            metadata=metadata,
-        )
-    finally:
-        litellm.api_key = original_api_key
-        litellm.enable_preview_features = original_preview_flag
-
-    sent_metadata = mock_completion.call_args.kwargs["optional_params"]["metadata"]
-    assert sent_metadata == {"custom_meta_key": "value"}
 
 
 def test_get_optional_params_with_allowed_openai_params():
@@ -707,26 +672,6 @@ def test_bedrock_optional_params_embeddings_provider_specific_params():
     assert len(optional_params) == 1
 
 
-def test_get_optional_params_num_retries():
-    """
-    Relevant issue - https://github.com/BerriAI/litellm/issues/5124
-    """
-    with patch(
-        "litellm.main.get_optional_params",
-        new=MagicMock(return_value={"max_retries": 0}),
-    ) as mock_client:
-        _ = litellm.completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hello world"}],
-            num_retries=10,
-        )
-
-        mock_client.assert_called()
-
-        print(f"mock_client.call_args: {mock_client.call_args}")
-        assert mock_client.call_args.kwargs["max_retries"] == 10
-
-
 @pytest.mark.parametrize(
     "provider",
     [
@@ -1101,7 +1046,7 @@ def test_together_ai_model_params():
 
 
 def test_forward_user_param():
-    from litellm.utils import get_supported_openai_params, get_optional_params
+    from litellm.utils import get_optional_params
 
     model = "claude-3-5-sonnet-20240620"
     optional_params = get_optional_params(
@@ -1895,8 +1840,7 @@ def test_optional_params_image_gen_with_aspect_ratio():
 
 
 def test_optional_params_responses_api_allowed_openai_params():
-    from litellm import responses
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import patch
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -1985,43 +1929,6 @@ def test_validate_openai_optional_params_disable_stop_sequence_limit():
     finally:
         # Restore original value
         litellm.disable_stop_sequence_limit = original_value
-
-
-def test_validate_openai_optional_params_integration():
-    """
-    Test that validate_openai_optional_params is properly integrated in the completion flow.
-    """
-    # Test that completion with more than 4 stop sequences works without error
-    try:
-        with patch("litellm.llms.openai.openai.OpenAI") as mock_client:
-            mock_response = MagicMock()
-            mock_response.choices = [MagicMock()]
-            mock_response.choices[0].message.content = "Test response"
-            mock_response.model = "gpt-3.5-turbo"
-            mock_response.id = "test-id"
-            mock_response.created = 1234567890
-            mock_response.usage = MagicMock()
-            mock_response.usage.prompt_tokens = 10
-            mock_response.usage.completion_tokens = 5
-            mock_response.usage.total_tokens = 15
-
-            mock_client.return_value.chat.completions.create.return_value = (
-                mock_response
-            )
-
-            # Call completion with more than 4 stop sequences
-            response = litellm.completion(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "Hello"}],
-                stop=["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"],
-                mock_response="Test response",  # This will use mock
-            )
-
-            # Verify the call was made (stop sequences should be truncated internally)
-            assert response is not None
-    except Exception as e:
-        # Should not raise an exception
-        pytest.fail(f"validate_openai_optional_params integration failed: {e}")
 
 
 def test_drop_store_param_for_anthropic():

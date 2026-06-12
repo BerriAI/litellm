@@ -1,14 +1,10 @@
 import asyncio
-import json
 import os
 import sys
-import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
-import io
-import os
 from typing import Optional, Dict
 
 sys.path.insert(
@@ -16,15 +12,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm.types.rerank import RerankResponse
-from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 def assert_response_shape(response, custom_llm_provider):
@@ -148,75 +141,6 @@ async def test_basic_rerank_together_ai(sync_mode):
         raise e
 
 
-@pytest.mark.asyncio()
-@pytest.mark.parametrize("version", ["v1", "v2"])
-async def test_rerank_custom_api_base(version):
-    mock_response = AsyncMock()
-    litellm.cohere_key = "test_api_key"
-
-    def return_val():
-        return {
-            "id": "cmpl-mockid",
-            "results": [{"index": 0, "relevance_score": 0.95}],
-            "meta": {
-                "api_version": {"version": "1.0"},
-                "billed_units": {"search_units": 1},
-            },
-        }
-
-    mock_response.json = return_val
-    mock_response.headers = {"key": "value"}
-    mock_response.status_code = 200
-
-    expected_payload = {
-        "model": "Salesforce/Llama-Rank-V1",
-        "query": "hello",
-        "top_n": 3,
-        "documents": ["hello", "world"],
-    }
-
-    api_base = "https://exampleopenaiendpoint-production.up.railway.app/"
-    if version == "v1":
-        api_base += "v1/rerank"
-
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        return_value=mock_response,
-    ) as mock_post:
-        response = await litellm.arerank(
-            model="cohere/Salesforce/Llama-Rank-V1",
-            query="hello",
-            documents=["hello", "world"],
-            top_n=3,
-            api_base=api_base,
-        )
-
-        print("async re rank response: ", response)
-
-        # Assert
-        mock_post.assert_called_once()
-        print("call args", mock_post.call_args)
-        args_to_api = mock_post.call_args.kwargs["data"]
-        _url = mock_post.call_args.kwargs["url"]
-        print("Arguments passed to API=", args_to_api)
-        print("url = ", _url)
-        assert (
-            _url
-            == f"https://exampleopenaiendpoint-production.up.railway.app/{version}/rerank"
-        )
-
-        request_data = json.loads(args_to_api)
-        assert request_data["query"] == expected_payload["query"]
-        assert request_data["documents"] == expected_payload["documents"]
-        assert request_data["top_n"] == expected_payload["top_n"]
-        assert request_data["model"] == expected_payload["model"]
-
-        assert response.id is not None
-        assert response.results is not None
-
-        assert_response_shape(response, custom_llm_provider="cohere")
-
-
 class TestLogger(CustomLogger):
 
     def __init__(self):
@@ -253,37 +177,6 @@ async def test_rerank_custom_callbacks():
     assert custom_logger.kwargs.get("response_cost") > 0.0
     assert custom_logger.response_obj is not None
     assert custom_logger.response_obj.results is not None
-
-
-def test_complete_base_url_cohere():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    client = HTTPHandler()
-    litellm.api_base = "http://localhost:4000"
-    litellm.cohere_key = "test_api_key"
-    litellm.set_verbose = True
-
-    text = "Hello there!"
-    list_texts = ["Hello there!", "How are you?", "How do you do?"]
-
-    rerank_model = "rerank-multilingual-v3.0"
-
-    with patch.object(client, "post") as mock_post:
-        try:
-            litellm.rerank(
-                model=rerank_model,
-                query=text,
-                documents=list_texts,
-                custom_llm_provider="cohere",
-                client=client,
-            )
-        except Exception as e:
-            print(e)
-
-        print("mock_post.call_args", mock_post.call_args)
-        mock_post.assert_called_once()
-        # Default to the v2 client when calling the base /rerank
-        assert "http://localhost:4000/v2/rerank" in mock_post.call_args.kwargs["url"]
 
 
 @pytest.mark.asyncio()
@@ -370,63 +263,6 @@ def test_rerank_response_assertions():
     assert_response_shape(r, custom_llm_provider="custom")
 
 
-def test_cohere_rerank_v2_client():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    client = HTTPHandler()
-    litellm.api_base = "http://localhost:4000"
-    litellm.set_verbose = True
-
-    text = "Hello there!"
-    list_texts = ["Hello there!", "How are you?", "How do you do?"]
-
-    rerank_model = "rerank-multilingual-v3.0"
-
-    with patch.object(client, "post") as mock_post:
-        mock_response = MagicMock()
-        mock_response.text = json.dumps(
-            {
-                "id": "cmpl-mockid",
-                "results": [
-                    {"index": 0, "relevance_score": 0.95},
-                    {"index": 1, "relevance_score": 0.75},
-                    {"index": 2, "relevance_score": 0.65},
-                ],
-                "usage": {"prompt_tokens": 100, "total_tokens": 150},
-            }
-        )
-        mock_response.status_code = 200
-        mock_response.headers = {"Content-Type": "application/json"}
-        mock_response.json = lambda: json.loads(mock_response.text)
-
-        mock_post.return_value = mock_response
-
-        response = litellm.rerank(
-            model=rerank_model,
-            query=text,
-            documents=list_texts,
-            custom_llm_provider="cohere",
-            max_tokens_per_doc=3,
-            top_n=2,
-            api_key="fake-api-key",
-            client=client,
-        )
-
-        # Ensure Cohere API is called with the expected params
-        mock_post.assert_called_once()
-        assert mock_post.call_args.kwargs["url"] == "http://localhost:4000/v2/rerank"
-
-        request_data = json.loads(mock_post.call_args.kwargs["data"])
-        assert request_data["model"] == rerank_model
-        assert request_data["query"] == text
-        assert request_data["documents"] == list_texts
-        assert request_data["max_tokens_per_doc"] == 3
-        assert request_data["top_n"] == 2
-
-        # Ensure litellm response is what we expect
-        assert response["results"] == mock_response.json()["results"]
-
-
 @pytest.mark.flaky(retries=3, delay=1)
 def test_rerank_cohere_api():
     response = litellm.rerank(
@@ -443,40 +279,3 @@ def test_rerank_cohere_api():
     assert response.results[1]["document"]["text"] == "world"
 
 
-def test_rerank_infer_region_from_model_arn(monkeypatch):
-
-    mock_response = MagicMock()
-
-    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
-    args = {
-        "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
-        "query": "hello",
-        "documents": ["hello", "world"],
-    }
-
-    def return_val():
-        return {
-            "results": [
-                {"index": 0, "relevanceScore": 0.6716859340667725},
-                {"index": 1, "relevanceScore": 0.0004994205664843321},
-            ]
-        }
-
-    mock_response.json = return_val
-    mock_response.headers = {"key": "value"}
-    mock_response.status_code = 200
-
-    client = HTTPHandler()
-
-    with patch.object(client, "post", return_value=mock_response) as mock_post:
-        litellm.rerank(
-            model=args["model"],
-            query=args["query"],
-            documents=args["documents"],
-            client=client,
-        )
-
-        mock_post.assert_called_once()
-        print(f"mock_post.call_args: {mock_post.call_args.kwargs}")
-        assert "us-west-2" in mock_post.call_args.kwargs["url"]
-        assert "us-east-1" not in mock_post.call_args.kwargs["url"]

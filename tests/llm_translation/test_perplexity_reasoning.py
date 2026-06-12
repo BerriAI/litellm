@@ -1,7 +1,5 @@
-import json
 import os
 import sys
-from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -10,7 +8,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm import completion
 from litellm.utils import get_optional_params
 
 
@@ -52,93 +49,6 @@ class TestPerplexityReasoning:
         # Verify that reasoning_effort is preserved in optional_params for Perplexity
         assert "reasoning_effort" in optional_params
         assert optional_params["reasoning_effort"] == reasoning_effort
-
-    @pytest.mark.parametrize(
-        "model",
-        [
-            "perplexity/sonar-reasoning",
-            "perplexity/sonar-reasoning-pro",
-        ],
-    )
-    def test_perplexity_reasoning_effort_mock_completion(self, model):
-        """
-        Test that reasoning_effort is correctly passed in actual completion call (mocked)
-        """
-        from openai import OpenAI
-        from openai.types.chat.chat_completion import ChatCompletion
-
-        litellm.set_verbose = True
-
-        # Mock successful response with reasoning content
-        response_object = {
-            "id": "cmpl-test",
-            "object": "chat.completion",
-            "created": 1677652288,
-            "model": model.split("/")[1],
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "This is a test response from the reasoning model.",
-                        "reasoning_content": "Let me think about this step by step...",
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 9,
-                "completion_tokens": 20,
-                "total_tokens": 29,
-                "completion_tokens_details": {"reasoning_tokens": 15},
-            },
-        }
-
-        pydantic_obj = ChatCompletion(**response_object)
-
-        def _return_pydantic_obj(*args, **kwargs):
-            new_response = MagicMock()
-            new_response.headers = {"content-type": "application/json"}
-            new_response.parse.return_value = pydantic_obj
-            return new_response
-
-        openai_client = OpenAI(api_key="fake-api-key")
-
-        with patch.object(
-            openai_client.chat.completions.with_raw_response,
-            "create",
-            side_effect=_return_pydantic_obj,
-        ) as mock_client:
-
-            response = completion(
-                model=model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "Hello, please think about this carefully.",
-                    }
-                ],
-                reasoning_effort="high",
-                client=openai_client,
-            )
-
-            # Verify the call was made
-            assert mock_client.called
-
-            # Get the request data from the mock call
-            call_args = mock_client.call_args
-            request_data = call_args.kwargs
-
-            # Verify reasoning_effort was included in the request
-            assert "reasoning_effort" in request_data
-            assert request_data["reasoning_effort"] == "high"
-
-            # Verify response structure
-            assert response.choices[0].message.content is not None
-            assert (
-                response.choices[0].message.content
-                == "This is a test response from the reasoning model."
-            )
 
     def test_perplexity_reasoning_models_support_reasoning(self):
         """

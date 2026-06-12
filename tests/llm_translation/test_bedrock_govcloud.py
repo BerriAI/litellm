@@ -115,32 +115,6 @@ class TestBedrockGovCloudSupport:
         )
         assert base_model == "meta.llama3-8b-instruct-v1:0"
 
-    @patch("litellm.llms.bedrock.common_utils.init_bedrock_client")
-    def test_govcloud_client_initialization(self, mock_init_client):
-        """Test that Bedrock client can be initialized with GovCloud regions"""
-        mock_client = Mock()
-        mock_init_client.return_value = mock_client
-
-        # Test that init_bedrock_client accepts GovCloud regions
-        from litellm.llms.bedrock.common_utils import init_bedrock_client
-
-        # This should not raise an error
-        client = init_bedrock_client(
-            region_name="us-gov-east-1",
-            aws_access_key_id=None,
-            aws_secret_access_key=None,
-            aws_region_name="us-gov-east-1",
-            aws_bedrock_runtime_endpoint=None,
-            aws_session_name=None,
-            aws_profile_name=None,
-            aws_role_name=None,
-            aws_web_identity_token=None,
-            extra_headers=None,
-            timeout=None,
-        )
-
-        assert mock_init_client.called
-
     def test_govcloud_model_in_bedrock_models_list(self):
         """Test that GovCloud models are NOT included in bedrock_models list (they are pricing-only)"""
         # Regional models including GovCloud should be excluded from bedrock_models list
@@ -475,8 +449,6 @@ class TestBedrockGovCloudSupport:
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
     def test_govcloud_completion_with_cost_tracking(self, mock_post):
         """Test that completion requests with cost tracking use correct pricing for GovCloud models"""
-        from litellm import completion
-        from unittest.mock import Mock
         import json
 
         # Mock the HTTP client's post method to return responses

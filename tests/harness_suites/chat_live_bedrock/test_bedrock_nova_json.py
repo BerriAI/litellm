@@ -22,10 +22,6 @@ class TestBedrockNovaJson(BaseLLMChatTest):
     def test_json_response_nested_json_schema(self):
         pass
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
     def test_prompt_caching(self):
         """
         Remove override once we have access to Bedrock prompt caching

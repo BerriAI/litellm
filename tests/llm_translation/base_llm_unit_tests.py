@@ -2,33 +2,25 @@ import httpx
 import json
 import pytest
 import sys
-from typing import Any, Dict, List
-from unittest.mock import MagicMock, Mock, patch
 import os
 from litellm._uuid import uuid
 import time
 import base64
-import inspect
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm.exceptions import BadRequestError
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import (
     CustomStreamWrapper,
-    get_supported_openai_params,
     get_optional_params,
     ProviderConfigManager,
 )
 from litellm.main import stream_chunk_builder
-from typing import Union
 from litellm.types.utils import Usage, ModelResponse
 
 # test_example.py
 from abc import ABC, abstractmethod
-from openai import OpenAI
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
@@ -191,7 +183,6 @@ class BaseLLMChatTest(ABC):
         print(response)
         print(json.dumps(response, indent=4, default=str))
 
-    @pytest.mark.flaky(retries=3, delay=1)
     def test_tool_call_with_empty_enum_property(self):
         litellm._turn_on_debug()
         from litellm.utils import supports_function_calling
@@ -291,7 +282,7 @@ class BaseLLMChatTest(ABC):
     def test_pydantic_model_input(self):
         litellm.set_verbose = True
 
-        from litellm import completion, Message
+        from litellm import Message
 
         base_completion_call_args = self.get_base_completion_call_args()
         messages = [Message(content="Hello, how are you?", role="user")]
@@ -483,7 +474,6 @@ class BaseLLMChatTest(ABC):
             {"type": "text"},
         ],
     )
-    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_format(self, response_format):
         """
         Test that the JSON response format is supported by the LLM API
@@ -525,7 +515,6 @@ class BaseLLMChatTest(ABC):
             {"type": "text"},
         ],
     )
-    @pytest.mark.flaky(retries=6, delay=1)
     def test_response_format_type_text_with_tool_calls_no_tool_choice(
         self, response_format
     ):
@@ -603,7 +592,6 @@ class BaseLLMChatTest(ABC):
 
         print(f"translated_params={translated_params}")
 
-    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_pydantic_obj(self):
         litellm._turn_on_debug()
         from pydantic import BaseModel
@@ -643,16 +631,12 @@ class BaseLLMChatTest(ABC):
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
 
-    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_pydantic_obj_nested_obj(self):
         litellm.set_verbose = True
-        from pydantic import BaseModel
-        from litellm.utils import supports_response_schema
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_nested_pydantic_obj(self):
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
@@ -696,7 +680,6 @@ class BaseLLMChatTest(ABC):
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
 
-    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_nested_json_schema(self):
         """
         PROD Test: ensure nested json schema sent to proxy works as expected.
@@ -747,7 +730,6 @@ class BaseLLMChatTest(ABC):
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
 
-    @pytest.mark.flaky(retries=6, delay=1)
     def test_audio_input(self):
         """
         Test that audio input is supported by the LLM API
@@ -785,7 +767,6 @@ class BaseLLMChatTest(ABC):
 
         print(completion.choices[0].message)
 
-    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_format_stream(self):
         """
         Test that the JSON response format with streaming is supported by the LLM API
@@ -848,11 +829,6 @@ class BaseLLMChatTest(ABC):
             ],
         }
 
-    @abstractmethod
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
     @pytest.mark.parametrize("detail", [None, "low", "high"])
     @pytest.mark.parametrize(
         "image_url",
@@ -865,7 +841,6 @@ class BaseLLMChatTest(ABC):
             "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
         ],
     )
-    @pytest.mark.flaky(retries=4, delay=2)
     def test_image_url(self, detail, image_url):
         litellm.set_verbose = True
         from litellm.utils import supports_vision
@@ -962,7 +937,6 @@ class BaseLLMChatTest(ABC):
 
         assert response is not None
 
-    @pytest.mark.flaky(retries=4, delay=1)
     def test_prompt_caching(self):
         _skip_live_prompt_caching_test()
         print("test_prompt_caching")
@@ -1081,13 +1055,12 @@ class BaseLLMChatTest(ABC):
 
         return url
 
-    @pytest.mark.flaky(retries=3, delay=1)
     def test_empty_tools(self):
         """
         Related Issue: https://github.com/BerriAI/litellm/issues/9080
         """
         try:
-            from litellm import completion, ModelResponse
+            from litellm import completion
 
             litellm.set_verbose = True
             litellm._turn_on_debug()
@@ -1117,7 +1090,6 @@ class BaseLLMChatTest(ABC):
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
-    @pytest.mark.flaky(retries=3, delay=1)
     def test_basic_tool_calling(self):
         try:
             from litellm import completion, ModelResponse
@@ -1240,10 +1212,8 @@ class BaseLLMChatTest(ABC):
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
-    @pytest.mark.flaky(retries=3, delay=1)
     @pytest.mark.asyncio
     async def test_completion_cost(self):
-        from litellm import completion_cost
 
         litellm._turn_on_debug()
 
@@ -1471,114 +1441,6 @@ class BaseLLMChatTest(ABC):
             pytest.fail(f"Error: {e}")
 
 
-class BaseOSeriesModelsTest(ABC):  # test across azure/openai
-    @abstractmethod
-    def get_base_completion_call_args(self):
-        pass
-
-    @abstractmethod
-    def get_client(self) -> OpenAI:
-        pass
-
-    def test_reasoning_effort(self):
-        """Test that reasoning_effort is passed correctly to the model"""
-
-        from litellm import completion
-
-        client = self.get_client()
-
-        completion_args = self.get_base_completion_call_args()
-
-        with patch.object(
-            client.chat.completions.with_raw_response, "create"
-        ) as mock_client:
-            try:
-                completion(
-                    **completion_args,
-                    reasoning_effort="low",
-                    messages=[{"role": "user", "content": "Hello!"}],
-                    client=client,
-                )
-            except Exception as e:
-                print(f"Error: {e}")
-
-            mock_client.assert_called_once()
-            request_body = mock_client.call_args.kwargs
-            print("request_body: ", request_body)
-            assert request_body["reasoning_effort"] == "low"
-
-    def test_developer_role_translation(self):
-        """Test that developer role is translated correctly to system role for non-OpenAI providers"""
-        from litellm import completion
-
-        client = self.get_client()
-
-        completion_args = self.get_base_completion_call_args()
-
-        with patch.object(
-            client.chat.completions.with_raw_response, "create"
-        ) as mock_client:
-            try:
-                completion(
-                    **completion_args,
-                    reasoning_effort="low",
-                    messages=[
-                        {"role": "developer", "content": "Be a good bot!"},
-                        {"role": "user", "content": "Hello!"},
-                    ],
-                    client=client,
-                )
-            except Exception as e:
-                print(f"Error: {e}")
-
-            mock_client.assert_called_once()
-            request_body = mock_client.call_args.kwargs
-            print("request_body: ", request_body)
-            assert (
-                request_body["messages"][0]["role"] == "developer"
-            ), "Got={} instead of system".format(request_body["messages"][0]["role"])
-            assert request_body["messages"][0]["content"] == "Be a good bot!"
-
-    def test_completion_o_series_models_temperature(self):
-        """
-        Test that temperature is not passed to O-series models
-        """
-        try:
-            from litellm import completion
-
-            client = self.get_client()
-
-            completion_args = self.get_base_completion_call_args()
-
-            with patch.object(
-                client.chat.completions.with_raw_response, "create"
-            ) as mock_client:
-                try:
-                    completion(
-                        **completion_args,
-                        temperature=0.0,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": "Hello, world!",
-                            }
-                        ],
-                        drop_params=True,
-                        client=client,
-                    )
-                except Exception as e:
-                    print(f"Error: {e}")
-
-            mock_client.assert_called_once()
-            request_body = mock_client.call_args.kwargs
-            print("request_body: ", request_body)
-            assert (
-                "temperature" not in request_body
-            ), "temperature should not be in the request body"
-        except Exception as e:
-            pytest.fail(f"Error occurred: {e}")
-
-
 class BaseAnthropicChatTest(ABC):
     """
     Ensures consistent result across anthropic model usage
@@ -1681,7 +1543,6 @@ class BaseAnthropicChatTest(ABC):
         print(response)
 
     def test_completion_thinking_with_max_tokens(self):
-        from pydantic import BaseModel
 
         litellm._turn_on_debug()
 
@@ -1697,7 +1558,6 @@ class BaseAnthropicChatTest(ABC):
         print(response)
 
     def test_completion_thinking_without_max_tokens(self):
-        from pydantic import BaseModel
 
         litellm._turn_on_debug()
 

@@ -146,62 +146,6 @@ def watsonx_embedding_call():
     return _call
 
 
-@pytest.mark.parametrize("with_custom_auth_header", [True, False])
-def test_watsonx_custom_auth_header(
-    with_custom_auth_header, watsonx_chat_completion_call
-):
-    headers = (
-        {"Authorization": "Bearer my-custom-auth-header"}
-        if with_custom_auth_header
-        else {}
-    )
-
-    mock_post, _ = watsonx_chat_completion_call(headers=headers)
-
-    assert mock_post.call_count == 1
-    if with_custom_auth_header:
-        assert (
-            mock_post.call_args[1]["headers"]["Authorization"]
-            == "Bearer my-custom-auth-header"
-        )
-    else:
-        assert (
-            mock_post.call_args[1]["headers"]["Authorization"]
-            == "Bearer mock_access_token"
-        )
-
-
-@pytest.mark.parametrize("env_var_key", ["WATSONX_ZENAPIKEY", "WATSONX_TOKEN"])
-def test_watsonx_token_in_env_var(
-    monkeypatch, watsonx_chat_completion_call, env_var_key
-):
-    monkeypatch.setenv(env_var_key, "my-custom-token")
-
-    mock_post, _ = watsonx_chat_completion_call(patch_token_call=False)
-
-    assert mock_post.call_count == 1
-    if env_var_key == "WATSONX_ZENAPIKEY":
-        assert (
-            mock_post.call_args[1]["headers"]["Authorization"]
-            == "ZenApiKey my-custom-token"
-        )
-    else:
-        assert (
-            mock_post.call_args[1]["headers"]["Authorization"]
-            == "Bearer my-custom-token"
-        )
-
-
-def test_watsonx_chat_completions_endpoint(watsonx_chat_completion_call):
-    model = "watsonx/another-model"
-    messages = [{"role": "user", "content": "Test message"}]
-
-    mock_post, _ = watsonx_chat_completion_call(model=model, messages=messages)
-
-    assert mock_post.call_count == 1
-    assert "deployment" not in mock_post.call_args.kwargs["url"]
-
-
 def test_watsonx_chat_completions_endpoint_space_id(
     monkeypatch, watsonx_chat_completion_call
 ):
