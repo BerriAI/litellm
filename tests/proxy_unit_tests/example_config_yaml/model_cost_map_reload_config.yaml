@@ -1,0 +1,10 @@
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+
+general_settings:
+  # Example: Automatically reload model pricing from remote every 24 hours
+  model_cost_map_reload_config:
+    interval_hours: 24
+    force_reload: false
