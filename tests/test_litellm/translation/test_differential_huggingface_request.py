@@ -206,6 +206,24 @@ def test_router_route_falls_back_whole() -> None:
         )
 
 
+def test_seam_deps_never_arm_api_base_from_env(monkeypatch) -> None:
+    """critic-wave2b-alpha MAJOR-5: deps.api_base may ONLY ever come from
+    litellm_params["api_base"]. The env HF_API_BASE/HUGGINGFACE_API_BASE
+    chain resolves in v1's envelope ABOVE the transform and does NOT arm the
+    api_base transform route (v1 takes the ROUTER arm there — env-probed by
+    the verifier), so a fork that threads env values into deps.api_base
+    would serve bodies v1 never builds — the one unsafe direction of this
+    port. This canary freezes the rule: build_translation_deps answers
+    api_base None even with both env vars armed. The future fork-wirer who
+    threads api_base MUST extend this test with the litellm_params-only
+    source (and keep the env arms asserting None), not delete it."""
+    from litellm.translation_seam import build_translation_deps
+
+    monkeypatch.setenv("HF_API_BASE", "https://env.example/v1")
+    monkeypatch.setenv("HUGGINGFACE_API_BASE", "https://env2.example/v1")
+    assert build_translation_deps().api_base is None
+
+
 def test_api_base_body_is_verbatim() -> None:
     """The api_base arm: model verbatim, messages verbatim, no renames —
     v1's ChatCompletionRequest passthrough."""
