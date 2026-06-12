@@ -2,12 +2,12 @@ import React, { useState, useEffect } from "react";
 
 import { Button } from "@tremor/react";
 import { Modal, Select } from "antd";
-import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "./networking";
-import PromptTable from "./prompts/prompt_table";
-import PromptInfoView from "./prompts/prompt_info";
-import AddPromptForm from "./prompts/add_prompt_form";
-import PromptEditorView from "./prompts/prompt_editor_view";
-import NotificationsManager from "./molecules/notifications_manager";
+import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "@/components/networking";
+import PromptTable from "./prompt_table";
+import PromptInfoView from "./prompt_info";
+import AddPromptForm from "./add_prompt_form";
+import PromptEditorView from "./prompt_editor_view";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 
 interface PromptsProps {

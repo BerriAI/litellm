@@ -1774,14 +1774,6 @@
       "count": 2
     }
   },
-  "src/components/prompts.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/prompts/components/add_prompt_form.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -2247,6 +2239,14 @@
       "count": 1
     },
     "react/display-name": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/prompts/components/index.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   }
