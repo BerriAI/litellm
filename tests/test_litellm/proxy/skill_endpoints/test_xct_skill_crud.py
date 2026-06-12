@@ -182,7 +182,9 @@ def test_publish_sets_metadata_flags():
         )
     assert resp.status_code == 200
     update_data = prisma.db.litellm_skillstable.update.call_args.kwargs["data"]
-    meta = update_data["xct_metadata"]
+    # xct_metadata reaches Prisma wrapped in prisma.Json (raw dicts are
+    # rejected by Json columns); unwrap via .data to assert on the payload.
+    meta = update_data["xct_metadata"].data
     assert meta["published"] is True
     assert "published_at" in meta and meta["published_by"] == "u-1"
 
@@ -219,3 +221,28 @@ def test_patch_published_skill_allows_safe_field():
             headers={"Authorization": "Bearer k"},
         )
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# _prisma_json_compat — Prisma Json columns reject plain dicts and explicit
+# None; values must be wrapped in prisma.Json and absent-when-None.
+# (Regression: every real-DB create returned 500 before this existed.)
+# ---------------------------------------------------------------------------
+
+
+def test_prisma_json_compat_wraps_json_columns_and_drops_none():
+    prisma = pytest.importorskip("prisma")
+    from litellm.proxy.skill_endpoints.endpoints import _prisma_json_compat
+
+    data = _prisma_json_compat(
+        {
+            "display_title": "t",
+            "tool_schema": None,
+            "xct_metadata": {"origin": "x"},
+            "metadata": [{"a": 1}],
+        }
+    )
+    assert "tool_schema" not in data  # explicit None must be omitted
+    assert isinstance(data["xct_metadata"], prisma.Json)
+    assert isinstance(data["metadata"], prisma.Json)
+    assert data["display_title"] == "t"  # non-Json fields untouched

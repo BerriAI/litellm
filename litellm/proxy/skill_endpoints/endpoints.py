@@ -49,6 +49,25 @@ _IMMUTABLE_AFTER_PUBLISH = {
 }
 
 
+# Json-typed columns on LiteLLM_SkillsTable. Prisma rejects plain dicts and
+# explicit None for Json columns — values must be wrapped in prisma.Json and
+# None-valued keys omitted entirely.
+_JSON_COLUMNS = {"tool_schema", "xct_metadata", "metadata"}
+
+
+def _prisma_json_compat(data: dict) -> dict:
+    import prisma  # optional dependency; only importable on the proxy
+
+    compat = {}
+    for key, value in data.items():
+        if key in _JSON_COLUMNS:
+            if value is None:
+                continue
+            value = prisma.Json(value)  # type: ignore[attr-defined]
+        compat[key] = value
+    return compat
+
+
 def _is_admin(uak: UserAPIKeyAuth) -> bool:
     return uak.user_role in (
         LitellmUserRoles.PROXY_ADMIN,
@@ -132,7 +151,9 @@ async def create_skill(
         "xct_metadata": payload.xct_metadata or {},
         "created_by": user_api_key_dict.user_id,
     }
-    row = await prisma_client.db.litellm_skillstable.create(data=create_data)
+    row = await prisma_client.db.litellm_skillstable.create(
+        data=_prisma_json_compat(create_data)
+    )
     return _row_to_skill(row)
 
 
@@ -268,7 +289,7 @@ async def patch_skill(
     update_data["updated_by"] = user_api_key_dict.user_id
     row = await prisma_client.db.litellm_skillstable.update(
         where={"skill_id": skill_id},
-        data=update_data,
+        data=_prisma_json_compat(update_data),
     )
     return _row_to_skill(row)
 
@@ -303,7 +324,9 @@ async def publish_skill(
     xct_meta["published_by"] = user_api_key_dict.user_id
     row = await prisma_client.db.litellm_skillstable.update(
         where={"skill_id": skill_id},
-        data={"xct_metadata": xct_meta, "updated_by": user_api_key_dict.user_id},
+        data=_prisma_json_compat(
+            {"xct_metadata": xct_meta, "updated_by": user_api_key_dict.user_id}
+        ),
     )
     return _row_to_skill(row)
 
@@ -410,7 +433,9 @@ async def upload_skill_zip(
         "file_type": parsed.file_type,
         "created_by": user_api_key_dict.user_id,
     }
-    row = await prisma_client.db.litellm_skillstable.create(data=create_data)
+    row = await prisma_client.db.litellm_skillstable.create(
+        data=_prisma_json_compat(create_data)
+    )
     verbose_proxy_logger.info(
         "uploaded xct skill %s (%d bytes, by %s)",
         row.skill_id,
