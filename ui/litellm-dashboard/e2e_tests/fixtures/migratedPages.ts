@@ -9,8 +9,6 @@
  *   - navigation specs that assert per-page URLs (tests/navigation/sidebar.spec.ts)
  *
  * Keep this in lockstep with MIGRATED_PAGES in src/utils/migratedPages.ts.
- * Pending (add as each PR lands): admin-panel, logging-and-alerts,
- * model-hub-table, and usage (#30268).
  */
 export const MIGRATED_E2E_PAGES: Record<string, string> = {
   api_ref: "api-reference",
@@ -35,6 +33,10 @@ export const MIGRATED_E2E_PAGES: Record<string, string> = {
   "transform-request": "transform-request",
   "ui-theme": "ui-theme",
   logs: "logs",
+  "admin-panel": "admin-panel",
+  "logging-and-alerts": "logging-and-alerts",
+  "model-hub-table": "model-hub-table",
+  new_usage: "usage",
 };
 
 export const MIGRATED_E2E_SEGMENTS: string[] = [...new Set(Object.values(MIGRATED_E2E_PAGES))];
