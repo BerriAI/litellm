@@ -91,6 +91,11 @@ from ..providers.vertex_anthropic import (
 from ..providers.vertex_anthropic import (
     serialize_request as vertex_anthropic_serialize_request,
 )
+from ..providers.watsonx import parse_response as watsonx_parse_response
+from ..providers.watsonx import serialize_request as watsonx_serialize_request
+from ..providers.watsonx import (
+    unsupported_request_shapes as watsonx_unsupported_request_shapes,
+)
 from ..providers.xai import parse_response as xai_parse_response
 from ..providers.xai import serialize_request as xai_serialize_request
 from ..providers.xai import (
@@ -129,6 +134,7 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "cohere": cohere_serialize_request,
         "cohere_chat": cohere_serialize_request,
         "mistral": mistral_serialize_request,
+        "watsonx": watsonx_serialize_request,
     }
 )
 
@@ -169,6 +175,11 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # content-list collapse) then the shared openai parser (bare wire
         # model — the cdr fresh-ModelResponse arm).
         "mistral": mistral_parse_response,
+        # watsonx: openai parse for validation, then the verbatim body with
+        # the LIVE "watsonx/{wire_model}" prefix (the openai_like arm's one
+        # wave-2b consumer; the seam must construct with usage_style
+        # "openai_like", NOT "openai").
+        "watsonx": watsonx_parse_response,
     }
 )
 
@@ -207,6 +218,11 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # mistral: openai outbound body; the chunk-fold dialect is "xai"
         # (the generic httpx dict path) over the mistral line parser.
         "mistral": _OPENAI_DIALECT,
+        # watsonx: openai outbound body (the parser rides it on wire); the
+        # chunk-fold dialect is "generic" and the seam CONSTRUCTION arm is
+        # "openai_like" — this table is the outbound-body dialect only (the
+        # construction-arm gate guards the seam read).
+        "watsonx": _OPENAI_DIALECT,
     }
 )
 
@@ -240,6 +256,9 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         # skip_name_fallback; deliberately NO explicit stream:false arm
         # (v1's map only copies stream=True).
         "mistral": mistral_unsupported_request_shapes,
+        # watsonx: the shared openai guard (full name fallback); no
+        # stream:false arm — the wire ALWAYS carries the stream key.
+        "watsonx": watsonx_unsupported_request_shapes,
     }
 )
 

@@ -384,6 +384,30 @@ translation/
 │   │                    #   httpx_chunk factory (reasoning="rename" + the
 │   │                    #   passthrough_delta_keys axis admitting
 │   │                    #   thinking_blocks); "xai" chunk dialect
+│   ├── watsonx/         # wave-2b-beta: watsonx /ml/v1/text/chat over the
+│   │   │                #   OpenAILikeChatHandler route (auth incl. the
+│   │   │                #   IAM-token network POST is envelope; project/
+│   │   │                #   space ids ride TranslationDeps)
+│   │   ├── guard.py     # the shared openai guard (full name fallback);
+│   │   │                #   NO stream:false arm (the wire ALWAYS carries
+│   │   │                #   the stream key)
+│   │   ├── params.py    # mct/parallel_tool_calls/thinking raises, the
+│   │   │                #   top_k legacy watsonx_text ValueError, user
+│   │   │                #   drop, deployment/ models, missing project+
+│   │   │                #   space (v1 raises 401) — all typed fallbacks
+│   │   ├── serialize.py # assemble_body + stream-always + model_id +
+│   │   │                #   project_id/space_id injection + tools
+│   │   │                #   strict/additionalProperties-False strip +
+│   │   │                #   tool_choice_option split + reasoning_effort
+│   │   │                #   verbatim
+│   │   ├── response.py  # openai parse for validation, verbatim wire with
+│   │   │                #   the LIVE "watsonx/{wire_model}" prefix (the
+│   │   │                #   seam constructs with usage_style
+│   │   │                #   "openai_like"); F2 non-string-model arm
+│   │   └── stream.py    # databricks ModelResponseIterator mirror ->
+│   │                    #   generic payloads ("generic" dialect; data:-
+│   │                    #   OPTIONAL line seam; v1's silent swallows of
+│   │                    #   malformed lines/chunks are PINNED DIVERGENCES)
 │   └── xai/             # Grok over openai_compat (httpx path: NO model
 │       │                #   prefix anywhere, transform_response is LIVE):
 │       ├── guard.py     # web_search_options (v1's Responses-bridge reroute
@@ -543,9 +567,9 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to sixty-eight providers out (wave-2b-beta adds
-`cohere`/`cohere_chat` (one module) and `mistral` — see their paragraphs
-below) —
+OpenAI-chat-in to sixty-nine providers out (wave-2b-beta adds
+`cohere`/`cohere_chat` (one module), `mistral`, and `watsonx` — see their
+paragraphs below) —
 `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
@@ -856,6 +880,45 @@ own dossier). Mistral fork obligations (NOT wired; integrator scope): no
 model preset (bare wire model, the xai R4 rule), construction arm
 "openai", streams fold with the "xai" dialect over
 providers/mistral.parse_line (standard data:/[DONE] SSE).
+Deliberate wave-2b-beta watsonx fallback surfaces (providers/watsonx; each
+names the v1 path): max_completion_tokens (RAISES — the OpenAILike rename
+is dead behind the list gate), parallel_tool_calls/thinking/logit_bias/
+web_search_options (raises), top_k and every legacy watsonx-text param
+(the get_optional_params watsonx-only arm raises a bare ValueError naming
+the watsonx_text provider — a DIFFERENT raise class, pinned), ``user``
+(silent drop), ``deployment/`` models (deployment URLs, api_version pop,
+no model_id/project_id payload — envelope), missing project AND space id
+in deps (v1's _get_api_params raises WatsonXAIError 401), message ``name``
+(forwarded verbatim — full-name guard arm), n/seed/penalties/logprobs/
+top_logprobs (parse-level; v1 serves verbatim). SERVED quirks pinned
+IDENTICAL: the body ALWAYS carries ``stream`` (the openai_like handler
+re-adds ``stream or False`` unconditionally, so explicit false == absent —
+NO guard arm), ``model`` AND ``model_id`` both set to the wire model,
+project_id-or-space_id injection (project wins; ids ride
+``TranslationDeps.watsonx_project_id``/``watsonx_space_id`` — the future
+seam fork must run v1's _get_api_params resolution chain), tools
+``strict`` stripped at every depth + ``additionalProperties`` removed only
+where False, tool_choice auto/none/required -> ``tool_choice_option`` with
+the dict form riding ``tool_choice`` verbatim, response_format (object AND
+json_schema) + reasoning_effort verbatim (json_mode is NEVER set —
+the OpenAILike json_mode machinery is dormant), responses constructed
+ModelResponse(**json)-direct with the LIVE ``watsonx/{wire_model}`` prefix
+(model None -> the literal "watsonx/"; non-string wire model fails closed
+— the verifier-longtail F2 arm), and streams through the databricks
+GenericStreamingChunk iterator (researcher-4 drift: NOT the plain openai
+dialect) folded by the "generic" dialect — wire finish maps through
+map_finish_reason (IBM time_limit/cancelled/error -> stop, max_tokens ->
+length; unknown strings are conservative loud errors), name-only tool
+starts ride with validated arguments "", mid-stream usage is stripped, the
+choices=[] usage tail passes through (seam contract), and a stream without
+a wire finish gets v1's SYNTHESIZED trailing stop (seam scope, the cohere
+contract). PINNED DIVERGENCES (fail-closed on failure paths): non-JSON
+stream lines and chunks failing ModelResponseStream validation — v1's
+iterator swallows both silently, v2 errors loudly (named report rows).
+Watsonx fork obligations (NOT wired; integrator scope): construction arm
+"openai_like" (NEVER "openai" — the construction-arm gate applies), no
+model preset, deps built with the resolved project/space ids, streams fold
+with the "generic" dialect over providers/watsonx.parse_line.
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body

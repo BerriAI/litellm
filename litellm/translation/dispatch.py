@@ -121,6 +121,11 @@ Provider = Literal[
     # fallback inside the module — codestral reuses the v1 config but is
     # NOT a wave-2b provider and stays a v1 fallback).
     "mistral",
+    # wave-2b-beta: watsonx (the OpenAILikeChatHandler route; the IAM-token
+    # auth is envelope, project/space ids ride deps; the LIVE
+    # watsonx/{wire_model} response prefix is parser scope; streams ride the
+    # generic dialect via the databricks iterator).
+    "watsonx",
 ]
 
 NeverPortProvider = Literal[
