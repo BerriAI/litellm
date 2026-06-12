@@ -270,7 +270,6 @@ if MCP_AVAILABLE:
         global_mcp_tool_registry,
     )
     from litellm.proxy._experimental.mcp_server.utils import (
-        MCP_TOOL_PREFIX_SEPARATOR,
         is_tool_name_prefixed,
         normalize_server_name,
         split_server_prefix_from_name,
@@ -2497,25 +2496,14 @@ if MCP_AVAILABLE:
             )
 
         if requested_server is not None and not name_is_prefixed:
-            if MCP_TOOL_PREFIX_SEPARATOR in name:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "ambiguous_tool_name",
-                        "message": (
-                            f"Tool name '{name}' contains "
-                            f"'{MCP_TOOL_PREFIX_SEPARATOR}' but does not match "
-                            "a registered MCP server prefix. Pass the unprefixed "
-                            "upstream tool name with server_id, or use the full "
-                            "prefixed form 'server_name-tool_name'."
-                        ),
-                    },
-                )
             # REST callers may pass server_id with the upstream tool name (no
-            # LiteLLM prefix). Multiple MCP entries can share the same URL and
-            # tool name; server_id is authoritative for routing and auth.
+            # LiteLLM prefix). The first segment is not a registered server
+            # prefix, so the whole string is the upstream tool name and may
+            # legitimately contain the separator (e.g. "text-to-speech").
+            # server_id is authoritative for routing and auth.
             mcp_server = requested_server
             server_name = requested_server.name
+            original_tool_name = name
         else:
             # Resolve from tool name (MCP JSON-RPC or prefixed REST tool names).
             mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)

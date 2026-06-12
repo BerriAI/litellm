@@ -5787,8 +5787,10 @@ async def test_execute_mcp_tool_rest_unauthorized_prefix_still_mismatches():
 
 
 @pytest.mark.asyncio
-async def test_execute_mcp_tool_rest_ambiguous_hyphenated_name_rejected():
-    """REST server_id + hyphenated name with no registry prefix must 400."""
+async def test_execute_mcp_tool_rest_hyphenated_upstream_tool_name_routes_to_requested_server():
+    """REST server_id + hyphenated upstream tool name (no registry prefix) must route, not 400."""
+    from mcp.types import TextContent
+
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     api_key_server = MCPServer(
@@ -5801,6 +5803,15 @@ async def test_execute_mcp_tool_rest_ambiguous_hyphenated_name_rejected():
         authentication_token="abc123",
     )
 
+    captured: dict = {}
+
+    async def fake_handle_managed_mcp_tool(**kwargs):
+        captured.update(kwargs)
+        return mcp_module.CallToolResult(
+            content=[TextContent(type="text", text="ok")],
+            isError=False,
+        )
+
     with (
         patch.object(
             mcp_module.global_mcp_server_manager,
@@ -5808,11 +5819,25 @@ async def test_execute_mcp_tool_rest_ambiguous_hyphenated_name_rejected():
             return_value={api_key_server.server_id: api_key_server},
         ),
         patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=None,
+        ),
+        patch.object(
+            mcp_module,
+            "_handle_managed_mcp_tool",
+            new=fake_handle_managed_mcp_tool,
+        ),
+        patch.object(
+            mcp_module.MCPRequestHandler,
+            "is_tool_allowed",
+            return_value=True,
+        ),
+        patch.object(
             mcp_module.global_mcp_tool_registry,
             "get_tool",
             return_value=None,
         ),
-        pytest.raises(HTTPException) as exc_info,
     ):
         await mcp_module.execute_mcp_tool(
             name="text-to-speech",
@@ -5822,8 +5847,8 @@ async def test_execute_mcp_tool_rest_ambiguous_hyphenated_name_rejected():
             requested_server_id=api_key_server.server_id,
         )
 
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.detail["error"] == "ambiguous_tool_name"
+    assert captured["server_name"] == "echo_api_key"
+    assert captured["name"] == "text-to-speech"
 
 
 @pytest.mark.asyncio
