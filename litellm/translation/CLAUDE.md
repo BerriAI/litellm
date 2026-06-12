@@ -986,9 +986,17 @@ max_completion_tokens VERBATIM (no rename), top_k top-level
 seam (botocore framing is transport — the bedrock precedent): the shared
 openai parser + a post-step mirroring the decoder's litellm validation
 (provider_specific_fields: None materialized on every delta, tool_call
-type missing-or-null -> "function") with wrong-typed delta strings LOUD
-(v1's StreamingChatCompletionChunk validation raises — not the watsonx
-swallow). sagemaker_nova shares the main.py branch but carries its own
+type missing-or-null -> "function") with the FULL validation breadth LOUD
+(v1's StreamingChatCompletionChunk/ChatCompletionDeltaToolCall validation
+raises — not the watsonx swallow — on non-str delta strings, present
+non-dict delta, non-list tool_calls, non-str tool id/name/arguments/type,
+non-coercible tool/choice indexes, non-dict usage and usage values the
+lax coercion rejects; the verifier-F5 fix), a pre-step SERVING v1's lax
+coercions (index bool/digit-str/integral-float -> int) and the wrapper's
+finish semantics (falsy -> no finish, tail synthesis seam scope; truthy
+non-str hashable -> "stop"; unknown strings ride verbatim through the
+live map both sides; truthy unhashable loud — the verifier-F7 fix).
+sagemaker_nova shares the main.py branch but carries its own
 config overrides and stays a typed v1 fallback (canary in the request
 gate). SigV4 + the /invocations[-response-stream] URL split are envelope;
 the fork must sign AFTER wire_body finalizes (the bedrock rule).

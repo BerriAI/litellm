@@ -1205,16 +1205,36 @@ def _sagemaker_chat_rows(lines: list) -> int:
         + "usage tail (v2 passes the wire choices=[] usage chunk through;"
         " the streaming seam owns v1's synthesized final chunk)"
     )
-    bad = stream._chunk({"content": 5})
-    loud = stream.parse_event(dict(bad)).is_error()
-    if loud:
-        with pytest.raises(Exception):
-            stream._v1_chunks([bad])
-    failures += 0 if loud else 1
-    lines.append(
-        f"- {'FALLBACK (v1 raises ValidationError)' if loud else 'DIVERGENT'}:"
-        " non-string delta content (loud on both sides)"
-    )
+    for name in sorted(stream._V1_RAISES):
+        bad, fragment = stream._V1_RAISES[name]
+        result = stream.parse_event(dict(bad))
+        loud = result.is_error() and fragment in result.error.summary
+        if loud:
+            with pytest.raises(Exception):
+                stream._v1_chunks([bad])
+        failures += 0 if loud else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises ValidationError)' if loud else 'DIVERGENT'}:"
+            f" {name} (loud on both sides)"
+        )
+    for falsy, label in (("", "empty-string"), ({}, "empty-object")):
+        events = [
+            stream._chunk({"role": "assistant", "content": "x"}),
+            stream._chunk({}, finish=falsy),
+        ]
+        v1 = stream._v1_chunks(events)
+        v2 = stream._v2_chunks(events)
+        ok = (
+            len(v1) == len(v2) + 1
+            and stream._norm(v2) == stream._norm(v1[:-1])
+            and v1[-1]["choices"][0]["finish_reason"] == "stop"
+        )
+        failures += 0 if ok else 1
+        lines.append(
+            ("- SEAM CONTRACT: " if ok else "- DIVERGENT: ")
+            + f"falsy ({label}) finish_reason — no finish rides (v1's truthy"
+            " gate); v2 == v1 minus the wrapper's synthesized stop tail"
+        )
     return failures
 
 

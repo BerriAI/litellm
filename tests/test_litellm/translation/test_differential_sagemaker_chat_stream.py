@@ -82,6 +82,44 @@ STREAMS = {
         _chunk({"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]}),
         _chunk({}, finish="tool_calls"),
     ],
+    # verifier-wave2b-beta F5/F7: shapes v1's lax validation SERVES — the
+    # pre-step mirrors the coercions (index bool -> 1, tool index "1" -> 1)
+    # and the wrapper's finish semantics (truthy non-str -> "stop", unknown
+    # strings -> "stop" through the live map both sides).
+    "choice_index_bool_coerces": [
+        _chunk(
+            choices=[{"index": True, "delta": {"content": "x"}, "finish_reason": None}]
+        ),
+        _chunk({}, finish="stop"),
+    ],
+    "tool_index_str_coerces": [
+        _chunk(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": "1",
+                        "id": "t",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ],
+            }
+        ),
+        _chunk({}, finish="tool_calls"),
+    ],
+    "non_str_finish_int_serves_stop": [
+        _chunk({"role": "assistant", "content": "x"}),
+        _chunk({}, finish=5),
+    ],
+    "non_str_finish_bool_serves_stop": [
+        _chunk({"role": "assistant", "content": "x"}),
+        _chunk({}, finish=True),
+    ],
+    "unknown_finish_string_serves_stop": [
+        _chunk({"role": "assistant", "content": "x"}),
+        _chunk({}, finish="eos_token"),
+    ],
 }
 
 USAGE_STREAM = [
@@ -154,11 +192,148 @@ def test_usage_tail_swallowed_without_stream_options(frozen_ambient) -> None:
     assert _norm(v1) == _norm(v2[:-1])
 
 
-def test_invalid_chunk_raises_on_both_sides(frozen_ambient) -> None:
+# verifier-wave2b-beta F5: every shape the StreamingChatCompletionChunk /
+# ChatCompletionDeltaToolCall validation REJECTS raises out of v1's decoder
+# (no watsonx-style swallow); v2 is a loud typed error on each — the old
+# pre-check covered content/role/refusal only and SERVED the rest.
+_V1_RAISES = {
+    "content_non_str": (_chunk({"content": 5}), "content is not a string"),
+    "delta_non_dict": (
+        _chunk(choices=[{"index": 0, "delta": "oops", "finish_reason": None}]),
+        "delta is not an object",
+    ),
+    "tool_arguments_non_str": (
+        _chunk(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "t",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": 5},
+                    }
+                ],
+            }
+        ),
+        "arguments is not a string",
+    ),
+    "tool_id_non_str": (
+        _chunk(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": 42,
+                        "type": "function",
+                        "function": {"name": "f", "arguments": ""},
+                    }
+                ],
+            }
+        ),
+        "id is not a string",
+    ),
+    "tool_name_non_str": (
+        _chunk(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "t",
+                        "type": "function",
+                        "function": {"name": 5, "arguments": ""},
+                    }
+                ],
+            }
+        ),
+        "name is not a string",
+    ),
+    "tool_type_non_str": (
+        _chunk(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "t",
+                        "type": 7,
+                        "function": {"name": "f", "arguments": ""},
+                    }
+                ],
+            }
+        ),
+        "type is not a string",
+    ),
+    "tool_function_missing": (
+        _chunk(
+            {"role": "assistant", "tool_calls": [{"index": 0, "id": "t"}]},
+        ),
+        "function is missing",
+    ),
+    "tool_index_non_coercible": (
+        _chunk(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": "x",
+                        "id": "t",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": ""},
+                    }
+                ],
+            }
+        ),
+        "tool_call index is not an integer",
+    ),
+    "tool_calls_non_list": (
+        _chunk({"role": "assistant", "tool_calls": "x"}),
+        "tool_calls is not a list",
+    ),
+    "choice_index_null": (
+        _chunk(choices=[{"index": None, "delta": {"content": "x"}}]),
+        "choice index is not an integer",
+    ),
+    "mid_usage_non_dict": (
+        _chunk({"role": "assistant", "content": "x"}, usage="oops"),
+        "usage is not an object",
+    ),
+    "mid_usage_bad_values": (
+        _chunk({"role": "assistant", "content": "x"}, usage={"prompt_tokens": "abc"}),
+        "missing or not an integer",
+    ),
+    "finish_truthy_unhashable": (
+        _chunk({}, finish=[1]),
+        "truthy unhashable",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_V1_RAISES))
+def test_invalid_chunk_raises_on_both_sides(name: str, frozen_ambient) -> None:
     """Decoder validation RAISES out of v1 (unlike watsonx's swallowing
     iterator); v2's parser is a loud error value."""
-    bad = _chunk({"content": 5})
+    bad, fragment = _V1_RAISES[name]
     result = parse_event(copy.deepcopy(bad))
-    assert result.is_error()
+    assert result.is_error(), f"{name} unexpectedly parsed"
+    assert fragment in result.error.summary, result.error.summary
     with pytest.raises(Exception):
         _v1_chunks([bad])
+
+
+def test_falsy_finish_is_no_finish_with_the_synthesized_tail(frozen_ambient) -> None:
+    """F7: a falsy finish ("", {}) fails the wrapper's truthy gate in v1 —
+    no finish rides and v1 synthesizes the trailing stop; v2 strips it and
+    the synthesized tail is seam scope (tail-only difference)."""
+    for falsy in ("", {}):
+        events = [
+            _chunk({"role": "assistant", "content": "x"}),
+            _chunk({}, finish=falsy),
+        ]
+        v1 = _v1_chunks(events)
+        v2 = _v2_chunks(events)
+        assert len(v1) == len(v2) + 1, falsy
+        assert _norm(v2) == _norm(v1[:-1]), falsy
+        assert v1[-1]["choices"][0]["finish_reason"] == "stop", falsy
