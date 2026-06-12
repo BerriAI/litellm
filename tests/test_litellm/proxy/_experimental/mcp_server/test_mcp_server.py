@@ -5575,6 +5575,92 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
 
 
 @pytest.mark.asyncio
+async def test_execute_mcp_tool_rest_server_id_injects_requested_server_credentials():
+    """REST server_id must inject the requested server's auth, not a URL-collision peer's."""
+    from mcp.types import TextContent
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    requested_server = MCPServer(
+        server_id="requested-server-id",
+        name="echo_requested",
+        server_name="echo_requested",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="requested-secret",
+    )
+    collision_server = MCPServer(
+        server_id="collision-server-id",
+        name="echo_collision",
+        server_name="echo_collision",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.bearer_token,
+        authentication_token="collision-secret",
+    )
+
+    fake_client = MagicMock()
+    fake_client._last_initialize_instructions = None
+    fake_client.call_tool = AsyncMock(
+        return_value=mcp_module.CallToolResult(
+            content=[TextContent(type="text", text="ok")],
+            isError=False,
+        )
+    )
+
+    injected: dict = {}
+
+    async def fake_create_mcp_client(server, **kwargs):
+        injected["server"] = server
+        return fake_client
+
+    with (
+        patch.dict(
+            mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {"echo": collision_server.name},
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={
+                requested_server.server_id: requested_server,
+                collision_server.server_id: collision_server,
+            },
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_create_mcp_client",
+            new=fake_create_mcp_client,
+        ),
+        patch.object(
+            mcp_module.MCPRequestHandler,
+            "is_tool_allowed",
+            return_value=True,
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=None,
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="echo",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[requested_server, collision_server],
+            start_time=datetime.now(),
+            requested_server_id=requested_server.server_id,
+        )
+
+    routed = injected["server"]
+    assert routed.server_id == requested_server.server_id
+    assert routed.auth_type == MCPAuth.api_key
+    assert routed.authentication_token == "requested-secret"
+    assert routed.authentication_token != collision_server.authentication_token
+
+
+@pytest.mark.asyncio
 async def test_execute_mcp_tool_rest_prefixed_tool_still_validates_server_id():
     """Prefixed REST tool names must still match the requested server_id."""
     from litellm.proxy._experimental.mcp_server import server as mcp_module
@@ -5843,7 +5929,7 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
         server_name="known_prefix",
         url="http://127.0.0.1:5116/mcp",
         transport=MCPTransport.http,
-        auth_type=MCPAuth.api_key,
+        auth_type=MCPAuth.bearer_token,
         authentication_token="def456",
     )
 
@@ -5896,6 +5982,15 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
 
     assert captured["server_name"] == "rest_target"
     assert captured["name"] == "list_things"
+
+    routed_server = {
+        requested_server.name: requested_server,
+        prefix_owner.name: prefix_owner,
+    }[captured["server_name"]]
+    assert routed_server.server_id == requested_server.server_id
+    assert routed_server.auth_type == MCPAuth.api_key
+    assert routed_server.authentication_token == "abc123"
+    assert routed_server.authentication_token != prefix_owner.authentication_token
 
 
 @pytest.mark.asyncio
