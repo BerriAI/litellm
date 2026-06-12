@@ -1359,24 +1359,26 @@ class ResponsesWebSocketStreaming:
                 else:
                     response_str = raw_response
 
+                # When apply_to_output masking is active, suppress delta events:
+                # per-fragment Presidio cannot reliably catch PII that spans
+                # multiple delta chunks (e.g. "alice@" + "example.com"), and the
+                # client receives the fully-masked response.completed instead.
+                # Drop them before masking so no Presidio call is wasted on a
+                # fragment that is never forwarded.
+                if self.output_guardrail_callbacks:
+                    try:
+                        _evt_type = json.loads(response_str).get("type")
+                    except (json.JSONDecodeError, TypeError):
+                        _evt_type = None
+                    if _evt_type in self._DELTA_EVENT_TYPES:
+                        continue
+
                 unmasked_str = self._unmask_response_event(response_str)
                 output_masked_str = await self._mask_response_completed(unmasked_str)
 
                 # Log the output-masked form so PII redacted by apply_to_output
                 # guardrails does not appear in success logs.
                 self._store_event(output_masked_str)
-
-                # When apply_to_output masking is active, suppress delta events:
-                # per-fragment Presidio cannot reliably catch PII that spans
-                # multiple delta chunks (e.g. "alice@" + "example.com").
-                # Clients receive the fully-masked response.completed instead.
-                if self.output_guardrail_callbacks:
-                    try:
-                        _evt_type = json.loads(output_masked_str).get("type")
-                    except (json.JSONDecodeError, TypeError):
-                        _evt_type = None
-                    if _evt_type in self._DELTA_EVENT_TYPES:
-                        continue
 
                 await self.websocket.send_text(output_masked_str)
 

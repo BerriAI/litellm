@@ -858,6 +858,80 @@ class TestNativeWebSocketGuardrails:
         assert handler._unmask_response_event(event) == event
         assert await handler._mask_response_completed(event) == event
 
+    @pytest.mark.asyncio
+    async def test_output_masking_suppresses_delta_without_calling_presidio(self):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        import websockets.exceptions
+
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        class RecordingGuardrail:
+            def __init__(self):
+                self.check_pii_calls = []
+
+            def get_presidio_settings_from_request_data(self, request_data):
+                return None
+
+            def _unmask_pii_text(self, text, pii_tokens):
+                return text
+
+            async def check_pii(
+                self, text, output_parse_pii, presidio_config, request_data
+            ):
+                self.check_pii_calls.append(text)
+                return text
+
+        class FakeBackendWS:
+            def __init__(self, events):
+                self._events = list(events)
+
+            async def recv(self, decode=False):
+                if self._events:
+                    return self._events.pop(0)
+                raise websockets.exceptions.ConnectionClosed(None, None)
+
+        guardrail = RecordingGuardrail()
+        client_ws = MagicMock()
+        client_ws.send_text = AsyncMock()
+        logging_obj = MagicMock()
+        logging_obj.async_success_handler = AsyncMock()
+
+        delta_event = json.dumps(
+            {"type": "response.output_text.delta", "delta": "alice@example.com"}
+        )
+        completed_event = json.dumps(
+            {
+                "type": "response.completed",
+                "response": {
+                    "output": [
+                        {
+                            "content": [
+                                {"type": "output_text", "text": "alice@example.com"}
+                            ]
+                        }
+                    ]
+                },
+            }
+        )
+
+        handler = ResponsesWebSocketStreaming(
+            websocket=client_ws,
+            backend_ws=FakeBackendWS([delta_event, completed_event]),
+            logging_obj=logging_obj,
+            output_guardrail_callbacks=[guardrail],
+        )
+
+        await handler.backend_to_client()
+
+        # The delta event must be suppressed without ever invoking Presidio,
+        # so check_pii is called exactly once (for the completed event only).
+        assert guardrail.check_pii_calls == ["alice@example.com"]
+        client_ws.send_text.assert_called_once()
+        sent_payload = client_ws.send_text.call_args[0][0]
+        assert json.loads(sent_payload)["type"] == "response.completed"
+
 
 class TestWebSocketChunkTypes:
     """Test handling of different chunk types from streaming responses"""
