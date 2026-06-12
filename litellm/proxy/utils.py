@@ -5197,14 +5197,12 @@ async def send_email(
     email_message.attach(MIMEText(html, "html"))
 
     try:
-        # Establish a secure connection with the SMTP server
+        using_ssl = _should_use_smtp_ssl(smtp_port=smtp_port)
         with _create_smtp_connection(
             smtp_host=smtp_host,
             smtp_port=smtp_port,
         ) as server:
-            if not isinstance(server, smtplib.SMTP_SSL) and (
-                os.getenv("SMTP_TLS", "True") != "False"
-            ):
+            if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls(context=ssl.create_default_context())
 
             # Login to your email account only if smtp_username and smtp_password are provided
