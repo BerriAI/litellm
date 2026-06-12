@@ -39,6 +39,7 @@ from typing import Literal
 
 from expression import Error, Ok, Result
 from expression.collections import Block
+from typing_extensions import assert_never
 
 from ...errors import BoundaryError, TranslationError
 from ...ir import JsonBlob, PlainJson, StreamEvent
@@ -252,17 +253,36 @@ def _normalize_delta(
 def _reasoning_tail(
     mode: ReasoningMode, delta: dict[str, PlainJson], base: dict[str, PlainJson]
 ) -> dict[str, PlainJson]:
+    # every ReasoningMode member named, assert_never on the residual: a new
+    # Literal value without an arm here is a pyright error at this line, not
+    # silent rename semantics (critic-wave2b-alpha MAJOR-3, the UsageStyle/M2
+    # precedent — "rename" used to be the implicit else)
     if mode == "unconditional":
         value = _string_or_none(delta.get("reasoning"))
         if "reasoning" in delta:
             return {**base, "reasoning": value, "reasoning_content": value}
         return {**base, "reasoning_content": value}
-    if "reasoning" in delta:
-        value = _string_or_none(delta.get("reasoning"))
-        if mode == "copy_both":
+    if mode == "copy_both":
+        if "reasoning" in delta:
+            value = _string_or_none(delta.get("reasoning"))
             # v1 cometapi assigns without popping: both keys reach the Delta
             return {**base, "reasoning": value, "reasoning_content": value}
-        return {**base, "reasoning_content": value}
+        return _native_reasoning_tail(delta, base)
+    if mode == "rename":
+        if "reasoning" in delta:
+            return {
+                **base,
+                "reasoning_content": _string_or_none(delta.get("reasoning")),
+            }
+        return _native_reasoning_tail(delta, base)
+    assert_never(mode)
+
+
+def _native_reasoning_tail(
+    delta: dict[str, PlainJson], base: dict[str, PlainJson]
+) -> dict[str, PlainJson]:
+    """A native wire ``reasoning_content`` passes through verbatim in the
+    rename and copy_both modes (the unconditional mode CLOBBERS it instead)."""
     if "reasoning_content" in delta:
         return {
             **base,
