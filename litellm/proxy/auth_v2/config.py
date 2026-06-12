@@ -44,7 +44,9 @@ class OIDCProviderConfig(BaseModel):
     require_at_jwt: bool = False
     client_id: Optional[str] = None
     client_secret: Optional[SecretStr] = None
-    login_scopes: List[str] = Field(default_factory=lambda: ["openid", "email", "profile"])
+    login_scopes: List[str] = Field(
+        default_factory=lambda: ["openid", "email", "profile"]
+    )
     allowed_roles: List[str] = Field(default_factory=list)
     allow_platform_roles: bool = False
 
@@ -70,14 +72,18 @@ class SAMLConfig(BaseModel):
     sp_cert_file: Optional[str] = None
     allow_unsolicited: bool = False
     xmlsec_binary: Optional[str] = None
-    attribute_map: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_SAML_ATTRIBUTE_MAP))
+    attribute_map: Dict[str, str] = Field(
+        default_factory=lambda: dict(DEFAULT_SAML_ATTRIBUTE_MAP)
+    )
     allowed_roles: List[str] = Field(default_factory=list)
     allow_platform_roles: bool = False
 
     @model_validator(mode="after")
     def _require_idp_metadata(self) -> "SAMLConfig":
         if self.enabled and not self.idp_metadata.strip():
-            raise ValueError("SAML enabled but idp_metadata is empty (inline XML, local path, or URL)")
+            raise ValueError(
+                "SAML enabled but idp_metadata is empty (inline XML, local path, or URL)"
+            )
         return self
 
 
@@ -134,3 +140,4 @@ class AuthConfig(BaseModel):
     session: SessionConfig = Field(default_factory=SessionConfig)
     saml: Optional[SAMLConfig] = None
     casbin_policy_path: Optional[str] = None
+    abac_policy_path: Optional[str] = None
