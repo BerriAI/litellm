@@ -3381,7 +3381,10 @@ class Router:
                     # Request Number X, Model Number Y
                     _tasks.append(
                         _async_completion_no_exceptions_return_idx(
-                            model=model, idx=idx, messages=message, **kwargs  # type: ignore
+                            model=model,
+                            idx=idx,
+                            messages=message,  # type: ignore[arg-type]
+                            **kwargs,
                         )
                     )
             responses = await asyncio.gather(*_tasks)
@@ -3544,7 +3547,7 @@ class Router:
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[False] = False, **kwargs
     ) -> ModelResponse: 
         ...
-    
+
     @overload
     async def schedule_acompletion(
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[True], **kwargs
@@ -7937,8 +7940,7 @@ class Router:
                     re.compile(pattern)
                 except re.error as exc:
                     raise ValueError(
-                        f"Invalid regex in tag_regex for model '{deployment.model_name}': "
-                        f"{pattern!r} — {exc}"
+                        f"Invalid regex in tag_regex for model '{deployment.model_name}': {pattern!r} — {exc}"
                     ) from exc
 
             deployment = self._add_deployment(deployment=deployment)
@@ -8196,8 +8198,7 @@ class Router:
 
         if deployment.model_name in self.adaptive_routers:
             raise ValueError(
-                f"Adaptive-router deployment {deployment.model_name} already exists. "
-                "Please use a different model name."
+                f"Adaptive-router deployment {deployment.model_name} already exists. Please use a different model name."
             )
 
         adaptive_router = AdaptiveRouter(
@@ -9407,8 +9408,7 @@ class Router:
                 ):
                     model_group_info.supports_parallel_function_calling = True
                 if (
-                    model_info.get("supports_vision", None) is not None
-                    and model_info["supports_vision"] is True  # type: ignore
+                    model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True  # type: ignore
                 ):
                     model_group_info.supports_vision = True
                 if (
@@ -9428,8 +9428,7 @@ class Router:
                     model_group_info.supports_url_context = True
 
                 if (
-                    model_info.get("supports_reasoning", None) is not None
-                    and model_info["supports_reasoning"] is True  # type: ignore
+                    model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True  # type: ignore
                 ):
                     model_group_info.supports_reasoning = True
                 if (
@@ -10050,6 +10049,76 @@ class Router:
                 blocked_by_name[name] = is_blocked
         return {
             name for name, fully_blocked in blocked_by_name.items() if fully_blocked
+        }
+
+    @staticmethod
+    def _are_all_deployments_blocked(
+        deployments: List[DeploymentTypedDict],
+    ) -> bool:
+        return len(deployments) > 0 and all(
+            (deployment.get("model_info") or {}).get("blocked") is True
+            for deployment in deployments
+        )
+
+    def _is_model_fully_blocked(self, model: str) -> bool:
+        deployments = self.get_model_list(model_name=model) or []
+        return self._are_all_deployments_blocked(deployments=deployments)
+
+    async def async_get_fully_unhealthy_model_names(self) -> Set[str]:
+        """
+        Returns the set of model names where every backing deployment is currently
+        marked unhealthy by background health checks (and the health state is not stale).
+
+        Used by `/v1/models?healthy_only=true` to hide models that cannot serve any
+        request. A model with at least one healthy (or unknown-health) deployment
+        remains visible. Returns an empty set when no health state is available, so
+        callers fail open to the unfiltered listing.
+
+        Notes:
+            - Mirrors `_async_filter_health_check_unhealthy_deployments`: when
+              `allowed_fails_policy` is set, cooldown is the sole routing exclusion
+              mechanism, so nothing is hidden here either.
+            - Team-specific public model names (`team_public_model_name`) are
+              aggregated alongside `model_name`, so team aliases of fully-unhealthy
+              deployments are hidden too (unlike `get_fully_blocked_model_names`,
+              which matches `model_name` only).
+            - Wildcard routes (e.g. `openai/*`) are matched by their literal
+              deployment name only; models expanded from a wildcard route are not
+              hidden (fail open).
+            - Intentionally diverges from the routing-time safety net (which
+              bypasses the health filter when every candidate is unhealthy and
+              still attempts the request): hiding here is presentation-only —
+              it answers "should this model be advertised?", not "should a
+              request for it still be attempted?". A hidden model can still be
+              called directly.
+        """
+        if self.allowed_fails_policy is not None:
+            return set()
+        unhealthy_ids = (
+            await self.health_state_cache.async_get_unhealthy_deployment_ids()
+        )
+        if not unhealthy_ids:
+            return set()
+        deployments = self.get_model_list() or []
+        unhealthy_by_name: Dict[str, bool] = {}
+        for deployment in deployments:
+            model_info = deployment.get("model_info") or {}
+            names = [deployment.get("model_name") or ""]
+            team_public_model_name = model_info.get("team_public_model_name")
+            if team_public_model_name:
+                names.append(team_public_model_name)
+            is_unhealthy = model_info.get("id") in unhealthy_ids
+            for name in names:
+                if not name:
+                    continue
+                if name in unhealthy_by_name:
+                    unhealthy_by_name[name] = unhealthy_by_name[name] and is_unhealthy
+                else:
+                    unhealthy_by_name[name] = is_unhealthy
+        return {
+            name
+            for name, fully_unhealthy in unhealthy_by_name.items()
+            if fully_unhealthy
         }
 
     def _get_team_specific_model(
