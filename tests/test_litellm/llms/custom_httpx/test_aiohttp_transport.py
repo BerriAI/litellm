@@ -63,9 +63,13 @@ class MockAiohttpResponse:
     ):
         self.status = status
         self.headers = headers or {}
+        self.closed = False
         self.content = MockContent(
             content_chunks, exception_to_raise, exception_at_chunk
         )
+
+    def close(self):
+        self.closed = True
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
@@ -613,3 +617,97 @@ async def test_handle_session_closed_during_request():
     assert counts["requests"] == 2  # First request failed, second succeeded
     assert counts["sessions"] == 2  # Created 2 sessions for retry
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_response_stream_closes_response_on_error():
+    """
+    Regression test for #30192: when body iteration ends with an error, the
+    underlying aiohttp response must be closed so its connector slot is
+    released. Leaked slots exhaust the pool and every later request times
+    out (408) until the proxy restarts, even after the backend recovers.
+    """
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"chunk1", b"chunk2"],
+        exception_to_raise=aiohttp.ServerTimeoutError("read timeout"),
+        exception_at_chunk=1,
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    with pytest.raises(httpx.TimeoutException):
+        async for _ in stream:
+            pass
+
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_response_stream_closes_response_on_cancellation():
+    """
+    Regression test for #30192: a task cancelled mid-stream (e.g. the caller
+    disconnects during a traffic spike) must not leak its aiohttp connection.
+    """
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"chunk1", b"chunk2", b"chunk3"],
+        exception_to_raise=asyncio.CancelledError(),
+        exception_at_chunk=1,
+    )
+
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    with pytest.raises(asyncio.CancelledError):
+        async for _ in stream:
+            pass
+
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_stream_read_timeout_releases_connection_slot():
+    """
+    Regression test for #30192 with a real single-connection pool: a request
+    that times out mid-stream must release its connector slot so a follow-up
+    request to the recovered backend succeeds instead of waiting on the pool.
+    """
+    from aiohttp import TCPConnector, web
+
+    async def trickle_handler(request):
+        response = web.StreamResponse()
+        await response.prepare(request)
+        await response.write(b"chunk0\n")
+        await asyncio.sleep(5)
+        await response.write(b"chunk1\n")
+        return response
+
+    async def fast_handler(request):
+        return web.Response(text="ok")
+
+    app = web.Application()
+    app.router.add_get("/trickle", trickle_handler)
+    app.router.add_get("/fast", fast_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+
+    transport = LiteLLMAiohttpTransport(
+        client=lambda: aiohttp.ClientSession(connector=TCPConnector(limit=1))
+    )
+
+    try:
+        slow_request = httpx.Request("GET", f"http://127.0.0.1:{port}/trickle")
+        slow_request.extensions["timeout"] = {"connect": 5.0, "read": 0.1, "pool": 1.0}
+        response = await transport.handle_async_request(slow_request)
+        with pytest.raises(httpx.TimeoutException):
+            async for _ in response.aiter_bytes():
+                pass
+
+        fast_request = httpx.Request("GET", f"http://127.0.0.1:{port}/fast")
+        fast_request.extensions["timeout"] = {"connect": 5.0, "read": 1.0, "pool": 1.0}
+        fast_response = await transport.handle_async_request(fast_request)
+        assert fast_response.status_code == 200
+        await fast_response.aread()
+        await fast_response.aclose()
+    finally:
+        await transport.aclose()
+        await runner.cleanup()
