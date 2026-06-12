@@ -5819,3 +5819,80 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
 
     assert litellm_logging_obj.model_call_details["model"] == "MCP: list_pets"
     assert litellm_logging_obj.model == "MCP: list_pets"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requested_server():
+    """A prefixed REST name that resolves to no tool must still dispatch to the server_id."""
+    from mcp.types import TextContent
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    requested_server = MCPServer(
+        server_id="rest-target-id",
+        name="rest_target",
+        server_name="rest_target",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="abc123",
+    )
+    prefix_owner = MCPServer(
+        server_id="prefix-owner-id",
+        name="known_prefix",
+        server_name="known_prefix",
+        url="http://127.0.0.1:5116/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="def456",
+    )
+
+    captured: dict = {}
+
+    async def fake_handle_managed_mcp_tool(**kwargs):
+        captured.update(kwargs)
+        return mcp_module.CallToolResult(
+            content=[TextContent(type="text", text="ok")],
+            isError=False,
+        )
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={
+                requested_server.server_id: requested_server,
+                prefix_owner.server_id: prefix_owner,
+            },
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=None,
+        ),
+        patch.object(
+            mcp_module,
+            "_handle_managed_mcp_tool",
+            new=fake_handle_managed_mcp_tool,
+        ),
+        patch.object(
+            mcp_module.MCPRequestHandler,
+            "is_tool_allowed",
+            return_value=True,
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=None,
+        ),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="known_prefix-list_things",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[requested_server, prefix_owner],
+            start_time=datetime.now(),
+            requested_server_id=requested_server.server_id,
+        )
+
+    assert captured["server_name"] == "rest_target"
+    assert captured["name"] == "list_things"
