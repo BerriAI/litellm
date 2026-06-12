@@ -895,6 +895,32 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     if prisma_client is not None:
+        # Fire the Prisma readiness gate as a background task so the proxy
+        # becomes ready immediately.  The gate will retry inside the task
+        # and background-job registration will proceed once the engine is
+        # up (or the budget is exhausted).  This avoids blocking the
+        # startup event for up to ~870 s when the engine is slow.
+        prisma_ready_event: asyncio.Event = asyncio.Event()
+
+        async def _prisma_readiness_task() -> None:
+            db_wrapper = getattr(prisma_client, "db", None)
+            if db_wrapper is not None and hasattr(
+                db_wrapper, "wait_for_prisma_engine"
+            ):
+                engine_ready = await db_wrapper.wait_for_prisma_engine(
+                    retries=10,
+                    delay=2.0,
+                    backoff_factor=1.0,
+                )
+                if not engine_ready:
+                    verbose_proxy_logger.warning(
+                        "Prisma engine did not become ready within the retry "
+                        "budget. Background jobs may fail on startup."
+                    )
+            prisma_ready_event.set()
+
+        asyncio.create_task(_prisma_readiness_task())
+
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings=general_settings,
             prisma_client=prisma_client,
@@ -902,6 +928,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             proxy_budget_rescheduler_max_time=proxy_budget_rescheduler_max_time,
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
+            prisma_ready_event=prisma_ready_event,
         )
 
         await ProxyStartupEvent._update_default_team_member_budget()
@@ -7318,6 +7345,7 @@ class ProxyStartupEvent:
         proxy_budget_rescheduler_max_time: int,
         proxy_batch_write_at: int,
         proxy_logging_obj: ProxyLogging,
+        prisma_ready_event: asyncio.Event,
     ):
         """Initializes scheduled background jobs"""
         global store_model_in_db, scheduler
@@ -7364,25 +7392,21 @@ class ProxyStartupEvent:
         batch_writing_interval = proxy_batch_write_at + random.randint(0, 5)
 
         # ── Prisma engine readiness gate ─────────────────────────────────
-        # During pod startup (especially in Kubernetes rolling deployments),
-        # the embedded Prisma Query Engine subprocess may not be ready when
-        # Uvicorn starts accepting traffic.  Background jobs that touch the
-        # database immediately will fail with httpx.ConnectError and lose
-        # spend data.  Wait here so every scheduled job below starts with a
-        # healthy connection.
-        if prisma_client is not None and hasattr(prisma_client, "db"):
-            db_wrapper = prisma_client.db
-            if hasattr(db_wrapper, "wait_for_prisma_engine"):
-                engine_ready = await db_wrapper.wait_for_prisma_engine(
-                    retries=30,
-                    delay=2.0,
-                    backoff_factor=1.0,
-                )
-                if not engine_ready:
-                    verbose_proxy_logger.warning(
-                        "Prisma engine did not become ready within the retry "
-                        "budget. Background jobs may fail on startup."
-                    )
+        # Background jobs that touch the database need a healthy Prisma
+        # connection.  The readiness probe now runs in a background task
+        # created by the caller (proxy_startup_event) so the proxy can
+        # accept traffic immediately.  We simply wait on the event here
+        # before scheduling any DB-dependent jobs.
+        try:
+            await asyncio.wait_for(
+                prisma_ready_event.wait(),
+                timeout=120.0,
+            )
+        except asyncio.TimeoutError:
+            verbose_proxy_logger.warning(
+                "Timed out waiting for Prisma engine readiness event. "
+                "Proceeding with background job registration anyway."
+            )
         # ──────────────────────────────────────────────────────────────────
 
         ### RESET BUDGET ###
