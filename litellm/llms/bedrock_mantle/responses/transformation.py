@@ -16,7 +16,7 @@ BaseAWSLLM._sign_request after the request body is finalized.
 """
 
 import re
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from botocore.exceptions import (
     CredentialRetrievalError,
@@ -25,9 +25,11 @@ from botocore.exceptions import (
     ProfileNotFound,
 )
 
+from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -46,6 +48,11 @@ _BASE_SUFFIXES_TO_STRIP = (
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
 _MANTLE_HOST_RE = re.compile(
     r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws", re.IGNORECASE
+)
+
+# Per Bedrock Mantle Responses API validation errors.
+_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset(
+    {"function", "mcp", "custom", "namespace", "tool_search"}
 )
 
 
@@ -67,6 +74,7 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _resolve_region(params: dict) -> str:
         region = params.get("aws_region_name")
         if region:
+            BaseAWSLLM._validate_aws_region_name(region)
             return region
         base = params.get("api_base") or get_secret_str("BEDROCK_MANTLE_API_BASE")
         if base:
@@ -124,6 +132,56 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def supports_native_websocket(self) -> bool:
         return False
+
+    @staticmethod
+    def _filter_unsupported_tools(tools: List[Any]) -> List[Any]:
+        """Keep only tool types Mantle's Responses API accepts."""
+        kept: List[Any] = []
+        dropped_types: List[str] = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                kept.append(tool)
+                continue
+            tool_type = tool.get("type")
+            if tool_type in _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES:
+                kept.append(tool)
+            else:
+                dropped_types.append(str(tool_type))
+
+        if dropped_types:
+            verbose_logger.warning(
+                "Bedrock Mantle Responses API: dropping unsupported tool type(s) "
+                "%s (supported: %s).",
+                sorted(set(dropped_types)),
+                sorted(_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES),
+            )
+
+        return kept
+
+    def map_openai_params(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+    ) -> Dict:
+        params = super().map_openai_params(
+            response_api_optional_params=response_api_optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+
+        tools = params.get("tools")
+        if not tools:
+            return params
+
+        tools_list = tools if isinstance(tools, list) else [tools]
+        filtered = self._filter_unsupported_tools(tools_list)
+        if filtered:
+            params["tools"] = filtered
+        else:
+            params.pop("tools", None)
+
+        return params
 
     def sign_request(
         self,

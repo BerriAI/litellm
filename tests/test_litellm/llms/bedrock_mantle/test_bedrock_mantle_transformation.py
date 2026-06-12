@@ -63,6 +63,71 @@ class TestBedrockMantleConfig:
         api_base, _ = cfg._get_openai_compatible_provider_info(None, None)
         assert api_base == "https://bedrock-mantle.ap-northeast-1.api.aws/v1"
 
+    def test_default_api_base_uses_aws_region_name_env(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.setenv("AWS_REGION_NAME", "ca-central-1")
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://bedrock-mantle.ca-central-1.api.aws/v1"
+
+    def test_aws_region_name_param_overrides_env(self, monkeypatch):
+        from litellm.types.router import GenericLiteLLMParams
+
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-west-2")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(
+            None, None, litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2")
+        )
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+
+    def test_malicious_aws_region_name_rejected(self, monkeypatch):
+        from litellm.types.router import GenericLiteLLMParams
+
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        cfg = BedrockMantleChatConfig()
+        with pytest.raises(ValueError):
+            cfg._get_openai_compatible_provider_info(
+                None,
+                None,
+                litellm_params=GenericLiteLLMParams(
+                    aws_region_name="us-east-1.api.aws.attacker.example/"
+                ),
+            )
+
+    def test_get_llm_provider_rejects_malicious_aws_region_name(self, monkeypatch):
+        from litellm.types.router import GenericLiteLLMParams
+
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        with pytest.raises(litellm.exceptions.BadRequestError):
+            litellm.get_llm_provider(
+                model="openai.gpt-5.5",
+                custom_llm_provider="bedrock_mantle",
+                litellm_params=GenericLiteLLMParams(
+                    aws_region_name="us-east-1.api.aws.attacker.example/"
+                ),
+            )
+
+    def test_get_llm_provider_uses_aws_region_name_for_responses(self, monkeypatch):
+        from litellm.types.router import GenericLiteLLMParams
+
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        _, provider, _, api_base = litellm.get_llm_provider(
+            model="openai.gpt-5.5",
+            custom_llm_provider="bedrock_mantle",
+            litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
+        )
+        assert provider == "bedrock_mantle"
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+
     def test_default_api_base_fallback_to_us_east_1(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
