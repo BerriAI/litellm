@@ -10,7 +10,7 @@ for a same-family pair, because the fast path forwards the message payload as-is
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from expression import case, tag, tagged_union
 
@@ -49,7 +49,113 @@ Provider = Literal[
     "nscale",
     "hyperbolic",
     "volcengine",
+    # wave-1b SDK-path shims (compat_sdk profile rows). ai21 chat traffic is
+    # COERCED to "ai21_chat" upstream (get_llm_provider), so that is the
+    # dispatch name; the legacy "ai21" wrapper branch never sees chat streams
+    # (coercion canary in test_differential_compat_sdk_stream). aiml is
+    # deliberately ABSENT: its config class is unregistered at HEAD, so v1
+    # serves it through the generic openai fallback stack (drop canary).
+    "ai21_chat",
+    "dashscope",
+    "docker_model_runner",
+    "empower",
+    "friendliai",
+    "galadriel",
+    "github",
+    "inception",
+    "meta_llama",
+    "morph",
+    "v0",
+    "zai",
+    "vercel_ai_gateway",
+    # wave-1b JSON-registry providers (compat_sdk profile rows): only the 14
+    # LlmProviders enum members ride the dynamic JSONProviderConfig; the 7
+    # non-members (veniceai, abliteration, llamagate, gmi, sarvam, aihubmix,
+    # crusoe) dispatch through the generic openai fallback arms in v1 and are
+    # deliberately ABSENT (drop canary).
+    "publicai",
+    "helicone",
+    "xiaomi_mimo",
+    "scaleway",
+    "synthetic",
+    "apertis",
+    "nano-gpt",
+    "poe",
+    "chutes",
+    "assemblyai",
+    "charity_engine",
+    "neosantara",
+    "tensormesh",
+    "parasail",
+    # wave-1b httpx-path shims (compat_httpx profile rows): dedicated elifs,
+    # transforms LIVE, NO seam model preset (bare wire model, except the
+    # compactifai/amazon-nova/lemonade request-model prefixes the family
+    # response parser owns).
+    "heroku",
+    "bedrock_mantle",
+    "minimax",
+    "compactifai",
+    "amazon_nova",
+    "datarobot",
+    "gradient_ai",
+    "ovhcloud",
+    "lemonade",
+    # wave-2a: compat_sdk profile rows + named gates. perplexity/sambanova/
+    # deepinfra/moonshot are SDK-path (seam preset + re-prefix applies);
+    # cometapi is httpx-path (NO model preset, bare wire model — the xai R4
+    # pin) and is a compat_httpx family row since the sibling merge, with
+    # its own strict-envelope/copy-both stream policy row (LINE_PARSERS).
+    "perplexity",
+    "sambanova",
+    "deepinfra",
+    "moonshot",
+    "cometapi",
 ]
+
+NeverPortProvider = Literal[
+    "replicate",
+    "predibase",
+    "triton",
+    "petals",
+    "nlp_cloud",
+    "gigachat",
+    "bytez",
+    "a2a",
+    "langgraph",
+    "langflow",
+    "ragflow",
+    "chatgpt",
+    "vllm",
+    "aiohttp_openai",
+    "azure_text",
+    "anthropic_text",
+    "oobabooga",
+    "maritalk",
+    "clarifai",
+    "cloudflare",
+    "litellm_proxy",
+    "aleph_alpha",
+    "palm",
+]
+"""Permanent v1 fallbacks. NOT a TODO list: each name carries a reason in the
+researcher-3/researcher-4 dossiers (poll-loop architectures, in-process libs,
+dead vendors, agent gateways, transform-time I/O, gateway-passthrough
+semantics). Promotion is a deliberate two-file edit (remove here, add to
+``Provider``) that the disjointness test forces you to notice.
+
+Deliberately OUTSIDE this Literal:
+
+- baseten: not policy — it keeps its own re-evaluate canary
+  (test_baseten_drop_canary) keyed on the legacy wrapper branch.
+- cohere / cohere_chat: their DEFAULT route at HEAD is the v2 wire (wave-2
+  scope); only the legacy explicit-``v1/`` route is never-port, and a provider
+  Literal cannot carry a route. That predicate (``"v1/" in model`` -> typed
+  fallback) belongs INSIDE the future cohere module, asserted there.
+- the wave-1b drop set (aiml + the 7 non-enum JSON providers): re-evaluate
+  drops with their own canaries, not permanent policy.
+"""
+
+NEVER_PORT: frozenset[str] = frozenset(get_args(NeverPortProvider))
 
 _SAME_FAMILY: frozenset[tuple[InboundSchema, Provider]] = frozenset(
     {

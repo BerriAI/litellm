@@ -16,7 +16,9 @@ fallback makes it yaml-configurable with zero extra plumbing. Off by default.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, FrozenSet, Optional, cast
+from typing import Any, Dict, FrozenSet, Literal, Optional, cast
+
+from typing_extensions import assert_never
 
 import litellm
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -67,15 +69,27 @@ def build_translation_deps(
     )
 
 
-UsageStyle = str  # "anthropic" | "bedrock_converse" | "openai" (v1 transform)
+UsageStyle = Literal["anthropic", "bedrock_converse", "openai", "openai_like"]
+"""The CLOSED set of v1 response-construction styles the seam reproduces
+(critic-wave1b M2: a stringly fall-through here silently built the WRONG
+ModelResponse for any unmatched value — now an unmatched style is a type
+error at the call site and ``assert_never`` at runtime). The compat_httpx
+fork must select its value from ``compat_httpx.RESPONSE_STYLES`` (the HARD
+OBLIGATION; the construction-arm gate in the request differential enforces
+the table read mechanically — verifier-wave1b F3)."""
 
 
 def to_model_response(
     body: Body,
     model_response: Optional[ModelResponse] = None,
+    *,
     usage_style: UsageStyle = "anthropic",
 ) -> ModelResponse:
     """Adapt a v2 response body onto litellm's ModelResponse envelope.
+
+    ``usage_style`` is keyword-only so a positional third argument can never
+    smuggle a construction style past the construction-arm gate
+    (critic-longtail MAJOR-1, dodge B).
 
     Mirrors v1's per-provider response assembly exactly (assign into the
     pre-allocated response's first choice, stamp created/model, setattr a
@@ -91,30 +105,43 @@ def to_model_response(
 
     if usage_style == "openai":
         return _to_model_response_openai(body, model_response)
+    if usage_style == "openai_like":
+        # Mirror OpenAILikeChatConfig._transform_response (and the
+        # compactifai override, same construction): the response is built
+        # DIRECTLY as ModelResponse(**response_json) — no cdr, so the wire
+        # finish_reason rides verbatim into Choices' live map_finish_reason
+        # (no stop->tool_calls rewrite) and the message/choice pydantic dump
+        # differs from the cdr-built one. v1 ignores the pre-allocated
+        # model_response on this path; so does this arm.
+        return ModelResponse(**cast(Dict[str, Any], body))
 
-    response = model_response if model_response is not None else ModelResponse()
-    choices = body.get("choices")
-    first = choices[0] if isinstance(choices, list) and choices else {}
-    message_payload = first.get("message") if isinstance(first, dict) else {}
-    if isinstance(message_payload, dict):
-        response.choices[0].message = Message(**cast(Dict[str, Any], message_payload))
-    finish = first.get("finish_reason") if isinstance(first, dict) else None
-    response.choices[0].finish_reason = cast(
-        Any, finish if isinstance(finish, str) else "stop"
-    )
-    usage_payload = body.get("usage")
-    if not isinstance(usage_payload, dict):
-        usage = Usage()
-    elif usage_style == "bedrock_converse":
-        usage = _build_usage_converse(usage_payload)
-    else:
-        usage = _build_usage(usage_payload)
-    setattr(response, "usage", usage)
-    response.created = int(time.time())
-    model = body.get("model")
-    if isinstance(model, str):
-        response.model = model
-    return response
+    if usage_style in ("anthropic", "bedrock_converse"):
+        response = model_response if model_response is not None else ModelResponse()
+        choices = body.get("choices")
+        first = choices[0] if isinstance(choices, list) and choices else {}
+        message_payload = first.get("message") if isinstance(first, dict) else {}
+        if isinstance(message_payload, dict):
+            response.choices[0].message = Message(
+                **cast(Dict[str, Any], message_payload)
+            )
+        finish = first.get("finish_reason") if isinstance(first, dict) else None
+        response.choices[0].finish_reason = cast(
+            Any, finish if isinstance(finish, str) else "stop"
+        )
+        usage_payload = body.get("usage")
+        if not isinstance(usage_payload, dict):
+            usage = Usage()
+        elif usage_style == "bedrock_converse":
+            usage = _build_usage_converse(usage_payload)
+        else:
+            usage = _build_usage(usage_payload)
+        setattr(response, "usage", usage)
+        response.created = int(time.time())
+        model = body.get("model")
+        if isinstance(model, str):
+            response.model = model
+        return response
+    assert_never(usage_style)
 
 
 _OPENAI_BODY_ENVELOPE_FIELDS = (
@@ -280,9 +307,16 @@ def to_model_response_stream(body: Body, stream_id: str):
         setattr(chunk, "usage", Usage(**cast(Dict[str, Any], usage_payload)))
     choices = body.get("choices")
     first = choices[0] if isinstance(choices, list) and choices else None
-    if isinstance(first, dict) and first.get("finish_reason") is None:
-        # v1 sets citations only on content chunks, never the finish chunk
-        # nor the choices=[] usage chunk.
+    if (
+        "citations" not in body
+        and isinstance(first, dict)
+        and first.get("finish_reason") is None
+    ):
+        # v1 sets citations only on content chunks (None when the wire chunk
+        # carried none), never the finish chunk nor the choices=[] usage
+        # chunk. A wire-carried value (perplexity) already rode the body via
+        # the extras passthrough and must not be clobbered by the preset
+        # (pinned by the wave-2a perplexity citations stream row).
         setattr(chunk, "citations", None)
     return chunk
 
@@ -582,8 +616,14 @@ async def _send_v2_bedrock(
     )
     if result.is_error():
         raise BedrockError(status_code=500, message=result.error.summary)
+    # The bedrock fork's dialects are exactly {"anthropic",
+    # "bedrock_converse"} (provider_key is the bedrock route); the cast
+    # narrows ResponseDialect's "gemini"/"openai" arms that cannot reach
+    # this fork, instead of a blanket ignore (the critic-wave1b N4 shape).
     return to_model_response(
-        result.ok, model_response, usage_style=response_dialect(provider_key)  # type: ignore[arg-type]
+        result.ok,
+        model_response,
+        usage_style=cast(UsageStyle, response_dialect(provider_key)),
     )
 
 

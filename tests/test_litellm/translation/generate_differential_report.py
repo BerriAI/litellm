@@ -323,7 +323,8 @@ def _compat_sdk_rows(lines: list) -> int:
     lines += [
         "",
         "## compat_sdk family: responses (v1 convert_to_model_response_object"
-        " with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm)",
+        " with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix"
+        " arm; cometapi is a compat_httpx row — its no-prefix rows are below)",
         "",
     ]
     for provider, name in resp._rows():
@@ -334,10 +335,27 @@ def _compat_sdk_rows(lines: list) -> int:
         )
         failures += 0 if same else 1
         lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} {name}")
+    citations = resp._PERPLEXITY_CITATIONS_RESPONSE
+    preset = "perplexity/sonar"
+    v1_cite = resp._v1_model_response(citations, preset)
+    v2_cite = resp._v2_model_response("perplexity", citations, preset)
+    cite_ok = (
+        resp._norm(v2_cite) == resp._norm(v1_cite)
+        and v2_cite["citations"] == ["https://a.example"]
+        and v2_cite["choices"][0]["message"].get("annotations") is None
+        and "citation_tokens" not in v2_cite["usage"]
+    )
+    failures += 0 if cite_ok else 1
+    lines.append(
+        ("- IDENTICAL: " if cite_ok else "- DIVERGENT: ")
+        + "perplexity citations dormancy (transform_response's annotation/"
+        "citation-token enrichment is DEAD on the SDK path; citations/"
+        "search_results survive via cdr's unknown-key mirror only)"
+    )
     lines += [
         "",
         "## compat_sdk family: streams (v1 CustomStreamWrapper(provider) over"
-        " SDK chunks vs v2 openai dialect)",
+        " SDK chunks vs v2 openai dialect; SDK-path members only)",
         "",
     ]
     for provider, name in stream._rows():
@@ -347,6 +365,15 @@ def _compat_sdk_rows(lines: list) -> int:
         )
         failures += 0 if same else 1
         lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} {name}")
+    cite_stream_ok = stream._norm(
+        stream._v2_chunks(stream._CITATIONS_STREAM)
+    ) == stream._norm(stream._v1_chunks("perplexity", stream._CITATIONS_STREAM))
+    failures += 0 if cite_stream_ok else 1
+    lines.append(
+        ("- IDENTICAL: " if cite_stream_ok else "- DIVERGENT: ")
+        + "perplexity wire-carried citations (body value survives the seam's"
+        " citations preset; None preset where the wire carried none)"
+    )
     for provider in corpus.PROVIDERS:
         v1 = stream._v1_chunks(
             provider, stream.USAGE_STREAM, stream_options={"include_usage": True}
@@ -374,7 +401,251 @@ def _compat_sdk_rows(lines: list) -> int:
         " handle_baseten_chunk wrapper branch, not the openai dialect;"
         " unregistered, typed v1 fallback; canary"
         " test_baseten_drop_canary pins the evidence)",
+        "- DROPPED FROM WAVE 1B: aiml (AIMLChatConfig unregistered at HEAD;"
+        " v1 serves it through the generic openai fallback stack whose mct"
+        " rename flips the day the config registers; canary"
+        " test_aiml_drop_canary)",
+        "- DROPPED FROM WAVE 1B: veniceai, abliteration, llamagate, gmi,"
+        " sarvam, aihubmix, crusoe (JSON-registry rows WITHOUT LlmProviders"
+        " enum membership: no provider config at param/transform time, the"
+        " JSON gates are dead in v1; canary"
+        " test_json_non_enum_providers_stay_dropped)",
     ]
+    return failures
+
+
+def _compat_httpx_rows(lines: list) -> int:
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import _compat_httpx_corpus as corpus
+    from . import test_differential_compat_httpx_request as req
+    from . import test_differential_compat_httpx_response as resp
+    from . import test_differential_compat_httpx_stream as stream
+
+    failures = 0
+    for provider in corpus.PROVIDERS:
+        lines += [
+            "",
+            f"## {provider}: request bodies (v1 get_optional_params('{provider}')"
+            " + the LIVE httpx transform_request vs v2 compat_httpx)",
+            "",
+        ]
+        for name in sorted(corpus.corpus_for(provider)):
+            case = corpus.corpus_for(provider)[name]
+            result = req._v2(provider, case)
+            same = result.is_ok() and req._norm(result.ok) == req._norm(
+                corpus.run_v1_request_transform(provider, case)
+            )
+            failures += 0 if same else 1
+            lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+        for name in sorted(k for k in req.V1_RAISES if k.startswith(f"{provider}:")):
+            p, case, reason = req.V1_RAISES[name]
+            result = req._v2(p, case)
+            try:
+                corpus.run_v1_request_transform(p, case)
+                raised = False
+            except UnsupportedParamsError:
+                raised = True
+            ok = result.is_error() and reason in result.error.summary and raised
+            failures += 0 if ok else 1
+            label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+            lines.append(f"- {label}: {name} ({reason})")
+        for name in sorted(
+            k for k in req.EXPECTED_FALLBACKS if k.startswith(f"{provider}:")
+        ):
+            p, case, reason = req.EXPECTED_FALLBACKS[name]
+            result = req._v2(p, case)
+            ok = result.is_error() and reason in result.error.summary
+            failures += 0 if ok else 1
+            label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+            lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## compat_httpx family: responses (v1's LIVE transform_response over a"
+        " FRESH ModelResponse — no seam preset; cdr style for heroku/minimax/"
+        "ovhcloud, ModelResponse(**json) style for the rest — vs v2 family"
+        " parser + the per-style seam arm; includes the request-model prefix"
+        " pins and the usage-null row)",
+        "",
+    ]
+    for provider, name in resp._rows():
+        raw = resp._RESPONSES[name]
+        v1 = corpus.run_v1_response_transform(
+            provider, raw, corpus.SPECS[provider].model
+        ).model_dump()
+        same = resp._norm(resp._v2_model_response(provider, raw)) == resp._norm(v1)
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} {name}")
+    for provider in corpus.PROVIDERS:
+        v1 = corpus.run_v1_response_transform(
+            provider, resp._NULL_USAGE_BODY, corpus.SPECS[provider].model
+        ).model_dump()
+        same = resp._norm(
+            resp._v2_model_response(provider, resp._NULL_USAGE_BODY)
+        ) == resp._norm(v1)
+        failures += 0 if same else 1
+        lines.append(
+            f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} usage_null_tokens"
+        )
+    lines += [
+        "",
+        "## compat_httpx family: non-string wire model (v1's OpenAILike"
+        " construction raises pydantic ValidationError BEFORE the prefix"
+        " overwrite; v2's family parser fails closed so the typed fallback"
+        " reproduces the raise — verifier-longtail F2)",
+        "",
+    ]
+    from pydantic import ValidationError
+
+    for provider in sorted(
+        p for p in corpus.PROVIDERS if corpus.SPECS[p].prefix is not None
+    ):
+        try:
+            corpus.run_v1_response_transform(
+                provider, resp._NON_STRING_MODEL_BODY, corpus.SPECS[provider].model
+            )
+            raised = False
+        except ValidationError:
+            raised = True
+        result = resp._v2_parse_result(provider, resp._NON_STRING_MODEL_BODY)
+        ok = (
+            raised
+            and result.is_error()
+            and "non-string wire model" in result.error.summary
+        )
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises ValidationError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {provider} non_string_wire_model")
+    lines += [
+        "",
+        "## compat_httpx family: streams (v1 base"
+        " OpenAIChatCompletionStreamingHandler + CustomStreamWrapper(provider)"
+        " over SSE lines vs v2 family parser with the xai chunk dialect)",
+        "",
+    ]
+    for provider, name in stream._rows():
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            corpus.replay_v1_sse_lines(provider, events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} {name}")
+    for provider in corpus.PROVIDERS:
+        v1 = corpus.replay_v1_sse_lines(
+            provider, stream.USAGE_STREAM, stream_options={"include_usage": True}
+        )
+        v2 = stream._v2_chunks(stream.USAGE_STREAM)
+        tail_ok = (
+            len(v1) == len(v2)
+            and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+            and v2[-1]["choices"] == []
+            and all(
+                v1[-1]["usage"][k] == v2[-1]["usage"][k]
+                for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+            )
+        )
+        failures += 0 if tail_ok else 1
+        lines.append(
+            ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+            + f"{provider} usage tail (v2 passes the wire choices=[] usage"
+            " chunk through; the streaming seam owns v1's synthesized final"
+            " chunk)"
+        )
+    import json as _json
+
+    from litellm.translation.engine.stream import fold_lines as _fold_lines
+    from litellm.translation.inbound.openai_chat.stream import (
+        initial_state as _initial_state,
+    )
+    from litellm.translation.providers.compat_httpx.stream import (
+        parse_line as _httpx_parse_line,
+    )
+
+    error_events = stream._ERROR_CHUNK_STREAM
+    v1_swallow = corpus.replay_v1_sse_lines("heroku", error_events)
+    error_lines = [f"data: {_json.dumps(e)}" for e in error_events]
+    v2_loud = _fold_lines(
+        error_lines,
+        _httpx_parse_line,
+        _initial_state(stream.STREAM_MODEL, dialect="xai"),
+    )
+    divergence_pinned = (
+        "error" not in _json.dumps(v1_swallow)
+        and v2_loud.is_error()
+        and "provider stream error" in v2_loud.error.summary
+    )
+    failures += 0 if divergence_pinned else 1
+    lines.append(
+        (
+            "- PINNED DIVERGENCE (fail-closed on a failure path): "
+            if divergence_pinned
+            else "- DIVERGENT: "
+        )
+        + "mid-stream {'error': ...} chunks — v1's BASE handler silently"
+        " swallows them (no error surface in the emitted sequence; asserted"
+        " in-process for all nine base-handler members), v2's family parser"
+        " surfaces a LOUD typed boundary error naming the chunk"
+        " (test_error_chunk_divergence_two_sided; cometapi differs: its v1"
+        " handler RAISES and its policy row mirrors the raise — see the"
+        " cometapi stream rows below)"
+    )
+    return failures
+
+
+def _cometapi_rows(lines: list) -> int:
+    from . import test_differential_cometapi_response as resp
+    from . import test_differential_cometapi_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## cometapi: responses (v1 CometAPIConfig.transform_response over"
+        " httpx — LIVE on the dedicated elif, main.py:2547 — vs v2 shared"
+        " openai parser with NO model preset; bare wire model, the xai R4 pin)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = (
+            resp._norm(v2) == resp._norm(v1)
+            and v2["model"] == raw["model"]
+            and not str(v2["model"]).startswith("cometapi/")
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name} (no prefix)")
+    lines += [
+        "",
+        "## cometapi: streams (v1 line-seam replay through"
+        " CometAPIChatCompletionStreamingHandler + CustomStreamWrapper"
+        "('cometapi') vs v2 cometapi parser + the shared xai chunk dialect)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
     return failures
 
 
@@ -849,7 +1120,7 @@ def main() -> None:
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the wave-1a compat_sdk family)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -864,6 +1135,8 @@ def main() -> None:
     failures += _openai_rows(lines)
     failures += _xai_rows(lines)
     failures += _compat_sdk_rows(lines)
+    failures += _compat_httpx_rows(lines)
+    failures += _cometapi_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

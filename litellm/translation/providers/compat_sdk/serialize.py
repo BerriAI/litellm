@@ -42,15 +42,20 @@ from types import MappingProxyType
 
 from expression import Error, Result
 
+from litellm.constants import MIN_NON_ZERO_TEMPERATURE
+
 from ...deps import TranslationDeps
 from ...errors import TranslationError
 from ...ir import Body, ChatRequest, PlainJson
 from ..openai_compat.serialize import assemble_body
 from . import params as p
+from .checks import base_list_unsupported
+from .json_registry import JSON_RENAME, json_registry_unsupported
 
 _SerializeResult = Result[Body, TranslationError]
 Serializer = Callable[[ChatRequest, TranslationDeps], _SerializeResult]
 _GateFn = Callable[[ChatRequest, TranslationDeps], str | None]
+_RewriteFn = Callable[[Body, ChatRequest, TranslationDeps], Body]
 
 
 @dataclass(frozen=True)
@@ -59,6 +64,22 @@ class CompatProfile:
     unsupported: _GateFn
     rename_max_completion_tokens: bool = False
     drop_text_response_format: bool = False
+    drop_non_json_schema_response_format: bool = False
+    """meta_llama: v1's map POPS response_format unless type == json_schema
+    (LlamaAPIConfig.map_openai_params) — json_object is silently dropped."""
+    # wave-2a named deltas (append-only; defaults inert for wave-1a/1b rows):
+    drop_tool_choice: bool = False
+    """deepinfra: v1's tool_choice map arm never copies the value, so a
+    served "auto"/"none" is silently DROPPED from the wire (every other
+    value falls back at the gate; v1 raises)."""
+    flatten_text_content_lists: bool = False
+    """sambanova/moonshot: v1 flattens text-only content lists to a single
+    concatenated string (handle_messages_with_content_list_to_str_conversion);
+    moonshot skips the flatten REQUEST-WIDE when any non-text part is present
+    (sambanova's gate falls back on those, so the same skip is inert there)."""
+    rewrite: _RewriteFn | None = None
+    """Provider VALUE rewrites (pure functions of body/request/deps): the
+    deepinfra zero-temperature floor and the moonshot temperature laws."""
 
 
 def serialize_with_profile(
@@ -67,10 +88,14 @@ def serialize_with_profile(
     reason = profile.unsupported(request, deps)
     if reason is not None:
         return Error(TranslationError.of_unsupported(reason))
-    return assemble_body(request).map(lambda body: _with_deltas(body, request, profile))
+    return assemble_body(request).map(
+        lambda body: _with_deltas(body, request, deps, profile)
+    )
 
 
-def _with_deltas(body: Body, request: ChatRequest, profile: CompatProfile) -> Body:
+def _with_deltas(
+    body: Body, request: ChatRequest, deps: TranslationDeps, profile: CompatProfile
+) -> Body:
     if profile.rename_max_completion_tokens and "max_completion_tokens" in body:
         body = {
             **{k: v for k, v in body.items() if k != "max_completion_tokens"},
@@ -80,6 +105,19 @@ def _with_deltas(body: Body, request: ChatRequest, profile: CompatProfile) -> Bo
         "type": "text"
     }:
         body = {k: v for k, v in body.items() if k != "response_format"}
+    if profile.drop_non_json_schema_response_format:
+        response_format = body.get("response_format")
+        if (
+            isinstance(response_format, dict)
+            and response_format.get("type") != "json_schema"
+        ):
+            body = {k: v for k, v in body.items() if k != "response_format"}
+    if profile.drop_tool_choice:
+        body = {k: v for k, v in body.items() if k != "tool_choice"}
+    if profile.flatten_text_content_lists:
+        body = _flatten_text_content_lists(body)
+    if profile.rewrite is not None:
+        body = profile.rewrite(body, request, deps)
     emittable = p.ALLOWED[profile.provider]
     extras: dict[str, PlainJson] = {}
     user = request.user.default_value(None) if "user" in emittable else None
@@ -95,11 +133,81 @@ def _with_deltas(body: Body, request: ChatRequest, profile: CompatProfile) -> Bo
     return {**body, **extras} if extras else body
 
 
-def _base_list_gate(provider: str) -> _GateFn:
+def _base_list_gate(provider: p.CompatSdkProvider) -> _GateFn:
     def gate(request: ChatRequest, deps: TranslationDeps) -> str | None:
-        return p.base_list_unsupported(request, deps, provider)
+        return base_list_unsupported(request, deps, provider)
 
     return gate
+
+
+def _json_registry_gate(provider: p.CompatSdkProvider) -> _GateFn:
+    def gate(request: ChatRequest, deps: TranslationDeps) -> str | None:
+        return json_registry_unsupported(request, deps, provider)
+
+    return gate
+
+
+def _flatten_text_content_lists(body: Body) -> Body:
+    """v1's handle_messages_with_content_list_to_str_conversion, body-level:
+    a content list becomes the concatenation of its text values — but only
+    when the joined text is non-empty (v1's ``if texts:`` keeps all-empty
+    lists as lists), and only when NO message in the request carries a
+    non-text part (moonshot's request-wide multimodal skip; sambanova's gate
+    already fell back on those shapes, so the skip never fires there).
+    All verified in-process at HEAD ("ab" join, lossless skip, empty keep)."""
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return body
+    parts = [part for message in messages for part in _content_list_parts(message)]
+    if any(not isinstance(part, dict) or part.get("type") != "text" for part in parts):
+        return body  # the request-wide multimodal skip
+    return {**body, "messages": [_flattened_message(message) for message in messages]}
+
+
+def _content_list_parts(message: PlainJson) -> list[PlainJson]:
+    if not isinstance(message, dict):
+        return []
+    content = message.get("content")
+    return content if isinstance(content, list) else []
+
+
+def _flattened_message(message: PlainJson) -> PlainJson:
+    parts = _content_list_parts(message)
+    if not parts or not isinstance(message, dict):
+        return message
+    texts = "".join(
+        text
+        for part in parts
+        if isinstance(part, dict) and isinstance(text := part.get("text"), str) and text
+    )
+    return {**message, "content": texts} if texts else message
+
+
+def _deepinfra_rewrite(body: Body, request: ChatRequest, deps: TranslationDeps) -> Body:
+    """The one-model zero-temperature floor (deepinfra map_openai_params:
+    temperature == 0 on exactly mistralai/Mistral-7B-Instruct-v0.1 is bumped
+    to MIN_NON_ZERO_TEMPERATURE; verified 0 -> 0.0001 at HEAD)."""
+    if (
+        request.model == "mistralai/Mistral-7B-Instruct-v0.1"
+        and body.get("temperature") == 0
+    ):
+        return {**body, "temperature": MIN_NON_ZERO_TEMPERATURE}
+    return body
+
+
+def _moonshot_rewrite(body: Body, request: ChatRequest, deps: TranslationDeps) -> Body:
+    """Moonshot's temperature laws (map_openai_params:135-150), verified at
+    HEAD: reasoning models (model-map supports_reasoning over moonshot/{m})
+    get temperature POPPED entirely; otherwise temperature > 1 is clamped to
+    the literal int 1 (1.5 -> 1, 2 -> 1; 1.0 stays 1.0). v1's third arm
+    (< 0.3 with n > 1 -> 0.3) is unreachable here: n is outside the IR and
+    falls back at the inbound boundary."""
+    if p.supports_moonshot_reasoning(request.model, deps):
+        return {k: v for k, v in body.items() if k != "temperature"}
+    temperature = body.get("temperature")
+    if isinstance(temperature, (int, float)) and temperature > 1:
+        return {**body, "temperature": 1}
+    return body
 
 
 _PROFILE_ROWS: tuple[CompatProfile, ...] = (
@@ -147,6 +255,99 @@ _PROFILE_ROWS: tuple[CompatProfile, ...] = (
         provider="volcengine",
         unsupported=p.volcengine_unsupported,
         rename_max_completion_tokens=True,
+    ),
+    # wave-1b SDK-path shims. mct flags re-verified in-process at HEAD:
+    # rename = the OpenAILike super arm (ai21_chat/empower/friendliai/
+    # galadriel/github/inception) or docker_model_runner's explicit map arm;
+    # verbatim = plain OpenAIGPT copy (dashscope/meta_llama/
+    # vercel_ai_gateway); morph/v0/zai raise (mct outside their lists, so the
+    # OpenAILike rename arm is dead behind the gate — the nscale/hyperbolic
+    # trap again).
+    CompatProfile(
+        provider="ai21_chat",
+        unsupported=p.ai21_chat_unsupported,
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(provider="dashscope", unsupported=_base_list_gate("dashscope")),
+    CompatProfile(
+        provider="docker_model_runner",
+        unsupported=_base_list_gate("docker_model_runner"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="empower",
+        unsupported=_base_list_gate("empower"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="friendliai",
+        unsupported=_base_list_gate("friendliai"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="galadriel",
+        unsupported=_base_list_gate("galadriel"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="github",
+        unsupported=_base_list_gate("github"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="inception",
+        unsupported=p.inception_unsupported,
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="meta_llama",
+        unsupported=_base_list_gate("meta_llama"),
+        drop_non_json_schema_response_format=True,
+    ),
+    CompatProfile(provider="morph", unsupported=p.morph_unsupported),
+    CompatProfile(provider="v0", unsupported=p.v0_unsupported),
+    CompatProfile(provider="zai", unsupported=p.zai_unsupported),
+    CompatProfile(
+        provider="vercel_ai_gateway",
+        unsupported=_base_list_gate("vercel_ai_gateway"),
+        # The dedicated main.py elif is DEAD CODE (the compat list matches at
+        # the big SDK elif first); the map's always-injected ``extra_body`` is
+        # empty unless the non-IR ``providerOptions`` rides (inbound fallback)
+        # and the SDK spreads the empty dict to nothing on the wire.
+    ),
+    # wave-1b JSON-registry rows: one parameterized gate (the dynamic
+    # JSONProviderConfig's function-calling capability fork) + the
+    # param_mappings mct→max_tokens rename where providers.json carries it.
+    *(
+        CompatProfile(
+            provider=provider,
+            unsupported=_json_registry_gate(provider),
+            rename_max_completion_tokens=provider in JSON_RENAME,
+        )
+        for provider in p.JSON_REGISTRY_PROVIDERS
+    ),
+    # wave-2a rows (researcher-4 Part 1, entries 1-5; all v1 facts re-verified
+    # in-process at HEAD — see test_differential_compat_sdk_request.py).
+    CompatProfile(provider="perplexity", unsupported=p.perplexity_unsupported),
+    CompatProfile(
+        provider="sambanova",
+        unsupported=p.sambanova_unsupported,
+        rename_max_completion_tokens=True,
+        flatten_text_content_lists=True,
+    ),
+    CompatProfile(
+        provider="deepinfra",
+        unsupported=p.deepinfra_unsupported,
+        rename_max_completion_tokens=True,
+        drop_tool_choice=True,
+        rewrite=_deepinfra_rewrite,
+    ),
+    CompatProfile(
+        provider="moonshot",
+        unsupported=p.moonshot_unsupported,
+        rename_max_completion_tokens=True,
+        flatten_text_content_lists=True,
+        rewrite=_moonshot_rewrite,
     ),
 )
 

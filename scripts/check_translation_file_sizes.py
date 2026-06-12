@@ -1,10 +1,16 @@
 """No-monster-files gate for litellm/translation (06-quality-team.md tenet:
 no monster files or god objects).
 
-Hard line cap per .py file. 720 = 1.3x today's largest file (ir.py, 555
-lines, the deliberate home of every IR union) so the current tree passes
-with ~30% headroom; everything else is under 360. Raising the cap is a
-reviewed decision, not a drive-by edit.
+Hard line cap per .py file. 720 = 1.3x the largest file when the gate
+landed (ir.py, then 555 lines, the deliberate home of every IR union).
+Distribution at the wave-1b/2a sibling merge: compat_sdk/params.py ~715
+(the per-provider allowed sets + gates + the single ALLOWED table; the
+generic checker and the providers.json mechanism were split out to
+compat_sdk/checks.py and compat_sdk/json_registry.py — critic-wave1b M3)
+and ir.py 628 ride closest to the cap. params.py is FULL for new rows
+(new families get their own packages; see translation/CLAUDE.md's recipe
+paragraph and critic-wave2a M3); everything else is under 400. Raising
+the cap is a reviewed decision, not a drive-by edit.
 
 Run: python scripts/check_translation_file_sizes.py
 """
@@ -24,9 +30,7 @@ def line_count(path: Path) -> int:
 
 
 def main() -> int:
-    counts = sorted(
-        ((line_count(p), p) for p in PACKAGE.rglob("*.py")), reverse=True
-    )
+    counts = sorted(((line_count(p), p) for p in PACKAGE.rglob("*.py")), reverse=True)
     offenders = [(n, p) for n, p in counts if n > MAX_LINES]
     if not offenders:
         biggest, where = counts[0]

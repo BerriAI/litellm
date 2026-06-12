@@ -24,7 +24,13 @@ translation/
 │                   #   opaque JSON sub-trees (leaf-checked, deep-copied)
 ├── deps.py         # TranslationDeps: every ambient litellm input (model map
 │                   #   lookups, drop_params/modify_params) enters as a value
-├── dispatch.py     # route(): per-provider allowlist + same-family fast path
+├── dispatch.py     # route(): per-provider allowlist + same-family fast path;
+│                   #   NeverPortProvider/NEVER_PORT — the 23 permanent v1
+│                   #   fallbacks AS CODE (disjointness + typed-fallback
+│                   #   tests in test_dispatch.py; promotion = a deliberate
+│                   #   two-file edit). baseten, cohere(v1-route) and the
+│                   #   wave-1b drops stay OUT (own canaries / route
+│                   #   predicate in the future cohere module)
 ├── inbound/        # one subpackage per accepted schema: raw <-> OpenAI shapes
 │   └── openai_chat/
 │       ├── schema.py    # pydantic wire models, extra="forbid" + strict=True
@@ -82,14 +88,30 @@ translation/
 │   │   ├── response.py  # mirrors convert_to_model_response_object (the LIVE
 │   │   │                #   normalizer; transform_response is dead on the SDK
 │   │   │                #   path); rides the outbound body on ChatResponse.wire
-│   │   └── stream.py    # SSE chunk -> wire_chunk events normalized to the
-│   │                    #   SDK-dump shape (service_tier preset to None:
-│   │                    #   the validated SDK chunk materializes it even
-│   │                    #   when the wire omits the key, and v1's wrapper
-│   │                    #   copies it onto every chunk); the openai chunk
-│   │                    #   dialect folds them; make_parse_line is the ONE
-│   │                    #   data:-line decode every same-family provider
-│   │                    #   composes
+│   │   ├── stream.py    # SSE chunk -> wire_chunk events normalized to the
+│   │   │                #   SDK-dump shape (service_tier preset to None:
+│   │   │                #   the validated SDK chunk materializes it even
+│   │   │                #   when the wire omits the key, and v1's wrapper
+│   │   │                #   copies it onto every chunk); the openai chunk
+│   │   │                #   dialect folds them; make_parse_line is the ONE
+│   │   │                #   data:-line decode every same-family provider
+│   │   │                #   composes
+│   │   └── httpx_chunk.py # the ONE httpx (dict-path) chunk normalizer
+│   │                    #   behind every BaseModelResponseIterator-style
+│   │                    #   v1 decode: make_parse_event(HttpxChunkPolicy)
+│   │                    #   owns the shared rebuild (extras/fingerprint
+│   │                    #   dropped, tool_call type "function" default,
+│   │                    #   usage only on the choices:[] tail, the
+│   │                    #   reasoning -> reasoning_content rewrite by
+│   │                    #   ReasoningMode, strict-envelope keys, usage-fold
+│   │                    #   hook). Consumers: xai (rename + usage fold) and
+│   │                    #   cometapi (copy_both + strict envelope); wave-2b
+│   │                    #   dict-path providers (groq's pop == "rename",
+│   │                    #   openrouter's unconditional variant) EXTEND
+│   │                    #   ReasoningMode with their arm in the same commit
+│   │                    #   as the consumer + its differential rows — the
+│   │                    #   critic rejects another copy of this machinery
+│   │                    #   (critic-wave2a M2; no consumer, no arm)
 │   ├── google_genai/    # ONE generateContent family for BOTH google routes:
 │   │   │                #   providers "vertex_ai" and "gemini" are the same
 │   │   │                #   serializer parameterized by the drift list
@@ -153,12 +175,38 @@ translation/
 │   │   └── claude.py    # anthropic serializer/parsers re-exported; NO
 │   │                    #   response-format model spoof (v1 maps with the
 │   │                    #   real model); billing-header blocks fail closed
-│   ├── compat_sdk/      # the wave-1a SDK-path openai-compat family in ONE
+│   ├── compat_sdk/      # the SDK-path openai-compat family in ONE
 │   │   │                #   subpackage (the google_genai "one family,
-│   │   │                #   parameterized" precedent): together_ai,
+│   │   │                #   parameterized" precedent): wave-1a together_ai,
 │   │   │                #   cerebras, nvidia_nim, lm_studio, llamafile,
 │   │   │                #   lambda_ai, nebius, novita, wandb,
-│   │   │                #   featherless_ai, nscale, hyperbolic, volcengine.
+│   │   │                #   featherless_ai, nscale, hyperbolic, volcengine;
+│   │   │                #   wave-1b shims ai21_chat (the get_llm_provider
+│   │   │                #   coercion is CONDITIONAL on ai21_chat_models
+│   │   │                #   membership — uncoerced "ai21" traffic has no
+│   │   │                #   row and falls back, canary-pinned), dashscope,
+│   │   │                #   docker_model_runner, empower, friendliai,
+│   │   │                #   galadriel, github, inception, meta_llama,
+│   │   │                #   morph, v0, zai, vercel_ai_gateway (its
+│   │   │                #   dedicated elif is dead code — the compat list
+│   │   │                #   matches first); wave-1b JSON-registry rows
+│   │   │                #   (providers.json), ONLY the 14 LlmProviders
+│   │   │                #   enum members — the dynamic JSONProviderConfig
+│   │   │                #   = base list minus tool params unless
+│   │   │                #   supports_function_calling({slug}/{m}), plus
+│   │   │                #   param_mappings mct renames; the 7 NON-members
+│   │   │                #   (veniceai, abliteration, llamagate, gmi,
+│   │   │                #   sarvam, aihubmix, crusoe) ride v1's generic
+│   │   │                #   openai fallback arms (no provider config at
+│   │   │                #   param/transform time) and stay DROPPED,
+│   │   │                #   canary-pinned. aiml is dropped the same way
+│   │   │                #   (its config class is unregistered at HEAD).
+│   │   │                #   Wave 2a: perplexity, sambanova, deepinfra,
+│   │   │                #   moonshot — all SDK-path (cometapi, wave-2a's
+│   │   │                #   httpx member, moved to compat_httpx at the
+│   │   │                #   sibling merge: that family IS the
+│   │   │                #   dedicated-elif shape; critic-wave1b
+│   │   │                #   reconciliation).
 │   │   │                #   All ride v1's big openai elif into the SDK, so
 │   │   │                #   the body is openai_compat.assemble_body after
 │   │   │                #   per-provider gates; the response parser is
@@ -171,17 +219,42 @@ translation/
 │   │   │                #   dedicated legacy wrapper branch
 │   │   │                #   (handle_baseten_chunk), so it stays a typed v1
 │   │   │                #   fallback (canary-pinned).
+│   │   ├── checks.py    # the generic supported-list checker BOTH compat
+│   │   │                #   families compose: unsupported_against (the
+│   │   │                #   _check_valid_arg mirror incl. the top_k
+│   │   │                #   extra_body default arm), BASE_LIST,
+│   │   │                #   base_list_unsupported, the user notes
+│   │   │                #   (critic-wave1b M3 concept split)
+│   │   ├── json_registry.py # the providers.json mechanism: the dynamic
+│   │   │                #   JSONProviderConfig fc-capability fork + the
+│   │   │                #   param_mappings JSON_RENAME set, co-located so
+│   │   │                #   the mirror test reconciles ONE module;
+│   │   │                #   membership (JSON_REGISTRY_PROVIDERS) stays
+│   │   │                #   beside ALLOWED in params.py
 │   │   ├── params.py    # per-provider supported-list truths as pure gates
 │   │   │                #   (v1 RAISES-unless-drop_params on anything off
 │   │   │                #   the list); capability gates read deps over the
 │   │   │                #   LOAD-BEARING {provider}/{model} map keys
-│   │   │                #   (together_ai function calling, cerebras
+│   │   │                #   (together_ai/sambanova function calling,
+│   │   │                #   cerebras/perplexity/deepinfra/moonshot
 │   │   │                #   reasoning); nvidia_nim's static per-model
-│   │   │                #   table; ALLOWED — the per-provider MAXIMAL
+│   │   │                #   table; moonshot's kimi-thinking-preview
+│   │   │                #   exclusion and rewrite fallbacks (tool_choice
+│   │   │                #   required -> synthetic message, reasoning-model
+│   │   │                #   fill_reasoning_content), deepinfra's
+│   │   │                #   tool_choice∉{auto,none} raise, sambanova's
+│   │   │                #   non-text content fallback (v1's lossy flatten);
+│   │   │                #   ALLOWED — the per-provider MAXIMAL
 │   │   │                #   allowed sets, the ONE source the gates narrow
 │   │   │                #   and serialization derives emission from
 │   │   ├── serialize.py # frozen CompatProfile per provider (gate + mct
-│   │   │                #   rename / together's rf-text drop; user and
+│   │   │                #   rename / together's rf-text drop / meta_llama's
+│   │   │                #   non-json_schema response_format drop / wave-2a
+│   │   │                #   named deltas: deepinfra's tool_choice drop +
+│   │   │                #   zero-temperature floor, moonshot's temperature
+│   │   │                #   pop/clamp VALUE rewrites, the sambanova/
+│   │   │                #   moonshot text-content-list flatten with the
+│   │   │                #   request-wide multimodal skip; user and
 │   │   │                #   reasoning_effort emission DERIVED from
 │   │   │                #   params.ALLOWED, never cached as booleans) ->
 │   │   │                #   gates -> openai_compat assemble_body ->
@@ -190,9 +263,68 @@ translation/
 │   │   │                #   pipeline splices them whole, one line per
 │   │   │                #   TABLE
 │   │   └── guard.py     # explicit stream:false (the SDK serializes the
-│   │                    #   key; absent-vs-false is lost in the IR), then
-│   │                    #   the shared openai guard with the full
-│   │                    #   message-name fallback (nobody here strips names)
+│   │   │                #   key; absent-vs-false is lost in the IR — and
+│   │   │                #   the httpx path keeps it on the wire, so the
+│   │   │                #   arm covers the httpx members too), then
+│   │   │                #   the shared openai guard with the full
+│   │   │                #   message-name fallback (nobody here strips
+│   │   │                #   names); GUARDS is the COMPLETE per-provider
+│   │   │                #   table (overrides: dashscope/zai preserve
+│   │   │                #   cache_control on the wire; docker_model_runner/
+│   │   │                #   publicai flatten content lists) — pipeline
+│   │   │                #   splices it whole
+│   ├── compat_httpx/    # the httpx-path shim family (dedicated
+│   │   │                #   completion() elifs, transforms LIVE, NO seam
+│   │   │                #   model preset — the xai routing shape): heroku,
+│   │   │                #   bedrock_mantle, minimax, compactifai,
+│   │   │                #   amazon_nova, datarobot, gradient_ai, ovhcloud,
+│   │   │                #   lemonade (param config unregistered at HEAD;
+│   │   │                #   the elif threads LemonadeChatConfig explicitly
+│   │   │                #   — facts canary), and cometapi (wave-2a's httpx
+│   │   │                #   member, moved here at the sibling merge — the
+│   │   │                #   dedicated elif IS this family's routing fact)
+│   │   ├── params.py    # per-provider allowed sets over the shared
+│   │   │                #   compat_sdk/checks.py checker (gradient_ai's
+│   │   │                #   own map RAISES even on
+│   │   │                #   user; bedrock_mantle reasoning is capability-
+│   │   │                #   gated; amazon_nova's static list serves
+│   │   │                #   reasoning_effort unconditionally)
+│   │   ├── serialize.py # frozen HttpxProfile rows (mct rename +
+│   │   │                #   response_model_prefix data) -> gates ->
+│   │   │                #   openai_compat assemble_body -> deltas
+│   │   ├── guard.py     # the compat_sdk default (stream:false + full
+│   │   │                #   name fallback) + heroku content-list flatten
+│   │   │                #   and minimax cache_control arms; complete GUARDS
+│   │   ├── response.py  # TWO v1 construction styles as family DATA
+│   │   │                #   (RESPONSE_STYLES, the seam fork must read it;
+│   │   │                #   the construction-arm gate makes the
+│   │   │                #   response_dialect() shortcut fail tests):
+│   │   │                #   "openai" = cdr (heroku/minimax/ovhcloud/
+│   │   │                #   cometapi);
+│   │   │                #   "openai_like" = ModelResponse(**json) direct —
+│   │   │                #   NO stop->tool_calls rewrite, different pydantic
+│   │   │                #   dump — with the {prefix}/{REQUEST model}
+│   │   │                #   overwrite for compactifai / amazon-nova (the
+│   │   │                #   literal hyphen) / lemonade; the seam's
+│   │   │                #   to_model_response grew the "openai_like" arm
+│   │   └── stream.py    # BOTH policies over openai_compat.httpx_chunk.
+│   │                    #   make_parse_event (the B1 factory lift — no
+│   │                    #   copies): the family policy (reasoning rename,
+│   │                    #   no extras, usage only on the choices:[] tail —
+│   │                    #   the xai policy minus the usage fold; the BASE
+│   │                    #   OpenAIChatCompletionStreamingHandler rebuild)
+│   │                    #   and cometapi's strict-envelope/copy-both
+│   │                    #   policy; LINE_PARSERS is the per-provider table
+│   │                    #   the streaming seam must select from; folds
+│   │                    #   with the "xai" ChunkDialect (the generic httpx
+│   │                    #   dict path); ovhcloud's custom handler is dead
+│   │                    #   code in v1 (canary); provider error chunks are
+│   │                    #   a LOUD v2 boundary error where v1's BASE
+│   │                    #   handler silently swallows them (deliberate
+│   │                    #   fail-closed divergence on a failure path,
+│   │                    #   two-sided-pinned + a named report row; v1's
+│   │                    #   cometapi handler RAISES instead — its policy
+│   │                    #   row mirrors that raise)
 │   └── xai/             # Grok over openai_compat (httpx path: NO model
 │       │                #   prefix anywhere, transform_response is LIVE):
 │       ├── guard.py     # web_search_options (v1's Responses-bridge reroute
@@ -213,14 +345,15 @@ translation/
 │       │                #   web_search_requests); the finish_reason "" chain
 │       │                #   needs no arm: v1's own fix is dead, both sides
 │       │                #   map "" -> "stop" in the live Choices constructor
-│       └── stream.py    # SSE dict-path parser: per-chunk usage fold with
-│                        #   the folded usage attached ONLY to the choices:[]
-│                        #   tail (v1's wrapper strips it elsewhere), no
-│                        #   extras/system_fingerprint passthrough (the
-│                        #   chunk_parser rebuild drops them), reasoning
-│                        #   rename, refusal forwarded when it rides a
-│                        #   role/content delta, tool_call type "function"
-│                        #   default; the "xai" chunk dialect folds it
+│       └── stream.py    # SSE dict-path parser = httpx_chunk.make_parse_event
+│                        #   with the xai policy (reasoning="rename" + the
+│                        #   per-chunk usage fold hook); the folded usage
+│                        #   attaches ONLY to the choices:[] tail (v1's
+│                        #   wrapper strips it elsewhere), no extras/
+│                        #   system_fingerprint passthrough, refusal
+│                        #   forwarded when it rides a role/content delta,
+│                        #   tool_call type "function" default; the "xai"
+│                        #   chunk dialect folds it
 └── engine/
     ├── pipeline.py # prepare (pure, drives the fallback decision) -> send;
     │               #   per-provider serializer/parser/dialect tables —
@@ -237,7 +370,10 @@ translation/
 The v1-side adapter lives OUTSIDE the package in `litellm/translation_seam.py`:
 deps building from litellm ambient state, ModelResponse/ModelResponseStream
 envelope adaptation (per-provider usage construction, because `Usage` only
-serializes explicitly-set fields), the `completion()` forks (anthropic branch
+serializes explicitly-set fields; on stream chunks the seam presets
+`citations: None` for content chunks ONLY when the body lacks the key, so a
+wire-carried value — perplexity — survives, pinned by the wave-2a citations
+stream row), the `completion()` forks (anthropic branch
 and the bedrock branch's converse/invoke routes, selected by
 `BedrockModelInfo.get_bedrock_route`), and the
 `litellm.translation_v2_providers` allowlist (env:
@@ -348,13 +484,24 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to twenty-four providers out — `anthropic`,
+OpenAI-chat-in to sixty-five providers out — `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
-`azure_ai_anthropic`, `xai`, and the thirteen wave-1a compat_sdk providers
+`azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
 (`together_ai`, `cerebras`, `nvidia_nim`, `lm_studio`, `llamafile`,
 `lambda_ai`, `nebius`, `novita`, `wandb`, `featherless_ai`, `nscale`,
-`hyperbolic`, `volcengine`) — request, response, and stream translation,
+`hyperbolic`, `volcengine`), the twenty-seven wave-1b compat_sdk rows
+(shims `ai21_chat`, `dashscope`, `docker_model_runner`, `empower`,
+`friendliai`, `galadriel`, `github`, `inception`, `meta_llama`, `morph`,
+`v0`, `zai`, `vercel_ai_gateway`; JSON-registry enum members `publicai`,
+`helicone`, `xiaomi_mimo`, `scaleway`, `synthetic`, `apertis`, `nano-gpt`,
+`poe`, `chutes`, `assemblyai`, `charity_engine`, `neosantara`,
+`tensormesh`, `parasail`), and the nine wave-1b compat_httpx providers
+(`heroku`, `bedrock_mantle`, `minimax`, `compactifai`, `amazon_nova`,
+`datarobot`, `gradient_ai`, `ovhcloud`, `lemonade`), and the five wave-2a
+providers (`perplexity`, `sambanova`, `deepinfra`, `moonshot` on the SDK
+path, `cometapi` on the httpx path) — request, response, and stream
+translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk
 corpora; openai: 17-shape request corpus + 17 typed-fallback rows +
@@ -370,7 +517,12 @@ compat_sdk: per-provider generated corpora vs v1 in-process at HEAD
 (`test_differential_compat_sdk_{request,response,stream}.py` over
 `_compat_sdk_corpus.py` — served rows, UnsupportedParamsError raise rows,
 preset-model re-prefix response rows, per-provider wrapper stream replays,
-and supported-list mirror drift gates over every model-map row)),
+and supported-list mirror drift gates over every model-map row; wave-2a
+adds the VALUE-rewrite IDENTICAL rows — moonshot temperature pop/clamp,
+deepinfra zero-temp floor and tool_choice drop, the flatten rows — the
+perplexity citations-dormancy response row and wire-citations stream row,
+and cometapi's dedicated no-prefix/line-seam gates in
+`test_differential_cometapi_{response,stream}.py`)),
 fail-closed everywhere else, with non-streaming flag-gated seams live in
 `completion()` for the anthropic, bedrock, and google routes (the
 openai/azure seam forks are integrator scope and NOT wired; the google
@@ -477,6 +629,87 @@ cdr:699-710 (pinned per provider by the preset-model differential rows),
 and baseten must NEVER be added to the family without resolving its
 dedicated legacy wrapper stream branch (handle_baseten_chunk — the
 test_baseten_drop_canary evidence).
+Wave-1b additions to that family inherit every surface above, plus
+(each names the v1 path): ai21_chat's own list (top_p RAISES; n/seed are
+parse-level unknowns v1 serves); inception's list (top_p RAISES;
+reasoning_effort is served UNCONDITIONALLY — emission derived from
+ALLOWED); morph (everything but stream RAISES) and v0 (everything but
+stream/tools/tool_choice RAISES); zai (mct/response_format RAISE; verbatim
+top-level `thinking` for capability models is an unported emission, typed
+fallback); meta_llama's non-json_schema response_format drop (a serializer
+delta, both sides drop json_object silently); dashscope/zai cache_control
+preserved on the wire (guard arm — the v2 serializer strips it);
+docker_model_runner/publicai content-list flatten (guard arm — ANY
+list-form content falls back); the JSON-registry function-calling fork
+(tools/tool_choice/parallel_tool_calls RAISE unless
+supports_function_calling({slug}/{m})). DROPPED with re-evaluate canaries:
+aiml (config class unregistered at HEAD — the generic fallback stack
+renames mct; registration would flip it to verbatim) and the 7 non-enum
+JSON providers (no provider config at param/transform time).
+Deliberate compat_httpx (wave-1b) surfaces: the same family fallbacks
+(supported-list raises incl. gradient_ai's map-level raise on `user`,
+explicit stream:false — the httpx path keeps the key on the wire — the
+openai guard's raw shapes with the full message-name fallback, parse-level
+unknowns), heroku's content-list flatten and minimax's preserved
+cache_control (guard arms), minimax `thinking` (verbatim top-level copy,
+unported emission), bedrock_mantle reasoning_effort on non-flagged models
+(v1 raises). The compat_httpx completion() forks are NOT wired (integrator
+scope); when they land these are HARD OBLIGATIONS: NO model preset (fresh
+ModelResponse — the xai R4 rule; the compat_sdk preset arm must never fire
+for this family), to_model_response MUST select the style from
+compat_httpx.response.RESPONSE_STYLES ("openai" = cdr for heroku/minimax/
+ovhcloud/cometapi; "openai_like" = ModelResponse(**json) for the other six
+— the seam arm added for this family), streams fold with the "xai"
+ChunkDialect over compat_httpx.parse_line, and the family parser's
+fail-closed non-string wire `model` arm must stay ahead of the fork
+(verifier-longtail F2): v1's OpenAILike construction raises pydantic
+ValidationError BEFORE the prefix overwrite, so on
+compactifai/amazon_nova/lemonade a wired fork that bypassed the parser's
+arm would SERVE what v1 raises on — keep the typed fallback (pinned by
+the family's ValidationError differential rows and the datarobot canary;
+`model: None` stays served, v1 constructs it).
+Deliberate wave-2a fallback surfaces (each names the v1 path): every
+supported-list raise (perplexity stop/tools/tool_choice/parallel and
+reasoning_effort on non-reasoning models; sambanova tools/tool_choice/
+parallel on models without the sambanova/{m} supports_function_calling
+flag; deepinfra parallel_tool_calls, reasoning_effort off
+deepinfra/{m}-flagged models, and its CUSTOM tool_choice raise on every
+value outside {auto, none}; moonshot tools/tool_choice on
+kimi-thinking-preview models); the v1 body REWRITES v2 deliberately does
+not reproduce (moonshot tool_choice="required" appends a synthetic user
+message; moonshot reasoning models inject reasoning_content into
+assistant tool-call history; sambanova's lossy flatten of non-text
+content lists, which also skips the base image transforms); `top_k`
+family-wide (the shared default arm: v1 packs it into extra_body via the
+provider-specific passthrough and the SDK/handler merges it top-level —
+wire-proven for all 18 members; critic-wave2a M1 flipped the reason text
+from the transform-output-only "silently drops" reading that
+verifier-wave1a F6 had pinned); `user` everywhere (model-list gated in
+v1); and the family's shared guard/parse fallbacks. The VALUE rewrites are SERVED, never
+fallbacks (the wave-2a brief): moonshot temperature pop (reasoning
+models) and >1 -> int 1 clamp, deepinfra temperature-0 -> 0.0001 on
+mistralai/Mistral-7B-Instruct-v0.1, deepinfra tool_choice auto/none
+silently dropped, and the text-only content-list flatten with moonshot's
+request-wide multimodal skip — each pinned by IDENTICAL differential
+rows. cometapi fork obligations (a compat_httpx family row since the
+sibling merge; when the integrator wires it): the fork must NOT preset a
+model (fresh ModelResponse, bare wire model — pinned by the no-prefix
+rows, the xai R4 shape), must route streams through
+compat_httpx.LINE_PARSERS["cometapi"] with the "xai" chunk dialect at the
+SSE line seam (NOT the SDK wrapper arm), and inherits the
+synthesized-final-usage contract from the openai/xai ports.
+Streaming-seam obligations carried from wave 2a (verifier-wave2a W1/W2 —
+no impact while streaming stays on v1, pinned by
+`test_reasoning_stream_seam_obligation_canary`): the SDK family's openai
+chunk parser typed-errors on `reasoning_content` deltas as "unreachable",
+but wave 2a SERVES `reasoning_effort` on perplexity/deepinfra (and 1a on
+cerebras) whose real streams carry reasoning deltas v1's wrapper serves —
+the streaming seam must teach the openai parser + dialect reasoning
+deltas (and decide finish+content interleaves) BEFORE flag-on streaming
+for reasoning-capable family members; and the line decoders
+(make_parse_line consumers) error loudly on malformed SSE lines that
+v1's BaseModelResponseIterator silently swallows — the PR #30138
+lenient-boundary call belongs to that seam, not the parsers.
 The xai completion() fork is NOT wired (integrator
 scope, like openai/azure); when it lands these are HARD OBLIGATIONS, not
 notes: the in-package `use_xai_oauth` guard arm is defense-in-depth ONLY
@@ -496,14 +729,27 @@ inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body
 relay). To add a provider that is a pure param-surface delta over an
 existing wire family, add DATA rows to that family's package instead of a
-new subpackage (the `compat_sdk/` shape, THE wave-1b/2 convention): an
-allowed frozenset + `ALLOWED` row in the family's params.py, a profile row
-in its serialize.py registry, and one dispatch `Provider` Literal line —
-pipeline already splices the family's exported `SERIALIZERS` table whole
-(one `**` line per table per FAMILY; never add per-provider rows for a
-family member), and the registration-completeness gate
+new subpackage (the `compat_sdk`/`compat_httpx` shape, THE wave-1b/2
+convention): an allowed frozenset + `ALLOWED` row in the family's
+params.py, a profile row in its serialize.py registry (named gates ride
+the profile's gate fn; deterministic VALUE rewrites ride its
+`rewrite`/delta fields — wave-2a's moonshot/deepinfra rows are the
+template), one dispatch `Provider` Literal line, and a corpus `SPECS`
+row — pipeline already splices the family's exported
+`SERIALIZERS`/`GUARDS` (and compat_httpx `PARSERS`) tables whole (one
+`**` line per table per FAMILY; never add per-provider rows for a family
+member; guard overrides go in the family's `_OVERRIDES`, the complete
+`GUARDS` table derives from `ALLOWED`). The shared supported-list checker
+is `compat_sdk/checks.py`: IMPORT it (`from ..compat_sdk import checks`),
+NEVER copy `_CHECKS` or its helpers into a new family — copies of that
+machinery get rejected, exactly like the httpx_chunk normalizer's
+(critic-wave2a M3; critic-longtail NIT-6). HEADROOM: compat_sdk/params.py
+is near the 720 hard cap — it is FULL; new FAMILIES (the wave-1b
+openai_like shims, the httpx no-prefix group) get their OWN family package
+per researcher-4, never more rows in that file (critic-wave2a M3) — and
+the registration-completeness gate
 (`test_differential_compat_sdk_request.py`) fails any registered provider
-without a differential corpus row. To add a provider with its own wire
+without a differential corpus row — for BOTH families. To add a provider with its own wire
 format: write `providers/<name>/`, register it in
 `engine/pipeline._SERIALIZERS` / `_RESPONSE_PARSERS` / `_RESPONSE_DIALECTS`
 (plus `_RAW_GUARDS` when the inbound schema is the provider's own family),

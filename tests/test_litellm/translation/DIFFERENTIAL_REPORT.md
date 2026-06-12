@@ -1,4 +1,4 @@
-# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the wave-1a compat_sdk family)
+# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family)
 
 v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
 explained FALLBACK that v1 serves) for a provider's flag to turn on.
@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: c6dfb86247
+- commit: 86697f4aa3
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -207,6 +207,69 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - SEAM CONTRACT: usage_tail_include_usage (v1's chunk_parser injects a dummy choice so the wrapper swallows the tail and synthesizes the final usage chunk; v2 passes the wire choices=[] chunk through with the FOLDED usage for the streaming seam to synthesize from)
 - IDENTICAL: usage_withheld_on_content_chunks
 
+## ai21_chat: request bodies (v1 get_optional_params('ai21_chat') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): ai21_chat:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): ai21_chat:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): ai21_chat:top_p (top_p)
+- FALLBACK (v1 serves it): ai21_chat:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): ai21_chat:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): ai21_chat:message_name_field (message name field)
+- FALLBACK (v1 serves it): ai21_chat:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): ai21_chat:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): ai21_chat:user_model_list_gate (user)
+
+## apertis: request bodies (v1 get_optional_params('apertis') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): apertis:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): apertis:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): apertis:tools (tools)
+- FALLBACK (v1 serves it): apertis:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): apertis:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): apertis:message_name_field (message name field)
+- FALLBACK (v1 serves it): apertis:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): apertis:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): apertis:user_model_list_gate (user)
+
+## assemblyai: request bodies (v1 get_optional_params('assemblyai') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): assemblyai:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): assemblyai:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): assemblyai:tools (tools)
+- FALLBACK (v1 serves it): assemblyai:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): assemblyai:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): assemblyai:message_name_field (message name field)
+- FALLBACK (v1 serves it): assemblyai:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): assemblyai:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): assemblyai:user_model_list_gate (user)
+
 ## cerebras: request bodies (v1 get_optional_params('cerebras') + transform_request vs v2 compat_sdk)
 
 - IDENTICAL: max_completion_tokens
@@ -229,6 +292,139 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): cerebras:seed_outside_ir (seed)
 - FALLBACK (v1 serves it): cerebras:string_form_stop (string-form stop)
 
+## charity_engine: request bodies (v1 get_optional_params('charity_engine') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): charity_engine:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): charity_engine:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): charity_engine:tools (tools)
+- FALLBACK (v1 serves it): charity_engine:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): charity_engine:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): charity_engine:message_name_field (message name field)
+- FALLBACK (v1 serves it): charity_engine:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): charity_engine:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): charity_engine:user_model_list_gate (user)
+
+## chutes: request bodies (v1 get_optional_params('chutes') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): chutes:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): chutes:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): chutes:tools (tools)
+- FALLBACK (v1 serves it): chutes:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): chutes:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): chutes:message_name_field (message name field)
+- FALLBACK (v1 serves it): chutes:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): chutes:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): chutes:user_model_list_gate (user)
+
+## dashscope: request bodies (v1 get_optional_params('dashscope') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): dashscope:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): dashscope:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): dashscope:cache_control_preserved (cache_control)
+- FALLBACK (v1 serves it): dashscope:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): dashscope:message_name_field (message name field)
+- FALLBACK (v1 serves it): dashscope:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): dashscope:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): dashscope:user_model_list_gate (user)
+
+## deepinfra: request bodies (v1 get_optional_params('deepinfra') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): deepinfra:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): deepinfra:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): deepinfra:tool_choice_required (tool_choice)
+- FALLBACK (v1 raises UnsupportedParamsError): deepinfra:tool_choice_specific (tool_choice)
+- FALLBACK (v1 serves it): deepinfra:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): deepinfra:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): deepinfra:message_name_field (message name field)
+- FALLBACK (v1 serves it): deepinfra:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): deepinfra:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): deepinfra:tool_message_list_content (list-form tool content)
+- FALLBACK (v1 serves it): deepinfra:top_k_extra_body (extra_body)
+- FALLBACK (v1 serves it): deepinfra:user_model_list_gate (user)
+
+## docker_model_runner: request bodies (v1 get_optional_params('docker_model_runner') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): docker_model_runner:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): docker_model_runner:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): docker_model_runner:content_list_flatten (list-form message content)
+- FALLBACK (v1 serves it): docker_model_runner:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): docker_model_runner:message_name_field (message name field)
+- FALLBACK (v1 serves it): docker_model_runner:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): docker_model_runner:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): docker_model_runner:user_model_list_gate (user)
+
+## empower: request bodies (v1 get_optional_params('empower') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): empower:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): empower:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): empower:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): empower:message_name_field (message name field)
+- FALLBACK (v1 serves it): empower:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): empower:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): empower:user_model_list_gate (user)
+
 ## featherless_ai: request bodies (v1 get_optional_params('featherless_ai') + transform_request vs v2 compat_sdk)
 
 - IDENTICAL: max_completion_tokens
@@ -247,6 +443,92 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): featherless_ai:seed_outside_ir (seed)
 - FALLBACK (v1 serves it): featherless_ai:string_form_stop (string-form stop)
 - FALLBACK (v1 serves it): featherless_ai:user_model_list_gate (user)
+
+## friendliai: request bodies (v1 get_optional_params('friendliai') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): friendliai:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): friendliai:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): friendliai:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): friendliai:message_name_field (message name field)
+- FALLBACK (v1 serves it): friendliai:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): friendliai:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): friendliai:user_model_list_gate (user)
+
+## galadriel: request bodies (v1 get_optional_params('galadriel') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): galadriel:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): galadriel:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): galadriel:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): galadriel:message_name_field (message name field)
+- FALLBACK (v1 serves it): galadriel:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): galadriel:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): galadriel:user_model_list_gate (user)
+
+## github: request bodies (v1 get_optional_params('github') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): github:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): github:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): github:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): github:message_name_field (message name field)
+- FALLBACK (v1 serves it): github:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): github:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): github:user_model_list_gate (user)
+
+## helicone: request bodies (v1 get_optional_params('helicone') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): helicone:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): helicone:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): helicone:tools (tools)
+- FALLBACK (v1 serves it): helicone:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): helicone:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): helicone:message_name_field (message name field)
+- FALLBACK (v1 serves it): helicone:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): helicone:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): helicone:user_model_list_gate (user)
 
 ## hyperbolic: request bodies (v1 get_optional_params('hyperbolic') + transform_request vs v2 compat_sdk)
 
@@ -269,6 +551,28 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): hyperbolic:message_name_field (message name field)
 - FALLBACK (v1 serves it): hyperbolic:seed_outside_ir (seed)
 - FALLBACK (v1 serves it): hyperbolic:string_form_stop (string-form stop)
+
+## inception: request bodies (v1 get_optional_params('inception') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): inception:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): inception:top_p (top_p)
+- FALLBACK (v1 serves it): inception:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): inception:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): inception:message_name_field (message name field)
+- FALLBACK (v1 serves it): inception:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): inception:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): inception:user_model_list_gate (user)
 
 ## lambda_ai: request bodies (v1 get_optional_params('lambda_ai') + transform_request vs v2 compat_sdk)
 
@@ -338,6 +642,95 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): lm_studio:string_form_stop (string-form stop)
 - FALLBACK (v1 serves it): lm_studio:user_model_list_gate (user)
 
+## meta_llama: request bodies (v1 get_optional_params('meta_llama') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): meta_llama:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): meta_llama:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): meta_llama:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): meta_llama:message_name_field (message name field)
+- FALLBACK (v1 serves it): meta_llama:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): meta_llama:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): meta_llama:user_model_list_gate (user)
+
+## moonshot: request bodies (v1 get_optional_params('moonshot') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): moonshot:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): moonshot:tool_choice_on_kimi_thinking_preview (kimi-thinking-preview)
+- FALLBACK (v1 raises UnsupportedParamsError): moonshot:tools_on_kimi_thinking_preview (kimi-thinking-preview)
+- FALLBACK (v1 serves it): moonshot:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): moonshot:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): moonshot:message_name_field (message name field)
+- FALLBACK (v1 serves it): moonshot:reasoning_model_tool_history (fill_reasoning_content)
+- FALLBACK (v1 serves it): moonshot:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): moonshot:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): moonshot:tool_choice_required (synthetic user message)
+- FALLBACK (v1 serves it): moonshot:top_k_extra_body (extra_body)
+- FALLBACK (v1 serves it): moonshot:user_model_list_gate (user)
+
+## morph: request bodies (v1 get_optional_params('morph') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: stream_true
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): morph:max_completion_tokens (max_completion_tokens)
+- FALLBACK (v1 raises UnsupportedParamsError): morph:max_tokens (max_tokens)
+- FALLBACK (v1 raises UnsupportedParamsError): morph:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): morph:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): morph:response_format (response_format)
+- FALLBACK (v1 raises UnsupportedParamsError): morph:stop (stop)
+- FALLBACK (v1 raises UnsupportedParamsError): morph:temperature (temperature)
+- FALLBACK (v1 raises UnsupportedParamsError): morph:tools (tools)
+- FALLBACK (v1 raises UnsupportedParamsError): morph:top_p (top_p)
+- FALLBACK (v1 serves it): morph:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): morph:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): morph:message_name_field (message name field)
+- FALLBACK (v1 serves it): morph:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): morph:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): morph:user_model_list_gate (user)
+
+## nano-gpt: request bodies (v1 get_optional_params('nano-gpt') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): nano-gpt:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): nano-gpt:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): nano-gpt:tools (tools)
+- FALLBACK (v1 serves it): nano-gpt:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): nano-gpt:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): nano-gpt:message_name_field (message name field)
+- FALLBACK (v1 serves it): nano-gpt:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): nano-gpt:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): nano-gpt:user_model_list_gate (user)
+
 ## nebius: request bodies (v1 get_optional_params('nebius') + transform_request vs v2 compat_sdk)
 
 - IDENTICAL: max_completion_tokens
@@ -359,6 +752,26 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): nebius:seed_outside_ir (seed)
 - FALLBACK (v1 serves it): nebius:string_form_stop (string-form stop)
 - FALLBACK (v1 serves it): nebius:user_model_list_gate (user)
+
+## neosantara: request bodies (v1 get_optional_params('neosantara') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): neosantara:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): neosantara:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): neosantara:tools (tools)
+- FALLBACK (v1 serves it): neosantara:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): neosantara:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): neosantara:message_name_field (message name field)
+- FALLBACK (v1 serves it): neosantara:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): neosantara:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): neosantara:user_model_list_gate (user)
 
 ## novita: request bodies (v1 get_optional_params('novita') + transform_request vs v2 compat_sdk)
 
@@ -428,6 +841,178 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): nvidia_nim:string_form_stop (string-form stop)
 - FALLBACK (v1 serves it): nvidia_nim:user_model_list_gate (user)
 
+## parasail: request bodies (v1 get_optional_params('parasail') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): parasail:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): parasail:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): parasail:tools (tools)
+- FALLBACK (v1 serves it): parasail:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): parasail:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): parasail:message_name_field (message name field)
+- FALLBACK (v1 serves it): parasail:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): parasail:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): parasail:user_model_list_gate (user)
+
+## perplexity: request bodies (v1 get_optional_params('perplexity') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): perplexity:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): perplexity:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): perplexity:stop (stop)
+- FALLBACK (v1 raises UnsupportedParamsError): perplexity:tool_choice (tool_choice)
+- FALLBACK (v1 raises UnsupportedParamsError): perplexity:tools (tools)
+- FALLBACK (v1 serves it): perplexity:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): perplexity:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): perplexity:message_name_field (message name field)
+- FALLBACK (v1 serves it): perplexity:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): perplexity:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): perplexity:top_k_extra_body (extra_body)
+- FALLBACK (v1 serves it): perplexity:user_model_list_gate (user)
+- FALLBACK (v1 serves it): perplexity:web_search_options (web_search_options)
+
+## poe: request bodies (v1 get_optional_params('poe') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): poe:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): poe:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): poe:tools (tools)
+- FALLBACK (v1 serves it): poe:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): poe:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): poe:message_name_field (message name field)
+- FALLBACK (v1 serves it): poe:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): poe:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): poe:user_model_list_gate (user)
+
+## publicai: request bodies (v1 get_optional_params('publicai') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): publicai:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): publicai:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): publicai:tools (tools)
+- FALLBACK (v1 serves it): publicai:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): publicai:content_list_flatten (list-form message content)
+- FALLBACK (v1 serves it): publicai:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): publicai:message_name_field (message name field)
+- FALLBACK (v1 serves it): publicai:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): publicai:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): publicai:user_model_list_gate (user)
+
+## sambanova: request bodies (v1 get_optional_params('sambanova') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): sambanova:parallel_on_non_fc_model (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): sambanova:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): sambanova:tool_choice_on_non_fc_model (tool_choice)
+- FALLBACK (v1 raises UnsupportedParamsError): sambanova:tools_on_non_fc_model (tools)
+- FALLBACK (v1 serves it): sambanova:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): sambanova:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): sambanova:image_content_list (non-text content block)
+- FALLBACK (v1 serves it): sambanova:message_name_field (message name field)
+- FALLBACK (v1 serves it): sambanova:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): sambanova:stream_options (stream_options)
+- FALLBACK (v1 serves it): sambanova:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): sambanova:top_k_extra_body (extra_body)
+- FALLBACK (v1 serves it): sambanova:user_model_list_gate (user)
+
+## scaleway: request bodies (v1 get_optional_params('scaleway') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): scaleway:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): scaleway:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): scaleway:tools (tools)
+- FALLBACK (v1 serves it): scaleway:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): scaleway:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): scaleway:message_name_field (message name field)
+- FALLBACK (v1 serves it): scaleway:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): scaleway:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): scaleway:user_model_list_gate (user)
+
+## synthetic: request bodies (v1 get_optional_params('synthetic') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): synthetic:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): synthetic:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): synthetic:tools (tools)
+- FALLBACK (v1 serves it): synthetic:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): synthetic:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): synthetic:message_name_field (message name field)
+- FALLBACK (v1 serves it): synthetic:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): synthetic:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): synthetic:user_model_list_gate (user)
+
+## tensormesh: request bodies (v1 get_optional_params('tensormesh') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): tensormesh:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): tensormesh:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): tensormesh:tools (tools)
+- FALLBACK (v1 serves it): tensormesh:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): tensormesh:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): tensormesh:message_name_field (message name field)
+- FALLBACK (v1 serves it): tensormesh:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): tensormesh:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): tensormesh:user_model_list_gate (user)
+
 ## together_ai: request bodies (v1 get_optional_params('together_ai') + transform_request vs v2 compat_sdk)
 
 - IDENTICAL: max_completion_tokens
@@ -455,6 +1040,50 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): together_ai:seed_outside_ir (seed)
 - FALLBACK (v1 serves it): together_ai:string_form_stop (string-form stop)
 - FALLBACK (v1 serves it): together_ai:user_model_list_gate (user)
+
+## v0: request bodies (v1 get_optional_params('v0') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: stream_true
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): v0:max_completion_tokens (max_completion_tokens)
+- FALLBACK (v1 raises UnsupportedParamsError): v0:max_tokens (max_tokens)
+- FALLBACK (v1 raises UnsupportedParamsError): v0:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): v0:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): v0:response_format (response_format)
+- FALLBACK (v1 raises UnsupportedParamsError): v0:stop (stop)
+- FALLBACK (v1 raises UnsupportedParamsError): v0:temperature (temperature)
+- FALLBACK (v1 raises UnsupportedParamsError): v0:top_p (top_p)
+- FALLBACK (v1 serves it): v0:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): v0:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): v0:message_name_field (message name field)
+- FALLBACK (v1 serves it): v0:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): v0:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): v0:user_model_list_gate (user)
+
+## vercel_ai_gateway: request bodies (v1 get_optional_params('vercel_ai_gateway') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): vercel_ai_gateway:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): vercel_ai_gateway:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): vercel_ai_gateway:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): vercel_ai_gateway:message_name_field (message name field)
+- FALLBACK (v1 serves it): vercel_ai_gateway:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): vercel_ai_gateway:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): vercel_ai_gateway:user_model_list_gate (user)
 
 ## volcengine: request bodies (v1 get_optional_params('volcengine') + transform_request vs v2 compat_sdk)
 
@@ -500,17 +1129,102 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): wandb:string_form_stop (string-form stop)
 - FALLBACK (v1 serves it): wandb:user_model_list_gate (user)
 
-## compat_sdk family: responses (v1 convert_to_model_response_object with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm)
+## xiaomi_mimo: request bodies (v1 get_optional_params('xiaomi_mimo') + transform_request vs v2 compat_sdk)
 
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): xiaomi_mimo:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): xiaomi_mimo:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): xiaomi_mimo:tools (tools)
+- FALLBACK (v1 serves it): xiaomi_mimo:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): xiaomi_mimo:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): xiaomi_mimo:message_name_field (message name field)
+- FALLBACK (v1 serves it): xiaomi_mimo:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): xiaomi_mimo:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): xiaomi_mimo:user_model_list_gate (user)
+
+## zai: request bodies (v1 get_optional_params('zai') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): zai:max_completion_tokens (max_completion_tokens)
+- FALLBACK (v1 raises UnsupportedParamsError): zai:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): zai:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): zai:response_format (response_format)
+- FALLBACK (v1 serves it): zai:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): zai:cache_control_preserved (cache_control)
+- FALLBACK (v1 serves it): zai:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): zai:message_name_field (message name field)
+- FALLBACK (v1 serves it): zai:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): zai:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): zai:thinking_verbatim_copy (thinking on zai)
+- FALLBACK (v1 serves it): zai:user_model_list_gate (user)
+
+## compat_sdk family: responses (v1 convert_to_model_response_object with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm; cometapi is a compat_httpx row — its no-prefix rows are below)
+
+- IDENTICAL: ai21_chat cached_and_reasoning_usage_details
+- IDENTICAL: ai21_chat text
+- IDENTICAL: ai21_chat tool_calls_rewrites_stop
+- IDENTICAL: apertis cached_and_reasoning_usage_details
+- IDENTICAL: apertis text
+- IDENTICAL: apertis tool_calls_rewrites_stop
+- IDENTICAL: assemblyai cached_and_reasoning_usage_details
+- IDENTICAL: assemblyai text
+- IDENTICAL: assemblyai tool_calls_rewrites_stop
 - IDENTICAL: cerebras cached_and_reasoning_usage_details
 - IDENTICAL: cerebras text
 - IDENTICAL: cerebras tool_calls_rewrites_stop
+- IDENTICAL: charity_engine cached_and_reasoning_usage_details
+- IDENTICAL: charity_engine text
+- IDENTICAL: charity_engine tool_calls_rewrites_stop
+- IDENTICAL: chutes cached_and_reasoning_usage_details
+- IDENTICAL: chutes text
+- IDENTICAL: chutes tool_calls_rewrites_stop
+- IDENTICAL: dashscope cached_and_reasoning_usage_details
+- IDENTICAL: dashscope text
+- IDENTICAL: dashscope tool_calls_rewrites_stop
+- IDENTICAL: deepinfra cached_and_reasoning_usage_details
+- IDENTICAL: deepinfra text
+- IDENTICAL: deepinfra tool_calls_rewrites_stop
+- IDENTICAL: docker_model_runner cached_and_reasoning_usage_details
+- IDENTICAL: docker_model_runner text
+- IDENTICAL: docker_model_runner tool_calls_rewrites_stop
+- IDENTICAL: empower cached_and_reasoning_usage_details
+- IDENTICAL: empower text
+- IDENTICAL: empower tool_calls_rewrites_stop
 - IDENTICAL: featherless_ai cached_and_reasoning_usage_details
 - IDENTICAL: featherless_ai text
 - IDENTICAL: featherless_ai tool_calls_rewrites_stop
+- IDENTICAL: friendliai cached_and_reasoning_usage_details
+- IDENTICAL: friendliai text
+- IDENTICAL: friendliai tool_calls_rewrites_stop
+- IDENTICAL: galadriel cached_and_reasoning_usage_details
+- IDENTICAL: galadriel text
+- IDENTICAL: galadriel tool_calls_rewrites_stop
+- IDENTICAL: github cached_and_reasoning_usage_details
+- IDENTICAL: github text
+- IDENTICAL: github tool_calls_rewrites_stop
+- IDENTICAL: helicone cached_and_reasoning_usage_details
+- IDENTICAL: helicone text
+- IDENTICAL: helicone tool_calls_rewrites_stop
 - IDENTICAL: hyperbolic cached_and_reasoning_usage_details
 - IDENTICAL: hyperbolic text
 - IDENTICAL: hyperbolic tool_calls_rewrites_stop
+- IDENTICAL: inception cached_and_reasoning_usage_details
+- IDENTICAL: inception text
+- IDENTICAL: inception tool_calls_rewrites_stop
 - IDENTICAL: lambda_ai cached_and_reasoning_usage_details
 - IDENTICAL: lambda_ai text
 - IDENTICAL: lambda_ai tool_calls_rewrites_stop
@@ -520,9 +1234,24 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: lm_studio cached_and_reasoning_usage_details
 - IDENTICAL: lm_studio text
 - IDENTICAL: lm_studio tool_calls_rewrites_stop
+- IDENTICAL: meta_llama cached_and_reasoning_usage_details
+- IDENTICAL: meta_llama text
+- IDENTICAL: meta_llama tool_calls_rewrites_stop
+- IDENTICAL: moonshot cached_and_reasoning_usage_details
+- IDENTICAL: moonshot text
+- IDENTICAL: moonshot tool_calls_rewrites_stop
+- IDENTICAL: morph cached_and_reasoning_usage_details
+- IDENTICAL: morph text
+- IDENTICAL: morph tool_calls_rewrites_stop
+- IDENTICAL: nano-gpt cached_and_reasoning_usage_details
+- IDENTICAL: nano-gpt text
+- IDENTICAL: nano-gpt tool_calls_rewrites_stop
 - IDENTICAL: nebius cached_and_reasoning_usage_details
 - IDENTICAL: nebius text
 - IDENTICAL: nebius tool_calls_rewrites_stop
+- IDENTICAL: neosantara cached_and_reasoning_usage_details
+- IDENTICAL: neosantara text
+- IDENTICAL: neosantara tool_calls_rewrites_stop
 - IDENTICAL: novita cached_and_reasoning_usage_details
 - IDENTICAL: novita text
 - IDENTICAL: novita tool_calls_rewrites_stop
@@ -532,27 +1261,106 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: nvidia_nim cached_and_reasoning_usage_details
 - IDENTICAL: nvidia_nim text
 - IDENTICAL: nvidia_nim tool_calls_rewrites_stop
+- IDENTICAL: parasail cached_and_reasoning_usage_details
+- IDENTICAL: parasail text
+- IDENTICAL: parasail tool_calls_rewrites_stop
+- IDENTICAL: perplexity cached_and_reasoning_usage_details
+- IDENTICAL: perplexity text
+- IDENTICAL: perplexity tool_calls_rewrites_stop
+- IDENTICAL: poe cached_and_reasoning_usage_details
+- IDENTICAL: poe text
+- IDENTICAL: poe tool_calls_rewrites_stop
+- IDENTICAL: publicai cached_and_reasoning_usage_details
+- IDENTICAL: publicai text
+- IDENTICAL: publicai tool_calls_rewrites_stop
+- IDENTICAL: sambanova cached_and_reasoning_usage_details
+- IDENTICAL: sambanova text
+- IDENTICAL: sambanova tool_calls_rewrites_stop
+- IDENTICAL: scaleway cached_and_reasoning_usage_details
+- IDENTICAL: scaleway text
+- IDENTICAL: scaleway tool_calls_rewrites_stop
+- IDENTICAL: synthetic cached_and_reasoning_usage_details
+- IDENTICAL: synthetic text
+- IDENTICAL: synthetic tool_calls_rewrites_stop
+- IDENTICAL: tensormesh cached_and_reasoning_usage_details
+- IDENTICAL: tensormesh text
+- IDENTICAL: tensormesh tool_calls_rewrites_stop
 - IDENTICAL: together_ai cached_and_reasoning_usage_details
 - IDENTICAL: together_ai text
 - IDENTICAL: together_ai tool_calls_rewrites_stop
+- IDENTICAL: v0 cached_and_reasoning_usage_details
+- IDENTICAL: v0 text
+- IDENTICAL: v0 tool_calls_rewrites_stop
+- IDENTICAL: vercel_ai_gateway cached_and_reasoning_usage_details
+- IDENTICAL: vercel_ai_gateway text
+- IDENTICAL: vercel_ai_gateway tool_calls_rewrites_stop
 - IDENTICAL: volcengine cached_and_reasoning_usage_details
 - IDENTICAL: volcengine text
 - IDENTICAL: volcengine tool_calls_rewrites_stop
 - IDENTICAL: wandb cached_and_reasoning_usage_details
 - IDENTICAL: wandb text
 - IDENTICAL: wandb tool_calls_rewrites_stop
+- IDENTICAL: xiaomi_mimo cached_and_reasoning_usage_details
+- IDENTICAL: xiaomi_mimo text
+- IDENTICAL: xiaomi_mimo tool_calls_rewrites_stop
+- IDENTICAL: zai cached_and_reasoning_usage_details
+- IDENTICAL: zai text
+- IDENTICAL: zai tool_calls_rewrites_stop
+- IDENTICAL: perplexity citations dormancy (transform_response's annotation/citation-token enrichment is DEAD on the SDK path; citations/search_results survive via cdr's unknown-key mirror only)
 
-## compat_sdk family: streams (v1 CustomStreamWrapper(provider) over SDK chunks vs v2 openai dialect)
+## compat_sdk family: streams (v1 CustomStreamWrapper(provider) over SDK chunks vs v2 openai dialect; SDK-path members only)
 
+- IDENTICAL: ai21_chat empty_keepalive_swallowed
+- IDENTICAL: ai21_chat text
+- IDENTICAL: ai21_chat tools
+- IDENTICAL: apertis empty_keepalive_swallowed
+- IDENTICAL: apertis text
+- IDENTICAL: apertis tools
+- IDENTICAL: assemblyai empty_keepalive_swallowed
+- IDENTICAL: assemblyai text
+- IDENTICAL: assemblyai tools
 - IDENTICAL: cerebras empty_keepalive_swallowed
 - IDENTICAL: cerebras text
 - IDENTICAL: cerebras tools
+- IDENTICAL: charity_engine empty_keepalive_swallowed
+- IDENTICAL: charity_engine text
+- IDENTICAL: charity_engine tools
+- IDENTICAL: chutes empty_keepalive_swallowed
+- IDENTICAL: chutes text
+- IDENTICAL: chutes tools
+- IDENTICAL: dashscope empty_keepalive_swallowed
+- IDENTICAL: dashscope text
+- IDENTICAL: dashscope tools
+- IDENTICAL: deepinfra empty_keepalive_swallowed
+- IDENTICAL: deepinfra text
+- IDENTICAL: deepinfra tools
+- IDENTICAL: docker_model_runner empty_keepalive_swallowed
+- IDENTICAL: docker_model_runner text
+- IDENTICAL: docker_model_runner tools
+- IDENTICAL: empower empty_keepalive_swallowed
+- IDENTICAL: empower text
+- IDENTICAL: empower tools
 - IDENTICAL: featherless_ai empty_keepalive_swallowed
 - IDENTICAL: featherless_ai text
 - IDENTICAL: featherless_ai tools
+- IDENTICAL: friendliai empty_keepalive_swallowed
+- IDENTICAL: friendliai text
+- IDENTICAL: friendliai tools
+- IDENTICAL: galadriel empty_keepalive_swallowed
+- IDENTICAL: galadriel text
+- IDENTICAL: galadriel tools
+- IDENTICAL: github empty_keepalive_swallowed
+- IDENTICAL: github text
+- IDENTICAL: github tools
+- IDENTICAL: helicone empty_keepalive_swallowed
+- IDENTICAL: helicone text
+- IDENTICAL: helicone tools
 - IDENTICAL: hyperbolic empty_keepalive_swallowed
 - IDENTICAL: hyperbolic text
 - IDENTICAL: hyperbolic tools
+- IDENTICAL: inception empty_keepalive_swallowed
+- IDENTICAL: inception text
+- IDENTICAL: inception tools
 - IDENTICAL: lambda_ai empty_keepalive_swallowed
 - IDENTICAL: lambda_ai text
 - IDENTICAL: lambda_ai tools
@@ -562,9 +1370,24 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: lm_studio empty_keepalive_swallowed
 - IDENTICAL: lm_studio text
 - IDENTICAL: lm_studio tools
+- IDENTICAL: meta_llama empty_keepalive_swallowed
+- IDENTICAL: meta_llama text
+- IDENTICAL: meta_llama tools
+- IDENTICAL: moonshot empty_keepalive_swallowed
+- IDENTICAL: moonshot text
+- IDENTICAL: moonshot tools
+- IDENTICAL: morph empty_keepalive_swallowed
+- IDENTICAL: morph text
+- IDENTICAL: morph tools
+- IDENTICAL: nano-gpt empty_keepalive_swallowed
+- IDENTICAL: nano-gpt text
+- IDENTICAL: nano-gpt tools
 - IDENTICAL: nebius empty_keepalive_swallowed
 - IDENTICAL: nebius text
 - IDENTICAL: nebius tools
+- IDENTICAL: neosantara empty_keepalive_swallowed
+- IDENTICAL: neosantara text
+- IDENTICAL: neosantara tools
 - IDENTICAL: novita empty_keepalive_swallowed
 - IDENTICAL: novita text
 - IDENTICAL: novita tools
@@ -574,30 +1397,435 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: nvidia_nim empty_keepalive_swallowed
 - IDENTICAL: nvidia_nim text
 - IDENTICAL: nvidia_nim tools
+- IDENTICAL: parasail empty_keepalive_swallowed
+- IDENTICAL: parasail text
+- IDENTICAL: parasail tools
+- IDENTICAL: perplexity empty_keepalive_swallowed
+- IDENTICAL: perplexity text
+- IDENTICAL: perplexity tools
+- IDENTICAL: poe empty_keepalive_swallowed
+- IDENTICAL: poe text
+- IDENTICAL: poe tools
+- IDENTICAL: publicai empty_keepalive_swallowed
+- IDENTICAL: publicai text
+- IDENTICAL: publicai tools
+- IDENTICAL: sambanova empty_keepalive_swallowed
+- IDENTICAL: sambanova text
+- IDENTICAL: sambanova tools
+- IDENTICAL: scaleway empty_keepalive_swallowed
+- IDENTICAL: scaleway text
+- IDENTICAL: scaleway tools
+- IDENTICAL: synthetic empty_keepalive_swallowed
+- IDENTICAL: synthetic text
+- IDENTICAL: synthetic tools
+- IDENTICAL: tensormesh empty_keepalive_swallowed
+- IDENTICAL: tensormesh text
+- IDENTICAL: tensormesh tools
 - IDENTICAL: together_ai empty_keepalive_swallowed
 - IDENTICAL: together_ai text
 - IDENTICAL: together_ai tools
+- IDENTICAL: v0 empty_keepalive_swallowed
+- IDENTICAL: v0 text
+- IDENTICAL: v0 tools
+- IDENTICAL: vercel_ai_gateway empty_keepalive_swallowed
+- IDENTICAL: vercel_ai_gateway text
+- IDENTICAL: vercel_ai_gateway tools
 - IDENTICAL: volcengine empty_keepalive_swallowed
 - IDENTICAL: volcengine text
 - IDENTICAL: volcengine tools
 - IDENTICAL: wandb empty_keepalive_swallowed
 - IDENTICAL: wandb text
 - IDENTICAL: wandb tools
+- IDENTICAL: xiaomi_mimo empty_keepalive_swallowed
+- IDENTICAL: xiaomi_mimo text
+- IDENTICAL: xiaomi_mimo tools
+- IDENTICAL: zai empty_keepalive_swallowed
+- IDENTICAL: zai text
+- IDENTICAL: zai tools
+- IDENTICAL: perplexity wire-carried citations (body value survives the seam's citations preset; None preset where the wire carried none)
+- SEAM CONTRACT: ai21_chat usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: apertis usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: assemblyai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: cerebras usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: charity_engine usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: chutes usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: dashscope usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: deepinfra usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: docker_model_runner usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: empower usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: featherless_ai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: friendliai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: galadriel usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: github usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: helicone usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: hyperbolic usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: inception usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: lambda_ai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: llamafile usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: lm_studio usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: meta_llama usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: moonshot usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: morph usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: nano-gpt usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: nebius usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: neosantara usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: novita usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: nscale usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: nvidia_nim usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: parasail usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: perplexity usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: poe usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: publicai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: sambanova usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: scaleway usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: synthetic usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: tensormesh usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: together_ai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: v0 usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: vercel_ai_gateway usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: volcengine usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: wandb usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: xiaomi_mimo usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: zai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 
 - DROPPED FROM WAVE 1A: baseten (streams ride the dedicated legacy handle_baseten_chunk wrapper branch, not the openai dialect; unregistered, typed v1 fallback; canary test_baseten_drop_canary pins the evidence)
+- DROPPED FROM WAVE 1B: aiml (AIMLChatConfig unregistered at HEAD; v1 serves it through the generic openai fallback stack whose mct rename flips the day the config registers; canary test_aiml_drop_canary)
+- DROPPED FROM WAVE 1B: veniceai, abliteration, llamagate, gmi, sarvam, aihubmix, crusoe (JSON-registry rows WITHOUT LlmProviders enum membership: no provider config at param/transform time, the JSON gates are dead in v1; canary test_json_non_enum_providers_stay_dropped)
+
+## amazon_nova: request bodies (v1 get_optional_params('amazon_nova') + the LIVE httpx transform_request vs v2 compat_httpx)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: reasoning_effort_served
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): amazon_nova:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): amazon_nova:response_format (response_format)
+- FALLBACK (v1 serves it): amazon_nova:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): amazon_nova:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): amazon_nova:message_name_field (message name field)
+- FALLBACK (v1 serves it): amazon_nova:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): amazon_nova:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): amazon_nova:user_model_list_gate (user)
+
+## bedrock_mantle: request bodies (v1 get_optional_params('bedrock_mantle') + the LIVE httpx transform_request vs v2 compat_httpx)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: reasoning_effort_served
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): bedrock_mantle:reasoning_effort_non_reasoning_model (reasoning_effort on non-reasoning bedrock_mantle model)
+- FALLBACK (v1 serves it): bedrock_mantle:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): bedrock_mantle:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): bedrock_mantle:message_name_field (message name field)
+- FALLBACK (v1 serves it): bedrock_mantle:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): bedrock_mantle:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): bedrock_mantle:user_model_list_gate (user)
+
+## cometapi: request bodies (v1 get_optional_params('cometapi') + the LIVE httpx transform_request vs v2 compat_httpx)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): cometapi:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): cometapi:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): cometapi:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): cometapi:message_name_field (message name field)
+- FALLBACK (v1 serves it): cometapi:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): cometapi:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): cometapi:top_k_extra_body (extra_body)
+- FALLBACK (v1 serves it): cometapi:user_model_list_gate (user)
+
+## compactifai: request bodies (v1 get_optional_params('compactifai') + the LIVE httpx transform_request vs v2 compat_httpx)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): compactifai:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): compactifai:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): compactifai:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): compactifai:message_name_field (message name field)
+- FALLBACK (v1 serves it): compactifai:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): compactifai:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): compactifai:user_model_list_gate (user)
+
+## datarobot: request bodies (v1 get_optional_params('datarobot') + the LIVE httpx transform_request vs v2 compat_httpx)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): datarobot:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): datarobot:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): datarobot:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): datarobot:message_name_field (message name field)
+- FALLBACK (v1 serves it): datarobot:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): datarobot:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): datarobot:user_model_list_gate (user)
+
+## gradient_ai: request bodies (v1 get_optional_params('gradient_ai') + the LIVE httpx transform_request vs v2 compat_httpx)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): gradient_ai:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): gradient_ai:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): gradient_ai:response_format (response_format)
+- FALLBACK (v1 raises UnsupportedParamsError): gradient_ai:tools (tools)
+- FALLBACK (v1 raises UnsupportedParamsError): gradient_ai:user_map_level_raise (user on gradient_ai)
+- FALLBACK (v1 serves it): gradient_ai:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): gradient_ai:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): gradient_ai:message_name_field (message name field)
+- FALLBACK (v1 serves it): gradient_ai:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): gradient_ai:string_form_stop (string-form stop)
+
+## heroku: request bodies (v1 get_optional_params('heroku') + the LIVE httpx transform_request vs v2 compat_httpx)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): heroku:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): heroku:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): heroku:content_list_flatten (list-form message content)
+- FALLBACK (v1 serves it): heroku:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): heroku:message_name_field (message name field)
+- FALLBACK (v1 serves it): heroku:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): heroku:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): heroku:user_model_list_gate (user)
+
+## lemonade: request bodies (v1 get_optional_params('lemonade') + the LIVE httpx transform_request vs v2 compat_httpx)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): lemonade:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): lemonade:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): lemonade:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): lemonade:message_name_field (message name field)
+- FALLBACK (v1 serves it): lemonade:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): lemonade:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): lemonade:user_model_list_gate (user)
+
+## minimax: request bodies (v1 get_optional_params('minimax') + the LIVE httpx transform_request vs v2 compat_httpx)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): minimax:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): minimax:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): minimax:cache_control_preserved (cache_control)
+- FALLBACK (v1 serves it): minimax:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): minimax:message_name_field (message name field)
+- FALLBACK (v1 serves it): minimax:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): minimax:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): minimax:thinking_verbatim_copy (thinking on minimax)
+- FALLBACK (v1 serves it): minimax:user_model_list_gate (user)
+
+## ovhcloud: request bodies (v1 get_optional_params('ovhcloud') + the LIVE httpx transform_request vs v2 compat_httpx)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): ovhcloud:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): ovhcloud:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): ovhcloud:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): ovhcloud:message_name_field (message name field)
+- FALLBACK (v1 serves it): ovhcloud:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): ovhcloud:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): ovhcloud:user_model_list_gate (user)
+
+## compat_httpx family: responses (v1's LIVE transform_response over a FRESH ModelResponse — no seam preset; cdr style for heroku/minimax/ovhcloud, ModelResponse(**json) style for the rest — vs v2 family parser + the per-style seam arm; includes the request-model prefix pins and the usage-null row)
+
+- IDENTICAL: amazon_nova cached_and_reasoning_usage_details
+- IDENTICAL: amazon_nova text
+- IDENTICAL: amazon_nova tool_calls_rewrites_stop
+- IDENTICAL: bedrock_mantle cached_and_reasoning_usage_details
+- IDENTICAL: bedrock_mantle text
+- IDENTICAL: bedrock_mantle tool_calls_rewrites_stop
+- IDENTICAL: cometapi cached_and_reasoning_usage_details
+- IDENTICAL: cometapi text
+- IDENTICAL: cometapi tool_calls_rewrites_stop
+- IDENTICAL: compactifai cached_and_reasoning_usage_details
+- IDENTICAL: compactifai text
+- IDENTICAL: compactifai tool_calls_rewrites_stop
+- IDENTICAL: datarobot cached_and_reasoning_usage_details
+- IDENTICAL: datarobot text
+- IDENTICAL: datarobot tool_calls_rewrites_stop
+- IDENTICAL: gradient_ai cached_and_reasoning_usage_details
+- IDENTICAL: gradient_ai text
+- IDENTICAL: gradient_ai tool_calls_rewrites_stop
+- IDENTICAL: heroku cached_and_reasoning_usage_details
+- IDENTICAL: heroku text
+- IDENTICAL: heroku tool_calls_rewrites_stop
+- IDENTICAL: lemonade cached_and_reasoning_usage_details
+- IDENTICAL: lemonade text
+- IDENTICAL: lemonade tool_calls_rewrites_stop
+- IDENTICAL: minimax cached_and_reasoning_usage_details
+- IDENTICAL: minimax text
+- IDENTICAL: minimax tool_calls_rewrites_stop
+- IDENTICAL: ovhcloud cached_and_reasoning_usage_details
+- IDENTICAL: ovhcloud text
+- IDENTICAL: ovhcloud tool_calls_rewrites_stop
+- IDENTICAL: amazon_nova usage_null_tokens
+- IDENTICAL: bedrock_mantle usage_null_tokens
+- IDENTICAL: cometapi usage_null_tokens
+- IDENTICAL: compactifai usage_null_tokens
+- IDENTICAL: datarobot usage_null_tokens
+- IDENTICAL: gradient_ai usage_null_tokens
+- IDENTICAL: heroku usage_null_tokens
+- IDENTICAL: lemonade usage_null_tokens
+- IDENTICAL: minimax usage_null_tokens
+- IDENTICAL: ovhcloud usage_null_tokens
+
+## compat_httpx family: non-string wire model (v1's OpenAILike construction raises pydantic ValidationError BEFORE the prefix overwrite; v2's family parser fails closed so the typed fallback reproduces the raise — verifier-longtail F2)
+
+- FALLBACK (v1 raises ValidationError): amazon_nova non_string_wire_model
+- FALLBACK (v1 raises ValidationError): compactifai non_string_wire_model
+- FALLBACK (v1 raises ValidationError): lemonade non_string_wire_model
+
+## compat_httpx family: streams (v1 base OpenAIChatCompletionStreamingHandler + CustomStreamWrapper(provider) over SSE lines vs v2 family parser with the xai chunk dialect)
+
+- IDENTICAL: amazon_nova empty_keepalive_swallowed
+- IDENTICAL: amazon_nova reasoning_rename
+- IDENTICAL: amazon_nova text
+- IDENTICAL: amazon_nova tools
+- IDENTICAL: bedrock_mantle empty_keepalive_swallowed
+- IDENTICAL: bedrock_mantle reasoning_rename
+- IDENTICAL: bedrock_mantle text
+- IDENTICAL: bedrock_mantle tools
+- IDENTICAL: compactifai empty_keepalive_swallowed
+- IDENTICAL: compactifai reasoning_rename
+- IDENTICAL: compactifai text
+- IDENTICAL: compactifai tools
+- IDENTICAL: datarobot empty_keepalive_swallowed
+- IDENTICAL: datarobot reasoning_rename
+- IDENTICAL: datarobot text
+- IDENTICAL: datarobot tools
+- IDENTICAL: gradient_ai empty_keepalive_swallowed
+- IDENTICAL: gradient_ai reasoning_rename
+- IDENTICAL: gradient_ai text
+- IDENTICAL: gradient_ai tools
+- IDENTICAL: heroku empty_keepalive_swallowed
+- IDENTICAL: heroku reasoning_rename
+- IDENTICAL: heroku text
+- IDENTICAL: heroku tools
+- IDENTICAL: lemonade empty_keepalive_swallowed
+- IDENTICAL: lemonade reasoning_rename
+- IDENTICAL: lemonade text
+- IDENTICAL: lemonade tools
+- IDENTICAL: minimax empty_keepalive_swallowed
+- IDENTICAL: minimax reasoning_rename
+- IDENTICAL: minimax text
+- IDENTICAL: minimax tools
+- IDENTICAL: ovhcloud empty_keepalive_swallowed
+- IDENTICAL: ovhcloud reasoning_rename
+- IDENTICAL: ovhcloud text
+- IDENTICAL: ovhcloud tools
+- SEAM CONTRACT: amazon_nova usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: bedrock_mantle usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: cometapi usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: compactifai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: datarobot usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: gradient_ai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: heroku usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: lemonade usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: minimax usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: ovhcloud usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- PINNED DIVERGENCE (fail-closed on a failure path): mid-stream {'error': ...} chunks — v1's BASE handler silently swallows them (no error surface in the emitted sequence; asserted in-process for all nine base-handler members), v2's family parser surfaces a LOUD typed boundary error naming the chunk (test_error_chunk_divergence_two_sided; cometapi differs: its v1 handler RAISES and its policy row mirrors the raise — see the cometapi stream rows below)
+
+## cometapi: responses (v1 CometAPIConfig.transform_response over httpx — LIVE on the dedicated elif, main.py:2547 — vs v2 shared openai parser with NO model preset; bare wire model, the xai R4 pin)
+
+- IDENTICAL: reasoning_usage_details (no prefix)
+- IDENTICAL: text (no prefix)
+- IDENTICAL: tool_calls (no prefix)
+
+## cometapi: streams (v1 line-seam replay through CometAPIChatCompletionStreamingHandler + CustomStreamWrapper('cometapi') vs v2 cometapi parser + the shared xai chunk dialect)
+
+- IDENTICAL: extras_dropped
+- IDENTICAL: native_reasoning_content
+- IDENTICAL: reasoning_rename
+- IDENTICAL: text
+- IDENTICAL: tools
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 
 ## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)
 

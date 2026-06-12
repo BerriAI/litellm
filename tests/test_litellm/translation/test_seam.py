@@ -31,6 +31,12 @@ _PROVIDER_RESPONSE = {
 def _flag(monkeypatch):
     monkeypatch.setattr(litellm, "translation_v2_providers", ["anthropic"])
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    # Hermeticity (critic-longtail NIT-7 / verifier-longtail F4): the respx
+    # mocks pin the DEFAULT anthropic endpoint; an ambient ANTHROPIC_BASE_URL
+    # (any agent-harness shell exports one) redirects the request to an
+    # unmocked host and the four respx tests fail as phantom reds.
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
 
 
 @respx.mock
