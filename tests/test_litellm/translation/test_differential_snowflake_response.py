@@ -21,7 +21,11 @@ from litellm.types.utils import ModelResponse
 from litellm.translation.inbound.openai_chat import parse_request
 from litellm.translation.inbound.openai_chat.response import serialize_response
 from litellm.translation.providers.snowflake import parse_response
-from litellm.translation_seam import build_translation_deps, to_model_response
+from litellm.translation_seam import (
+    UsageStyle,
+    build_translation_deps,
+    to_model_response,
+)
 
 from ._own_module_corpus import run_v1_response_transform
 
@@ -118,17 +122,20 @@ def _v1_model_response(raw: dict) -> dict:
     return _v1_full(raw).model_dump()
 
 
-def _v2_model_response(raw: dict) -> dict:
+def _v2_with_style(raw: dict, style: UsageStyle) -> dict:
     parsed = parse_request(copy.deepcopy(_REQUEST))
     assert parsed.is_ok(), parsed.error.summary
     response = parse_response(copy.deepcopy(raw), parsed.ok)
     assert response.is_ok(), response.error.summary
     body = serialize_response(response.ok, build_translation_deps(), "openai")
+    return to_model_response(body, ModelResponse(), usage_style=style).model_dump()
+
+
+def _v2_model_response(raw: dict) -> dict:
     # snowflake is DIRECT construction: the seam fork must use the
-    # "openai_like" arm (never "openai", never a model preset)
-    return to_model_response(
-        body, ModelResponse(), usage_style="openai_like"
-    ).model_dump()
+    # "openai_like" arm (never "openai", never a model preset) — the truth is
+    # pipeline.OWN_MODULE_RESPONSE_STYLES["snowflake"], divergence-pinned below
+    return _v2_with_style(raw, "openai_like")
 
 
 def _norm(payload: dict) -> str:
@@ -184,6 +191,32 @@ def test_non_string_wire_model_falls_back_where_v1_raises(frozen_ambient) -> Non
     result = parse_response(copy.deepcopy(_NON_STRING_MODEL_BODY), parsed.ok)
     assert result.is_error()
     assert "non-string wire model" in result.error.summary
+
+
+def test_wrong_construction_arm_diverges_and_the_table_pins_it(
+    frozen_ambient,
+) -> None:
+    """critic-wave2b-alpha MAJOR-4 (the snowflake half — see the fireworks_ai
+    twin for the full rationale): the obligated "openai_like" style is
+    machine-readable in pipeline.OWN_MODULE_RESPONSE_STYLES and the wrong
+    (openai/cdr) arm provably diverges from v1 on a parser-admissible body —
+    cdr's enumerate rebuild rewrites a verbatim wire choice index 5 to 0
+    while v1's ModelResponse(**json) keeps it."""
+    from litellm.translation.engine.pipeline import OWN_MODULE_RESPONSE_STYLES
+
+    assert OWN_MODULE_RESPONSE_STYLES["snowflake"] == "openai_like"
+    raw = copy.deepcopy(_RESPONSES["plain_content"])
+    raw["choices"][0]["index"] = 5
+    v1 = _v1_model_response(raw)
+    correct = _v2_with_style(raw, OWN_MODULE_RESPONSE_STYLES["snowflake"])
+    wrong = _v2_with_style(raw, "openai")
+    assert _norm(correct) == _norm(v1)
+    assert correct["choices"][0]["index"] == 5
+    assert wrong["choices"][0]["index"] == 0
+    assert _norm(wrong) != _norm(v1), (
+        "the construction arms stopped diverging on the index-rewrite body — "
+        "the MAJOR-4 gate lost its discriminator; re-decide before relying on it"
+    )
 
 
 def test_v1_hidden_request_model_is_the_fork_obligation(frozen_ambient) -> None:

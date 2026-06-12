@@ -56,6 +56,7 @@ from ..providers.bedrock_invoke import (
 from ..providers.compat_httpx import GUARDS as compat_httpx_guards
 from ..providers.compat_httpx import PARSERS as compat_httpx_parsers
 from ..providers.compat_httpx import SERIALIZERS as compat_httpx_serializers
+from ..providers.compat_httpx.response import ResponseStyle
 from ..providers.compat_sdk import GUARDS as compat_sdk_guards
 from ..providers.compat_sdk import SERIALIZERS as compat_sdk_serializers
 from ..providers.deepseek import parse_response as deepseek_parse_response
@@ -199,6 +200,29 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # snowflake/{wire model} prefix policy ("openai_like" seam arm).
         "snowflake": snowflake_parse_response,
         "huggingface": huggingface_parse_response,
+    }
+)
+
+OWN_MODULE_RESPONSE_STYLES: Mapping[Provider, ResponseStyle] = MappingProxyType(
+    {
+        # The v1 response-CONSTRUCTION style per own-module provider — the
+        # machine-readable truth any future completion() fork must select
+        # ``usage_style`` from, exactly like compat_httpx.RESPONSE_STYLES
+        # (critic-wave2b-alpha MAJOR-4: this obligation lived in prose).
+        # "openai" = cdr via the base GPT transform_response; "openai_like" =
+        # ModelResponse(**json) DIRECT construction (no stop->tool_calls
+        # rewrite, different pydantic dump, NO seam preset either way).
+        # Wrong-arm divergence is pinned per openai_like member in the
+        # fireworks_ai/snowflake response gates; the registration gate
+        # asserts every own-module provider has a row. The seam's AST gate
+        # (test_seam_forks_never_select_usage_style_via_response_dialect)
+        # already rejects any fork that routes through response_dialect().
+        "deepseek": "openai",
+        "openrouter": "openai",
+        "hosted_vllm": "openai",
+        "huggingface": "openai",
+        "fireworks_ai": "openai_like",
+        "snowflake": "openai_like",
     }
 )
 

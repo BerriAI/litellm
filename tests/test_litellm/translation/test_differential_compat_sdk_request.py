@@ -616,6 +616,22 @@ def test_registered_providers_have_differential_coverage() -> None:
         "huggingface",  # test_differential_huggingface_{request,response,stream}
     }
     assert providers == dedicated_gates | set(SPECS) | set(HTTPX_SPECS)
+    own_modules = {
+        "deepseek",
+        "openrouter",
+        "hosted_vllm",
+        "fireworks_ai",
+        "snowflake",
+        "huggingface",
+    }
+    # critic-wave2b-alpha MAJOR-4: every own-module provider must carry a row
+    # in pipeline.OWN_MODULE_RESPONSE_STYLES (the construction-style truth the
+    # future completion() fork selects usage_style from — the compat_httpx
+    # RESPONSE_STYLES shape). Add the row in the commit that adds the module;
+    # an "openai_like" row additionally needs a wrong-arm divergence pin in
+    # its response gate (the fireworks_ai/snowflake template).
+    assert set(pipeline.OWN_MODULE_RESPONSE_STYLES) == own_modules
+    assert own_modules <= dedicated_gates
 
 
 @pytest.mark.parametrize("provider,name", _request_rows())

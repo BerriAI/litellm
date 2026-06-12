@@ -942,7 +942,13 @@ gate on the REWRITTEN model; data: urls exempt), cache_control stripped
 (== the IR drop), and user/reasoning_effort verbatim. fireworks_ai fork
 obligations: NO seam preset and the "openai_like" construction arm with
 the parser-owned fireworks_ai/{WIRE model} prefix (NOT the request
-model); the ambient litellm.disable_add_transform_inline_image_block
+model) — the style is machine-readable in
+`engine/pipeline.OWN_MODULE_RESPONSE_STYLES` (the table the fork must
+select usage_style from, asserted complete by the registration gate;
+the wrong arm is a PROVEN byte divergence pinned in the response gate —
+critic-wave2b-alpha MAJOR-4 closed the prose-only gap, and the seam AST
+gate already rejects any fork routed through response_dialect());
+the ambient litellm.disable_add_transform_inline_image_block
 global (and the per-request litellm_params flag) must FORCE v1 at the
 seam before flag-on — the serializer encodes the default-enabled arm
 only; response _hidden_params.additional_headers ride the seam's
@@ -969,7 +975,10 @@ content_list response rewrite (choices[0] text concat + tool_use ->
 OpenAI tool_calls with json.dumps DEFAULT-separator arguments,
 byte-pinned) and the snowflake/{wire-or-EMPTY} response prefix.
 snowflake fork obligations: NO seam preset and the "openai_like"
-construction arm; the request model must ride
+construction arm (machine-readable in
+`engine/pipeline.OWN_MODULE_RESPONSE_STYLES`, wrong-arm divergence
+pinned in the response gate — the fireworks_ai MAJOR-4 shape); the
+request model must ride
 _hidden_params["model"] (v1's cost-calculator feed, dump-invisible —
 gate-pinned); account_id -> URL synthesis and KEYPAIR_JWT/PAT headers
 are pure envelope (header-only auth, researcher-4's correction). Real
