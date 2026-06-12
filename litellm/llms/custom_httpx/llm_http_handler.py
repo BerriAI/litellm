@@ -1889,8 +1889,6 @@ class BaseLLMHTTPHandler:
     def _resolve_anthropic_messages_timeout(
         litellm_params: GenericLiteLLMParams, stream: bool
     ) -> Optional[Union[float, httpx.Timeout]]:
-        from litellm.secret_managers.main import get_secret_str
-
         stream_timeout = litellm_params.get("stream_timeout")
         raw = (
             stream_timeout
@@ -1899,10 +1897,6 @@ class BaseLLMHTTPHandler:
         )
         if raw is None or isinstance(raw, httpx.Timeout):
             return raw
-        if isinstance(raw, str) and raw.startswith("os.environ/"):
-            raw = get_secret_str(raw)
-            if raw is None:
-                return None
         timeout = float(raw)
         return timeout if timeout > 0 else None
 

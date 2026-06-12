@@ -1152,21 +1152,21 @@ def test_resolve_anthropic_messages_timeout_passes_httpx_timeout_through():
     assert resolved is explicit
 
 
-def test_resolve_anthropic_messages_timeout_os_environ_string(monkeypatch):
-    """os.environ/ timeout strings are resolved then coerced; an unset env var
-    degrades to None (default) rather than crashing on float(None)."""
-    monkeypatch.setenv("ANTHROPIC_MESSAGES_TIMEOUT", "450")
-    resolved = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(
-        GenericLiteLLMParams(timeout="os.environ/ANTHROPIC_MESSAGES_TIMEOUT"),
-        stream=False,
-    )
-    assert resolved == 450.0
+def test_resolve_anthropic_messages_timeout_does_not_read_env(monkeypatch):
+    """Security regression: a client-supplied os.environ/ timeout string must NOT
+    resolve a server environment variable. Request-time secret resolution would let
+    a caller exfiltrate env-backed secrets via the float() error message; config-time
+    resolution (router.set_model_list / proxy load_config) already handles the
+    legitimate os.environ/ form before the request. The string is coerced as-is and
+    raises with the literal input, never the secret value."""
+    secret = "sk-ant-super-secret-value"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
 
-    monkeypatch.delenv("ANTHROPIC_MESSAGES_TIMEOUT", raising=False)
-    assert (
+    with pytest.raises(ValueError) as exc_info:
         BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(
-            GenericLiteLLMParams(timeout="os.environ/ANTHROPIC_MESSAGES_TIMEOUT"),
+            GenericLiteLLMParams(timeout="os.environ/ANTHROPIC_API_KEY"),
             stream=False,
         )
-        is None
-    )
+
+    assert secret not in str(exc_info.value)
+    assert "os.environ/ANTHROPIC_API_KEY" in str(exc_info.value)
