@@ -374,6 +374,7 @@ async def test_model_info_v1_populates_access_via_team_ids(monkeypatch):
             model_id = model["model_info"]["id"]
             if model_id == "byok-id-1":
                 model["model_info"]["access_via_team_ids"] = [team_id]
+                model["model_info"]["direct_access"] = False
             elif model_id == "global-id-1":
                 model["model_info"]["direct_access"] = True
         return kwargs["all_models"]
@@ -394,4 +395,37 @@ async def test_model_info_v1_populates_access_via_team_ids(monkeypatch):
 
     by_id = {m["model_info"]["id"]: m for m in resp["data"]}
     assert by_id["byok-id-1"]["model_info"]["access_via_team_ids"] == [team_id]
-    assert by_id["global-id-1"]["model_info"].get("direct_access") is True
+    assert by_id["byok-id-1"]["model_info"]["direct_access"] is False
+    assert by_id["global-id-1"]["model_info"]["direct_access"] is True
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_sets_direct_access_false_by_default(monkeypatch):
+    """Team-accessible models without direct access must return direct_access=false."""
+    team_row = _team_row()
+    global_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1"]
+    monkeypatch.setattr(
+        ps,
+        "get_all_team_models",
+        AsyncMock(return_value={"byok-id-1": ["team-abc-123"]}),
+    )
+
+    admin = UserAPIKeyAuth(
+        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
+    )
+    result = await ps._populate_team_access_on_models(
+        user_api_key_dict=admin,
+        prisma_client=MagicMock(),
+        llm_router=router,
+        all_models=[team_row, global_row],
+    )
+
+    by_id = {m["model_info"]["id"]: m for m in result}
+    assert by_id["byok-id-1"]["model_info"]["direct_access"] is False
+    assert by_id["global-id-1"]["model_info"]["direct_access"] is True
