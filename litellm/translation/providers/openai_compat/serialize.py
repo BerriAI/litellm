@@ -174,3 +174,20 @@ def _response_format_json(
                     pass
             return {"type": "json_schema", "json_schema": inner}
     assert_never(response_format.tag)
+
+
+def strip_function_strict(tool: PlainJson) -> PlainJson:
+    """Drop the FUNCTION-LEVEL ``strict`` key from one tool (deeper
+    ``strict`` keys untouched) — v1's ``function.pop("strict", None)``
+    shape shared by xai (filter_value_from_dict at the function level) and
+    fireworks_ai (_transform_tools). Lifted from xai/serialize.py when
+    fireworks_ai became the second consumer."""
+    if not isinstance(tool, dict):
+        return tool
+    function = tool.get("function")
+    if not isinstance(function, dict):
+        return tool
+    return {
+        **tool,
+        "function": {key: value for key, value in function.items() if key != "strict"},
+    }

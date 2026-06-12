@@ -345,6 +345,39 @@ translation/
 │   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
 │   │                    #   OpenAIChatCompletionStreamingHandler) +
 │   │                    #   make_parse_line; "xai" chunk dialect
+│   ├── fireworks_ai/    # wave-2b-alpha own module (httpx dedicated elif
+│   │   │                #   main.py:2198; the WIRE model differs from the
+│   │   │                #   request model and the response model carries
+│   │   │                #   the fireworks_ai/ prefix INSIDE the parser)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   │                #   (cache_control needs NO arm: v1 strips it
+│   │   │                #   recursively == the IR drop, served)
+│   │   ├── params.py    # fireworks' OWN list (user SERVED; top_k mention
+│   │   │                #   dead — extra_body crossing) + three capability
+│   │   │                #   forks over fireworks_ai/{m}; the deps read is
+│   │   │                #   STRICTLY NARROWER than v1's get_provider_info
+│   │   │                #   default-true + hyphen-boundary scan (one-
+│   │   │                #   direction mirror gate; honest drift notes);
+│   │   │                #   response_format WITH tools falls back (v1's
+│   │   │                #   json_mode cross-plane machinery); legacy-defs
+│   │   │                #   tools fall back at the shared inbound arm
+│   │   ├── serialize.py # openai_compat body + accounts/fireworks/models/
+│   │   │                #   model rewrite + mct->max_tokens rename +
+│   │   │                #   tool_choice required->any + function-level
+│   │   │                #   strict strip (shared strip_function_strict) +
+│   │   │                #   the #transform=inline image suffix (literal
+│   │   │                #   "vision" substring gate; data: urls exempt;
+│   │   │                #   the ambient disable global is a SEAM
+│   │   │                #   obligation) + user/reasoning_effort verbatim
+│   │   ├── response.py  # the shared make_direct_parser (OpenAILike
+│   │   │                #   DIRECT construction, "openai_like" seam arm)
+│   │   │                #   with the fireworks_ai/{WIRE model} policy +
+│   │   │                #   the tool-calls-in-content repair fallback
+│   │   │                #   (v1 mints uuid4 ids; the pure parser fails
+│   │   │                #   closed)
+│   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
+│   │                    #   handler; chunks keep the BARE wire model);
+│   │                    #   joins the ONE error-chunk PINNED DIVERGENCE
 │   ├── hosted_vllm/     # wave-2b-alpha own module (httpx dedicated elif
 │   │   │                #   main.py:2619, transforms LIVE, bare wire model)
 │   │   ├── guard.py     # explicit stream:false + the shared openai guard
@@ -548,7 +581,7 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to sixty-eight providers out — `anthropic`,
+OpenAI-chat-in to sixty-nine providers out — `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
@@ -565,7 +598,8 @@ route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `datarobot`, `gradient_ai`, `ovhcloud`, `lemonade`), the five wave-2a
 providers (`perplexity`, `sambanova`, `deepinfra`, `moonshot` on the SDK
 path, `cometapi` on the httpx path), and the wave-2b-alpha own modules
-(`deepseek`, `openrouter`, `hosted_vllm`) — request, response, and stream
+(`deepseek`, `openrouter`, `hosted_vllm`, `fireworks_ai`) — request,
+response, and stream
 translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk
@@ -832,6 +866,40 @@ false — contrast xai's function-level-only strip). hosted_vllm fork
 obligations: NO model preset (bare wire model); streams fold
 providers/hosted_vllm.parse_line (the FAMILY policy; the base-handler
 error-chunk PINNED DIVERGENCE covers it) with the "xai" chunk dialect.
+Deliberate wave-2b-alpha (fireworks_ai) fallback surfaces (each names the
+v1 path): tools/parallel_tool_calls/tool_choice/reasoning_effort wherever
+the fireworks_ai/{m} map flag is not explicitly true — the deps read is
+STRICTLY NARROWER than v1's get_provider_info default-true +
+hyphen-boundary scan (one-direction soundness pinned by
+test_capability_mirror_is_one_direction: zero v1-False/v2-True rows at
+HEAD; v1 serves or raises per its own gate, the typed fallback reproduces
+it either way; re-evaluate with a deps map-scan surface if tools fallback
+volume hurts); response_format WITH tools (v1 pops response_format and
+sets the json_mode routing marker — the groq-shape cross-plane
+machinery); legacy-def tool schemas (the SHARED inbound arm; v1 inlines
+$refs via unpack_legacy_defs); assistant provider_specific_fields /
+thinking_blocks (v1 POPS both); pdf/file parts (v1 migrates to
+image_url); n / logprobs / penalties / prompt_truncate_length /
+context_length_exceeded_behavior (v1 serves — top-level for the OpenAI
+ones, extra_body crossing for the provider-native two); top_k (extra_body
+crossing, wire-proven); explicit stream:false; on the response side, the
+tool-calls-in-content repair shape (v1 synthesizes a uuid4 tool_call —
+the pure parser fails closed; reserved json_tool_call contents serve
+verbatim, pinned) and non-string wire models (v1's ModelResponse(**json)
+raises ValidationError). SERVED, never fallbacks: the accounts/fireworks/
+models/{m} model rewrite (kept verbatim for accounts/-prefixed and
+#-bearing ids), mct->max_tokens, tool_choice required->any, the
+function-level strict strip (deeper strict keys ride verbatim — v1 keeps
+them), the #transform=inline image suffix (LITERAL "vision" substring
+gate on the REWRITTEN model; data: urls exempt), cache_control stripped
+(== the IR drop), and user/reasoning_effort verbatim. fireworks_ai fork
+obligations: NO seam preset and the "openai_like" construction arm with
+the parser-owned fireworks_ai/{WIRE model} prefix (NOT the request
+model); the ambient litellm.disable_add_transform_inline_image_block
+global (and the per-request litellm_params flag) must FORCE v1 at the
+seam before flag-on — the serializer encodes the default-enabled arm
+only; response _hidden_params.additional_headers ride the seam's
+headers-passthrough follow-up.
 Streaming-seam obligations carried from wave 2a (verifier-wave2a W1/W2 —
 no impact while streaming stays on v1, pinned by
 `test_reasoning_stream_seam_obligation_canary`): the SDK family's openai

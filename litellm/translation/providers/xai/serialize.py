@@ -19,7 +19,7 @@ from expression import Error, Result
 from ...deps import TranslationDeps
 from ...errors import TranslationError
 from ...ir import Body, ChatRequest, PlainJson
-from ..openai_compat.serialize import assemble_body
+from ..openai_compat.serialize import assemble_body, strip_function_strict
 from . import params as p
 
 _SerializeResult = Result[Body, TranslationError]
@@ -43,16 +43,7 @@ def _with_xai_deltas(body: Body, request: ChatRequest) -> Body:
     tools = body.get("tools")
     if not isinstance(tools, list):
         return {**body, **extras}
-    return {**body, "tools": [_without_strict(tool) for tool in tools], **extras}
-
-
-def _without_strict(tool: PlainJson) -> PlainJson:
-    if not isinstance(tool, dict):
-        return tool
-    function = tool.get("function")
-    if not isinstance(function, dict):
-        return tool
-    return {
-        **tool,
-        "function": {key: value for key, value in function.items() if key != "strict"},
-    }
+    # the function-level strict strip is openai_compat.serialize.
+    # strip_function_strict (lifted there when fireworks_ai became the
+    # second consumer)
+    return {**body, "tools": [strip_function_strict(tool) for tool in tools], **extras}

@@ -121,6 +121,10 @@ Provider = Literal[
     # hosted_vllm: bare wire model too; thinking serves through v1's
     # deterministic budget-band rewrite, tools cleaned recursively.
     "hosted_vllm",
+    # fireworks_ai: the ONE wave-2b-alpha prefixing parser so far —
+    # fireworks_ai/{WIRE model} INSIDE its parser (never a seam preset);
+    # request model rewritten to accounts/fireworks/models/{m}.
+    "fireworks_ai",
 ]
 
 NeverPortProvider = Literal[

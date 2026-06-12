@@ -613,9 +613,14 @@ def _wave2b_alpha_error_chunk_pins() -> bool:
     from . import test_differential_deepseek_stream as _ds_stream
     from . import test_differential_hosted_vllm_stream as _hv_stream
 
+    from litellm.translation.providers import fireworks_ai as _fireworks_pkg
+
+    from . import test_differential_fireworks_ai_stream as _fw_stream
+
     consumers = (
         (_ds_stream, _deepseek_pkg.parse_line),
         (_hv_stream, _hosted_vllm_pkg.parse_line),
+        (_fw_stream, _fireworks_pkg.parse_line),
     )
     for mod, line_parser in consumers:
         v1 = mod._v1_chunks(mod._ERROR_CHUNK_STREAM)
@@ -905,11 +910,148 @@ def _hosted_vllm_rows(lines: list) -> int:
     return failures
 
 
+def _fireworks_ai_rows(lines: list) -> int:
+    import pydantic
+
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import _own_module_corpus as own
+    from . import test_differential_fireworks_ai_request as req
+    from . import test_differential_fireworks_ai_response as resp
+    from . import test_differential_fireworks_ai_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## fireworks_ai: request bodies (v1 get_optional_params"
+        "('fireworks_ai') + the LIVE httpx transform_request — dedicated elif"
+        " main.py:2198, incl. the accounts/fireworks/models/ rewrite, the"
+        " required->any tool_choice arm and the #transform=inline image"
+        " suffix — vs v2 providers/fireworks_ai)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            own.run_v1_request_transform("fireworks_ai", case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, reason = req.V1_RAISES[name]
+        result = req._v2(case)
+        try:
+            own.run_v1_request_transform("fireworks_ai", case)
+            raised = False
+        except UnsupportedParamsError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req.EXPECTED_FALLBACKS):
+        case, reason = req.EXPECTED_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## fireworks_ai: responses (v1's OWN transform_response — the"
+        " OpenAILike DIRECT construction + the fireworks_ai/{WIRE model}"
+        " prefix + the tool-calls-in-content repair — vs v2 direct parser"
+        " with the openai_like seam arm)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = resp._norm(v2) == resp._norm(v1) and v2["model"] == (
+            f"fireworks_ai/{resp.WIRE_MODEL}"
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name} (prefixed)")
+    from litellm.translation.inbound.openai_chat import parse_request as _parse_req
+    from litellm.translation.providers.fireworks_ai import (
+        parse_response as _fw_parse,
+    )
+
+    parsed = _parse_req(dict(resp._REQUEST))
+    repair_result = _fw_parse(dict(resp._REPAIR_BODY), parsed.ok)
+    repair_v1 = resp._v1_model_response(resp._REPAIR_BODY)
+    repair_ok = (
+        repair_result.is_error()
+        and "uuid4" in repair_result.error.summary
+        and repair_v1["choices"][0]["message"]["content"] is None
+    )
+    failures += 0 if repair_ok else 1
+    label = "FALLBACK (v1 serves it)" if repair_ok else "DIVERGENT"
+    lines.append(
+        f"- {label}: tool_call_in_content_repair (v1 synthesizes the"
+        " tool_call with a fresh uuid4; the pure parser fails closed)"
+    )
+    try:
+        resp._v1_model_response(resp._NON_STRING_MODEL_BODY)
+        raised = False
+    except pydantic.ValidationError:
+        raised = True
+    ns_result = _fw_parse(dict(resp._NON_STRING_MODEL_BODY), parsed.ok)
+    ns_ok = (
+        raised
+        and ns_result.is_error()
+        and "non-string wire model" in ns_result.error.summary
+    )
+    failures += 0 if ns_ok else 1
+    label = "FALLBACK (v1 raises ValidationError)" if ns_ok else "DIVERGENT"
+    lines.append(f"- {label}: non_string_wire_model")
+    lines += [
+        "",
+        "## fireworks_ai: streams (v1 base OpenAIChatCompletionStreamingHandler"
+        " + CustomStreamWrapper('fireworks_ai') over SSE lines vs v2 fireworks"
+        " parser — the httpx_chunk family policy — with the xai chunk dialect;"
+        " chunk models stay the BARE wire model, no prefix)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    return failures
+
+
 def _wave2b_alpha_rows(lines: list) -> int:
     """wave-2b-alpha own-module providers, researcher-4 ascending-risk
     order. APPEND-ONLY: each provider's row function lands in its own
     commit; the beta sibling appends its own section function."""
-    return _deepseek_rows(lines) + _openrouter_rows(lines) + _hosted_vllm_rows(lines)
+    return (
+        _deepseek_rows(lines)
+        + _openrouter_rows(lines)
+        + _hosted_vllm_rows(lines)
+        + _fireworks_ai_rows(lines)
+    )
 
 
 def _cometapi_rows(lines: list) -> int:

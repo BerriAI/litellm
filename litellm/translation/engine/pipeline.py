@@ -63,6 +63,11 @@ from ..providers.deepseek import serialize_request as deepseek_serialize_request
 from ..providers.deepseek import (
     unsupported_request_shapes as deepseek_unsupported_request_shapes,
 )
+from ..providers.fireworks_ai import parse_response as fireworks_parse_response
+from ..providers.fireworks_ai import serialize_request as fireworks_serialize_request
+from ..providers.fireworks_ai import (
+    unsupported_request_shapes as fireworks_unsupported_request_shapes,
+)
 from ..providers.google_genai import parse_response as google_parse_response
 from ..providers.google_genai import (
     serialize_request_studio as google_serialize_request_studio,
@@ -134,6 +139,7 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "deepseek": deepseek_serialize_request,
         "openrouter": openrouter_serialize_request,
         "hosted_vllm": hosted_vllm_serialize_request,
+        "fireworks_ai": fireworks_serialize_request,
     }
 )
 
@@ -172,6 +178,11 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         "deepseek": deepseek_parse_response,
         "openrouter": openrouter_parse_response,
         "hosted_vllm": hosted_vllm_parse_response,
+        # fireworks_ai: its OWN transform_response (the OpenAILike DIRECT
+        # construction + the fireworks_ai/{wire model} prefix) -> the shared
+        # direct-parser factory with the fireworks policy; the seam fork must
+        # use the "openai_like" construction arm (RESPONSE_STYLE, pinned).
+        "fireworks_ai": fireworks_parse_response,
     }
 )
 
@@ -206,6 +217,7 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         "deepseek": _OPENAI_DIALECT,
         "openrouter": _OPENAI_DIALECT,
         "hosted_vllm": _OPENAI_DIALECT,
+        "fireworks_ai": _OPENAI_DIALECT,
     }
 )
 
@@ -234,6 +246,7 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         "deepseek": deepseek_unsupported_request_shapes,
         "openrouter": openrouter_unsupported_request_shapes,
         "hosted_vllm": hosted_vllm_unsupported_request_shapes,
+        "fireworks_ai": fireworks_unsupported_request_shapes,
     }
 )
 
