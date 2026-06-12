@@ -1,8 +1,15 @@
-# Helm Chart for LiteLLM
+# Helm Chart for LiteLLM (stable / monolithic)
 
 > [!IMPORTANT]
-> This is community maintained, Please make an issue if you run into a bug
+> This is the **stable, community-maintained, monolithic** Helm chart and is the recommended starting point for most users. Please make an issue if you run into a bug.
 > We recommend using [Docker or Kubernetes for production deployments](https://docs.litellm.ai/docs/proxy/prod)
+
+> [!NOTE]
+> **Which chart should I use?** This repo currently ships two charts:
+> - **`deploy/charts/litellm-helm/`** (this chart) — single-Deployment, community-maintained, stable. Use this unless you specifically need the microservices split below.
+> - **`helm/litellm/`** — experimental microservices-split chart maintained by the LiteLLM team. See the [microservices helm guide](https://docs.litellm.ai/docs/proxy/microservices_helm) for guidance. The associated container images are dev-only releases (see [BerriAI packages](https://github.com/orgs/BerriAI/packages?repo_name=litellm)).
+>
+> See [#28619](https://github.com/BerriAI/litellm/issues/28619) for the discussion that prompted this clarification.
 
 ## Prerequisites
 
