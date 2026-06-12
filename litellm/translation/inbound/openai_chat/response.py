@@ -29,6 +29,7 @@ from expression import Option
 from expression.collections import Block
 
 from ...deps import TranslationDeps
+from ...errors import BoundaryError, TranslationError
 from ...ir import Body, ChatResponse, ContentBlock, PlainJson, ResponseUsage
 
 ResponseDialect = Literal["anthropic", "bedrock_converse", "openai", "gemini"]
@@ -38,13 +39,27 @@ def serialize_response(
     response: ChatResponse,
     deps: TranslationDeps,
     dialect: ResponseDialect = "anthropic",
-) -> Body:
+) -> Body | TranslationError:
     if dialect == "openai":
         match response.wire:
             case Option(tag="some", some=blob) if isinstance(blob.value, dict):
                 return blob.value
             case _:
-                pass  # no wire body: fall through to the anthropic assembly
+                # The openai dialect has no assembly of its own: the provider
+                # parser MUST ride the normalized body on ChatResponse.wire.
+                # A registered openai-dialect parser that does not is a
+                # wiring bug; serving the anthropic assembly here would put a
+                # wrong-shaped body on the wire silently (critic-openai M3).
+                return TranslationError.of_boundary(
+                    BoundaryError.of(
+                        Block.of_seq(
+                            [
+                                "openai-dialect response carries no wire body;"
+                                " the provider parser must set ChatResponse.wire"
+                            ]
+                        )
+                    )
+                )
     if dialect == "gemini":
         return _gemini_body(response)
     text = "".join(block.text.text for block in response.content if block.tag == "text")

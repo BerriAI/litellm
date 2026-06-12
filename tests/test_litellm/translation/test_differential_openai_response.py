@@ -345,3 +345,23 @@ def test_unreachable_response_shape_is_a_typed_error(name: str) -> None:
     result = parse_response(copy.deepcopy(raw), parsed.ok)
     assert result.is_error(), f"{name} unexpectedly parsed"
     assert reason_fragment in result.error.summary, result.error.summary
+
+
+def test_openai_dialect_without_wire_body_is_a_loud_error() -> None:
+    """An openai-dialect response whose parser failed to set
+    ChatResponse.wire must be a typed error, never a silently served
+    anthropic-shaped body (critic-openai M3)."""
+    import dataclasses
+
+    from expression import Nothing
+
+    from litellm.translation.errors import TranslationError
+
+    parsed = parse_request(copy.deepcopy(_REQUEST))
+    assert parsed.is_ok()
+    response = parse_response(copy.deepcopy(_RESPONSES["text"]), parsed.ok)
+    assert response.is_ok()
+    wireless = dataclasses.replace(response.ok, wire=Nothing)
+    body = serialize_response(wireless, build_translation_deps(), "openai")
+    assert isinstance(body, TranslationError)
+    assert "wire body" in body.summary

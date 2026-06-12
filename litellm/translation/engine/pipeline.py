@@ -180,9 +180,18 @@ def translate_chat_response(
             )
         )
     dialect = response_dialect(provider)
-    return parser(raw_response, request).map(
-        lambda response: serialize_response(response, deps, dialect)
+    return parser(raw_response, request).bind(
+        lambda response: _serialized_body(response, deps, dialect)
     )
+
+
+def _serialized_body(
+    response: ChatResponse, deps: TranslationDeps, dialect: ResponseDialect
+) -> TranslateResult:
+    body = serialize_response(response, deps, dialect)
+    if isinstance(body, TranslationError):
+        return Error(body)
+    return Ok(body)
 
 
 @dataclass(frozen=True)
@@ -268,9 +277,10 @@ async def send_prepared(
         )
     match parser(response.body, prepared.request):
         case Result(tag="ok", ok=chat_response):
-            return Ok(
-                serialize_response(chat_response, deps, response_dialect(provider))
-            )
+            body = serialize_response(chat_response, deps, response_dialect(provider))
+            if isinstance(body, TranslationError):
+                return Error(ExecuteError.of_translation(body))
+            return Ok(body)
         case Result(error=response_err):
             return Error(ExecuteError.of_translation(response_err))
 
