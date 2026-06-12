@@ -1,4 +1,4 @@
-# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family)
+# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha own modules)
 
 v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
 explained FALLBACK that v1 serves) for a provider's flag to turn on.
@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: 86697f4aa3
+- commit: 71da3c71c9
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -1810,7 +1810,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - SEAM CONTRACT: lemonade usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: minimax usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: ovhcloud usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
-- PINNED DIVERGENCE (fail-closed on a failure path): mid-stream {'error': ...} chunks — v1's BASE handler silently swallows them (no error surface in the emitted sequence; asserted in-process for all nine base-handler members), v2's family parser surfaces a LOUD typed boundary error naming the chunk (test_error_chunk_divergence_two_sided; cometapi differs: its v1 handler RAISES and its policy row mirrors the raise — see the cometapi stream rows below)
+- PINNED DIVERGENCE (fail-closed on a failure path): mid-stream {'error': ...} chunks — v1's BASE handler silently swallows them (no error surface in the emitted sequence; asserted in-process for all nine base-handler members AND the wave-2b-alpha own-module base-handler consumers, per their dedicated stream gates), v2's family parser surfaces a LOUD typed boundary error naming the chunk (test_error_chunk_divergence_two_sided; cometapi differs: its v1 handler RAISES and its policy row mirrors the raise — see the cometapi stream rows below)
 
 ## cometapi: responses (v1 CometAPIConfig.transform_response over httpx — LIVE on the dedicated elif, main.py:2547 — vs v2 shared openai parser with NO model preset; bare wire model, the xai R4 pin)
 
@@ -1821,6 +1821,269 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 ## cometapi: streams (v1 line-seam replay through CometAPIChatCompletionStreamingHandler + CustomStreamWrapper('cometapi') vs v2 cometapi parser + the shared xai chunk dialect)
 
 - IDENTICAL: extras_dropped
+- IDENTICAL: native_reasoning_content
+- IDENTICAL: reasoning_rename
+- IDENTICAL: text
+- IDENTICAL: tools
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+
+## deepseek: request bodies (v1 get_optional_params('deepseek') + the LIVE httpx transform_request — dedicated elif main.py:1942 — vs v2 providers/deepseek)
+
+- IDENTICAL: content_list_flattened
+- IDENTICAL: max_completion_tokens_verbatim
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: reasoner_thinking_without_history
+- IDENTICAL: reasoning_effort_none_dropped
+- IDENTICAL: reasoning_effort_rewrites_to_thinking
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: thinking_disabled_dropped
+- IDENTICAL: thinking_disabled_shadows_reasoning_effort
+- IDENTICAL: thinking_enabled_budget_discarded
+- IDENTICAL: thinking_history_inert_on_non_reasoning_model
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_none_verbatim
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 serves it): non_text_content (lossy flatten)
+- FALLBACK (v1 serves it): reasoning_effort_fill_history (_fill_reasoning_content)
+- FALLBACK (v1 serves it): stream_false (stream)
+- FALLBACK (v1 serves it): thinking_fill_history (_fill_reasoning_content)
+- FALLBACK (v1 serves it): top_k (extra_body)
+- FALLBACK (v1 serves it): user (user)
+- FALLBACK (v1 serves it): web_search_options (web_search_options)
+
+## deepseek: responses (v1 base GPT transform_response over httpx — LIVE on the dedicated elif — vs v2 shared openai parser with NO model preset; bare wire model, the xai R4 pin)
+
+- IDENTICAL: reasoning_content (no prefix)
+- IDENTICAL: text (no prefix)
+- IDENTICAL: tool_calls (no prefix)
+
+## deepseek: streams (v1 base OpenAIChatCompletionStreamingHandler + CustomStreamWrapper('deepseek') over SSE lines vs v2 deepseek parser — the httpx_chunk family policy — with the xai chunk dialect)
+
+- IDENTICAL: empty_keepalive_swallowed
+- IDENTICAL: native_reasoning_content
+- IDENTICAL: reasoning_rename
+- IDENTICAL: text
+- IDENTICAL: tools
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+
+## openrouter: request bodies (v1 get_optional_params('openrouter') + the LIVE httpx transform_request — dedicated elif main.py:3354, incl. the always-injected usage:{include:true} — vs v2 providers/openrouter)
+
+- IDENTICAL: cache_control_stripped_on_non_cache_model
+- IDENTICAL: max_completion_tokens_verbatim
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: reasoning_effort_on_reasoner
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- IDENTICAL: top_k_top_level
+- FALLBACK (v1 raises UnsupportedParamsError): reasoning_effort_on_non_reasoning_model (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): thinking_on_non_reasoning_model (thinking)
+- FALLBACK (v1 serves it): cache_control_on_claude (cache-capable)
+- FALLBACK (v1 serves it): route (route)
+- FALLBACK (v1 serves it): stream_false (stream)
+- FALLBACK (v1 serves it): thinking_on_reasoner (VERBATIM)
+- FALLBACK (v1 serves it): transforms (transforms)
+- FALLBACK (v1 serves it): user (user)
+
+## openrouter: responses (v1 base GPT transform_response + the usage.cost hidden-params post-step vs v2 shared openai parser; NO model preset, bare wire model)
+
+- IDENTICAL: message_reasoning (no prefix)
+- IDENTICAL: text (no prefix)
+- IDENTICAL: tool_calls (no prefix)
+- IDENTICAL: usage_cost (no prefix)
+- SEAM CONTRACT: usage.cost hidden-params header (v1's transform copies the wire usage.cost into _hidden_params additional_headers; the v2 body retains usage.cost verbatim and the future completion() fork must rebuild the header — CLAUDE.md HARD OBLIGATION)
+
+## openrouter: streams (v1 line-seam replay through OpenRouterChatCompletionStreamingHandler + CustomStreamWrapper('openrouter') vs v2 openrouter parser — the 'unconditional' ReasoningMode policy + missing-delta pre-step — with the xai chunk dialect)
+
+- IDENTICAL: empty_keepalive_swallowed
+- IDENTICAL: native_reasoning_content_clobbered
+- IDENTICAL: reasoning_both_keys
+- IDENTICAL: text
+- IDENTICAL: tools
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+
+## hosted_vllm: request bodies (v1 get_optional_params('hosted_vllm') + the LIVE httpx transform_request — dedicated elif main.py:2619, incl. the recursive tools cleaning and the thinking budget-band rewrite — vs v2 providers/hosted_vllm)
+
+- IDENTICAL: max_completion_tokens_verbatim
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: reasoning_effort_verbatim
+- IDENTICAL: reasoning_effort_wins_over_thinking
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: thinking_adaptive_dropped
+- IDENTICAL: thinking_band_high
+- IDENTICAL: thinking_band_low
+- IDENTICAL: thinking_band_medium
+- IDENTICAL: thinking_band_minimal_no_budget
+- IDENTICAL: thinking_disabled_dropped
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_cleaned_recursively
+- FALLBACK (v1 serves it): assistant_thinking_blocks (thinking_blocks)
+- FALLBACK (v1 serves it): custom_tool (custom-type tool)
+- FALLBACK (v1 serves it): stream_false (stream)
+- FALLBACK (v1 serves it): top_k (extra_body)
+- FALLBACK (v1 serves it): user (user)
+- FALLBACK (v1 serves it): video_file_part (not yet supported)
+
+## hosted_vllm: responses (v1 base GPT transform_response over httpx — LIVE on the dedicated elif — vs v2 shared openai parser with NO model preset; bare wire model, the xai R4 pin)
+
+- IDENTICAL: reasoning_content (no prefix)
+- IDENTICAL: text (no prefix)
+- IDENTICAL: tool_calls (no prefix)
+
+## hosted_vllm: streams (v1 base OpenAIChatCompletionStreamingHandler + CustomStreamWrapper('hosted_vllm') over SSE lines vs v2 hosted_vllm parser — the httpx_chunk family policy — with the xai chunk dialect)
+
+- IDENTICAL: empty_keepalive_swallowed
+- IDENTICAL: native_reasoning_content
+- IDENTICAL: reasoning_rename
+- IDENTICAL: text
+- IDENTICAL: tools
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+
+## fireworks_ai: request bodies (v1 get_optional_params('fireworks_ai') + the LIVE httpx transform_request — dedicated elif main.py:2198, incl. the accounts/fireworks/models/ rewrite, the required->any tool_choice arm and the #transform=inline image suffix — vs v2 providers/fireworks_ai)
+
+- IDENTICAL: cache_control_stripped
+- IDENTICAL: image_data_url_exempt
+- IDENTICAL: image_inline_suffix_on_non_vision_name
+- IDENTICAL: image_no_suffix_on_vision_named_model
+- IDENTICAL: max_completion_tokens_renamed
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: reasoning_effort_on_flagged_model
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text_accounts_model_kept
+- IDENTICAL: text_bare_model_rewritten
+- IDENTICAL: text_hash_model_kept
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_required_to_any
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto_on_flagged_model
+- IDENTICAL: user_verbatim
+- FALLBACK (v1 raises UnsupportedParamsError): reasoning_effort_on_non_reasoning_model (strictly narrower)
+- FALLBACK (v1 raises UnsupportedParamsError): tools_on_explicit_no_fc_model (strictly narrower)
+- FALLBACK (v1 serves it): assistant_thinking_blocks (thinking_blocks)
+- FALLBACK (v1 serves it): legacy_defs_tool (schema inlining)
+- FALLBACK (v1 serves it): n (n)
+- FALLBACK (v1 serves it): pdf_file_part (not yet supported)
+- FALLBACK (v1 serves it): prompt_truncate_length (prompt_truncate_length)
+- FALLBACK (v1 serves it): provider_specific_fields_message (provider_specific_fields)
+- FALLBACK (v1 serves it): response_format_with_tools (json_mode)
+- FALLBACK (v1 serves it): stream_false (stream)
+- FALLBACK (v1 serves it): tools_on_unflagged_model_drift (strictly narrower)
+- FALLBACK (v1 serves it): top_k (extra_body)
+
+## fireworks_ai: responses (v1's OWN transform_response — the OpenAILike DIRECT construction + the fireworks_ai/{WIRE model} prefix + the tool-calls-in-content repair — vs v2 direct parser with the openai_like seam arm)
+
+- IDENTICAL: plain_content_with_tools (prefixed)
+- IDENTICAL: text (prefixed)
+- IDENTICAL: tool_calls (prefixed)
+- FALLBACK (v1 serves it): tool_call_in_content_repair (v1 synthesizes the tool_call with a fresh uuid4; the pure parser fails closed)
+- FALLBACK (v1 raises ValidationError): non_string_wire_model
+
+## fireworks_ai: streams (v1 base OpenAIChatCompletionStreamingHandler + CustomStreamWrapper('fireworks_ai') over SSE lines vs v2 fireworks parser — the httpx_chunk family policy — with the xai chunk dialect; chunk models stay the BARE wire model, no prefix)
+
+- IDENTICAL: empty_keepalive_swallowed
+- IDENTICAL: native_reasoning_content
+- IDENTICAL: reasoning_rename
+- IDENTICAL: text
+- IDENTICAL: tools
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+
+## snowflake: request bodies (v1 get_optional_params('snowflake') + the LIVE httpx transform_request — dedicated elif main.py:4286, incl. the tool_spec/tool_choice wire mapping, the ALWAYS-on stream key and the verbatim messages — vs v2 providers/snowflake)
+
+- IDENTICAL: content_list_verbatim
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: sampling
+- IDENTICAL: stream_false_served
+- IDENTICAL: stream_true
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_auto
+- IDENTICAL: tool_choice_none_object
+- IDENTICAL: tool_choice_required_to_any
+- IDENTICAL: tool_choice_specific_to_name_array
+- IDENTICAL: tools_to_tool_spec
+- IDENTICAL: top_k_top_level
+- FALLBACK (v1 raises UnsupportedParamsError): max_completion_tokens (max_completion_tokens)
+- FALLBACK (v1 raises UnsupportedParamsError): parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): stop (stop)
+- FALLBACK (v1 serves it): message_name (name)
+- FALLBACK (v1 serves it): user (user)
+
+## snowflake: responses (v1's OWN transform_response — the content_list rewrite + OpenAILike DIRECT construction + the snowflake/{wire model} prefix — vs v2 pre-rewrite + direct parser with the openai_like seam arm)
+
+- IDENTICAL: content_list_text (prefixed)
+- IDENTICAL: content_list_tool_use (prefixed)
+- IDENTICAL: plain_content (prefixed)
+- FALLBACK (v1 raises ValidationError): non_string_wire_model
+- SEAM CONTRACT: request model in _hidden_params['model'] (v1's cost-calculator feed; dump-invisible — the future completion() fork must set it, CLAUDE.md HARD OBLIGATION)
+
+## snowflake: streams (v1 base OpenAIChatCompletionStreamingHandler + CustomStreamWrapper('snowflake') over Cortex SSE lines vs v2 snowflake parser — the httpx_chunk family policy — with the xai chunk dialect; real Cortex delta shapes are UNPINNED upstream)
+
+- IDENTICAL: empty_keepalive_swallowed
+- IDENTICAL: native_reasoning_content
+- IDENTICAL: reasoning_rename
+- IDENTICAL: text
+- IDENTICAL: tools
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+
+## huggingface: request bodies — the api_base (dedicated endpoint) route ONLY (v1 get_optional_params('huggingface') + the LIVE httpx transform_request's VERBATIM ChatCompletionRequest arm vs v2 providers/huggingface; the router route is a typed fallback whole)
+
+- IDENTICAL: content_list_verbatim
+- IDENTICAL: max_completion_tokens_verbatim
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: sampling
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- IDENTICAL: top_k_top_level
+- FALLBACK (v1 serves it): max_retries (max_retries)
+- FALLBACK (v1 serves it): message_name (name)
+- FALLBACK (v1 serves it): stream_false (stream)
+- FALLBACK (v1 serves it): user (user)
+- FALLBACK (v1 serves it): router_route_whole (no api_base: v1 synthesizes router.huggingface.co URLs; 3-segment names fetch the HF provider mapping over HTTP inside the transform — the in-transform I/O the port refuses; 1-segment names CRASH v1)
+
+## huggingface: responses (v1 base GPT transform_response over httpx — LIVE on the dedicated elif — vs v2 shared openai parser with NO model preset; bare wire model, the xai R4 pin)
+
+- IDENTICAL: reasoning_content (no prefix)
+- IDENTICAL: text (no prefix)
+- IDENTICAL: tool_calls (no prefix)
+
+## huggingface: streams (v1 base OpenAIChatCompletionStreamingHandler + CustomStreamWrapper('huggingface') over SSE lines vs v2 huggingface parser — the httpx_chunk family policy — with the xai chunk dialect)
+
+- IDENTICAL: empty_keepalive_swallowed
 - IDENTICAL: native_reasoning_content
 - IDENTICAL: reasoning_rename
 - IDENTICAL: text
