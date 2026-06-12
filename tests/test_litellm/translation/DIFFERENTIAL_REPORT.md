@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: c52360173d
+- commit: a608d8bf1c
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
