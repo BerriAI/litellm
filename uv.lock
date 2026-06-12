@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-06-08T18:13:46.085526Z"
+exclude-newer = "2026-06-08T17:51:27.122018Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3482,7 +3482,7 @@ proxy-dev = [
 [package.metadata]
 requires-dist = [
     { name = "a2a-sdk", marker = "extra == 'extra-proxy'", specifier = ">=0.3.24,<1.0" },
-    { name = "aiohttp", specifier = ">=3.14.0,<4.0" },
+    { name = "aiohttp", specifier = ">=3.10,<4.0" },
     { name = "anthropic", extras = ["vertex"], marker = "extra == 'proxy-runtime'", specifier = ">=0.84.0,<1.0" },
     { name = "apscheduler", marker = "extra == 'proxy'", specifier = ">=3.11.2,<4.0" },
     { name = "audioread", marker = "extra == 'stt-nvidia-riva'", specifier = ">=3.0.1" },
