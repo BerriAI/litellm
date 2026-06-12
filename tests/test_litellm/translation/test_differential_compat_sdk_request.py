@@ -19,6 +19,7 @@ import pytest
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
+from litellm.utils import get_optional_params
 
 from litellm.translation import translate_chat_request
 from litellm.translation.dispatch import Provider
@@ -85,8 +86,11 @@ for _p in PROVIDERS:
             {"model": _m(_p), "parallel_tool_calls": False, "messages": _USER},
             "parallel_tool_calls",
         )
-    # no provider in the family supports reasoning_effort except cerebras
-    # (capability-gated, pinned below)
+    # reasoning_effort is capability-gated for the providers in
+    # _REASONING_CAPABILITY_GATES (cerebras/perplexity/deepinfra) and
+    # unsupported everywhere else; the blanket raise row below is sound for
+    # ALL non-cerebras providers because every SPECS corpus model is
+    # non-reasoning (served rows on capable models are pinned separately)
     if _p != "cerebras":
         V1_RAISES[f"{_p}:reasoning_effort"] = (
             _p,
@@ -737,18 +741,27 @@ def test_mct_verbatim_matches_v1(provider: str) -> None:
     assert "max_tokens" not in result.ok
 
 
-def test_top_k_fallback_reason_matches_v1_silent_drop() -> None:
-    """v1 silently drops top_k WITHOUT drop_params (it is not an OpenAI
-    param, so _check_valid_arg never sees it) — the fallback reason must say
-    so instead of claiming an UnsupportedParamsError raise (verifier-wave1a
-    F6). Pinned in-process: v1 serves the request with top_k gone."""
-    case = {"model": _m("lambda_ai"), "top_k": 3, "messages": _USER}
-    result = _v2("lambda_ai", case)
-    assert result.is_error()
-    assert "silently drops it" in result.error.summary, result.error.summary
-    assert "UnsupportedParamsError" not in result.error.summary
-    v1 = run_v1_request_transform("lambda_ai", case)
-    assert "top_k" not in v1
+def test_top_k_fallback_reason_matches_v1_extra_body_packing() -> None:
+    """top_k never reaches _check_valid_arg (not an OpenAI param — the
+    verifier-wave1a F6 half, still pinned: no raise, gone from the
+    transform output) but it is NOT dropped: get_optional_params packs it
+    into extra_body and the SDK merges it top-level, so v1 SERVES it. The
+    reason must own that verified mechanism instead of the
+    transform-output-only "silently drops" reading (critic-wave2a M1);
+    both halves pinned in-process here, for a wave-1a AND a wave-2a member."""
+    for provider in ("lambda_ai", "perplexity"):
+        case = {"model": _m(provider), "top_k": 3, "messages": _USER}
+        result = _v2(provider, case)
+        assert result.is_error(), provider
+        assert "extra_body" in result.error.summary, result.error.summary
+        assert "silently drops" not in result.error.summary
+        assert "UnsupportedParamsError" not in result.error.summary
+        v1 = run_v1_request_transform(provider, copy.deepcopy(case))
+        assert "top_k" not in v1, provider
+        packed = get_optional_params(
+            model=_m(provider), custom_llm_provider=provider, stream=None, top_k=3
+        )
+        assert packed["extra_body"] == {"top_k": 3}, provider
 
 
 def test_together_text_response_format_dropped_like_v1() -> None:
@@ -794,7 +807,7 @@ def test_nvidia_gemma_arm_serves_its_reduced_list() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _identical(provider: str, case: dict) -> dict:
+def _identical(provider: str, case: dict[str, object]) -> dict[str, object]:
     result = _v2(provider, case)
     assert result.is_ok(), result.error.summary
     v1 = run_v1_request_transform(provider, case)

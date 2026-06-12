@@ -102,13 +102,20 @@ def unsupported_against(
             return note
         if key == "top_k":
             # top_k is not an OpenAI param: it never enters
-            # non_default_params, so _check_valid_arg never sees it and v1
-            # drops it WITHOUT drop_params (verified in-process at HEAD;
-            # verifier-wave1a F6).
+            # non_default_params, so _check_valid_arg never sees it (no
+            # raise, even without drop_params — verifier-wave1a F6's half of
+            # the story). It is NOT dropped, though: get_optional_params
+            # packs it into extra_body (the provider-specific passthrough)
+            # and the SDK/handler merges extra_body top-level, so v1 SERVES
+            # it. Re-verified in-process at HEAD for ALL 18 family
+            # providers; critic-wave2a M1 made this verified truth the
+            # default arm instead of the transform-output-only "silently
+            # drops" reading.
             return (
                 f"top_k on {provider}: not an OpenAI param; v1's "
-                "get_optional_params silently drops it (no raise, even "
-                "without drop_params)"
+                "get_optional_params packs it into extra_body and the "
+                "SDK/handler merges it top-level — that crossing is "
+                "unported, v1 serves it"
             )
         return (
             f"{key} on {provider}: outside v1's supported list; "
@@ -379,19 +386,9 @@ def volcengine_unsupported(request: ChatRequest, deps: TranslationDeps) -> str |
 
 
 # ---------------------------------------------------------------------------
-# wave-2a gates. Shared fact (verified in-process at HEAD): for every provider
-# below, get_optional_params packs top_k into ``extra_body`` (the
-# provider-specific passthrough for openai-compatible providers) and the
-# SDK/handler merges it top-level — v1 SERVES it; the crossing is unported.
+# wave-2a gates. The top_k extra_body passthrough is the shared default arm
+# in ``unsupported_against`` above (true for all 18 family providers).
 # ---------------------------------------------------------------------------
-
-
-def _top_k_extra_body_note(provider: str) -> str:
-    return (
-        f"top_k on {provider}: v1 packs it into extra_body (the "
-        "provider-specific passthrough) and the SDK/handler merges it "
-        "top-level; that crossing is unported, v1 serves it"
-    )
 
 
 # Perplexity's own reduced list (perplexity/chat/transformation.py:44-55),
@@ -426,7 +423,6 @@ def perplexity_unsupported(request: ChatRequest, deps: TranslationDeps) -> str |
         allowed=allowed,
         notes={
             "user": _user_note("perplexity"),
-            "top_k": _top_k_extra_body_note("perplexity"),
             "reasoning_effort": (
                 f"reasoning_effort on non-reasoning perplexity model "
                 f"{request.model} (model-map supports_reasoning gate); "
@@ -438,7 +434,7 @@ def perplexity_unsupported(request: ChatRequest, deps: TranslationDeps) -> str |
 
 # SambanovaConfig's list (sambanova/chat.py:56-80), IR-restricted. top_k IS in
 # v1's list but never enters non_default_params, so it rides the extra_body
-# passthrough instead (note above); stream_options is outside the IR (inbound
+# passthrough instead (the shared default arm); stream_options is outside the IR (inbound
 # fallback). tools/tool_choice/parallel_tool_calls are fc-capability-gated.
 _SAMBANOVA_LIST = frozenset(
     {
@@ -493,7 +489,6 @@ def sambanova_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | 
         allowed=allowed,
         notes={
             "user": _user_note("sambanova"),
-            "top_k": _top_k_extra_body_note("sambanova"),
         },
     )
 
@@ -542,7 +537,6 @@ def deepinfra_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | 
         allowed=allowed,
         notes={
             "user": _user_note("deepinfra"),
-            "top_k": _top_k_extra_body_note("deepinfra"),
             "reasoning_effort": (
                 f"reasoning_effort on non-reasoning deepinfra model "
                 f"{request.model} (model-map supports_reasoning gate); "
@@ -593,7 +587,6 @@ def moonshot_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | N
     allowed = _BASE_LIST
     notes: dict[str, str] = {
         "user": _user_note("moonshot"),
-        "top_k": _top_k_extra_body_note("moonshot"),
     }
     if _MOONSHOT_THINKING_PREVIEW in request.model:
         allowed = allowed - frozenset({"tools", "tool_choice"})
@@ -618,15 +611,13 @@ def moonshot_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | N
 def cometapi_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | None:
     """CometAPIConfig's map is super() over the plain base list (its
     extra_body stub is always empty and transform_request pops it — a no-op,
-    verified at HEAD), so the gate is the base-list gate with the shared
-    wave-2a top_k note."""
+    verified at HEAD), so the gate is the base-list gate."""
     return unsupported_against(
         request,
         provider="cometapi",
         allowed=_BASE_LIST,
         notes={
             "user": _user_note("cometapi"),
-            "top_k": _top_k_extra_body_note("cometapi"),
         },
     ) or unsupported_response_format(request)
 
