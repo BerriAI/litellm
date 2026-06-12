@@ -2569,6 +2569,25 @@ class TestCheckRequestDisconnection:
         await _cancel_pending_gather_tasks([task])
 
     @pytest.mark.asyncio
+    async def test_cancel_pending_gather_tasks_swallows_guardrail_converted_cancel(
+        self,
+    ):
+        import asyncio
+
+        from litellm.proxy.common_request_processing import _cancel_pending_gather_tasks
+
+        async def hook_converts_cancel_to_runtime_error():
+            try:
+                await asyncio.sleep(9999)
+            except asyncio.CancelledError:
+                raise RuntimeError("guardrail converted cancel")
+
+        task = asyncio.create_task(hook_converts_cancel_to_runtime_error())
+        await asyncio.sleep(0)
+        await _cancel_pending_gather_tasks([task])
+        assert task.done()
+
+    @pytest.mark.asyncio
     async def test_base_process_llm_request_preserves_llm_error_after_gather(
         self, monkeypatch
     ):

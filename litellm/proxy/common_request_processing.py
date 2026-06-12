@@ -2084,13 +2084,13 @@ class ProxyBaseLLMRequestProcessing:
         request_data: dict,
         response: Any,
     ) -> None:
-        client_disconnected = await _record_streaming_client_disconnect_if_needed(
-            request, request_data
-        )
-        if client_disconnected:
-            ProxyLogging._fire_deferred_stream_logging(request_data)
-
         with anyio.CancelScope(shield=True):
+            client_disconnected = await _record_streaming_client_disconnect_if_needed(
+                request, request_data
+            )
+            if client_disconnected:
+                ProxyLogging._fire_deferred_stream_logging(request_data)
+
             if hasattr(response, "aclose"):
                 try:
                     await response.aclose()
