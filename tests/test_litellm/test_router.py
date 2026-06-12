@@ -213,9 +213,10 @@ async def test_encrypted_content_affinity_model_group_config_is_additive():
     )
 
     assert unfiltered == healthy_deployments
-    assert "encrypted_content_affinity_enabled" not in disabled_request_kwargs[
-        "litellm_metadata"
-    ]
+    assert (
+        "encrypted_content_affinity_enabled"
+        not in disabled_request_kwargs["litellm_metadata"]
+    )
 
     global_check = EncryptedContentAffinityCheck(
         enable_global_affinity=True,
@@ -1265,10 +1266,16 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
         # calling the helper through async_function_with_fallbacks).
         kwargs["model"] = "not-gemini-2.5-flash"
 
-    with patch.object(router, "async_get_available_deployment") as mock_dep, \
-         patch.object(router, "_update_kwargs_with_deployment", side_effect=inject_alias_into_kwargs), \
-         patch.object(router, "async_routing_strategy_pre_call_checks"), \
-         patch.object(router, "_get_client", return_value=None):
+    with (
+        patch.object(router, "async_get_available_deployment") as mock_dep,
+        patch.object(
+            router,
+            "_update_kwargs_with_deployment",
+            side_effect=inject_alias_into_kwargs,
+        ),
+        patch.object(router, "async_routing_strategy_pre_call_checks"),
+        patch.object(router, "_get_client", return_value=None),
+    ):
         mock_dep.return_value = {
             "model_name": "not-gemini-2.5-flash",
             "litellm_params": {
@@ -1282,9 +1289,9 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
             original_generic_function=capture_model,
         )
 
-    assert captured["model"] == "vertex_ai/gemini-2.5-flash", (
-        f"Expected deployment model 'vertex_ai/gemini-2.5-flash', got '{captured['model']}'"
-    )
+    assert (
+        captured["model"] == "vertex_ai/gemini-2.5-flash"
+    ), f"Expected deployment model 'vertex_ai/gemini-2.5-flash', got '{captured['model']}'"
 
 
 def test_router_get_model_access_groups_team_only_models():
@@ -2918,6 +2925,33 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     assert (
         result["endpoint"] == "/model/us.meta.llama3-8b-instruct-v1:0/invoke"
     ), f"Expected '/model/us.meta.llama3-8b-instruct-v1:0/invoke', got '{result['endpoint']}'"
+
+
+def test_update_kwargs_with_deployment_uses_pass_through_request_timeout():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-bedrock-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0",
+                },
+            }
+        ],
+    )
+    deployment = router.model_list[0]
+    kwargs: dict = {}
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"pass_through_request_timeout": 6},
+    ):
+        router._update_kwargs_with_deployment(
+            deployment=deployment,
+            kwargs=kwargs,
+            function_name="_ageneric_api_call_with_fallbacks",
+        )
+
+    assert kwargs["timeout"] == 6.0
 
 
 @pytest.mark.asyncio
