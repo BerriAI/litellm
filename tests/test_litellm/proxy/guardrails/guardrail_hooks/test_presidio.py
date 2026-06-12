@@ -2398,11 +2398,9 @@ async def test_anonymize_text_uses_correct_positions_no_parse_pii():
         )
 
     expected = "My name is <PERSON>, my email is <EMAIL_ADDRESS>, phone <PHONE_NUMBER>"
-    assert result == expected, (
-        f"anonymize_text produced garbled output with PII remnants.\n"
-        f"Expected: {expected!r}\n"
-        f"Got:      {result!r}"
-    )
+    assert (
+        result == expected
+    ), f"anonymize_text produced garbled output with PII remnants.\nExpected: {expected!r}\nGot:      {result!r}"
     assert masked_entity_count == {
         "PERSON": 1,
         "EMAIL_ADDRESS": 1,
@@ -2495,3 +2493,369 @@ async def test_anonymize_text_uses_correct_positions_with_parse_pii():
     assert pii_tokens.get("<PERSON_1>") == "John Smith"
     assert pii_tokens.get("<EMAIL_ADDRESS_2>") == "john@example.com"
     assert pii_tokens.get("<PHONE_NUMBER_3>") == "555-867-5309"
+
+
+def _sse_event_bytes(event: dict, event_name: str = "") -> bytes:
+    import json
+
+    prefix = f"event: {event_name}\n" if event_name else ""
+    # ensure_ascii=False matches Anthropic's wire format (raw UTF-8)
+    return (prefix + "data: " + json.dumps(event, ensure_ascii=False) + "\n\n").encode(
+        "utf-8"
+    )
+
+
+def _text_delta_bytes(text: str, index: int = 0) -> bytes:
+    return _sse_event_bytes(
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "text_delta", "text": text},
+        }
+    )
+
+
+def _collect_delta_text(raw: bytes, field: str = "text") -> str:
+    """Concatenate every delta `field` value across all events in `raw`."""
+    import json
+
+    parts = []
+    for line in raw.split(b"\n"):
+        if line.startswith(b"data: ") and line != b"data: [DONE]":
+            try:
+                event = json.loads(line[len(b"data: ") :])
+            except json.JSONDecodeError:
+                continue
+            delta = event.get("delta") or {}
+            if field in delta:
+                parts.append(delta[field])
+    return "".join(parts)
+
+
+def _run_unmasker(pii_tokens: dict, *chunks: bytes, **unmasker_kwargs) -> bytes:
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _AnthropicSSEUnmasker,
+    )
+
+    unmasker = _AnthropicSSEUnmasker(pii_tokens, **unmasker_kwargs)
+    return b"".join(unmasker.feed(c) for c in chunks) + unmasker.flush()
+
+
+def test_unmask_sse_bytes_replaces_text_delta():
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    result = _run_unmasker(
+        pii_tokens, _text_delta_bytes("Hello <PERSON_1>, how are you?")
+    )
+    assert _collect_delta_text(result) == "Hello Bobby, how are you?"
+
+
+def test_unmask_sse_bytes_ignores_events_without_delta():
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    chunk = _sse_event_bytes(
+        {"type": "message_start", "message": {"id": "msg_01", "role": "assistant"}}
+    )
+    assert _run_unmasker(pii_tokens, chunk) == chunk
+
+
+def test_unmask_sse_bytes_keeps_input_json_delta_masked_by_default():
+    # Streamed tool-call arguments are executed by agentic clients — restoring
+    # PII there hands the originals to tool execution, so placeholders stay
+    # masked unless unmask_streamed_tool_calls is explicitly enabled.
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    chunk = _sse_event_bytes(
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"name": "<PERSON_1>"}',
+            },
+        }
+    )
+    assert _run_unmasker(pii_tokens, chunk) == chunk
+
+
+def test_unmask_sse_bytes_unmasks_input_json_delta_when_opted_in():
+    import json
+
+    # With the explicit opt-in, tool inputs are restored. The original
+    # contains a double quote, which must be JSON-escaped so the assembled
+    # tool input stays valid JSON.
+    pii_tokens = {"<PERSON_1>": 'Bobby "Bob" Tables'}
+    chunk = _sse_event_bytes(
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"name": "<PERSON_1>"}',
+            },
+        }
+    )
+    result = _run_unmasker(pii_tokens, chunk, unmask_tool_inputs=True)
+    fragment = _collect_delta_text(result, field="partial_json")
+    assert json.loads(fragment) == {"name": 'Bobby "Bob" Tables'}
+
+
+def test_unmask_sse_bytes_openai_format_passes_through_unchanged():
+    import json
+
+    # OpenAI-format streams normally arrive as ModelResponseStream objects and
+    # never reach the SSE unmasker; if OpenAI-shaped bytes ever do, they must
+    # pass through byte-identical (same behavior as the previous
+    # _unmask_sse_bytes_chunk implementation).
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    event = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion.chunk",
+        "choices": [{"index": 0, "delta": {"content": "Hello <PERSON_1>!"}}],
+    }
+    chunk = ("data: " + json.dumps(event) + "\n\ndata: [DONE]\n\n").encode("utf-8")
+    assert _run_unmasker(pii_tokens, chunk) == chunk
+
+
+def test_unmask_sse_bytes_unmasks_thinking_delta():
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    chunk = _sse_event_bytes(
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "user is <PERSON_1>"},
+        }
+    )
+    result = _run_unmasker(pii_tokens, chunk)
+    assert _collect_delta_text(result, field="thinking") == "user is Bobby"
+
+
+def test_unmask_sse_bytes_handles_malformed_json():
+    chunk = b"data: {not valid json}\n\n"
+    assert _run_unmasker({"<PERSON_1>": "Bobby"}, chunk) == chunk
+
+
+def test_unmask_sse_bytes_handles_unicode_decode_error():
+    chunk = b"\xff\xfe invalid utf-8\n"
+    assert _run_unmasker({"<PERSON_1>": "Bobby"}, chunk) == chunk
+
+
+def test_unmask_sse_bytes_non_ascii_pii_not_escaped():
+    pii_tokens = {"<PERSON_1>": "José"}
+    result = _run_unmasker(pii_tokens, _text_delta_bytes("Hello <PERSON_1>!"))
+    assert "Jos\\u" not in result.decode("utf-8")
+    assert _collect_delta_text(result) == "Hello José!"
+
+
+def test_unmask_sse_bytes_handles_crlf_line_endings():
+    import json
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    event = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hi <PERSON_1>!"},
+    }
+    crlf_chunk = ("data: " + json.dumps(event) + "\r\ndata: [DONE]\r\n").encode("utf-8")
+
+    result = _run_unmasker(pii_tokens, crlf_chunk)
+
+    decoded = result.decode("utf-8")
+    parsed = json.loads(decoded.split("data: ", 1)[1].split("\n")[0].strip())
+    assert parsed["delta"]["text"] == "Hi Bobby!"
+    assert "\r\n" in decoded  # original line endings preserved
+    assert "data: [DONE]" in decoded
+
+
+def test_unmask_sse_bytes_event_split_across_chunks():
+    # Network framing splits chunks arbitrarily — a `data:` line (and even a
+    # multi-byte UTF-8 character) may arrive split across two bytes chunks.
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    raw = _text_delta_bytes("Grüße an <PERSON_1>!")
+    split_at = raw.index("ü".encode("utf-8")) + 1  # mid multi-byte character
+    result = _run_unmasker(pii_tokens, raw[:split_at], raw[split_at:])
+    assert _collect_delta_text(result) == "Grüße an Bobby!"
+
+
+def test_unmask_sse_bytes_token_split_across_delta_events():
+    # Models routinely emit a placeholder split across multiple text deltas;
+    # no single delta contains the full token.
+    pii_tokens = {"<PERSON_1>": "Bobby", "<EMAIL_ADDRESS_2>": "bob@example.com"}
+    result = _run_unmasker(
+        pii_tokens,
+        _text_delta_bytes("Mail to <PERS"),
+        _text_delta_bytes("ON_1> at <EMAIL_"),
+        _text_delta_bytes("ADDRESS_2> today"),
+        _sse_event_bytes(
+            {"type": "content_block_stop", "index": 0}, "content_block_stop"
+        ),
+    )
+    assert _collect_delta_text(result) == "Mail to Bobby at bob@example.com today"
+
+
+def test_unmask_sse_bytes_numbered_token_disambiguation():
+    # <PERSON_1> must not match inside <PERSON_12>
+    pii_tokens = {"<PERSON_1>": "Bobby", "<PERSON_12>": "Alice"}
+    result = _run_unmasker(pii_tokens, _text_delta_bytes("<PERSON_12> vs <PERSON_1>"))
+    assert _collect_delta_text(result) == "Alice vs Bobby"
+
+
+def test_unmask_sse_bytes_literal_angle_bracket_released():
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    result = _run_unmasker(pii_tokens, _text_delta_bytes("Vec<String> stays"))
+    assert _collect_delta_text(result) == "Vec<String> stays"
+
+
+def test_unmask_sse_bytes_carry_flushed_on_block_stop():
+    # A dangling partial-token prefix at block end is literal text — it must
+    # be emitted (as a synthetic delta), not swallowed.
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    result = _run_unmasker(
+        pii_tokens,
+        _text_delta_bytes("ends with <PERSON"),
+        _sse_event_bytes(
+            {"type": "content_block_stop", "index": 0}, "content_block_stop"
+        ),
+    )
+    assert _collect_delta_text(result) == "ends with <PERSON"
+
+
+def test_unmask_sse_bytes_carry_not_flushed_by_ping():
+    # ping keepalives interleave mid-block; a placeholder may continue right
+    # after one, so pings must not flush the carry.
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    result = _run_unmasker(
+        pii_tokens,
+        _text_delta_bytes("Hi <PERS"),
+        _sse_event_bytes({"type": "ping"}, "ping"),
+        _text_delta_bytes("ON_1>!"),
+        _sse_event_bytes(
+            {"type": "content_block_stop", "index": 0}, "content_block_stop"
+        ),
+    )
+    assert _collect_delta_text(result) == "Hi Bobby!"
+
+
+def test_unmask_sse_bytes_carry_flush_preserves_crlf():
+    import json
+
+    # The synthetic flush event must use the stream's line endings so a CRLF
+    # stream stays uniformly CRLF.
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    delta_event = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "ends with <PERSON"},
+    }
+    result = _run_unmasker(
+        pii_tokens,
+        ("data: " + json.dumps(delta_event) + "\r\n\r\n").encode("utf-8"),
+        (
+            "event: content_block_stop\r\n"
+            'data: {"type": "content_block_stop", "index": 0}\r\n\r\n'
+        ).encode("utf-8"),
+    )
+    assert _collect_delta_text(result) == "ends with <PERSON"
+    assert b"\n" not in result.replace(b"\r\n", b"")
+
+
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_unmaskes_bytes_chunks(mock_user_api_key):
+    import json
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    request_data = {"metadata": {"pii_tokens": pii_tokens}}
+
+    def _make_sse_chunk(text: str) -> bytes:
+        event = {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": text},
+        }
+        return ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+    async def mock_stream():
+        yield _make_sse_chunk("Hello <PERSON_1>!")
+        yield _make_sse_chunk(" How can I help?")
+
+    chunks = []
+    async for chunk in guardrail._stream_pii_unmasking(mock_stream(), request_data):
+        chunks.append(chunk)
+
+    assert len(chunks) == 2
+    first = chunks[0].decode("utf-8")
+    first_event = json.loads(first.split("data: ", 1)[1].strip())
+    assert first_event["delta"]["text"] == "Hello Bobby!"
+
+    second = chunks[1].decode("utf-8")
+    second_event = json.loads(second.split("data: ", 1)[1].strip())
+    assert second_event["delta"]["text"] == " How can I help?"
+
+
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_respects_unmask_streamed_tool_calls(
+    mock_user_api_key,
+):
+    import json
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    request_data = {"metadata": {"pii_tokens": pii_tokens}}
+    tool_chunk = (
+        "data: "
+        + json.dumps(
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": '{"name": "<PERSON_1>"}',
+                },
+            }
+        )
+        + "\n\n"
+    ).encode("utf-8")
+
+    async def collect(guardrail) -> bytes:
+        async def mock_stream():
+            yield tool_chunk
+
+        out = b""
+        async for chunk in guardrail._stream_pii_unmasking(
+            mock_stream(), request_data
+        ):
+            out += chunk
+        return out
+
+    default_guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, output_parse_pii=True
+    )
+    assert await collect(default_guardrail) == tool_chunk
+
+    opted_in_guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, output_parse_pii=True, unmask_streamed_tool_calls=True
+    )
+    opted_in = await collect(opted_in_guardrail)
+    event = json.loads(opted_in.decode("utf-8").split("data: ", 1)[1].strip())
+    assert json.loads(event["delta"]["partial_json"]) == {"name": "Bobby"}
+
+
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_passthrough_when_no_tokens(mock_user_api_key):
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    raw_chunk = b"data: {}\n\n"
+    request_data: dict = {"metadata": {}}
+
+    async def mock_stream():
+        yield raw_chunk
+
+    chunks = []
+    async for chunk in guardrail._stream_pii_unmasking(mock_stream(), request_data):
+        chunks.append(chunk)
+
+    assert chunks == [raw_chunk]

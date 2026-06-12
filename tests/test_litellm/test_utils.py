@@ -700,6 +700,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {
                     "type": "number"
@@ -721,6 +722,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
+                "input_cost_per_token_above_512k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens_priority": {
@@ -811,6 +813,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
                 "output_cost_per_token_above_256k_tokens": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens": {"type": "number"},
+                "output_cost_per_token_above_512k_tokens": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
                     "type": "number"
@@ -932,6 +935,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_native_streaming": {"type": "boolean"},
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
+                "use_openai_responses_path": {"type": "boolean"},
                 "tiered_pricing": {
                     "type": "array",
                     "items": {
@@ -4194,3 +4198,21 @@ class TestBedrockBaseModelLabelKeepsTools:
         )
 
         assert "tools" not in result
+
+
+def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
+    """`aws_bedrock_project_id` is sent as a bedrock-mantle request header, so it
+    must never reach optional_params (and from there the request body), while
+    other aws_* params keep flowing for boto3 auth."""
+    from litellm.utils import get_optional_params
+
+    result = get_optional_params(
+        model="mantle/anthropic.claude-mythos-preview",
+        custom_llm_provider="bedrock",
+        max_tokens=10,
+        aws_bedrock_project_id="proj_abc123def456",
+        aws_region_name="us-east-1",
+    )
+
+    assert "aws_bedrock_project_id" not in result
+    assert result["aws_region_name"] == "us-east-1"

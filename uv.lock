@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-06-03T21:40:52.018333Z"
+exclude-newer = "2026-06-05T23:18:37.734017Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3297,6 +3297,11 @@ dependencies = [
 caching = [
     { name = "diskcache" },
 ]
+cli = [
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "rich" },
+]
 extra-proxy = [
     { name = "a2a-sdk" },
     { name = "azure-identity" },
@@ -3522,16 +3527,19 @@ requires-dist = [
     { name = "prometheus-client", marker = "extra == 'proxy-runtime'", specifier = ">=0.20.0,<1.0" },
     { name = "pydantic", specifier = ">=2.10.0,<3.0.0" },
     { name = "pydantic-settings", marker = "extra == 'proxy'", specifier = ">=2.14.1,<3.0" },
-    { name = "pyjwt", marker = "extra == 'proxy'", specifier = ">=2.12.0,<3.0" },
+    { name = "pyjwt", marker = "extra == 'proxy'", specifier = ">=2.13.0,<3.0" },
     { name = "pynacl", marker = "extra == 'proxy'", specifier = ">=1.6.2,<2.0" },
     { name = "pypdf", marker = "python_full_version < '3.14' and extra == 'proxy-runtime'", specifier = ">=6.10.2,<7.0" },
     { name = "pyroscope-io", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.8.16,<1.0" },
     { name = "python-dotenv", specifier = ">=1.0.0,<2.0" },
     { name = "python-multipart", marker = "extra == 'proxy'", specifier = ">=0.0.27,<1.0" },
+    { name = "pyyaml", marker = "extra == 'cli'", specifier = ">=6.0.3,<7.0" },
     { name = "pyyaml", marker = "extra == 'proxy'", specifier = ">=6.0.3,<7.0" },
     { name = "redisvl", marker = "python_full_version < '3.14' and extra == 'extra-proxy'", specifier = ">=0.4.1,<1.0" },
+    { name = "requests", marker = "extra == 'cli'", specifier = ">=2.32.0,<3.0" },
     { name = "resend", marker = "extra == 'extra-proxy'", specifier = ">=2.23.0,<3.0" },
     { name = "restrictedpython", marker = "extra == 'proxy'", specifier = ">=8.1,<9.0" },
+    { name = "rich", marker = "extra == 'cli'", specifier = ">=13.9.4,<14.0" },
     { name = "rich", marker = "extra == 'proxy'", specifier = ">=13.9.4,<14.0" },
     { name = "rq", marker = "extra == 'proxy'", specifier = ">=2.7.0,<3.0" },
     { name = "semantic-router", marker = "python_full_version < '3.14' and extra == 'semantic-router'", specifier = ">=0.1.15,<1.0" },
@@ -3545,7 +3553,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.21.0,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
 ]
-provides-extras = ["proxy", "extra-proxy", "utils", "caching", "semantic-router", "mlflow", "grpc", "stt-nvidia-riva", "google", "proxy-runtime"]
+provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "semantic-router", "mlflow", "grpc", "stt-nvidia-riva", "google", "proxy-runtime"]
 
 [package.metadata.requires-dev]
 ci = [
@@ -5983,11 +5991,14 @@ wheels = [
 
 [[package]]
 name = "pyjwt"
-version = "2.12.0"
+version = "2.13.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a8/10/e8192be5f38f3e8e7e046716de4cae33d56fd5ae08927a823bb916be36c1/pyjwt-2.12.0.tar.gz", hash = "sha256:2f62390b667cd8257de560b850bb5a883102a388829274147f1d724453f8fb02", size = 102511, upload-time = "2026-03-12T17:15:30.831Z" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/70/70f895f404d363d291dcf62c12c85fdd47619ad9674ac0f53364d035925a/pyjwt-2.12.0-py3-none-any.whl", hash = "sha256:9bb459d1bdd0387967d287f5656bf7ec2b9a26645d1961628cda1764e087fd6e", size = 29700, upload-time = "2026-03-12T17:15:29.257Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
 ]
 
 [package.optional-dependencies]

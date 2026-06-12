@@ -1482,6 +1482,10 @@ class TestTemporaryMCPSessionEndpoints:
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
                 mock_manager,
             ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[non_admin]),
+            ),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await _get_cached_temporary_mcp_server_or_404("server-x", non_admin)
@@ -1514,12 +1518,68 @@ class TestTemporaryMCPSessionEndpoints:
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
                 mock_manager,
             ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[non_admin]),
+            ),
         ):
             result = await _get_cached_temporary_mcp_server_or_404(
                 "server-x", non_admin
             )
 
         assert result is registry_server
+
+    @pytest.mark.asyncio
+    async def test_get_cached_temporary_mcp_server_non_admin_allowed_via_team_access_group(
+        self,
+    ):
+        """Internal user whose only grant to the server flows through a team
+        access-group must pass the authorize/token access check. The check has to
+        expand the UI session into per-team contexts (build_effective_auth_contexts),
+        the same way the server-list grid does; checking only the bare session
+        context leaves the team grant invisible and 403s the user."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_cached_temporary_mcp_server_or_404,
+        )
+
+        registry_server = generate_mock_mcp_server_config_record(server_id="server-x")
+        ui_session_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        )
+        team_context = ui_session_auth.model_copy()
+        team_context.team_id = "team-with-mcp-grant"
+
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = registry_server
+        mock_manager.get_mcp_server_by_name.return_value = None
+
+        def allowed_for(auth):
+            return ["server-x"] if auth.team_id == "team-with-mcp-grant" else []
+
+        mock_manager.get_allowed_mcp_servers = AsyncMock(side_effect=allowed_for)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[ui_session_auth, team_context]),
+            ),
+        ):
+            result = await _get_cached_temporary_mcp_server_or_404(
+                "server-x", ui_session_auth
+            )
+
+        assert result is registry_server
+        assert mock_manager.get_allowed_mcp_servers.await_count == 2
 
     @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_temp_cache_non_admin_denied(self):
@@ -4146,7 +4206,7 @@ class TestListMCPUserEnvVarStatus:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
+                "_resolve_accessible_mcp_servers",
                 AsyncMock(return_value=[]),
             ),
         ):
@@ -4174,7 +4234,7 @@ class TestListMCPUserEnvVarStatus:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
+                "_resolve_accessible_mcp_servers",
                 AsyncMock(return_value=[server_with, server_without]),
             ),
             patch.object(
@@ -4204,7 +4264,7 @@ class TestListMCPUserEnvVarStatus:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
+                "_resolve_accessible_mcp_servers",
                 AsyncMock(return_value=[server]),
             ),
             patch.object(
@@ -4220,6 +4280,51 @@ class TestListMCPUserEnvVarStatus:
         assert by_name["CORP_USERNAME"].is_set is True
         assert by_name["CORP_PASSWORD"].is_set is False
         assert "alice" not in result[0].model_dump_json()
+
+    @pytest.mark.asyncio
+    async def test_admin_view_all_flags_missing_fields_without_key_grants(self):
+        """Regression: the red "user fields missing" card must light up for an
+        admin in view_all mode even when their key carries no per-server MCP
+        grant. The bulk status feed has to resolve the same server set the
+        dashboard grid renders; the old narrow key-scoped listing returned
+        nothing for such an admin, leaving every card un-highlighted."""
+        server = _make_env_var_server(
+            server_id="srv-with",
+            env_vars=_ENV_VARS_MIXED,
+            static_headers=_STATIC_HEADERS_MIXED,
+        )
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "_get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+            patch.object(
+                mgmt_endpoints.global_mcp_server_manager,
+                "get_all_mcp_servers_unfiltered",
+                AsyncMock(return_value=[server]),
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "get_user_env_vars_bulk",
+                AsyncMock(return_value={}),
+            ),
+        ):
+            result = await mgmt_endpoints.list_mcp_user_env_var_status(
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_id="admin",
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                )
+            )
+        assert [s.server_id for s in result] == ["srv-with"]
+        assert result[0].missing_count == 2
+        assert {f.name for f in result[0].required} == {
+            "CORP_USERNAME",
+            "CORP_PASSWORD",
+        }
 
 
 class TestMCPUserEnvVarsAccessControl:
