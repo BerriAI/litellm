@@ -3038,6 +3038,63 @@ def test_custom_pricing_does_not_double_count_cached_tokens_when_text_tokens_mis
         litellm.model_cost.pop(f"anthropic/{model_id}", None)
 
 
+def test_custom_pricing_uses_tiered_rate_when_multimodal_details_cross_threshold():
+    """
+    Multimodal prompt detail tokens should count toward tier thresholds even
+    when text_tokens is present.
+    """
+
+    model_id = "tiered-custom-pricing-multimodal-details-test"
+    model_info = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000025,
+        "input_cost_per_token_above_200k_tokens": 0.00001,
+        "output_cost_per_token_above_200k_tokens": 0.0000375,
+    }
+    text_tokens = 150_000
+    image_tokens = 60_001
+
+    litellm.register_model(model_cost={model_id: model_info})
+    try:
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model=f"openai/{model_id}",
+            object="chat.completion",
+            choices=[],
+            usage=Usage(
+                prompt_tokens=text_tokens + image_tokens,
+                completion_tokens=0,
+                total_tokens=text_tokens + image_tokens,
+                prompt_tokens_details=PromptTokensDetailsWrapper(
+                    text_tokens=text_tokens,
+                    image_tokens=image_tokens,
+                ),
+            ),
+        )
+
+        cost = completion_cost(
+            completion_response=response,
+            model=f"openai/{model_id}",
+            custom_llm_provider="openai",
+            custom_pricing=True,
+            router_model_id=model_id,
+        )
+
+        expected_cost = (
+            text_tokens + image_tokens
+        ) * model_info["input_cost_per_token_above_200k_tokens"]
+        base_cost = (text_tokens + image_tokens) * model_info["input_cost_per_token"]
+
+        assert cost == pytest.approx(expected_cost)
+        assert cost != pytest.approx(base_cost)
+    finally:
+        litellm.model_cost.pop(model_id, None)
+        litellm.model_cost.pop(f"openai/{model_id}", None)
+
+
 def test_extract_cache_read_tokens_anthropic_top_level():
     from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
 

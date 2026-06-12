@@ -212,6 +212,7 @@ def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
     them separate. When prompt_tokens_details is present, prefer the category
     fields so the threshold check can avoid double-counting cache tokens.
     """
+    prompt_tokens = float(getattr(usage, "prompt_tokens", 0) or 0)
     if usage.prompt_tokens_details is not None:
         details = usage.prompt_tokens_details
         raw_text_tokens = getattr(details, "text_tokens", None)
@@ -222,17 +223,29 @@ def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
             # If prompt_tokens already covers the cache detail total, use it as
             # the rolled-up input total. Otherwise cache tokens were reported
             # outside prompt_tokens and must be added for the tier threshold.
-            prompt_tokens = float(getattr(usage, "prompt_tokens", 0) or 0)
             cache_detail_tokens = cached_tokens + cache_creation
             if cache_detail_tokens > 0 and prompt_tokens < cache_detail_tokens:
                 return prompt_tokens + cache_detail_tokens
             return prompt_tokens
         text_tokens = float(raw_text_tokens or 0)
-        return text_tokens + cached_tokens + cache_creation
+        audio_tokens = float(getattr(details, "audio_tokens", 0) or 0)
+        image_tokens = float(getattr(details, "image_tokens", 0) or 0)
+        video_tokens = float(getattr(details, "video_tokens", 0) or 0)
+        detail_total = (
+            text_tokens
+            + audio_tokens
+            + image_tokens
+            + video_tokens
+            + cached_tokens
+            + cache_creation
+        )
+        cache_detail_tokens = cached_tokens + cache_creation
+        if cache_detail_tokens > 0 and detail_total > prompt_tokens:
+            return prompt_tokens
+        return max(prompt_tokens, detail_total)
 
     # No prompt_tokens_details. Add explicit cache fields only if they are
     # not already rolled into prompt_tokens (determined by their presence).
-    prompt_tokens = float(getattr(usage, "prompt_tokens", 0) or 0)
     cache_read_tokens = float(getattr(usage, "cache_read_input_tokens", 0) or 0)
     cache_creation_tokens = float(getattr(usage, "cache_creation_input_tokens", 0) or 0)
     return prompt_tokens + cache_read_tokens + cache_creation_tokens
@@ -674,10 +687,13 @@ def _calculate_input_cost(
         # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
         image_token_cost_key = "input_cost_per_image_token"
         if model_info.get(image_token_cost_key) is None:
-            image_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(
-            model_info, image_token_cost_key, prompt_tokens_details["image_tokens"]
-        )
+            prompt_cost += (
+                float(prompt_tokens_details["image_tokens"]) * prompt_base_cost
+            )
+        else:
+            prompt_cost += calculate_cost_component(
+                model_info, image_token_cost_key, prompt_tokens_details["image_tokens"]
+            )
 
     ### CACHE WRITING COST - Now uses tiered pricing
     if (
