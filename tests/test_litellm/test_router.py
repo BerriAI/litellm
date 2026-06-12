@@ -3692,6 +3692,56 @@ def test_update_kwargs_with_deployment_model_info_in_metadata():
     assert model_info["output_cost_per_token"] == 0.0015
 
 
+@pytest.mark.asyncio
+async def test_aspeech_includes_deployment_model_info_in_metadata():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "tts",
+                "litellm_params": {
+                    "model": "openai/tts-1",
+                    "api_key": "fake-key",
+                },
+                "model_info": {
+                    "id": "custom-tts-pricing-id",
+                    "input_cost_per_character": 0.000015,
+                },
+            },
+        ],
+    )
+
+    deployment = {
+        "model_name": "tts",
+        "litellm_params": {
+            "model": "openai/tts-1",
+            "api_key": "fake-key",
+        },
+        "model_info": {
+            "id": "custom-tts-pricing-id",
+            "input_cost_per_character": 0.000015,
+        },
+    }
+
+    with patch.object(
+        router,
+        "async_get_available_deployment",
+        AsyncMock(return_value=deployment),
+    ), patch.object(router, "_get_client", return_value=None), patch(
+        "litellm.aspeech", AsyncMock(return_value=MagicMock())
+    ) as mock_aspeech:
+        await router.aspeech(
+            model="tts",
+            input="hello world",
+            voice="alloy",
+        )
+
+    called_kwargs = mock_aspeech.await_args.kwargs
+    assert "metadata" in called_kwargs
+    model_info = called_kwargs["metadata"]["model_info"]
+    assert model_info["id"] == "custom-tts-pricing-id"
+    assert model_info["input_cost_per_character"] == 0.000015
+
+
 def test_combine_fallback_usage():
     """Test that _combine_fallback_usage merges partial and fallback usage."""
     from litellm.router import Router
