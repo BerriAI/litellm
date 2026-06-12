@@ -612,6 +612,7 @@ def test_registered_providers_have_differential_coverage() -> None:
         "openrouter",  # test_differential_openrouter_{request,response,stream}
         "hosted_vllm",  # test_differential_hosted_vllm_{request,response,stream}
         "fireworks_ai",  # test_differential_fireworks_ai_{request,response,stream}
+        "snowflake",  # test_differential_snowflake_{request,response,stream}
     }
     assert providers == dedicated_gates | set(SPECS) | set(HTTPX_SPECS)
 

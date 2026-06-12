@@ -125,6 +125,10 @@ Provider = Literal[
     # fireworks_ai/{WIRE model} INSIDE its parser (never a seam preset);
     # request model rewritten to accounts/fireworks/models/{m}.
     "fireworks_ai",
+    # snowflake: its own wire mapping (tool_spec / tool_choice objects /
+    # content_list responses); snowflake/{wire model} prefix INSIDE the
+    # parser; stream is ALWAYS a body key (absent == false on the wire).
+    "snowflake",
 ]
 
 NeverPortProvider = Literal[

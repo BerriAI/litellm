@@ -422,6 +422,35 @@ translation/
 │   │                    #   this consumer), key-presence error raise,
 │   │                    #   strict id/created/model/choices envelope +
 │   │                    #   the missing-delta pre-step
+│   ├── snowflake/       # wave-2b-alpha own module (httpx dedicated elif
+│   │   │                #   main.py:4286; a genuine wire mapping; the
+│   │   │                #   response model is snowflake/{wire model}
+│   │   │                #   INSIDE the parser)
+│   │   ├── guard.py     # the shared openai guard ONLY (messages ride
+│   │   │                #   VERBATIM in v1 — no transform); deliberately
+│   │   │                #   NO stream:false arm: stream is ALWAYS a body
+│   │   │                #   key (absent == false on the wire), so v2
+│   │   │                #   SERVES explicit false
+│   │   ├── params.py    # the small static list (mct/stop/n/seed/
+│   │   │                #   parallel RAISE; user silently dropped) +
+│   │   │                #   top_k (non-compat top-level passthrough,
+│   │   │                #   wire-proven via respx — the elif overwrites
+│   │   │                #   the caller's client, so the mock-transport
+│   │   │                #   helper can't reach it)
+│   │   ├── serialize.py # openai_compat body + the ALWAYS-on stream key
+│   │   │                #   + tools -> tool_spec + tool_choice -> object
+│   │   │                #   (required -> any; dict fn -> name ARRAY) +
+│   │   │                #   top_k verbatim
+│   │   ├── response.py  # content_list pre-rewrite (choices[0]: text
+│   │   │                #   concat + tool_use -> tool_calls with
+│   │   │                #   json.dumps(input) DEFAULT-separator
+│   │   │                #   arguments) + the shared direct parser with
+│   │   │                #   the snowflake/{wire-or-empty} prefix policy;
+│   │   │                #   "openai_like" seam arm; the request model in
+│   │   │                #   _hidden_params["model"] is a fork obligation
+│   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
+│   │                    #   handler); real Cortex delta shapes UNPINNED
+│   │                    #   upstream; joins the ONE PINNED DIVERGENCE
 │   └── xai/             # Grok over openai_compat (httpx path: NO model
 │       │                #   prefix anywhere, transform_response is LIVE):
 │       ├── guard.py     # web_search_options (v1's Responses-bridge reroute
@@ -581,7 +610,7 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to sixty-nine providers out — `anthropic`,
+OpenAI-chat-in to seventy providers out — `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
@@ -598,8 +627,8 @@ route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `datarobot`, `gradient_ai`, `ovhcloud`, `lemonade`), the five wave-2a
 providers (`perplexity`, `sambanova`, `deepinfra`, `moonshot` on the SDK
 path, `cometapi` on the httpx path), and the wave-2b-alpha own modules
-(`deepseek`, `openrouter`, `hosted_vllm`, `fireworks_ai`) — request,
-response, and stream
+(`deepseek`, `openrouter`, `hosted_vllm`, `fireworks_ai`, `snowflake`) —
+request, response, and stream
 translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk
@@ -900,6 +929,35 @@ global (and the per-request litellm_params flag) must FORCE v1 at the
 seam before flag-on — the serializer encodes the default-enabled arm
 only; response _hidden_params.additional_headers ride the seam's
 headers-passthrough follow-up.
+Deliberate wave-2b-alpha (snowflake) fallback surfaces (each names the
+v1 path): max_completion_tokens / stop / n / seed / penalties /
+parallel_tool_calls (v1's small static list RAISES — no rename arms
+anywhere); user (silently dropped; the list never carries it); message
+`name` and every other openai-guard raw shape (v1 sends messages
+VERBATIM — its transform never calls super, so no flatten and no base
+image transforms; the guard's fallbacks are all the v1-serves kind); on
+the response side, non-string wire models (v1's ModelResponse(**json)
+raises ValidationError). SERVED, never fallbacks: explicit
+`stream: false` (the ONE wave-2b provider where the family guard arm
+would be WRONG — v1 puts `stream` in every body, default false, so
+absent and explicit-false are the same wire byte, pinned); top_k (the
+non-compat TOP-LEVEL passthrough, wire-proven via respx — the snowflake
+elif OVERWRITES the caller's client at main.py:4390, so the
+mock-transport helper cannot reach it); tools -> Snowflake `tool_spec`
+(missing parameters get the empty-object default); tool_choice -> the
+object shape (auto/none verbatim types, required -> any, the dict
+function form -> {"type":"tool","name":[fn]} with the ARRAY); the
+content_list response rewrite (choices[0] text concat + tool_use ->
+OpenAI tool_calls with json.dumps DEFAULT-separator arguments,
+byte-pinned) and the snowflake/{wire-or-EMPTY} response prefix.
+snowflake fork obligations: NO seam preset and the "openai_like"
+construction arm; the request model must ride
+_hidden_params["model"] (v1's cost-calculator feed, dump-invisible —
+gate-pinned); account_id -> URL synthesis and KEYPAIR_JWT/PAT headers
+are pure envelope (header-only auth, researcher-4's correction). Real
+Cortex STREAM delta shapes are unpinned upstream: a content_list delta
+would be a loud v2 error where v1 serves a chunk that silently lost it
+— get real fixtures before flag-on streaming.
 Streaming-seam obligations carried from wave 2a (verifier-wave2a W1/W2 —
 no impact while streaming stays on v1, pinned by
 `test_reasoning_stream_seam_obligation_canary`): the SDK family's openai

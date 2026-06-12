@@ -95,6 +95,11 @@ from ..providers.openrouter import serialize_request as openrouter_serialize_req
 from ..providers.openrouter import (
     unsupported_request_shapes as openrouter_unsupported_request_shapes,
 )
+from ..providers.snowflake import parse_response as snowflake_parse_response
+from ..providers.snowflake import serialize_request as snowflake_serialize_request
+from ..providers.snowflake import (
+    unsupported_request_shapes as snowflake_unsupported_request_shapes,
+)
 from ..providers.vertex_anthropic import (
     parse_response as vertex_anthropic_parse_response,
 )
@@ -140,6 +145,7 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "openrouter": openrouter_serialize_request,
         "hosted_vllm": hosted_vllm_serialize_request,
         "fireworks_ai": fireworks_serialize_request,
+        "snowflake": snowflake_serialize_request,
     }
 )
 
@@ -183,6 +189,9 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # direct-parser factory with the fireworks policy; the seam fork must
         # use the "openai_like" construction arm (RESPONSE_STYLE, pinned).
         "fireworks_ai": fireworks_parse_response,
+        # snowflake: content_list pre-rewrite + the direct parser with the
+        # snowflake/{wire model} prefix policy ("openai_like" seam arm).
+        "snowflake": snowflake_parse_response,
     }
 )
 
@@ -218,6 +227,7 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         "openrouter": _OPENAI_DIALECT,
         "hosted_vllm": _OPENAI_DIALECT,
         "fireworks_ai": _OPENAI_DIALECT,
+        "snowflake": _OPENAI_DIALECT,
     }
 )
 
@@ -247,6 +257,7 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         "openrouter": openrouter_unsupported_request_shapes,
         "hosted_vllm": hosted_vllm_unsupported_request_shapes,
         "fireworks_ai": fireworks_unsupported_request_shapes,
+        "snowflake": snowflake_unsupported_request_shapes,
     }
 )
 

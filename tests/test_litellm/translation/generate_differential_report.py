@@ -617,10 +617,15 @@ def _wave2b_alpha_error_chunk_pins() -> bool:
 
     from . import test_differential_fireworks_ai_stream as _fw_stream
 
+    from litellm.translation.providers import snowflake as _snowflake_pkg
+
+    from . import test_differential_snowflake_stream as _sf_stream
+
     consumers = (
         (_ds_stream, _deepseek_pkg.parse_line),
         (_hv_stream, _hosted_vllm_pkg.parse_line),
         (_fw_stream, _fireworks_pkg.parse_line),
+        (_sf_stream, _snowflake_pkg.parse_line),
     )
     for mod, line_parser in consumers:
         v1 = mod._v1_chunks(mod._ERROR_CHUNK_STREAM)
@@ -1042,6 +1047,131 @@ def _fireworks_ai_rows(lines: list) -> int:
     return failures
 
 
+def _snowflake_rows(lines: list) -> int:
+    import pydantic
+
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import _own_module_corpus as own
+    from . import test_differential_snowflake_request as req
+    from . import test_differential_snowflake_response as resp
+    from . import test_differential_snowflake_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## snowflake: request bodies (v1 get_optional_params('snowflake') +"
+        " the LIVE httpx transform_request — dedicated elif main.py:4286,"
+        " incl. the tool_spec/tool_choice wire mapping, the ALWAYS-on stream"
+        " key and the verbatim messages — vs v2 providers/snowflake)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            own.run_v1_request_transform("snowflake", case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, reason = req.V1_RAISES[name]
+        result = req._v2(case)
+        try:
+            own.run_v1_request_transform("snowflake", case)
+            raised = False
+        except UnsupportedParamsError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req.EXPECTED_FALLBACKS):
+        case, reason = req.EXPECTED_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## snowflake: responses (v1's OWN transform_response — the"
+        " content_list rewrite + OpenAILike DIRECT construction + the"
+        " snowflake/{wire model} prefix — vs v2 pre-rewrite + direct parser"
+        " with the openai_like seam arm)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = resp._norm(v2) == resp._norm(v1) and v2["model"] == (
+            f"snowflake/{resp.WIRE_MODEL}"
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name} (prefixed)")
+    from litellm.translation.inbound.openai_chat import parse_request as _parse_req
+    from litellm.translation.providers.snowflake import parse_response as _sf_parse
+
+    parsed = _parse_req(dict(resp._REQUEST))
+    try:
+        resp._v1_model_response(resp._NON_STRING_MODEL_BODY)
+        raised = False
+    except pydantic.ValidationError:
+        raised = True
+    ns_result = _sf_parse(dict(resp._NON_STRING_MODEL_BODY), parsed.ok)
+    ns_ok = (
+        raised
+        and ns_result.is_error()
+        and "non-string wire model" in ns_result.error.summary
+    )
+    failures += 0 if ns_ok else 1
+    label = "FALLBACK (v1 raises ValidationError)" if ns_ok else "DIVERGENT"
+    lines.append(f"- {label}: non_string_wire_model")
+    v1_hidden = resp._v1_full(resp._RESPONSES["plain_content"])
+    hidden_ok = v1_hidden._hidden_params.get("model") == resp.REQUEST_MODEL
+    failures += 0 if hidden_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if hidden_ok else "- DIVERGENT: ")
+        + "request model in _hidden_params['model'] (v1's cost-calculator"
+        " feed; dump-invisible — the future completion() fork must set it,"
+        " CLAUDE.md HARD OBLIGATION)"
+    )
+    lines += [
+        "",
+        "## snowflake: streams (v1 base OpenAIChatCompletionStreamingHandler"
+        " + CustomStreamWrapper('snowflake') over Cortex SSE lines vs v2"
+        " snowflake parser — the httpx_chunk family policy — with the xai"
+        " chunk dialect; real Cortex delta shapes are UNPINNED upstream)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    return failures
+
+
 def _wave2b_alpha_rows(lines: list) -> int:
     """wave-2b-alpha own-module providers, researcher-4 ascending-risk
     order. APPEND-ONLY: each provider's row function lands in its own
@@ -1051,6 +1181,7 @@ def _wave2b_alpha_rows(lines: list) -> int:
         + _openrouter_rows(lines)
         + _hosted_vllm_rows(lines)
         + _fireworks_ai_rows(lines)
+        + _snowflake_rows(lines)
     )
 
 
