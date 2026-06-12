@@ -85,8 +85,11 @@ def _extract_converse_texts(
     top-level ``text`` blocks this scans the arbitrary-JSON fields a caller can
     hide prompt content in -- ``toolUse.input`` and
     ``toolResult.content[].json`` (alongside ``toolResult.content[].text``) --
-    so a blocking guardrail sees them before the request reaches Bedrock. Tool
-    blocks are skipped entirely when tool messages are excluded.
+    as well as the request-level fields still forwarded to Bedrock that a caller
+    can route blocked content through: ``toolConfig.tools`` (tool names,
+    descriptions and input schemas) and ``additionalModelRequestFields``. Tool
+    message blocks are skipped when tool messages are excluded, but tool
+    definitions are always scanned to match the chat-completions guardrail path.
     """
     holders: List[_StringHolder] = []
 
@@ -113,6 +116,12 @@ def _extract_converse_texts(
                     if isinstance(inner, dict):
                         _collect_block_text(inner, holders)
                         _collect_strings(inner.get("json"), holders)
+
+    tool_config = body.get("toolConfig")
+    if isinstance(tool_config, dict):
+        _collect_strings(tool_config.get("tools"), holders)
+
+    _collect_strings(body.get("additionalModelRequestFields"), holders)
 
     texts = [container[key] for container, key in holders]
     return texts, holders

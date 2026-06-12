@@ -170,6 +170,57 @@ class TestExtractConverseTexts:
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert texts == []
 
+    def test_extracts_tool_config_description_and_schema(self):
+        body = {
+            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "toolConfig": {
+                "tools": [
+                    {
+                        "toolSpec": {
+                            "name": "lookup",
+                            "description": "blocked tool description",
+                            "inputSchema": {
+                                "json": {
+                                    "type": "object",
+                                    "properties": {
+                                        "q": {
+                                            "type": "string",
+                                            "description": "blocked schema description",
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    }
+                ]
+            },
+        }
+        texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        assert "blocked tool description" in texts
+        assert "blocked schema description" in texts
+
+    def test_tool_config_scanned_even_when_tool_messages_skipped(self):
+        body = {
+            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "toolConfig": {
+                "tools": [
+                    {"toolSpec": {"name": "fn", "description": "blocked description"}}
+                ]
+            },
+        }
+        texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=True)
+        assert "blocked description" in texts
+
+    def test_extracts_additional_model_request_fields(self):
+        body = {
+            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "additionalModelRequestFields": {
+                "reasoning_config": {"prompt": "blocked extra field"}
+            },
+        }
+        texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        assert "blocked extra field" in texts
+
 
 class TestWriteBackTexts:
     def test_writes_system_text(self):
@@ -363,6 +414,71 @@ class TestBedrockPassthroughGuardrailHandlerInput:
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert "blocked content" in sent_texts
+
+    @pytest.mark.asyncio
+    async def test_tool_config_description_scanned_and_masked(self):
+        """Blocked text hidden in toolConfig.tools[].toolSpec.description is still
+        forwarded to Bedrock, so the guardrail must see it and mask it in place."""
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _converse_data()
+        data["data"]["toolConfig"] = {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": "lookup",
+                        "description": "email john@example.com",
+                        "inputSchema": {"json": {"type": "object"}},
+                    }
+                }
+            ]
+        }
+        guardrail = _make_guardrail(
+            {"texts": ["You are helpful.", "Hello world", "lookup", "[REDACTED]", "object"]}
+        )
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
+        assert "email john@example.com" in sent_texts
+        tool_spec = result["data"]["toolConfig"]["tools"][0]["toolSpec"]
+        assert tool_spec["description"] == "[REDACTED]"
+
+    @pytest.mark.asyncio
+    async def test_tool_config_description_blocking_propagates(self):
+        """A blocking guardrail must reject content hidden in a tool description."""
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _converse_data()
+        data["data"]["toolConfig"] = {
+            "tools": [{"toolSpec": {"name": "fn", "description": "blocked content"}}]
+        }
+        guardrail = MagicMock()
+        guardrail.guardrail_name = "block-guard"
+        guardrail.skip_system_message_in_guardrail = False
+        guardrail.skip_tool_message_in_guardrail = False
+        guardrail.apply_guardrail = AsyncMock(side_effect=GuardrailBlocked("Blocked"))
+
+        with pytest.raises(GuardrailBlocked):
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
+        assert "blocked content" in sent_texts
+
+    @pytest.mark.asyncio
+    async def test_additional_model_request_fields_scanned_and_masked(self):
+        """Blocked text hidden in additionalModelRequestFields is forwarded to
+        Bedrock, so the guardrail must scan it and mask it in place."""
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _converse_data()
+        data["data"]["additionalModelRequestFields"] = {"note": "ssn 123-45-6789"}
+        guardrail = _make_guardrail(
+            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
+        )
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
+        assert "ssn 123-45-6789" in sent_texts
+        assert result["data"]["additionalModelRequestFields"]["note"] == "[REDACTED]"
 
     @pytest.mark.asyncio
     async def test_non_converse_endpoint_scans_full_payload(self):
