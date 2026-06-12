@@ -285,6 +285,23 @@ EXPECTED_FALLBACKS = {
         "o1-mini",
         "AzureOpenAIO1Config",
     ),
+    "o_series_empty_base_model_falls_to_deployment": (
+        # base_model: "" (a one-character YAML slip) must behave like v1's
+        # `base_model or model`: detection falls to the deployment name,
+        # whose NON-PREFIX o3 substring only azure's substring predicate
+        # catches (the shared openai prefix gate misses it). Proven divergent
+        # before the fix: v2 served max_tokens while v1 routed
+        # AzureOpenAIO1Config and emitted max_completion_tokens
+        # (verifier-azure S1).
+        {
+            "model": "prod-o3-mini",
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        DEFAULT_API_VERSION,
+        "",
+        "AzureOpenAIO1Config",
+    ),
     "gpt5_model": (
         {"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]},
         DEFAULT_API_VERSION,

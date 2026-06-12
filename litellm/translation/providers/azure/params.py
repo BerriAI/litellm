@@ -30,7 +30,10 @@ _RESPONSE_FORMAT_SUPPORTED_MONTH = 8
 
 
 def detection_model(model: str, deps: TranslationDeps) -> str:
-    return deps.base_model if deps.base_model is not None else model
+    # v1 is truthiness, not None-ness (azure.py:246 `base_model or model`):
+    # base_model: "" in a config must fall to the deployment name, or the
+    # family/response_format gates fail OPEN (verifier-azure S1).
+    return deps.base_model or model
 
 
 def unsupported_model_family(model: str, deps: TranslationDeps) -> str | None:
