@@ -247,7 +247,36 @@ def _normalize_delta(
     }
     if "refusal" in delta:
         base = {**base, "refusal": _string_or_none(delta.get("refusal"))}
+    reasoning_error = _non_string_reasoning_error(policy.reasoning, delta)
+    if reasoning_error is not None:
+        return reasoning_error
     return _reasoning_tail(policy.reasoning, delta, base)
+
+
+def _non_string_reasoning_error(
+    mode: ReasoningMode, delta: dict[str, PlainJson]
+) -> TranslationError | None:
+    """verifier-wave2b-alpha F3: v1's chunk_parsers serve a non-string
+    reasoning value verbatim, then the stream CRASHES at the end (APIError
+    out of the chunk builder's reasoning join) — never serve what v1 raises
+    on, so the coercion-to-None that silently swallowed the chunk is now a
+    loud error. The native ``reasoning_content`` key is exempt in the
+    unconditional mode only: there v1's assignment clobbers it to None
+    before it can reach the join (replay-pinned), so v1 never crashes."""
+    checked = (
+        ("reasoning",)
+        if mode == "unconditional"
+        else ("reasoning", "reasoning_content")
+    )
+    for key in checked:
+        value = delta.get(key)
+        if value is not None and not isinstance(value, str):
+            return _boundary(
+                f"non-string stream delta {key!r} ({type(value).__name__}): "
+                "v1 serves the verbatim value, then raises APIError at stream "
+                "end joining reasoning for the chunk builder"
+            )
+    return None
 
 
 def _reasoning_tail(
@@ -316,7 +345,20 @@ def _normalize_tool_call(call: PlainJson) -> PlainJson | TranslationError:
 
 
 def _delta_bears_content(delta: dict[str, PlainJson]) -> bool:
+    """Does a NORMALIZED delta carry payload v1's wrapper would interleave
+    as its own chunk ahead of the finish chunk? Non-empty content,
+    tool_calls — and the refusal/reasoning keys (verifier-wave2b-alpha F1:
+    a reasoning-bearing finish delta used to be served as an EMPTY finish
+    chunk, silently dropping text v1 serves; now it takes the loud
+    finish-chunk fallback above). Those keys count only on non-None values:
+    the unconditional mode stamps ``reasoning_content: None`` onto every
+    delta, including the bare finish chunks v1 serves."""
     content = delta.get("content")
-    return (isinstance(content, str) and len(content) > 0) or delta.get(
-        "tool_calls"
-    ) is not None
+    if isinstance(content, str) and len(content) > 0:
+        return True
+    if delta.get("tool_calls") is not None:
+        return True
+    return any(
+        delta.get(key) is not None
+        for key in ("refusal", "reasoning", "reasoning_content")
+    )

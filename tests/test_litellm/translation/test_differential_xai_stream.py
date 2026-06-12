@@ -173,6 +173,32 @@ def test_unreachable_chunk_shape_is_a_typed_error(name: str) -> None:
     assert reason_fragment in result.error.summary, result.error.summary
 
 
+def test_reasoning_on_finish_chunk_is_loud_where_v1_interleaves(
+    frozen_ambient,
+) -> None:
+    """verifier-wave2b-alpha F1, the PRE-EXISTING xai hole: v1's wrapper
+    splits a reasoning-bearing finish chunk into a separate delta chunk
+    carrying reasoning_content + a bare finish chunk (4 emitted chunks); v2
+    used to serve an EMPTY finish chunk with the reasoning text silently
+    GONE. _delta_bears_content now counts reasoning/refusal, so the shape is
+    the existing loud finish-chunk fallback (typed error -> seam falls back
+    to v1) — fixed once in the shared httpx_chunk factory, inherited by
+    every consumer. Streaming flag-on obligation updated in CLAUDE.md."""
+    events = [
+        _chunk({"role": "assistant", "content": ""}),
+        _chunk({"content": "hi"}),
+        _chunk({"reasoning": "tail"}, finish="stop"),
+    ]
+    v1 = [dict(chunk) for chunk in replay_xai_sse_lines(events, None)]
+    assert len(v1) == len(events) + 1  # the interleaved reasoning chunk
+    interleaved = dict(v1[2]["choices"][0]["delta"])
+    assert interleaved["reasoning_content"] == "tail"
+    assert v1[3]["choices"][0]["finish_reason"] == "stop"
+    result = parse_event(copy.deepcopy(events[-1]))
+    assert result.is_error(), "reasoning-on-finish must be loud, never dropped"
+    assert "finish chunk with a non-empty delta" in result.error.summary
+
+
 def test_numeric_string_usage_folds_like_v1s_own_arithmetic() -> None:
     """v1's dict-path fold is int(x or 0): numeric strings fold
     (completion 2+7 -> 9, untouched keys keep their original values).

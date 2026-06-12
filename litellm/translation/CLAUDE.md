@@ -1008,6 +1008,21 @@ for reasoning-capable family members; and the line decoders
 (make_parse_line consumers) error loudly on malformed SSE lines that
 v1's BaseModelResponseIterator silently swallows — the PR #30138
 lenient-boundary call belongs to that seam, not the parsers.
+Streaming obligations added at the wave-2b-alpha fix round
+(verifier-wave2b-alpha F1/F2/F3, fixed ONCE in the shared
+`openai_compat/httpx_chunk.py` factory so every dict-path consumer
+inherits them): a reasoning/refusal-bearing FINISH delta is the LOUD
+finish-chunk fallback (v1's wrapper interleaves it as a separate chunk
+the fold cannot reproduce — the pre-fix factory served an empty finish
+chunk with the text silently GONE; two-sided rows in the openrouter and
+xai stream gates, all base-handler consumers inherit), and a non-string
+non-None reasoning value is a loud error (v1 serves it then RAISES
+APIError at stream end in the chunk builder). One NAMED zero-data
+divergence remains for the streaming seam to inherit deliberately: v1
+serves a mid-stream empty-string reasoning delta as its own chunk while
+the v2 fold swallows the empty delta (byte-identical otherwise) —
+pinned by the openrouter gate's named-obligation row; decide
+serve-vs-swallow at the seam before flag-on streaming.
 The xai completion() fork is NOT wired (integrator
 scope, like openai/azure); when it lands these are HARD OBLIGATIONS, not
 notes: the in-package `use_xai_oauth` guard arm is defense-in-depth ONLY

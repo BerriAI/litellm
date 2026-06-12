@@ -20,7 +20,7 @@ import json
 
 import pytest
 
-from litellm.exceptions import BadRequestError, MidStreamFallbackError
+from litellm.exceptions import APIError, BadRequestError, MidStreamFallbackError
 from litellm.llms.openrouter.chat.transformation import (
     OpenRouterChatCompletionStreamingHandler,
 )
@@ -280,6 +280,84 @@ def test_loud_chunk_shapes_error_on_both_sides(name: str, frozen_ambient) -> Non
         assert name == "multiple_choices"
         served = _v1_chunks([event, _chunk({}, finish="stop")])
         assert len(served) >= 1  # v1 serves the multi-choice chunk
+
+
+def test_reasoning_on_finish_chunk_is_loud_where_v1_interleaves(
+    frozen_ambient,
+) -> None:
+    """verifier-wave2b-alpha F1: v1's wrapper splits a reasoning-bearing
+    finish chunk into a separate reasoning delta chunk + a bare finish chunk
+    (4 emitted chunks); the v2 fold cannot reproduce the interleave, so
+    _delta_bears_content now counts reasoning/refusal and the shape takes the
+    existing LOUD finish-chunk fallback — before the fix v2 served 3 chunks
+    with the reasoning text silently GONE. Streaming flag-on obligation: the
+    seam falls back to v1 on this typed error like every other stream error."""
+    events = [
+        _chunk({"role": "assistant", "content": ""}),
+        _chunk({"content": "answer"}),
+        _chunk({"reasoning": "tail-think"}, finish="stop"),
+    ]
+    v1 = _v1_chunks(events)
+    assert len(v1) == len(events) + 1  # the interleaved reasoning chunk
+    interleaved = v1[2]["choices"][0]["delta"]
+    assert interleaved["reasoning_content"] == "tail-think"
+    assert v1[3]["choices"][0]["finish_reason"] == "stop"
+    result = parse_event(copy.deepcopy(events[-1]))
+    assert result.is_error(), "reasoning-on-finish must be loud, never dropped"
+    assert "finish chunk with a non-empty delta" in result.error.summary
+    folded = fold_lines(
+        [f"data: {json.dumps(e)}" for e in events] + ["data: [DONE]"],
+        parse_line,
+        initial_state(MODEL, dialect="xai"),
+    )
+    assert folded.is_error()
+
+
+def test_empty_string_reasoning_chunk_swallow_is_a_named_obligation(
+    frozen_ambient,
+) -> None:
+    """verifier-wave2b-alpha F2 (NOTE), pinned as a NAMED divergence on a
+    zero-data shape: v1 serves a mid-stream ``{"reasoning": ""}`` delta as a
+    chunk with reasoning_content="" (4 chunks); v2's fold swallows the empty
+    delta (3 chunks, byte-identical otherwise). No bytes are lost — the
+    falsy-swallow family the wrapper itself applies to empty deltas — but the
+    chunk-shape divergence is recorded here so flag-on streaming inherits it
+    deliberately, not by accident."""
+    events = [
+        _chunk({"role": "assistant", "content": ""}),
+        _chunk({"reasoning": ""}),
+        _chunk({"content": "hi"}),
+        _chunk({}, finish="stop"),
+    ]
+    v1 = _v1_chunks(events)
+    v2 = _v2_chunks(events)
+    assert len(v1) == len(v2) + 1
+    swallowed = v1[1]["choices"][0]["delta"]
+    assert swallowed["reasoning_content"] == ""  # zero bytes of data
+    assert _norm([v1[0], *v1[2:]]) == _norm(v2)
+
+
+def test_non_string_reasoning_is_loud_where_v1_crashes_at_stream_end(
+    frozen_ambient,
+) -> None:
+    """verifier-wave2b-alpha F3: v1 serves the non-string reasoning value
+    verbatim (pydantic serializer warning) and then RAISES APIError at stream
+    end (TypeError joining non-str in the chunk builder); v2 used to coerce
+    to None and serve a CLEAN stream — a letter violation of 'never serve
+    what v1 raises on'. The normalizer now errors loudly on non-string,
+    non-None reasoning values (explicit null stays served: v1 serves it and
+    never crashes, replay-pinned by the canonical rows)."""
+    events = [
+        _chunk({"role": "assistant", "content": ""}),
+        _chunk({"reasoning": 42}),
+        _chunk({"content": "hi"}),
+        _chunk({}, finish="stop"),
+    ]
+    with pytest.raises(APIError):
+        _v1_chunks(events)
+    result = parse_event(copy.deepcopy(events[1]))
+    assert result.is_error(), "non-string reasoning must be loud, never a clean stream"
+    assert "non-string stream delta 'reasoning'" in result.error.summary
 
 
 def test_iterator_is_the_openrouter_handler() -> None:
