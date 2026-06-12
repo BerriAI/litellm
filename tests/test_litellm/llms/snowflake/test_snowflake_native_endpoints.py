@@ -362,7 +362,7 @@ class TestAnthropicConfigRequest:
             headers={},
         )
         assert "max_tokens" in body
-        assert body["max_tokens"] == 1024
+        assert body["max_tokens"] == 4096
 
     def test_max_tokens_not_overridden_when_provided(self):
         body = self.cfg.transform_request(

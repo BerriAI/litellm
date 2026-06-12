@@ -44,8 +44,20 @@ class TestTeamModelAddAtomicAppend:
 
         updated_team = MagicMock()
         updated_team.team_id = "team-1"
+        updated_team.model_dump.return_value = {
+            "team_id": "team-1",
+            "models": ["existing-model", "new-model"],
+        }
 
-        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+            patch(
+                "litellm.proxy.management_endpoints.team_endpoints._cache_team_object",
+                new_callable=AsyncMock,
+            ),
+            patch("litellm.proxy.proxy_server.user_api_key_cache"),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        ):
             mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
                 return_value=existing_team
             )

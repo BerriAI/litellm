@@ -368,7 +368,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             body["system"] = system
 
         if "max_tokens" not in body:
-            body["max_tokens"] = 4096  # reasonable default; Anthropic API max varies by model
+            body["max_tokens"] = (
+                4096  # reasonable default; Anthropic API max varies by model
+            )
 
         return body
 
