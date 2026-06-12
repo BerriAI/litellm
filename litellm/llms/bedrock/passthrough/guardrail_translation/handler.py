@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -35,32 +35,60 @@ def _generic_passthrough_handler() -> BaseTranslation:
     return PassThroughEndpointHandler()
 
 
+_StringHolder = Tuple[Union[dict, list], Union[str, int]]
+
+
+def _collect_strings(node: Any, holders: List[_StringHolder]) -> None:
+    """
+    Record a (container, key) holder for every non-empty string value nested
+    under an arbitrary JSON node, so prompt content a caller hides in fields
+    like ``toolUse.input`` or ``toolResult.content[].json`` is still scanned
+    and can be written back in place.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, str):
+                if value:
+                    holders.append((node, key))
+            else:
+                _collect_strings(value, holders)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            if isinstance(value, str):
+                if value:
+                    holders.append((node, index))
+            else:
+                _collect_strings(value, holders)
+
+
+def _collect_block_text(block: dict, holders: List[_StringHolder]) -> None:
+    text = block.get("text")
+    if isinstance(text, str) and text:
+        holders.append((block, "text"))
+
+
 def _extract_converse_texts(
     body: dict,
     skip_system: bool,
     skip_tool: bool,
-) -> Tuple[List[str], List[dict]]:
+) -> Tuple[List[str], List[_StringHolder]]:
     """
     Walk a Bedrock Converse request body and collect text content.
 
-    Returns (texts, holders) where each holder is the dict that owns the
-    extracted ``text`` key, so write-back mutates it in place. Tool result
-    text lives under ``toolResult.content[].text`` rather than the top-level
-    block and is scanned too unless tool blocks are skipped.
+    Returns (texts, holders) where each holder is the (container, key) pair
+    that owns the extracted string, so write-back mutates it in place. Besides
+    top-level ``text`` blocks this scans the arbitrary-JSON fields a caller can
+    hide prompt content in -- ``toolUse.input`` and
+    ``toolResult.content[].json`` (alongside ``toolResult.content[].text``) --
+    so a blocking guardrail sees them before the request reaches Bedrock. Tool
+    blocks are skipped entirely when tool messages are excluded.
     """
-    texts: List[str] = []
-    holders: List[dict] = []
-
-    def _collect(block: dict) -> None:
-        text = block.get("text")
-        if text:
-            texts.append(text)
-            holders.append(block)
+    holders: List[_StringHolder] = []
 
     if not skip_system:
         for block in body.get("system") or []:
             if isinstance(block, dict):
-                _collect(block)
+                _collect_block_text(block, holders)
 
     for message in body.get("messages") or []:
         if not isinstance(message, dict):
@@ -70,24 +98,62 @@ def _extract_converse_texts(
                 continue
             if skip_tool and ("toolUse" in block or "toolResult" in block):
                 continue
-            _collect(block)
+            _collect_block_text(block, holders)
+            tool_use = block.get("toolUse")
+            if isinstance(tool_use, dict):
+                _collect_strings(tool_use.get("input"), holders)
             tool_result = block.get("toolResult")
             if isinstance(tool_result, dict):
                 for inner in tool_result.get("content") or []:
                     if isinstance(inner, dict):
-                        _collect(inner)
+                        _collect_block_text(inner, holders)
+                        _collect_strings(inner.get("json"), holders)
 
+    texts = [container[key] for container, key in holders]
+    return texts, holders
+
+
+def _extract_converse_output_texts(
+    content_blocks: List[Any],
+) -> Tuple[List[str], List[_StringHolder]]:
+    """
+    Collect user-visible text from Bedrock Converse output content blocks.
+
+    Covers ``text`` blocks plus the other content-bearing fields a model can
+    emit -- ``toolUse.input``, ``reasoningContent.reasoningText.text`` and
+    ``citationsContent.content[].text`` -- while leaving structural values such
+    as reasoning signatures and citation sources untouched.
+    """
+    holders: List[_StringHolder] = []
+    for block in content_blocks:
+        if not isinstance(block, dict):
+            continue
+        _collect_block_text(block, holders)
+        tool_use = block.get("toolUse")
+        if isinstance(tool_use, dict):
+            _collect_strings(tool_use.get("input"), holders)
+        reasoning = block.get("reasoningContent")
+        if isinstance(reasoning, dict):
+            reasoning_text = reasoning.get("reasoningText")
+            if isinstance(reasoning_text, dict):
+                _collect_block_text(reasoning_text, holders)
+        citations = block.get("citationsContent")
+        if isinstance(citations, dict):
+            for cited in citations.get("content") or []:
+                if isinstance(cited, dict):
+                    _collect_block_text(cited, holders)
+    texts = [container[key] for container, key in holders]
     return texts, holders
 
 
 def _write_back_texts(
     guardrailed_texts: List[str],
-    holders: List[dict],
+    holders: List[_StringHolder],
 ) -> None:
-    for idx, holder in enumerate(holders):
+    for idx, (container, key) in enumerate(holders):
         if idx >= len(guardrailed_texts):
             break
-        holder["text"] = guardrailed_texts[idx]
+        container[key] = guardrailed_texts[idx]
 
 
 class BedrockPassthroughGuardrailHandler(BaseTranslation):
@@ -308,12 +374,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         if not isinstance(content_blocks, list):
             return response
 
-        texts: List[str] = []
-        text_indices: List[int] = []
-        for i, block in enumerate(content_blocks):
-            if isinstance(block, dict) and "text" in block:
-                texts.append(block["text"])
-                text_indices.append(i)
+        texts, holders = _extract_converse_output_texts(content_blocks)
 
         if not texts:
             return response
@@ -345,8 +406,6 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         )
 
         guardrailed_texts = guardrailed_inputs.get("texts", [])
-        for list_pos, block_idx in enumerate(text_indices):
-            if list_pos < len(guardrailed_texts):
-                content_blocks[block_idx]["text"] = guardrailed_texts[list_pos]
+        _write_back_texts(guardrailed_texts, holders)
 
         return response

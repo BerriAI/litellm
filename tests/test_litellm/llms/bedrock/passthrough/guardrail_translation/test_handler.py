@@ -74,8 +74,8 @@ class TestExtractConverseTexts:
         }
         texts, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert texts == ["sys text", "user text"]
-        assert holders[0] is body["system"][0]
-        assert holders[1] is body["messages"][0]["content"][0]
+        assert holders[0] == (body["system"][0], "text")
+        assert holders[1] == (body["messages"][0]["content"][0], "text")
 
     def test_skip_system(self):
         body = {
@@ -84,7 +84,7 @@ class TestExtractConverseTexts:
         }
         texts, holders = _extract_converse_texts(body, skip_system=True, skip_tool=False)
         assert texts == ["user text"]
-        assert holders == [body["messages"][0]["content"][0]]
+        assert holders == [(body["messages"][0]["content"][0], "text")]
 
     def test_skip_tool_blocks(self):
         body = {
@@ -107,7 +107,7 @@ class TestExtractConverseTexts:
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=True)
         assert texts == ["hello"]
 
-    def test_extracts_nested_tool_result_text(self):
+    def test_extracts_nested_tool_result_text_and_json(self):
         body = {
             "messages": [
                 {
@@ -119,7 +119,7 @@ class TestExtractConverseTexts:
                                 "toolUseId": "1",
                                 "content": [
                                     {"text": "blocked tool text"},
-                                    {"json": {"k": "v"}},
+                                    {"json": {"k": "blocked json value"}},
                                 ],
                             }
                         },
@@ -128,8 +128,32 @@ class TestExtractConverseTexts:
             ]
         }
         texts, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
-        assert texts == ["hello", "blocked tool text"]
-        assert holders[1] is body["messages"][0]["content"][1]["toolResult"]["content"][0]
+        assert texts == ["hello", "blocked tool text", "blocked json value"]
+        tool_content = body["messages"][0]["content"][1]["toolResult"]["content"]
+        assert holders[1] == (tool_content[0], "text")
+        assert holders[2] == (tool_content[1]["json"], "k")
+
+    def test_extracts_tool_use_input_strings(self):
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "toolUse": {
+                                "toolUseId": "1",
+                                "name": "lookup",
+                                "input": {"query": "blocked input value", "limit": 5},
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+        texts, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        assert texts == ["blocked input value"]
+        tool_use_input = body["messages"][0]["content"][0]["toolUse"]["input"]
+        assert holders[0] == (tool_use_input, "query")
 
     def test_non_text_content_blocks_ignored(self):
         body = {
@@ -274,6 +298,72 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         assert tool_result["content"][0]["text"] == "[REDACTED]"
 
     @pytest.mark.asyncio
+    async def test_tool_result_json_scanned_and_masked(self):
+        """A caller can hide blocked text under toolResult.content[].json; the
+        guardrail must still see it and write the masked value back in place."""
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _converse_data()
+        data["data"]["messages"][0]["content"].append(
+            {
+                "toolResult": {
+                    "toolUseId": "t1",
+                    "content": [{"json": {"note": "SSN 123-45-6789"}}],
+                }
+            }
+        )
+        guardrail = _make_guardrail(
+            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
+        )
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
+        assert "SSN 123-45-6789" in sent_texts
+        tool_result = result["data"]["messages"][0]["content"][2]["toolResult"]
+        assert tool_result["content"][0]["json"]["note"] == "[REDACTED]"
+
+    @pytest.mark.asyncio
+    async def test_tool_use_input_scanned_and_masked(self):
+        """Blocked text hidden in toolUse.input must be scanned and masked."""
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _converse_data()
+        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {
+            "query": "email john@example.com"
+        }
+        guardrail = _make_guardrail(
+            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
+        )
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
+        assert "email john@example.com" in sent_texts
+        tool_use = result["data"]["messages"][0]["content"][1]["toolUse"]
+        assert tool_use["input"]["query"] == "[REDACTED]"
+
+    @pytest.mark.asyncio
+    async def test_tool_use_input_blocking_propagates(self):
+        """A blocking guardrail must reject content hidden in toolUse.input."""
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _converse_data()
+        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {
+            "query": "blocked content"
+        }
+        guardrail = MagicMock()
+        guardrail.guardrail_name = "block-guard"
+        guardrail.skip_system_message_in_guardrail = False
+        guardrail.skip_tool_message_in_guardrail = False
+        guardrail.apply_guardrail = AsyncMock(
+            side_effect=HTTPException(status_code=400, detail="Blocked")
+        )
+
+        with pytest.raises(HTTPException):
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
+        assert "blocked content" in sent_texts
+
+    @pytest.mark.asyncio
     async def test_non_converse_endpoint_scans_full_payload(self):
         """Invoke routes must not bypass guardrails: the full request payload is
         scanned so blocking guardrails still see user-controlled text."""
@@ -368,6 +458,92 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
 
         assert result["output"]["message"]["content"][0]["text"] == "[MASKED]"
         assert result["stopReason"] == "end_turn"
+
+    @pytest.mark.asyncio
+    async def test_response_reasoning_and_tooluse_extracted_and_masked(self):
+        """Model output hidden in reasoningContent.reasoningText.text and
+        toolUse.input must be scanned and masked, but the reasoning signature
+        must be left untouched."""
+        handler = BedrockPassthroughGuardrailHandler()
+        response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"text": "visible"},
+                        {
+                            "reasoningContent": {
+                                "reasoningText": {
+                                    "text": "thinking about john@example.com",
+                                    "signature": "sig-do-not-touch",
+                                }
+                            }
+                        },
+                        {
+                            "toolUse": {
+                                "toolUseId": "1",
+                                "name": "lookup",
+                                "input": {"q": "ssn 123-45-6789"},
+                            }
+                        },
+                    ],
+                }
+            },
+            "stopReason": "end_turn",
+        }
+        guardrail = _make_guardrail(
+            {"texts": ["[V]", "[REASON]", "[INPUT]"]}
+        )
+
+        result = await handler.process_output_response(
+            response=response, guardrail_to_apply=guardrail
+        )
+
+        sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
+        assert "thinking about john@example.com" in sent_texts
+        assert "ssn 123-45-6789" in sent_texts
+        blocks = result["output"]["message"]["content"]
+        assert blocks[0]["text"] == "[V]"
+        reasoning_text = blocks[1]["reasoningContent"]["reasoningText"]
+        assert reasoning_text["text"] == "[REASON]"
+        assert reasoning_text["signature"] == "sig-do-not-touch"
+        assert blocks[2]["toolUse"]["input"]["q"] == "[INPUT]"
+
+    @pytest.mark.asyncio
+    async def test_response_citations_content_extracted_and_masked(self):
+        """citationsContent.content[].text is grounded answer text and must be
+        scanned, while citation sources/titles are left untouched."""
+        handler = BedrockPassthroughGuardrailHandler()
+        response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "citationsContent": {
+                                "content": [{"text": "Contact john@example.com"}],
+                                "citations": [
+                                    {"source": "https://example.com", "title": "Example"}
+                                ],
+                            }
+                        }
+                    ],
+                }
+            },
+            "stopReason": "end_turn",
+        }
+        guardrail = _make_guardrail({"texts": ["[CITED]"]})
+
+        result = await handler.process_output_response(
+            response=response, guardrail_to_apply=guardrail
+        )
+
+        sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
+        assert sent_texts == ["Contact john@example.com"]
+        citations = result["output"]["message"]["content"][0]["citationsContent"]
+        assert citations["content"][0]["text"] == "[CITED]"
+        assert citations["citations"][0]["source"] == "https://example.com"
+        assert citations["citations"][0]["title"] == "Example"
 
     @pytest.mark.asyncio
     async def test_non_dict_response_returned_unchanged(self):
