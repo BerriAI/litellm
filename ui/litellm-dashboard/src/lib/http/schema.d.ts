@@ -22053,6 +22053,11 @@ export interface components {
              */
             background_health_checks?: boolean | null;
             /**
+             * Cancel On Disconnect
+             * @description cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure
+             */
+            cancel_on_disconnect?: boolean | null;
+            /**
              * Completion Model
              * @description proxy level default model for all chat completion calls
              */
