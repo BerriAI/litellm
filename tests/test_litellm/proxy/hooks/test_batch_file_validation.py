@@ -756,6 +756,7 @@ async def test_pre_call_allows_stripped_provider_model_when_key_has_proxy_alias(
         await rate_limiter._enforce_batch_file_model_access(
             user_api_key_dict=user,
             models=_models(file_dict),
+            target_model_names=[proxy_alias],
         )
 
     can_key_call_model.assert_awaited_once()
@@ -847,7 +848,7 @@ async def test_pre_call_uses_target_model_names_not_stripped_reverse_lookup(
     ):
         await rate_limiter._enforce_batch_file_model_access(
             user_api_key_dict=user,
-            file_content_as_dict=file_dict,
+            models=_models(file_dict),
             target_model_names=[batch_alias],
         )
 
@@ -1514,3 +1515,109 @@ async def test_count_input_file_usage_streams_without_building_list():
     assert usage.request_count == 10
     assert usage.total_tokens > 0
     mock_dict_list.assert_not_called()
+
+
+def _one_row_batch_bytes(model: str) -> bytes:
+    import json as _json
+
+    return (
+        _json.dumps(
+            {
+                "custom_id": "r0",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "x"}],
+                },
+            }
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_count_input_file_usage_enforces_models_when_token_counting_fails():
+    """Security regression: a row whose content makes token counting raise must
+    NOT skip the model allowlist check. async_pre_call_hook swallows non-HTTP
+    exceptions and submits the batch, so a raised counting error would otherwise
+    fail open. The access check must still run and deny the restricted model."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    fake_content = MagicMock()
+    fake_content.content = _one_row_batch_bytes("restricted-model")
+    user = UserAPIKeyAuth(
+        api_key="sk-x",
+        user_id="bob",
+        models=["only-allowed"],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    def _boom(*args, **kwargs):
+        raise ValueError("unsupported content part: input_audio")
+
+    deny = AsyncMock(side_effect=Exception("model not in allowlist"))
+
+    with (
+        patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
+        patch("litellm.proxy.hooks.batch_rate_limiter._count_entry_tokens", new=_boom),
+        patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=deny),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.count_input_file_usage(
+                file_id="file-not-managed",
+                custom_llm_provider="openai",
+                user_api_key_dict=user,
+            )
+
+    # The access check ran despite token counting failing, and denied the model.
+    deny.assert_awaited()
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_count_input_file_usage_blocks_when_counting_fails_for_allowed_model():
+    """Even for an allowed model, a token-counting failure must block with an
+    HTTPException rather than return. Returning would let async_pre_call_hook
+    treat it as success, so a caller could evade token rate limits by sending
+    rows the counter cannot measure."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    fake_content = MagicMock()
+    fake_content.content = _one_row_batch_bytes("allowed-model")
+    user = UserAPIKeyAuth(
+        api_key="sk-x",
+        user_id="bob",
+        models=["allowed-model"],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    def _boom(*args, **kwargs):
+        raise ValueError("unsupported content part: file")
+
+    allow = AsyncMock(return_value=True)
+
+    with (
+        patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
+        patch("litellm.proxy.hooks.batch_rate_limiter._count_entry_tokens", new=_boom),
+        patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=allow),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.count_input_file_usage(
+                file_id="file-not-managed",
+                custom_llm_provider="openai",
+                user_api_key_dict=user,
+            )
+
+    allow.assert_awaited()
+    assert exc.value.status_code == 400
