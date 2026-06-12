@@ -358,6 +358,32 @@ translation/
 │   │                    #   the real wire sends ``type`` — both regimes
 │   │                    #   pinned (wrapper end-of-stream synthesis = seam
 │   │                    #   scope)
+│   ├── mistral/         # wave-2b-beta: mistral over openai_compat (httpx
+│   │   │                #   path, dedicated elif, bare wire model)
+│   │   ├── guard.py     # own name matrix (tool-role names kept by v1;
+│   │   │                #   the image branch forwards every name) + the
+│   │   │                #   shared openai guard with skip_name_fallback;
+│   │   │                #   NO stream:false arm (v1's map only copies
+│   │   │                #   stream=True — explicit False never reaches
+│   │   │                #   the wire)
+│   │   ├── params.py    # user (silent drop) + thinking/reasoning_effort
+│   │   │                #   (magistral system-prompt injection / raise)
+│   │   │                #   as typed fallbacks
+│   │   ├── serialize.py # assemble_body + mct rename, tool_choice
+│   │   │                #   required->any (dict form silently dropped),
+│   │   │                #   $id/$schema strip at v1's depth cap, top_k
+│   │   │                #   verbatim; two-branch message munge (image ->
+│   │   │                #   verbatim base output; else flatten +
+│   │   │                #   MistralToolCallMessage + empty-assistant
+│   │   │                #   removal + None strip)
+│   │   ├── response.py  # the two raw pre-steps (empty->None FIRST, then
+│   │   │                #   magistral content-list collapse: LAST text
+│   │   │                #   wins, thinking joins -> reasoning_content)
+│   │   │                #   then the shared openai parser
+│   │   └── stream.py    # content-list normalize pre-step over the
+│   │                    #   httpx_chunk factory (reasoning="rename" + the
+│   │                    #   passthrough_delta_keys axis admitting
+│   │                    #   thinking_blocks); "xai" chunk dialect
 │   └── xai/             # Grok over openai_compat (httpx path: NO model
 │       │                #   prefix anywhere, transform_response is LIVE):
 │       ├── guard.py     # web_search_options (v1's Responses-bridge reroute
@@ -517,8 +543,9 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to sixty-seven providers out (wave-2b-beta adds
-`cohere`/`cohere_chat`, one module — see the cohere paragraph below) —
+OpenAI-chat-in to sixty-eight providers out (wave-2b-beta adds
+`cohere`/`cohere_chat` (one module) and `mistral` — see their paragraphs
+below) —
 `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
@@ -796,6 +823,39 @@ reaches the wrapper on that regime). One PINNED DIVERGENCE (fail-closed
 on a failure path, the compat_httpx error-chunk precedent): non-str
 stream ``content.text`` — v1 silently swallows the chunk, v2 errors
 loudly (named report row).
+Deliberate wave-2b-beta mistral fallback surfaces (providers/mistral; each
+names the v1 path): every supported-list raise (frequency_penalty,
+presence_penalty, n, logprobs, web_search_options, and
+thinking/reasoning_effort on NON-magistral models); the magistral
+reasoning-prompt INJECTION (v1 rewrites the message list with a constant
+system prompt at transform time — v2 falls back on thinking/
+reasoning_effort everywhere, one arm for both regimes); ``user`` (silently
+dropped upstream — dossier drift: researcher-4 listed it as a raise);
+``seed`` (v1 packs extra_body.random_seed, parse-level fallback); tool-role
+message ``name`` (v1 keeps it; non-tool names serve through the IR drop);
+ANY message ``name`` beside image/file content (the image branch forwards
+names verbatim); string-form stop; single-text content lists (v1 flattens
+— the conservative shared arm, the sambanova precedent); text lists
+flattening to "" (v1's truthy assignment keeps the LIST form). SERVED
+quirks pinned IDENTICAL: explicit stream:false (v1's map only copies True
+— NO guard arm, the IR collapse IS v1's drop), mct->max_tokens, top_k
+verbatim top-level (wire-proven — researcher-4 listed it as a raise, the
+probe refutes it), tool_choice required->any with the DICT form silently
+dropped, tools $id/$schema strip at v1's exact depth-10 cap
+(additionalProperties/strict KEPT — port the code, not the docstring),
+multi-text flatten, MistralToolCallMessage rebuild, empty-assistant
+removal, per-message None strip, the image branch's verbatim
+base-transform passthrough, response empty-content->None BEFORE the
+magistral content-list collapse (LAST text block wins; thinking texts
+join "\\n" into reasoning_content), bare wire model, and the stream
+content-list normalize (thinking_blocks signature "mistral" riding the
+delta via the httpx_chunk factory's wave-2b-beta passthrough_delta_keys
+axis — mistral is the axis's consumer). codestral reuses MistralConfig in
+v1 but is NOT registered here (stays a v1 fallback; re-evaluate with its
+own dossier). Mistral fork obligations (NOT wired; integrator scope): no
+model preset (bare wire model, the xai R4 rule), construction arm
+"openai", streams fold with the "xai" dialect over
+providers/mistral.parse_line (standard data:/[DONE] SSE).
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body

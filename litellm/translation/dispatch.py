@@ -116,6 +116,11 @@ Provider = Literal[
     # is a typed fallback inside the cohere guard, researcher-4 §11).
     "cohere",
     "cohere_chat",
+    # wave-2b-beta: mistral (httpx path, dedicated elif; bare wire model on
+    # responses; the magistral reasoning-prompt injection is a typed
+    # fallback inside the module — codestral reuses the v1 config but is
+    # NOT a wave-2b provider and stays a v1 fallback).
+    "mistral",
 ]
 
 NeverPortProvider = Literal[

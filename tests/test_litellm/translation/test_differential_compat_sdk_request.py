@@ -610,6 +610,7 @@ def test_registered_providers_have_differential_coverage() -> None:
         # wave-2b-beta own modules:
         "cohere",  # test_differential_cohere_{request,response,stream}
         "cohere_chat",  # same gates: both names run every request row
+        "mistral",  # test_differential_mistral_{request,response,stream}
     }
     assert providers == dedicated_gates | set(SPECS) | set(HTTPX_SPECS)
 

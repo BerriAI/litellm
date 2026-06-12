@@ -798,6 +798,115 @@ def _cohere_rows(lines: list) -> int:
     return failures
 
 
+def _mistral_rows(lines: list) -> int:
+    """wave-2b-beta: mistral (httpx path, bare wire model)."""
+    import copy
+
+    from . import test_differential_mistral_request as req
+    from . import test_differential_mistral_response as resp
+    from . import test_differential_mistral_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## mistral (wave-2b-beta): requests (v1 get_optional_params +"
+        " MistralConfig.transform_request — the two-branch message munge —"
+        " vs v2 providers/mistral)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, fragment = req.V1_RAISES[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                req.run_v1_request_transform(case)
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises UnsupportedParamsError)' if ok else 'DIVERGENT'}:"
+            f" {name}"
+        )
+    for name in sorted(req.V1_SERVES_FALLBACKS):
+        case, fragment = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 serves)' if ok else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## mistral: responses (v1 transform_response pre-steps + cdr vs v2"
+        " mistral pre-steps + the shared openai parser; bare wire model)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = (
+            resp._norm(v2) == resp._norm(v1)
+            and v2["model"] == resp.WIRE_MODEL
+            and not str(v2["model"]).startswith("mistral/")
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(resp._LOUD):
+        raw, fragment = resp._LOUD[name]
+        result = resp._v2_parse(raw)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                resp._v1_model_response(copy.deepcopy(raw))
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 raises)' if ok else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## mistral: streams (v1 SSE line replay through"
+        " MistralChatResponseIterator + CustomStreamWrapper('mistral') vs v2"
+        " mistral pre-step + the httpx_chunk factory (rename +"
+        " passthrough thinking_blocks) + the xai chunk dialect)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    return failures
+
+
 def _azure_rows(lines: list) -> int:
     import os
 
@@ -1287,6 +1396,7 @@ def main() -> None:
     failures += _compat_httpx_rows(lines)
     failures += _cometapi_rows(lines)
     failures += _cohere_rows(lines)
+    failures += _mistral_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

@@ -73,6 +73,11 @@ from ..providers.google_genai import (
 from ..providers.google_genai import (
     unsupported_request_shapes as google_unsupported_request_shapes,
 )
+from ..providers.mistral import parse_response as mistral_parse_response
+from ..providers.mistral import serialize_request as mistral_serialize_request
+from ..providers.mistral import (
+    unsupported_request_shapes as mistral_unsupported_request_shapes,
+)
 from ..providers.openai_compat import parse_response as openai_compat_parse_response
 from ..providers.openai_compat import (
     serialize_request as openai_compat_serialize_request,
@@ -123,6 +128,7 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         # main.py elif serves both provider names; v2 is the default route).
         "cohere": cohere_serialize_request,
         "cohere_chat": cohere_serialize_request,
+        "mistral": mistral_serialize_request,
     }
 )
 
@@ -159,6 +165,10 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # mutation byte-for-byte (probed; finish is ALWAYS "stop" in v1).
         "cohere": cohere_parse_response,
         "cohere_chat": cohere_parse_response,
+        # mistral: two raw-body pre-steps (empty-content -> None, magistral
+        # content-list collapse) then the shared openai parser (bare wire
+        # model — the cdr fresh-ModelResponse arm).
+        "mistral": mistral_parse_response,
     }
 )
 
@@ -194,6 +204,9 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # streaming seam, not this outbound-body table).
         "cohere": _OPENAI_DIALECT,
         "cohere_chat": _OPENAI_DIALECT,
+        # mistral: openai outbound body; the chunk-fold dialect is "xai"
+        # (the generic httpx dict path) over the mistral line parser.
+        "mistral": _OPENAI_DIALECT,
     }
 )
 
@@ -222,6 +235,11 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         # fallback — cohere's transform is the inherited GPT one).
         "cohere": cohere_unsupported_request_shapes,
         "cohere_chat": cohere_unsupported_request_shapes,
+        # mistral: own name-matrix arm (tool-role names kept by v1; image
+        # branch forwards every name) + the shared openai guard with
+        # skip_name_fallback; deliberately NO explicit stream:false arm
+        # (v1's map only copies stream=True).
+        "mistral": mistral_unsupported_request_shapes,
     }
 )
 

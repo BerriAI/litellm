@@ -84,6 +84,15 @@ class HttpxChunkPolicy:
     usage through verbatim. Either way usage is attached ONLY to the
     ``choices: []`` tail — v1's wrapper strips it from every emitted
     content/finish chunk and re-synthesizes the final usage chunk."""
+    passthrough_delta_keys: tuple[str, ...] = ()
+    """wave-2b-beta: delta keys (beyond the shared ``_DELTA_KEYS``) a
+    consumer's own pre-step deliberately emits, admitted and copied SET-ONLY
+    verbatim (mistral: ``thinking_blocks`` — its v1 chunk_parser normalizes
+    magistral content-list deltas into content + thinking_blocks +
+    reasoning_content BEFORE the base rebuild, so they are reachable, not
+    "unreachable for v2-sent requests"). The no-consumer-no-arm rule
+    applies: never add a key without the pre-step that emits it and its
+    differential rows in the same commit."""
 
 
 def _envelope_error(
@@ -201,7 +210,9 @@ def _normalize_choice(
 def _normalize_delta(
     policy: HttpxChunkPolicy, delta: dict[str, PlainJson]
 ) -> dict[str, PlainJson] | TranslationError:
-    extra_keys = set(delta.keys()) - set(_DELTA_KEYS)
+    extra_keys = (
+        set(delta.keys()) - set(_DELTA_KEYS) - set(policy.passthrough_delta_keys)
+    )
     if extra_keys:
         return TranslationError.of_unsupported(
             f"stream delta keys {sorted(extra_keys)!r}; unreachable for v2-sent requests"
@@ -236,6 +247,9 @@ def _normalize_delta(
     }
     if "refusal" in delta:
         base = {**base, "refusal": _string_or_none(delta.get("refusal"))}
+    for key in policy.passthrough_delta_keys:
+        if key in delta:
+            base = {**base, key: delta[key]}
     return _reasoning_tail(policy.reasoning, delta, base)
 
 
