@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: e308ad300b
+- commit: 4f60ebdc9a
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -331,29 +331,6 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): chutes:seed_outside_ir (seed)
 - FALLBACK (v1 serves it): chutes:string_form_stop (string-form stop)
 - FALLBACK (v1 serves it): chutes:user_model_list_gate (user)
-
-## cometapi: request bodies (v1 get_optional_params('cometapi') + transform_request vs v2 compat_sdk)
-
-- IDENTICAL: max_completion_tokens
-- IDENTICAL: parallel_tool_calls_false
-- IDENTICAL: response_format_json_object
-- IDENTICAL: response_format_json_schema_strict
-- IDENTICAL: stop_list
-- IDENTICAL: stream_true
-- IDENTICAL: system_and_sampling
-- IDENTICAL: temperature_int_stays_int
-- IDENTICAL: text
-- IDENTICAL: tool_call_compact_roundtrip
-- IDENTICAL: tool_choice_specific
-- IDENTICAL: tools_auto
-- FALLBACK (v1 raises UnsupportedParamsError): cometapi:reasoning_effort (reasoning_effort)
-- FALLBACK (v1 serves it): cometapi:both_max_tokens_keys (both max_tokens and max_completion_tokens)
-- FALLBACK (v1 serves it): cometapi:explicit_stream_false (explicit stream: false)
-- FALLBACK (v1 serves it): cometapi:message_name_field (message name field)
-- FALLBACK (v1 serves it): cometapi:seed_outside_ir (seed)
-- FALLBACK (v1 serves it): cometapi:string_form_stop (string-form stop)
-- FALLBACK (v1 serves it): cometapi:top_k_extra_body (extra_body)
-- FALLBACK (v1 serves it): cometapi:user_model_list_gate (user)
 
 ## dashscope: request bodies (v1 get_optional_params('dashscope') + transform_request vs v2 compat_sdk)
 
@@ -1195,7 +1172,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): zai:thinking_verbatim_copy (thinking on zai)
 - FALLBACK (v1 serves it): zai:user_model_list_gate (user)
 
-## compat_sdk family: responses (v1 convert_to_model_response_object with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm; SDK-path members only — cometapi's no-prefix rows are below)
+## compat_sdk family: responses (v1 convert_to_model_response_object with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm; cometapi is a compat_httpx row — its no-prefix rows are below)
 
 - IDENTICAL: ai21_chat cached_and_reasoning_usage_details
 - IDENTICAL: ai21_chat text
@@ -1554,6 +1531,26 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): bedrock_mantle:string_form_stop (string-form stop)
 - FALLBACK (v1 serves it): bedrock_mantle:user_model_list_gate (user)
 
+## cometapi: request bodies (v1 get_optional_params('cometapi') + the LIVE httpx transform_request vs v2 compat_httpx)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): cometapi:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): cometapi:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): cometapi:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): cometapi:message_name_field (message name field)
+- FALLBACK (v1 serves it): cometapi:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): cometapi:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): cometapi:top_k_extra_body (extra_body)
+- FALLBACK (v1 serves it): cometapi:user_model_list_gate (user)
+
 ## compactifai: request bodies (v1 get_optional_params('compactifai') + the LIVE httpx transform_request vs v2 compat_httpx)
 
 - IDENTICAL: max_completion_tokens
@@ -1697,6 +1694,9 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: bedrock_mantle cached_and_reasoning_usage_details
 - IDENTICAL: bedrock_mantle text
 - IDENTICAL: bedrock_mantle tool_calls_rewrites_stop
+- IDENTICAL: cometapi cached_and_reasoning_usage_details
+- IDENTICAL: cometapi text
+- IDENTICAL: cometapi tool_calls_rewrites_stop
 - IDENTICAL: compactifai cached_and_reasoning_usage_details
 - IDENTICAL: compactifai text
 - IDENTICAL: compactifai tool_calls_rewrites_stop
@@ -1720,6 +1720,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: ovhcloud tool_calls_rewrites_stop
 - IDENTICAL: amazon_nova usage_null_tokens
 - IDENTICAL: bedrock_mantle usage_null_tokens
+- IDENTICAL: cometapi usage_null_tokens
 - IDENTICAL: compactifai usage_null_tokens
 - IDENTICAL: datarobot usage_null_tokens
 - IDENTICAL: gradient_ai usage_null_tokens
@@ -1768,6 +1769,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: ovhcloud tools
 - SEAM CONTRACT: amazon_nova usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: bedrock_mantle usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: cometapi usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: compactifai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: datarobot usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: gradient_ai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
@@ -1775,6 +1777,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - SEAM CONTRACT: lemonade usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: minimax usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: ovhcloud usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- PINNED DIVERGENCE (fail-closed on a failure path): mid-stream {'error': ...} chunks — v1's BASE handler silently swallows them (no error surface in the emitted sequence; asserted in-process for all nine base-handler members), v2's family parser surfaces a LOUD typed boundary error naming the chunk (test_error_chunk_divergence_two_sided; cometapi differs: its v1 handler RAISES and its policy row mirrors the raise — see the cometapi stream rows below)
 
 ## cometapi: responses (v1 CometAPIConfig.transform_response over httpx — LIVE on the dedicated elif, main.py:2547 — vs v2 shared openai parser with NO model preset; bare wire model, the xai R4 pin)
 

@@ -278,12 +278,29 @@ def corpus_for(provider: str) -> dict[str, _Case]:
             "max_completion_tokens": 128,
             "messages": user_msg,
         },
+        # int temperature stays int through both sides (the json-dump pin;
+        # added at the sibling merge so cometapi keeps its wave-2a coverage
+        # and the family gains the row)
+        "temperature_int_stays_int": {
+            "model": model,
+            "temperature": 1,
+            "messages": user_msg,
+        },
     }
     if spec.tools:
         cases["tools_auto"] = {
             "model": model,
             "tools": [WEATHER_TOOL],
             "tool_choice": "auto",
+            "messages": [{"role": "user", "content": "Weather in Paris?"}],
+        }
+        cases["tool_choice_specific"] = {
+            "model": model,
+            "tools": [WEATHER_TOOL],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "get_weather"},
+            },
             "messages": [{"role": "user", "content": "Weather in Paris?"}],
         }
         cases["tool_call_compact_roundtrip"] = {
@@ -312,6 +329,18 @@ def corpus_for(provider: str) -> dict[str, _Case]:
         cases["response_format_json_object"] = {
             "model": model,
             "response_format": {"type": "json_object"},
+            "messages": user_msg,
+        }
+        cases["response_format_json_schema_strict"] = {
+            "model": model,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "a",
+                    "schema": {"type": "object"},
+                    "strict": True,
+                },
+            },
             "messages": user_msg,
         }
     if spec.parallel_tool_calls:
