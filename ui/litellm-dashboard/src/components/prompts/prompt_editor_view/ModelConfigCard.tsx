@@ -28,12 +28,7 @@ const ModelConfigCard: React.FC<ModelConfigCardProps> = ({
   return (
     <div className="flex items-center gap-3">
       <div className="w-[300px]">
-        <ModelSelector
-          accessToken={accessToken || ""}
-          value={model}
-          onChange={onModelChange}
-          showLabel={false}
-        />
+        <ModelSelector accessToken={accessToken || ""} value={model} onChange={onModelChange} showLabel={false} />
       </div>
 
       <button
@@ -49,10 +44,7 @@ const ModelConfigCard: React.FC<ModelConfigCardProps> = ({
           <div className="bg-white rounded-lg shadow-xl p-6 w-96">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Model Parameters</h3>
-              <button
-                onClick={() => setShowConfig(false)}
-                className="text-gray-400 hover:text-gray-600"
-              >
+              <button onClick={() => setShowConfig(false)} className="text-gray-400 hover:text-gray-600">
                 ✕
               </button>
             </div>
@@ -95,4 +87,3 @@ const ModelConfigCard: React.FC<ModelConfigCardProps> = ({
 };
 
 export default ModelConfigCard;
-

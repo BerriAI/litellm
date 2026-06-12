@@ -949,6 +949,28 @@ class TestToolChoiceTransformation:
         result = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
         assert result == tool_choice
 
+    def test_transform_tool_choice_responses_flat_function_name(self):
+        """Responses-API forced-function with a top-level name maps to the nested Chat
+        Completions shape instead of degrading to required and dropping the name"""
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function", "name": "get_weather"}
+        )
+        assert result == {"type": "function", "function": {"name": "get_weather"}}
+
+    def test_transform_tool_choice_function_without_name_falls_back_to_required(self):
+        """A function-type dict with no name still falls back to required"""
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function"}
+        )
+        assert result == "required"
+
+    def test_transform_tool_choice_function_empty_name_falls_back_to_required(self):
+        """An empty top-level name is falsy and must not produce an empty function name"""
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function", "name": ""}
+        )
+        assert result == "required"
+
 
 class TestContentTypeTransformation:
     """Test content type transformation from Responses API to Chat Completion format"""

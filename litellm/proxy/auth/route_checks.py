@@ -59,6 +59,10 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
 # paths directly because the request route carries the resolved key id.
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES = ("/regenerate", "/reset_spend")
 
+_AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS = frozenset(
+    ("openai_routes", "llm_api_routes")
+)
+
 
 class RouteChecks:
     @staticmethod
@@ -103,6 +107,8 @@ class RouteChecks:
         if len(valid_token.allowed_routes) == 0:
             return True
 
+        denied_auth_enforced_pass_through_route = False
+
         # explicit check for allowed routes (exact match or prefix match)
         for allowed_route in valid_token.allowed_routes:
             if RouteChecks._route_matches_allowed_route(
@@ -121,7 +127,20 @@ class RouteChecks:
                         route=route,
                         allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                     ):
-                        return True
+                        if (
+                            allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
+                            and RouteChecks.is_auth_enforced_pass_through_route(
+                                route=route,
+                                method=RouteChecks._get_request_method(request=request),
+                            )
+                        ):
+                            if RouteChecks.check_passthrough_route_access(
+                                route=route, user_api_key_dict=valid_token
+                            ):
+                                return True
+                            denied_auth_enforced_pass_through_route = True
+                        else:
+                            return True
 
                     ################################################
                     #  For llm_api_routes, also check registered pass-through endpoints
@@ -134,7 +153,17 @@ class RouteChecks:
                         if InitPassThroughEndpointHelpers.is_registered_pass_through_route(
                             route=route
                         ):
-                            return True
+                            if RouteChecks.is_auth_enforced_pass_through_route(
+                                route=route,
+                                method=RouteChecks._get_request_method(request=request),
+                            ):
+                                if RouteChecks.check_passthrough_route_access(
+                                    route=route, user_api_key_dict=valid_token
+                                ):
+                                    return True
+                                denied_auth_enforced_pass_through_route = True
+                            else:
+                                return True
 
                         # Method-aware carve-out: allow GET on the two
                         # read-only MCP-server discovery endpoints
@@ -157,6 +186,9 @@ class RouteChecks:
                 route=route, pattern=allowed_route
             ):
                 return True
+
+        if denied_auth_enforced_pass_through_route:
+            raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -228,7 +260,14 @@ class RouteChecks:
             route=route,
         )
 
-        if RouteChecks.is_llm_api_route(route=route):
+        if RouteChecks.is_auth_enforced_pass_through_route(
+            route=route,
+            method=RouteChecks._get_request_method(request=request),
+        ):
+            RouteChecks._require_auth_pass_through_access(
+                route=route, valid_token=valid_token
+            )
+        elif RouteChecks.is_llm_api_route(route=route):
             pass
         elif RouteChecks.is_info_route(route=route):
             # check if user allowed to call an info route
@@ -623,6 +662,66 @@ class RouteChecks:
             return True
 
         return False
+
+    @staticmethod
+    def _get_request_method(request: Optional[Request]) -> Optional[str]:
+        if request is None:
+            return None
+
+        try:
+            method = request.method
+        except (AttributeError, KeyError):
+            return None
+        if not isinstance(method, str):
+            return None
+
+        return method.upper()
+
+    @staticmethod
+    def is_auth_enforced_pass_through_route(
+        route: str, method: Optional[str] = None
+    ) -> bool:
+        """
+        True for config/DB pass-through endpoints registered with auth=true.
+
+        These routes are injected into ``openai_routes`` for spend/budget hooks but
+        must not inherit blanket ``openai_routes`` RBAC; access is gated by
+        ``allowed_passthrough_routes`` on the key or team.
+        """
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        route_info = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            route=route, method=method
+        )
+        if route_info is None:
+            return False
+        return route_info.get("auth") is True
+
+    @staticmethod
+    def _auth_pass_through_denied_exception(route: str) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Key/team not allowed to access passthrough route {route}. "
+                "Configure `allowed_passthrough_routes` on the team or key."
+            ),
+        )
+
+    @staticmethod
+    def _require_auth_pass_through_access(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+    ) -> None:
+        """
+        Require an explicit ``allowed_passthrough_routes`` match for auth=true pass-through.
+        """
+        if RouteChecks.check_passthrough_route_access(
+            route=route, user_api_key_dict=valid_token
+        ):
+            return
+        raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
     @staticmethod
     def check_passthrough_route_access(

@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Literal, Optional, Tuple, TypedDict, cast
+from typing import Any, Literal, Optional, Tuple, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,6 +29,37 @@ _IMAGE_RESPONSE_CALL_TYPES = frozenset(
         CallTypes.aimage_edit.value,
     }
 )
+
+# Pre-resolved DataResidency enum values for fast membership checks
+_VALID_DATA_RESIDENCIES = frozenset(r.value for r in DataResidency)
+
+
+def _get_token_detail_value(details: object, key: str) -> Optional[int]:
+    if isinstance(details, dict):
+        value = details.get(key)
+    else:
+        value = getattr(details, key, None)
+    return value if isinstance(value, int) else None
+
+
+def _get_web_search_requests(server_tool_use: Any) -> Optional[int]:
+    """
+    Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
+    that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
+    or any other object supporting attribute access.
+
+    Returns ``None`` when the value cannot be resolved — callers can
+    distinguish "absent" from "zero" using ``is None``.
+
+    See https://github.com/BerriAI/litellm/issues/26153 — ``stream_chunk_builder``
+    historically left this as a plain ``dict``, which broke direct attribute
+    access in cost calculation.
+    """
+    if server_tool_use is None:
+        return None
+    if isinstance(server_tool_use, dict):
+        return server_tool_use.get("web_search_requests")
+    return getattr(server_tool_use, "web_search_requests", None)
 
 
 def _is_above_128k(tokens: float) -> bool:
@@ -636,7 +667,7 @@ def _get_regional_uplift_multiplier(
     if data_residency is None:
         return 1.0
     residency = data_residency.lower()
-    if residency not in {r.value for r in DataResidency}:
+    if residency not in _VALID_DATA_RESIDENCIES:
         return 1.0
     multiplier = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
     if multiplier is None:
@@ -867,17 +898,47 @@ def calculate_image_response_cost_from_usage(
             cached_tokens=0,
         )
 
+    output_tokens_details = getattr(usage, "completion_tokens_details", None)
+    if output_tokens_details is None:
+        output_tokens_details = getattr(usage, "output_tokens_details", None)
+
+    if output_tokens_details is None:
+        completion_tokens_details = CompletionTokensDetailsWrapper(
+            text_tokens=0,
+            image_tokens=completion_tokens,
+            reasoning_tokens=0,
+            audio_tokens=0,
+        )
+    else:
+        text_tokens = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
+        image_tokens = (
+            _get_token_detail_value(output_tokens_details, "image_tokens") or 0
+        )
+        audio_tokens = (
+            _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
+        )
+        reasoning_tokens = (
+            _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
+        )
+        known_output_tokens = (
+            text_tokens + image_tokens + audio_tokens + reasoning_tokens
+        )
+        if completion_tokens > known_output_tokens:
+            text_tokens += completion_tokens - known_output_tokens
+
+        completion_tokens_details = CompletionTokensDetailsWrapper(
+            text_tokens=text_tokens,
+            image_tokens=image_tokens,
+            reasoning_tokens=reasoning_tokens,
+            audio_tokens=audio_tokens,
+        )
+
     normalized_usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
         prompt_tokens_details=prompt_tokens_details,
-        completion_tokens_details=CompletionTokensDetailsWrapper(
-            text_tokens=0,
-            image_tokens=completion_tokens,
-            reasoning_tokens=0,
-            audio_tokens=0,
-        ),
+        completion_tokens_details=completion_tokens_details,
     )
 
     prompt_cost, completion_cost = generic_cost_per_token(

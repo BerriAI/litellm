@@ -101,6 +101,42 @@ class AnthropicPassthroughLoggingHandler:
         return None
 
     @staticmethod
+    def _resolve_costing_model(model: str, logging_obj: LiteLLMLoggingObj) -> str:
+        if model and model != "unknown":
+            return model
+        litellm_params = (getattr(logging_obj, "model_call_details", {}) or {}).get(
+            "litellm_params", {}
+        ) or {}
+        deployment_model = litellm_params.get("model")
+        if deployment_model and deployment_model != "unknown":
+            return deployment_model
+        model_group = (litellm_params.get("metadata", {}) or {}).get("model_group")
+        if model_group:
+            return model_group.removeprefix("passthrough/")
+        return model
+
+    @staticmethod
+    def _extract_model_from_anthropic_chunks(
+        all_chunks: Sequence[Union[str, bytes]],
+    ) -> Optional[str]:
+        for raw in all_chunks:
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            for line in text.splitlines():
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    data = json.loads(line[len("data:") :].strip())
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                if data.get("type") == "message_start":
+                    model = (data.get("message") or {}).get("model")
+                    if model:
+                        return model
+        return None
+
+    @staticmethod
     def _create_anthropic_response_logging_payload(
         litellm_model_response: Union[ModelResponse, TextCompletionResponse],
         model: str,
@@ -114,10 +150,21 @@ class AnthropicPassthroughLoggingHandler:
 
         handles streaming and non-streaming responses
         """
+        # Only record complete_streaming_response for actual streaming responses.
+        # perform_redaction scrubs this field only when stream is True, so setting
+        # it on a non-streaming response would bypass message redaction.
+        if logging_obj.model_call_details.get("stream") is True:
+            logging_obj.model_call_details["complete_streaming_response"] = (
+                litellm_model_response
+            )
         try:
             # Get custom_llm_provider from logging object if available (e.g., azure_ai for Azure Anthropic)
             custom_llm_provider = logging_obj.model_call_details.get(
                 "custom_llm_provider"
+            )
+
+            model = AnthropicPassthroughLoggingHandler._resolve_costing_model(
+                model, logging_obj
             )
 
             # Prepend custom_llm_provider to model if not already present
@@ -205,6 +252,15 @@ class AnthropicPassthroughLoggingHandler:
             and litellm_logging_obj.model_call_details.get("model")
         ):
             model = cast(str, litellm_logging_obj.model_call_details.get("model"))
+
+        if not model or model == "unknown":
+            chunk_model = (
+                AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(
+                    all_chunks
+                )
+            )
+            if chunk_model:
+                model = chunk_model
 
         complete_streaming_response = (
             AnthropicPassthroughLoggingHandler._build_complete_streaming_response(

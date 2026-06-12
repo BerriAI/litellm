@@ -23,6 +23,7 @@ from litellm.integrations.opentelemetry import (
     OpenTelemetry,
     OpenTelemetryConfig,
     OTELSemconvCategory,
+    _normalize_team_metadata_keys,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -1262,7 +1263,6 @@ class TestOpenTelemetry(unittest.TestCase):
             ) as mock_get_headers,
             patch.object(otel, "_get_tracer_with_dynamic_headers") as mock_get_tracer,
         ):
-
             # Test case 1: With dynamic headers
             mock_get_headers.return_value = {
                 "arize-space-id": "test-space",
@@ -1758,6 +1758,31 @@ class TestOpenTelemetry(unittest.TestCase):
         )
 
         mock_tracer.start_span.assert_not_called()
+
+
+class TestOpenTelemetryToNs(unittest.TestCase):
+    """``_to_ns`` converts a span boundary to epoch nanoseconds. Service spans now
+    feed it real float/datetime windows, and a missing boundary arrives as
+    ``None`` — all three shapes must convert without raising the ``AttributeError``
+    a bare ``dt.timestamp()`` would on a float or ``None``."""
+
+    def setUp(self):
+        self.otel = OpenTelemetry()
+
+    def test_datetime_converts_to_epoch_ns(self):
+        dt = datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(self.otel._to_ns(dt), int(dt.timestamp() * 1e9))
+
+    def test_float_epoch_seconds_scaled_to_ns(self):
+        self.assertEqual(self.otel._to_ns(1700.5), 1_700_500_000_000)
+
+    def test_int_epoch_seconds_scaled_to_ns(self):
+        self.assertEqual(self.otel._to_ns(1700), 1_700_000_000_000)
+
+    @patch("litellm.integrations.opentelemetry.datetime")
+    def test_none_falls_back_to_current_time(self, mock_datetime):
+        mock_datetime.now.return_value.timestamp.return_value = 1700.0
+        self.assertEqual(self.otel._to_ns(None), 1_700_000_000_000)
 
 
 class TestOpenTelemetryHeaderSplitting(unittest.TestCase):
@@ -2642,7 +2667,7 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
                 # Verify parent span is still recording after each call
                 self.assertTrue(
                     parent_span.is_recording(),
-                    f"External span should still be recording after completion #{i+1}",
+                    f"External span should still be recording after completion #{i + 1}",
                 )
 
         # Verify all spans have the same trace_id
@@ -5142,3 +5167,303 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         span, exp = self._span()
         otel.set_preprocessing_duration_attribute(span, None)
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+
+class TestGetSpanContextLitellmMetadataFallback(unittest.TestCase):
+    """
+    Tests for _get_span_context() falling back to litellm_metadata.
+
+    On /v1/messages (Anthropic Messages API) and other LITELLM_METADATA_ROUTES,
+    litellm_parent_otel_span is stored in litellm_params["litellm_metadata"]
+    instead of litellm_params["metadata"].  _get_span_context() must check
+    both locations.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/27934
+    """
+
+    def test_span_context_from_metadata(self):
+        """Parent span is found when stored in litellm_params['metadata'] (OpenAI path)."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        mock_span.get_span_context.return_value = MagicMock(is_valid=True)
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_parent_otel_span": mock_span},
+            }
+        }
+
+        ctx, detected_span = otel._get_span_context(kwargs)
+        self.assertIsNotNone(ctx)
+        # Should NOT fall through to "no parent context" path
+        self.assertIsNone(detected_span)
+
+    def test_span_context_from_litellm_metadata_fallback(self):
+        """Parent span is found when stored in litellm_params['litellm_metadata'] (Anthropic path)."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        mock_span.get_span_context.return_value = MagicMock(is_valid=True)
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "user_id": "test-user"
+                },  # Anthropic native metadata, no span
+                "litellm_metadata": {"litellm_parent_otel_span": mock_span},
+            }
+        }
+
+        ctx, detected_span = otel._get_span_context(kwargs)
+        self.assertIsNotNone(ctx)
+        self.assertIsNone(detected_span)
+
+    def test_span_context_metadata_takes_priority(self):
+        """When both metadata and litellm_metadata have the span, metadata wins."""
+        otel = OpenTelemetry()
+        span_from_metadata = MagicMock(name="span_from_metadata")
+        span_from_metadata.get_span_context.return_value = MagicMock(is_valid=True)
+        span_from_litellm_metadata = MagicMock(name="span_from_litellm_metadata")
+        span_from_litellm_metadata.get_span_context.return_value = MagicMock(
+            is_valid=True
+        )
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_parent_otel_span": span_from_metadata},
+                "litellm_metadata": {
+                    "litellm_parent_otel_span": span_from_litellm_metadata
+                },
+            }
+        }
+
+        ctx, detected_span = otel._get_span_context(kwargs)
+        self.assertIsNotNone(ctx)
+        self.assertIsNone(detected_span)
+        # metadata span is found first, so get_span_context on the
+        # litellm_metadata span should never be called — proving
+        # metadata takes priority over litellm_metadata.
+        span_from_litellm_metadata.get_span_context.assert_not_called()
+
+    def test_span_context_no_parent_when_neither_has_span(self):
+        """When neither metadata nor litellm_metadata has a span, returns (None, None)."""
+        otel = OpenTelemetry()
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"user_id": "test-user"},
+                "litellm_metadata": {"some_key": "some_value"},
+            }
+        }
+
+        ctx, detected_span = otel._get_span_context(kwargs)
+        # No parent span in either metadata dict and no active span in test
+        # context, so both should be None.
+        self.assertIsNone(ctx)
+        self.assertIsNone(detected_span)
+
+
+class TestEndProxySpanLitellmMetadataFallback(unittest.TestCase):
+    """
+    Tests for _end_proxy_span_from_kwargs() falling back to litellm_metadata.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/27934
+    """
+
+    def test_end_proxy_span_from_metadata(self):
+        """Proxy span is found and ended from litellm_params['metadata']."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        mock_span.name = "Received Proxy Server Request"
+        mock_span.is_recording.return_value = True
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_parent_otel_span": mock_span},
+            }
+        }
+
+        otel._end_proxy_span_from_kwargs(kwargs, end_time=datetime.now())
+        mock_span.end.assert_called_once()
+
+    def test_end_proxy_span_from_litellm_metadata(self):
+        """Proxy span is found and ended from litellm_params['litellm_metadata'] (fallback)."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        mock_span.name = "Received Proxy Server Request"
+        mock_span.is_recording.return_value = True
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"user_id": "test-user"},  # No span here
+                "litellm_metadata": {"litellm_parent_otel_span": mock_span},
+            }
+        }
+
+        otel._end_proxy_span_from_kwargs(kwargs, end_time=datetime.now())
+        mock_span.end.assert_called_once()
+class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
+    """team_metadata, http.route, and both model names (the user-facing
+    model_group alias and the dispatched provider model) must land on the
+    inference span via set_attributes."""
+
+    def _span(self):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+        return tracer.start_span("litellm_request"), exporter
+
+    def _attr(self, span, exporter):
+        span.end()
+        return exporter.get_finished_spans()[0].attributes
+
+    def _kwargs(self):
+        return {
+            "model": "gpt-4o",
+            "optional_params": {},
+            "litellm_params": {
+                "custom_llm_provider": "azure",
+                "metadata": {
+                    "user_api_key_team_metadata": {
+                        "tier": "gold",
+                        "cost_center": "42",
+                    }
+                },
+            },
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_request_route": "/v1/chat/completions",
+                    "user_api_key_team_id": "team-1",
+                },
+                "call_type": "completion",
+                "model_group": "gpt-4o",
+                "model": "azure/my-deployment",
+                "hidden_params": {"litellm_model_name": "azure/my-deployment"},
+                "id": "req-1",
+                "litellm_call_id": "call-1",
+            },
+        }
+
+    def _otel_with_team_metadata_keys(self, keys):
+        return OpenTelemetry(
+            config=OpenTelemetryConfig(baggage_team_metadata_keys=keys)
+        )
+
+    def test_all_identity_attributes_stamped(self):
+        otel = self._otel_with_team_metadata_keys(["tier", "cost_center"])
+        span, exp = self._span()
+        otel.set_attributes(span, self._kwargs(), {"model": "azure/gpt-4o"})
+        attrs = self._attr(span, exp)
+
+        assert attrs["http.route"] == "/v1/chat/completions"
+        assert json.loads(attrs["litellm.team.metadata"]) == {
+            "tier": "gold",
+            "cost_center": "42",
+        }
+        assert attrs["litellm.model_group"] == "gpt-4o"
+        assert attrs["litellm.provider.model"] == "azure/my-deployment"
+
+    def test_team_metadata_defaults_to_none_stamped(self):
+        """With no allowlist configured (the default), a team's metadata must
+        never be stamped, even when present on the request."""
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_attributes(span, self._kwargs(), {"model": "azure/gpt-4o"})
+        assert "litellm.team.metadata" not in self._attr(span, exp)
+
+    def test_only_allowlisted_team_metadata_keys_stamped(self):
+        """Sub-keys outside the allowlist are excluded from the stamped value."""
+        otel = self._otel_with_team_metadata_keys(["tier"])
+        span, exp = self._span()
+        otel.set_attributes(span, self._kwargs(), {"model": "azure/gpt-4o"})
+        assert json.loads(self._attr(span, exp)["litellm.team.metadata"]) == {
+            "tier": "gold"
+        }
+
+    def test_team_metadata_allowlist_from_config_yaml_kwarg(self):
+        """callback_settings.otel.baggage_team_metadata_keys arrives as a kwarg
+        and must drive the allowlist."""
+        otel = OpenTelemetry(baggage_team_metadata_keys=["cost_center"])
+        span, exp = self._span()
+        otel.set_attributes(span, self._kwargs(), {"model": "azure/gpt-4o"})
+        assert json.loads(self._attr(span, exp)["litellm.team.metadata"]) == {
+            "cost_center": "42"
+        }
+
+    def test_provider_model_falls_back_to_payload_model(self):
+        """Without hidden_params.litellm_model_name the dispatched model is
+        the payload model (the SDK path, where no router renaming happened)."""
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        kwargs["standard_logging_object"]["hidden_params"] = {}
+        span, exp = self._span()
+        otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
+        assert self._attr(span, exp)["litellm.provider.model"] == "azure/my-deployment"
+
+    def test_empty_team_metadata_is_dropped(self):
+        """An empty team_metadata dict must not stamp a useless '{}'."""
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        kwargs["litellm_params"]["metadata"]["user_api_key_team_metadata"] = {}
+        span, exp = self._span()
+        otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
+        assert "litellm.team.metadata" not in self._attr(span, exp)
+
+    def test_missing_route_is_dropped(self):
+        """An SDK request has no route; http.route must be absent, not empty."""
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        del kwargs["standard_logging_object"]["metadata"]["user_api_key_request_route"]
+        span, exp = self._span()
+        otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
+        assert "http.route" not in self._attr(span, exp)
+
+    def test_team_metadata_json_helper(self):
+        keys = ["a", "b"]
+        assert OpenTelemetry._team_metadata_json(None, keys) is None
+        assert OpenTelemetry._team_metadata_json("not-a-dict", keys) is None
+        assert OpenTelemetry._team_metadata_json({}, keys) is None
+        # empty allowlist -> nothing stamped, even with data present
+        assert OpenTelemetry._team_metadata_json({"a": 1}, []) is None
+        # no allowlisted key present -> dropped, not a useless "{}"
+        assert OpenTelemetry._team_metadata_json({"c": 1}, keys) is None
+        # only allowlisted sub-keys survive
+        assert json.loads(
+            OpenTelemetry._team_metadata_json({"a": 1, "c": 2}, keys)
+        ) == {"a": 1}
+
+
+class TestOpenTelemetryTeamMetadataKeysConfig(unittest.TestCase):
+    def test_normalize_from_csv_string(self):
+        # comma-separated env var: strip whitespace and drop empties
+        assert _normalize_team_metadata_keys("tier, cost_center , ,") == [
+            "tier",
+            "cost_center",
+        ]
+
+    def test_normalize_from_list(self):
+        assert _normalize_team_metadata_keys(["tier", " cost_center ", ""]) == [
+            "tier",
+            "cost_center",
+        ]
+
+    def test_normalize_none(self):
+        assert _normalize_team_metadata_keys(None) == []
+
+    def test_config_reads_csv_env_var(self):
+        with patch.dict(
+            "os.environ",
+            {"LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS": "tier, cost_center"},
+        ):
+            assert OpenTelemetryConfig().baggage_team_metadata_keys == [
+                "tier",
+                "cost_center",
+            ]
+
+    def test_explicit_keys_win_over_env_var(self):
+        with patch.dict(
+            "os.environ",
+            {"LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS": "from_env"},
+        ):
+            cfg = OpenTelemetryConfig(baggage_team_metadata_keys=["from_arg"])
+            assert cfg.baggage_team_metadata_keys == ["from_arg"]

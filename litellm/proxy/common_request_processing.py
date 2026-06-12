@@ -249,6 +249,13 @@ async def create_response(  # noqa: PLR0915
     If the first chunk is an error, return a standard JSON error response.
     Otherwise, return StreamingResponse and stream all content.
     """
+    # Tell buffering reverse proxies (nginx, ingress-nginx, Envoy) to flush SSE
+    # immediately instead of releasing the whole stream in one batch (issue #28384).
+    streaming_headers = {
+        **headers,
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
     first_chunk_value: Optional[str] = None
     final_status_code = default_status_code
 
@@ -300,7 +307,7 @@ async def create_response(  # noqa: PLR0915
         return StreamingResponse(
             empty_gen(),
             media_type=media_type,
-            headers=headers,
+            headers=streaming_headers,
             status_code=default_status_code,
         )
     except Exception as e:
@@ -338,7 +345,7 @@ async def create_response(  # noqa: PLR0915
         return StreamingResponse(
             error_gen_message(),
             media_type=media_type,
-            headers=headers,
+            headers=streaming_headers,
             status_code=error_status,
         )
 
@@ -360,7 +367,7 @@ async def create_response(  # noqa: PLR0915
     return StreamingResponse(
         combined_generator(),
         media_type=media_type,
-        headers=headers,
+        headers=streaming_headers,
         status_code=final_status_code,
     )
 
@@ -839,6 +846,7 @@ class ProxyBaseLLMRequestProcessing:
             "aget_run",
             "acancel_run",
             "adelete_run",
+            "apply_guardrail",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -1290,7 +1298,7 @@ class ProxyBaseLLMRequestProcessing:
                 # (ProxyLogging._fire_deferred_stream_logging) fires the
                 # closure after the full streaming pipeline finishes.
                 # The closure runs non-apply_guardrail hooks on the
-                # assembled response, then fires both logging handlers.
+                # assembled response, then fires success logging.
                 # Only for CustomStreamWrapper — raw async generators from
                 # passthrough routes bypass CSW and would orphan the closure.
                 from litellm.litellm_core_utils.streaming_handler import (
@@ -1368,6 +1376,21 @@ class ProxyBaseLLMRequestProcessing:
                         user_api_key_dict=user_api_key_dict,
                         request_data=self.data,
                     )
+                    if route_type == "aresponses":
+                        # Streaming /v1/responses returns here without
+                        # reaching the non-streaming ownership tail below.
+                        # Wrap the SSE generator so container ownership is
+                        # written once the upstream iterator finishes
+                        # assembling ``completed_response`` — otherwise
+                        # code-interpreter containers created during the
+                        # stream stay unregistered and follow-up file API
+                        # calls 403. Covers the background-polling path
+                        # too, which loops ``body_iterator`` end-to-end.
+                        selected_data_generator = ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
+                            original_stream_response=response,
+                            wrapped_generator=selected_data_generator,
+                            user_api_key_dict=user_api_key_dict,
+                        )
                     return await create_response(
                         generator=selected_data_generator,
                         media_type="text/event-stream",
@@ -1411,32 +1434,17 @@ class ProxyBaseLLMRequestProcessing:
                     logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
                     try:
                         asyncio.create_task(
-                            logging_obj.async_success_handler(
+                            logging_obj.dispatch_success_handlers(
                                 response,
                                 cache_hit=None,
                                 start_time=None,
                                 end_time=None,
+                                prefer_async_handlers=True,
                             )
                         )
                     except Exception as e:
                         verbose_proxy_logger.exception(
                             "Error in orphaned streaming async logging: %s", e
-                        )
-                    try:
-                        from litellm.litellm_core_utils.thread_pool_executor import (
-                            executor as _exc,
-                        )
-
-                        _exc.submit(
-                            logging_obj.success_handler,
-                            response,
-                            cache_hit=None,
-                            start_time=None,
-                            end_time=None,
-                        )
-                    except Exception as e:
-                        verbose_proxy_logger.exception(
-                            "Error in orphaned streaming sync logging: %s", e
                         )
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
@@ -1483,7 +1491,92 @@ class ProxyBaseLLMRequestProcessing:
 
         await check_response_size_is_safe(response=response)
 
+        if route_type in {"aresponses", "aget_responses"}:
+            await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+            )
+
         return response
+
+    @staticmethod
+    async def _record_container_owners_from_responses_if_needed(
+        response: Any,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """Register code-interpreter containers so follow-up file APIs pass ownership checks."""
+        from litellm.proxy.container_endpoints.ownership import (
+            record_container_owners_from_responses_response,
+        )
+
+        if response is None:
+            return
+
+        try:
+            await record_container_owners_from_responses_response(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Container ownership recording failed after responses call: %s",
+                e,
+            )
+
+    @staticmethod
+    def _extract_completed_responses_response(stream_response: Any) -> Any:
+        """Pull the assembled ``ResponsesAPIResponse`` off a streaming iterator.
+
+        ``ResponsesAPIStreamingIterator`` stores the terminal stream event
+        (``response.completed`` / ``response.incomplete`` / ``response.failed``)
+        in ``completed_response``; the actual response body hangs off
+        that event's ``.response`` attribute. Some iterators store the
+        ``ResponsesAPIResponse`` directly. Handle both shapes so the
+        container-ownership recording path can walk ``.output`` either way.
+        """
+        completed = getattr(stream_response, "completed_response", None)
+        if completed is None:
+            return None
+        response_obj = getattr(completed, "response", None)
+        if response_obj is not None:
+            return response_obj
+        return completed
+
+    @staticmethod
+    async def _wrap_responses_stream_for_container_ownership(
+        original_stream_response: Any,
+        wrapped_generator: Any,
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
+        """Forward SSE chunks, then record container ownership at stream end.
+
+        Streaming ``/v1/responses`` short-circuits out of
+        ``base_process_llm_request`` before the non-streaming ownership
+        tail runs, so without this wrap the
+        ``LiteLLM_ManagedObjectTable`` row for any container created
+        during the stream is never written and follow-up file API calls
+        return 403.
+        """
+        try:
+            async for chunk in wrapped_generator:
+                yield chunk
+        finally:
+            try:
+                completed_obj = (
+                    ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+                        original_stream_response
+                    )
+                )
+                if completed_obj is not None:
+                    await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
+                        response=completed_obj,
+                        user_api_key_dict=user_api_key_dict,
+                    )
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "Container ownership recording failed after streaming responses call: %s",
+                    e,
+                )
 
     async def base_passthrough_process_llm_request(
         self,
@@ -1639,7 +1732,7 @@ class ProxyBaseLLMRequestProcessing:
     ) -> None:
         """
         Run non-streaming post-call guardrail hooks on an assembled streaming
-        response, then fire both async and sync logging handlers.
+        response, then fire success logging via ``dispatch_success_handlers``.
 
         Called by ProxyLogging._fire_deferred_stream_logging after the full
         streaming pipeline (including unified_guardrail end-of-stream blocks)
@@ -1655,8 +1748,6 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can call the production
         implementation directly rather than reimplementing the closure.
         """
-        from litellm.litellm_core_utils.thread_pool_executor import executor
-
         _response = assembled_response
         try:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
@@ -1715,31 +1806,23 @@ class ProxyBaseLLMRequestProcessing:
             )
         finally:
             try:
+                # Proxy streaming always runs in async context and proxy spend
+                # logging is async-only; force async dispatch so DB/spend
+                # callbacks fire regardless of the call-type heuristic in
+                # _is_sync_litellm_request (which only recognizes a subset of
+                # async markers stored in litellm_params).
                 asyncio.create_task(
-                    captured_logging_obj.async_success_handler(
+                    captured_logging_obj.dispatch_success_handlers(
                         _response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
+                        prefer_async_handlers=True,
                     )
                 )
             except Exception as e:
                 verbose_proxy_logger.exception(
-                    "Error in deferred streaming async logging: %s",
-                    e,
-                )
-
-            try:
-                executor.submit(
-                    captured_logging_obj.success_handler,
-                    _response,
-                    cache_hit=cache_hit,
-                    start_time=None,
-                    end_time=None,
-                )
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    "Error in deferred streaming sync logging: %s",
+                    "Error in deferred streaming success logging: %s",
                     e,
                 )
 
@@ -1866,12 +1949,26 @@ class ProxyBaseLLMRequestProcessing:
                 code=status.HTTP_400_BAD_REQUEST,
                 headers=headers,
             )
+        # Extract status_code from the exception if it carries one.
+        # Provider exceptions (NotFoundError, BadRequestError, GeminiError,
+        # VertexAIError, etc.) all have a status_code attribute reflecting
+        # the upstream API response. Use it to return the correct HTTP code
+        # instead of defaulting to 500.
+        _exc_status_code = getattr(e, "status_code", None)
+        if (
+            _exc_status_code is not None
+            and isinstance(_exc_status_code, int)
+            and 400 <= _exc_status_code <= 599
+        ):
+            _code = _exc_status_code
+        else:
+            _code = status.HTTP_500_INTERNAL_SERVER_ERROR
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             openai_code=getattr(e, "code", None),
-            code=getattr(e, "status_code", 500),
+            code=_code,
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )

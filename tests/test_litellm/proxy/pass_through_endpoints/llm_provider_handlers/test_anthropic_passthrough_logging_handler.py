@@ -321,6 +321,307 @@ class TestAzureAnthropicCostCalculation:
         assert call_kwargs["model"] == "azure_ai/claude-sonnet-4-5_gb_20250929"
         assert call_kwargs["custom_llm_provider"] == "azure_ai"
 
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_resolves_unknown_model_from_litellm_params(
+        self, mock_completion_cost
+    ):
+        """When the body model is the "unknown" sentinel, the deployment model
+        from litellm_params must be used for costing, not "unknown" (which makes
+        completion_cost raise and the cost silently fall back to $0)."""
+        from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.001
+
+        logging_obj = self._create_mock_logging_obj(model="unknown")
+        logging_obj.model_call_details["litellm_params"] = {
+            "model": "anthropic/claude-3-5-haiku-20241022",
+            "metadata": {
+                "model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"
+            },
+        }
+        logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "unknown"
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="unknown",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        mock_completion_cost.assert_called_once()
+        assert (
+            mock_completion_cost.call_args[1]["model"]
+            == "anthropic/claude-3-5-haiku-20241022"
+        )
+        assert kwargs["response_cost"] == 0.001
+        assert kwargs["model"] == "anthropic/claude-3-5-haiku-20241022"
+
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_resolves_unknown_model_from_model_group(
+        self, mock_completion_cost
+    ):
+        """With only model_group available (no deployment litellm_params.model),
+        the leading passthrough/ prefix must be stripped so the cost map can
+        resolve the model."""
+        from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.002
+
+        logging_obj = self._create_mock_logging_obj(model="unknown")
+        logging_obj.model_call_details["litellm_params"] = {
+            "metadata": {
+                "model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"
+            }
+        }
+        logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "unknown"
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="unknown",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        mock_completion_cost.assert_called_once()
+        assert (
+            mock_completion_cost.call_args[1]["model"]
+            == "anthropic/claude-3-5-haiku-20241022"
+        )
+        assert kwargs["response_cost"] == 0.002
+
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_skips_unknown_litellm_params_model_for_model_group(
+        self, mock_completion_cost
+    ):
+        """When litellm_params.model is itself the "unknown" sentinel, the
+        deployment-model branch must not short-circuit; resolution falls through
+        to model_group so costing still prices the real model instead of "unknown"."""
+        from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.003
+
+        logging_obj = self._create_mock_logging_obj(model="unknown")
+        logging_obj.model_call_details["litellm_params"] = {
+            "model": "unknown",
+            "metadata": {
+                "model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"
+            },
+        }
+        logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "unknown"
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="unknown",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        mock_completion_cost.assert_called_once()
+        assert (
+            mock_completion_cost.call_args[1]["model"]
+            == "anthropic/claude-3-5-haiku-20241022"
+        )
+        assert kwargs["response_cost"] == 0.003
+        assert kwargs["model"] == "anthropic/claude-3-5-haiku-20241022"
+
+    @patch("litellm.completion_cost")
+    def test_streaming_cost_calculation_resolves_model_from_message_start_chunk(
+        self, mock_completion_cost
+    ):
+        """On the bare /anthropic passthrough path litellm_params carries no model
+        or model_group and the body model is the "unknown" sentinel; the model
+        must be recovered from the message_start SSE event so completion_cost
+        prices the real model instead of failing on "unknown" and logging $0."""
+        from datetime import datetime
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as RealLoggingObj,
+        )
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+
+        mock_completion_cost.return_value = 0.001
+
+        def _sse(event, data):
+            return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+        frames = [
+            _sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-3-5-haiku-20241022",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 10, "output_tokens": 0},
+                    },
+                },
+            ),
+            _sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            _sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "hi"},
+                },
+            ),
+            _sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            _sse(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": 1},
+                },
+            ),
+            _sse("message_stop", {"type": "message_stop"}),
+        ]
+        all_chunks = list(
+            PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(frames)
+        )
+
+        logging_obj = RealLoggingObj(
+            model="unknown",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="1",
+        )
+        logging_obj.model_call_details["model"] = "unknown"
+        logging_obj.model_call_details["stream"] = True
+        logging_obj.model_call_details["litellm_params"] = {}
+        logging_obj.litellm_params = {}
+
+        result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"stream": True},
+            endpoint_type="messages",
+            start_time=datetime.now(),
+            all_chunks=all_chunks,
+            end_time=datetime.now(),
+        )
+
+        assert result["result"] is not None
+        mock_completion_cost.assert_called_once()
+        assert mock_completion_cost.call_args[1]["model"] == "claude-3-5-haiku-20241022"
+        assert result["kwargs"]["response_cost"] == 0.001
+        assert result["kwargs"]["model"] == "claude-3-5-haiku-20241022"
+
+    def test_extract_model_skips_non_dict_data_payload(self):
+        """A scalar data: payload (e.g. `data: null`) must be skipped, not crash
+        the streaming log handler with AttributeError, which would propagate out
+        and break spend logging for the whole request."""
+        chunks = [
+            "event: ping\ndata: null\n\n",
+            'event: message_start\ndata: {"type": "message_start", "message": '
+            '{"model": "claude-3-5-haiku-20241022"}}\n\n',
+        ]
+
+        assert (
+            AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(
+                chunks
+            )
+            == "claude-3-5-haiku-20241022"
+        )
+
+    def test_extract_model_parses_per_line_not_first_data_substring(self):
+        """A raw multi-line SSE event whose non-data line contains the substring
+        "data:" must not derail parsing: matching only lines that start with
+        "data:" recovers the message_start model, whereas a first-substring slice
+        would consume the wrong offset, fail to parse JSON, and return None."""
+        raw_event = (
+            "event: ping data: not-json\n"
+            'data: {"type": "message_start", "message": '
+            '{"model": "claude-3-5-haiku-20241022"}}\n\n'
+        )
+
+        assert (
+            AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(
+                [raw_event]
+            )
+            == "claude-3-5-haiku-20241022"
+        )
+
+    def test_passthrough_logging_sets_response_cost_with_server_tool_use_dict(self):
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        logging_obj = self._create_mock_logging_obj(model="claude-3-7-sonnet-20250219")
+        logging_obj.get_router_model_id.return_value = None
+        logging_obj.litellm_params = {}
+
+        response = ModelResponse(
+            id="test-id",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="test", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="claude-3-7-sonnet-20250219",
+            usage={
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "server_tool_use": {"web_search_requests": 1},
+            },
+        )
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="claude-3-7-sonnet-20250219",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert "response_cost" in kwargs
+        assert kwargs["response_cost"] > 0
+
 
 class TestAnthropicBatchPassthroughCostTracking:
     """Test cases for Anthropic batch passthrough cost tracking functionality"""
@@ -1043,3 +1344,335 @@ class TestPureTextFastPathParity:
             AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(all_chunks)
             is None
         )
+
+
+class TestStreamFalseDeduplication:
+    """
+    Regression tests for the duplicate-callback bug where a streaming pass-through
+    request had stream=False hardcoded on its Logging object.
+
+    Before the fix:
+    - logging_obj.stream was always False for pass-through requests
+    - _is_assembled_stream_success() checked `self.stream is not True` and returned
+      False immediately, so has_dispatched_final_stream_success was never set
+    - Any second dispatch_success_handlers call went through unchecked
+
+    After the fix:
+    - pass_through_endpoints.py sets logging_obj.stream = True after detecting stream
+    - _create_anthropic_response_logging_payload sets complete_streaming_response on
+      model_call_details so callbacks see the correct assembled response state
+    - _is_assembled_stream_success returns True, dedup guard fires on first dispatch
+    """
+
+    @staticmethod
+    def _sse(event, data):
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    @staticmethod
+    def _make_logging_obj(stream: bool = False) -> LiteLLMLoggingObj:
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-3-5-sonnet-20241022",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=stream,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="1245",
+        )
+        return logging_obj
+
+    @staticmethod
+    def _build_chunks():
+        frames = [
+            TestStreamFalseDeduplication._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_abc",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-3-5-sonnet-20241022",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 10, "output_tokens": 0},
+                    },
+                },
+            ),
+            TestStreamFalseDeduplication._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            TestStreamFalseDeduplication._sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "Hello"},
+                },
+            ),
+            TestStreamFalseDeduplication._sse(
+                "content_block_stop", {"type": "content_block_stop", "index": 0}
+            ),
+            TestStreamFalseDeduplication._sse(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": 5},
+                },
+            ),
+            TestStreamFalseDeduplication._sse("message_stop", {"type": "message_stop"}),
+        ]
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+
+        return PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(frames)
+
+    def test_complete_streaming_response_set_on_model_call_details(self):
+        """
+        After the fix, _create_anthropic_response_logging_payload must set
+        complete_streaming_response on logging_obj.model_call_details so that
+        callbacks like _PROXY_track_cost_callback see the assembled response
+        instead of None.
+
+        Before the fix: model_call_details had no complete_streaming_response key.
+        The log showed: "kwargs stream: True + complete streaming response: None"
+        """
+        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+            EndpointType,
+        )
+
+        # pass_through_request sets the stream flag before the streaming handler
+        # reconstructs the response; mirror that here.
+        logging_obj = self._make_logging_obj(stream=True)
+        logging_obj.model_call_details["stream"] = True
+        all_chunks = list(self._build_chunks())
+
+        result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"model": "claude-3-5-sonnet-20241022", "stream": True},
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=datetime.now(),
+            all_chunks=all_chunks,
+            end_time=datetime.now(),
+        )
+
+        # The assembled response must be stored on model_call_details so callbacks
+        # can identify this as a completed streaming call, not an in-progress one.
+        assert (
+            logging_obj.model_call_details.get("complete_streaming_response")
+            is not None
+        ), "complete_streaming_response must be set on model_call_details after assembly"
+
+        # The returned result must match what was stored
+        assert result["result"] is logging_obj.model_call_details.get(
+            "complete_streaming_response"
+        )
+
+    def test_dedup_guard_fires_when_stream_true_on_logging_obj(self):
+        """
+        When logging_obj.stream is True (set by pass_through_endpoints.py after
+        detecting a streaming request), dispatch_success_handlers must set
+        has_dispatched_final_stream_success=True on the first call so that any
+        second call is a no-op.
+
+        This is the _is_assembled_stream_success gate: with stream=False it
+        always returned False and the guard was permanently disabled.
+        """
+        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+            EndpointType,
+        )
+        from litellm.types.utils import ModelResponse
+
+        # Simulate what pass_through_endpoints.py now does after stream detection
+        logging_obj = self._make_logging_obj(stream=False)
+        logging_obj.stream = True  # fix applied
+        logging_obj.model_call_details["stream"] = True
+
+        # Simulate what _create_anthropic_response_logging_payload now does
+        mock_response = ModelResponse(model="claude-3-5-sonnet-20241022")
+        logging_obj.model_call_details["complete_streaming_response"] = mock_response
+
+        assert logging_obj._is_assembled_stream_success(result=mock_response) is True
+
+        # First dispatch sets the flag
+        assert not logging_obj.model_call_details.get(
+            "has_dispatched_final_stream_success"
+        )
+        logging_obj.model_call_details["has_dispatched_final_stream_success"] = True
+
+        # Second dispatch would be blocked — simulate the guard check
+        would_skip = bool(
+            logging_obj._is_assembled_stream_success(result=mock_response)
+            and logging_obj.model_call_details.get(
+                "has_dispatched_final_stream_success"
+            )
+        )
+        assert would_skip is True, (
+            "Dedup guard must block a second dispatch_success_handlers call for the "
+            "same assembled streaming response"
+        )
+
+    def test_sse_fallback_path_sets_stream_true_for_dedup(self):
+        """
+        When a nominally non-streaming request receives an SSE response
+        (_is_streaming_response returns True), the fallback branch in
+        pass_through_endpoints.py must set logging_obj.stream = True so the
+        dedup guard activates.
+
+        Before the fix the fallback path never set stream=True, so
+        _is_assembled_stream_success always returned False and duplicate
+        callback dispatches were never blocked.
+        """
+        from litellm.types.utils import ModelResponse
+
+        # logging_obj starts with stream=False, as created before the request
+        logging_obj = self._make_logging_obj(stream=False)
+        assert logging_obj._is_assembled_stream_success(result=MagicMock()) is False
+
+        # Simulate what the SSE fallback branch in pass_through_endpoints.py now does
+        logging_obj.stream = True
+        logging_obj.model_call_details["stream"] = True
+
+        mock_response = ModelResponse(model="claude-3-5-sonnet-20241022")
+        logging_obj.model_call_details["complete_streaming_response"] = mock_response
+
+        # With stream=True the dedup guard must be active
+        assert logging_obj._is_assembled_stream_success(result=mock_response) is True
+
+        logging_obj.model_call_details["has_dispatched_final_stream_success"] = True
+
+        would_skip = bool(
+            logging_obj._is_assembled_stream_success(result=mock_response)
+            and logging_obj.model_call_details.get(
+                "has_dispatched_final_stream_success"
+            )
+        )
+        assert would_skip is True
+
+    def test_stream_false_logging_obj_bypasses_dedup_guard(self):
+        """
+        Demonstrates the pre-fix state: with stream=False on the logging object,
+        _is_assembled_stream_success always returns False regardless of whether
+        complete_streaming_response is set. This means the dedup guard can never
+        fire, so duplicate dispatches go through unchecked.
+
+        This test documents the old broken behavior so the fix is clearly justified.
+        """
+        from litellm.types.utils import ModelResponse
+
+        logging_obj = self._make_logging_obj(stream=False)
+        mock_response = ModelResponse(model="claude-3-5-sonnet-20241022")
+        logging_obj.model_call_details["complete_streaming_response"] = mock_response
+
+        # With stream=False, _is_assembled_stream_success returns False even though
+        # complete_streaming_response is present — the guard is permanently disabled.
+        assert logging_obj._is_assembled_stream_success(result=mock_response) is False
+
+
+class TestNonStreamingResponseRedaction:
+    """
+    Regression tests ensuring _create_anthropic_response_logging_payload only sets
+    complete_streaming_response for streaming responses. perform_redaction scrubs
+    that field exclusively when model_call_details["stream"] is True, so storing it
+    on a non-streaming response would deliver the unredacted response to logging
+    callbacks when message logging is disabled.
+    """
+
+    @staticmethod
+    def _make_logging_obj(stream: bool) -> LiteLLMLoggingObj:
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-3-5-sonnet-20241022",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=stream,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="1245",
+        )
+        # pass_through_request mirrors the stream flag onto model_call_details,
+        # which is the key perform_redaction inspects.
+        logging_obj.model_call_details["stream"] = stream
+        return logging_obj
+
+    def test_non_streaming_does_not_set_complete_streaming_response(self):
+        from litellm.types.utils import ModelResponse
+
+        logging_obj = self._make_logging_obj(stream=False)
+        response = ModelResponse(model="claude-3-5-sonnet-20241022")
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="claude-3-5-sonnet-20241022",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert (
+            "complete_streaming_response" not in logging_obj.model_call_details
+        ), "non-streaming responses must not populate complete_streaming_response"
+
+    def test_streaming_sets_complete_streaming_response(self):
+        from litellm.types.utils import ModelResponse
+
+        logging_obj = self._make_logging_obj(stream=True)
+        response = ModelResponse(model="claude-3-5-sonnet-20241022")
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="claude-3-5-sonnet-20241022",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert (
+            logging_obj.model_call_details.get("complete_streaming_response")
+            is response
+        )
+
+    def test_non_streaming_response_is_redacted_when_message_logging_off(self):
+        from litellm.litellm_core_utils.redact_messages import (
+            redact_message_input_output_from_logging,
+        )
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        logging_obj = self._make_logging_obj(stream=False)
+        response = ModelResponse(
+            model="claude-3-5-sonnet-20241022",
+            choices=[Choices(message=Message(role="assistant", content="secret"))],
+        )
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="claude-3-5-sonnet-20241022",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        logging_obj.model_call_details["litellm_params"] = {
+            "metadata": {"headers": {"x-litellm-enable-message-redaction": True}}
+        }
+
+        redacted = redact_message_input_output_from_logging(
+            model_call_details=logging_obj.model_call_details,
+            result=response,
+        )
+
+        leaked = logging_obj.model_call_details.get("complete_streaming_response")
+        assert leaked is None
+        assert redacted.choices[0].message.content == "redacted-by-litellm"

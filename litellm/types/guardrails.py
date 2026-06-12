@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Required, TypedDict
 
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
@@ -41,6 +41,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
 from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
     QostodianNexusConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
+    VigilGuardGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -67,6 +70,7 @@ class SupportedGuardrailIntegrations(Enum):
     HIDE_SECRETS = "hide-secrets"
     HIDDENLAYER = "hiddenlayer"
     AIM = "aim"
+    CATO_NETWORKS = "cato_networks"
     PANGEA = "pangea"
     CROWDSTRIKE_AIDR = "crowdstrike_aidr"
     LASSO = "lasso"
@@ -102,6 +106,7 @@ class SupportedGuardrailIntegrations(Enum):
     LLM_AS_A_JUDGE = "llm_as_a_judge"
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
+    VIGIL_GUARD = "vigil_guard"
 
 
 class Role(Enum):
@@ -757,6 +762,67 @@ class BaseLitellmParams(
         description="Python-like code containing the apply_guardrail function for custom guardrail logic",
     )
 
+    timeout: Optional[float] = Field(
+        default=None,
+        description=(
+            "Per-request timeout for the guardrail provider API call (seconds). "
+            "Accepts int, float, or numeric string; coerced to float on load. "
+            "Each guardrail handler chooses its own default when unset."
+        ),
+    )
+
+    on_sensitive_data: Optional[Literal["block", "route"]] = Field(
+        default=None,
+        description=(
+            "Action to take when sensitive data is detected. "
+            "'block' raises an exception (default behavior). "
+            "'route' reroutes the request to the model specified in sensitive_data_route_to_model."
+        ),
+    )
+
+    sensitive_data_route_to_model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model to route requests to when sensitive data is detected and on_sensitive_data='route'. "
+            "This is typically an on-premise model for data privacy. "
+            "The routing decision persists for the entire session."
+        ),
+    )
+
+    sticky_session_routing: Optional[bool] = Field(
+        default=True,
+        description=(
+            "When True (default), after sensitive data is detected and routed, all subsequent "
+            "requests in the same session will continue routing to the same model."
+        ),
+    )
+
+    @field_validator(
+        "mode",
+        "default_action",
+        "on_disallowed_action",
+        "unreachable_fallback",
+        "on_sensitive_data",
+        mode="before",
+        check_fields=False,
+    )
+    @classmethod
+    def normalize_lowercase(cls, v):
+        """Normalize string and list fields to lowercase for ALL guardrail types."""
+        if isinstance(v, str):
+            return v.lower()
+        if isinstance(v, list):
+            return [x.lower() if isinstance(x, str) else x for x in v]
+        return v
+
+    @model_validator(mode="after")
+    def validate_sensitive_data_routing(self) -> "BaseLitellmParams":
+        if self.on_sensitive_data == "route" and not self.sensitive_data_route_to_model:
+            raise ValueError(
+                "sensitive_data_route_to_model must be set when on_sensitive_data='route'"
+            )
+        return self
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
@@ -790,28 +856,24 @@ class LitellmParams(
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
+    VigilGuardGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
 
-    @field_validator(
-        "mode",
-        "default_action",
-        "on_disallowed_action",
-        "unreachable_fallback",
-        mode="before",
-        check_fields=False,
-    )
+    @field_validator("timeout", mode="before", check_fields=False)
     @classmethod
-    def normalize_lowercase(cls, v):
-        """Normalize string and list fields to lowercase for ALL guardrail types."""
-        if isinstance(v, str):
-            return v.lower()
-        if isinstance(v, list):
-            return [x.lower() if isinstance(x, str) else x for x in v]
-        return v
+    def coerce_timeout(cls, v):
+        """Accept string-valued timeouts (dashboard UI sends JSON strings)
+        and coerce to float before any handler reads the value."""
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"timeout must be numeric, got {v!r}") from e
 
     def __init__(self, **kwargs):
         default_on = kwargs.pop("default_on", None)

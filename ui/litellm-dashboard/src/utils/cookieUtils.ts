@@ -106,21 +106,34 @@ export function storeLoginToken(token: string) {
 }
 
 /**
+ * Reads a cookie value directly from document.cookie with no fallback.
+ *
+ * Use this in flows that decide whether to redirect on the basis of "is the user
+ * still authenticated?". sessionStorage is per-origin and survives a logout
+ * triggered from a different origin (e.g. dev UI on :3000 cannot reach
+ * sessionStorage on the proxy origin :4000), which produces an infinite
+ * logout/login redirect.
+ */
+export function getCookieFromDocument(name: string) {
+  if (typeof document === "undefined") return null;
+  const row = document.cookie.split("; ").find((r) => r.startsWith(name + "="));
+  if (!row) return null;
+  const raw = row.split("=").slice(1).join("=");
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
  * Gets a cookie value by name
  * @param name The name of the cookie to retrieve
  * @returns The cookie value or null if not found
  */
 export function getCookie(name: string) {
-  if (typeof document === "undefined") return null;
-  const row = document.cookie.split("; ").find((r) => r.startsWith(name + "="));
-  if (row) {
-    const raw = row.split("=").slice(1).join("=");
-    try {
-      return decodeURIComponent(raw);
-    } catch {
-      return raw;
-    }
-  }
+  const fromCookie = getCookieFromDocument(name);
+  if (fromCookie !== null) return fromCookie;
   // Fallback to sessionStorage — covers the case where a reverse proxy
   // added HttpOnly to the server-set cookie, making it invisible to JS.
   if (name === "token" && typeof window !== "undefined") {

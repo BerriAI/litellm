@@ -3,8 +3,8 @@
  * Used in compact/tree views
  */
 
-import { Typography } from 'antd';
-import { ToolCall } from './prettyMessagesTypes';
+import { Typography } from "antd";
+import { ToolCall } from "./prettyMessagesTypes";
 
 const { Text } = Typography;
 
@@ -17,34 +17,34 @@ export function SimpleToolCallBlock({ tool, compact = false }: SimpleToolCallBlo
   return (
     <div
       style={{
-        background: '#f8f9fa',
-        border: '1px solid #e9ecef',
+        background: "#f8f9fa",
+        border: "1px solid #e9ecef",
         borderRadius: 6,
-        padding: compact ? '6px 10px' : '10px 14px',
+        padding: compact ? "6px 10px" : "10px 14px",
         marginTop: 8,
-        fontFamily: 'monospace',
+        fontFamily: "monospace",
         fontSize: 12,
-        position: 'relative',
+        position: "relative",
       }}
     >
       {/* Function badge */}
       <div
         style={{
-          position: 'absolute',
+          position: "absolute",
           top: -8,
           left: 12,
-          background: '#fff',
-          padding: '0 6px',
+          background: "#fff",
+          padding: "0 6px",
           fontSize: 10,
-          color: '#8c8c8c',
-          border: '1px solid #e9ecef',
+          color: "#8c8c8c",
+          border: "1px solid #e9ecef",
           borderRadius: 3,
         }}
       >
         function
       </div>
 
-      <Text strong style={{ fontSize: 13, display: 'block', marginBottom: 6 }}>
+      <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>
         {tool.name}
       </Text>
 
@@ -53,7 +53,7 @@ export function SimpleToolCallBlock({ tool, compact = false }: SimpleToolCallBlo
           {Object.entries(tool.arguments).map(([key, value]) => (
             <div key={key} style={{ marginBottom: 2 }}>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                {key}:{' '}
+                {key}:{" "}
               </Text>
               <Text style={{ fontSize: 12 }}>{JSON.stringify(value)}</Text>
             </div>

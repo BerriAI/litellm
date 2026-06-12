@@ -24,6 +24,7 @@ model_list:
     litellm_params:
       model: openai/gpt-4.1
       api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+      api_base: os.environ/RECORDER_OPENAI_BASE_URL # In CI, routes through the record/replay proxy; unset elsewhere -> direct to OpenAI
       rpm: 480
       timeout: 300
       stream_timeout: 60
@@ -35,6 +36,7 @@ model_list:
     litellm_params:
       model: openai/text-embedding-3-small
       api_key: os.environ/OPENAI_API_KEY
+      api_base: os.environ/RECORDER_OPENAI_BASE_URL # In CI, routes through the record/replay proxy; unset elsewhere -> direct to OpenAI
     model_info:
       mode: embedding
       base_model: text-embedding-3-small
@@ -44,6 +46,20 @@ model_list:
   - model_name: openai-dall-e-3 # dall-e-3 deprecated 2026-05-12; underlying now gpt-image-1
     litellm_params:
       model: gpt-image-1
+  # In CI, RECORDER_OPENAI_BASE_URL points OpenAI models at the record/replay
+  # proxy (tests/_openai_record_replay_proxy.py) so the spend/cost E2Es don't
+  # depend on OpenAI's uptime every commit. Unset elsewhere, so it resolves to
+  # None and falls back to api.openai.com.
+  - model_name: gpt-image-1
+    litellm_params:
+      model: openai/gpt-image-1
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: os.environ/RECORDER_OPENAI_BASE_URL
+  - model_name: text-moderation-stable
+    litellm_params:
+      model: openai/omni-moderation-latest
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: os.environ/RECORDER_OPENAI_BASE_URL
   - model_name: fake-openai-endpoint
     litellm_params:
       model: openai/gpt-5-mini

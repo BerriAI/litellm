@@ -23,9 +23,17 @@ import sys
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
 # reads ``DATABASE_URL`` (Prisma) and ``LITELLM_MASTER_KEY``. Tier-zero CI
 # runners don't set these. We pin throwaway values before the import so the
-# test never depends on a live database or master key.
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
-os.environ.setdefault("LITELLM_MASTER_KEY", "sk-test-component-allowlist")
+# test never depends on a live database or master key, then restore the prior
+# environment so the throwaway values don't leak into sibling tests sharing the
+# xdist worker (a leaked non-postgres ``DATABASE_URL`` makes DB-backed tests
+# treat a phantom database as available instead of skipping).
+_THROWAWAY_ENV = {
+    "DATABASE_URL": "sqlite:///:memory:",
+    "LITELLM_MASTER_KEY": "sk-test-component-allowlist",
+}
+_PRE_EXISTING_ENV = {key: os.environ.get(key) for key in _THROWAWAY_ENV}
+for _key, _value in _THROWAWAY_ENV.items():
+    os.environ.setdefault(_key, _value)
 
 from fastapi.routing import Mount
 
@@ -37,6 +45,12 @@ if _REPO_ROOT not in sys.path:
 from backend.routes.allowlist import BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
 from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
 from litellm.proxy.proxy_server import app
+
+for _key, _previous in _PRE_EXISTING_ENV.items():
+    if _previous is None:
+        os.environ.pop(_key, None)
+    else:
+        os.environ[_key] = _previous
 
 
 def _component_paths(routes, exact_paths, path_prefixes) -> set[str]:
