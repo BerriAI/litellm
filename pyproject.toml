@@ -43,6 +43,7 @@ Documentation = "https://docs.litellm.ai"
 proxy = [
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
+    "watchfiles>=1.0.0,<2.0",
     "granian>=2.7.4,<3.0",
     "uvloop>=0.21.0,<1.0; sys_platform != 'win32'",
     "fastapi>=0.136.3,<1.0",
