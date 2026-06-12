@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import ProxyLogging
 
 _CONVERSE_ACTIONS = frozenset({"converse", "converse-stream"})
+_EVENT_STREAM_CONTENT_TYPE = "vnd.amazon.eventstream"
 
 
 def _is_converse_endpoint(endpoint: str) -> bool:
@@ -195,6 +196,10 @@ def _collect_stream_delta_text_holders(delta: Any) -> List[_DeltaHolder]:
 
 
 class BedrockPassthroughGuardrailHandler(BaseTranslation):
+    @staticmethod
+    def is_event_stream_content_type(content_type: str) -> bool:
+        return _EVENT_STREAM_CONTENT_TYPE in content_type
+
     @staticmethod
     async def de_anonymize_event_stream(  # noqa: PLR0915
         body_bytes: bytes,

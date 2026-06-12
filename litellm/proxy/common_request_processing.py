@@ -1806,6 +1806,10 @@ class ProxyBaseLLMRequestProcessing:
 
         import json as _json
 
+        from litellm.llms.pass_through.guardrail_translation.handler import (
+            LlmPassthroughRouteHandler,
+        )
+
         try:
             response_status: int = response.status_code  # type: ignore[union-attr]
             content_type: str = response.headers.get("content-type", "")  # type: ignore[union-attr]
@@ -1819,7 +1823,9 @@ class ProxyBaseLLMRequestProcessing:
             k: v for k, v in custom_headers.items() if k.lower() != "content-length"
         }
 
-        if "vnd.amazon.eventstream" in content_type:
+        if LlmPassthroughRouteHandler.is_event_stream_response(
+            self.data.get("custom_llm_provider"), content_type
+        ):
             body_bytes = await response.aread()  # type: ignore[union-attr]
             modified_bytes = await self._handle_event_stream_allm_passthrough_route(
                 body_bytes=body_bytes,
