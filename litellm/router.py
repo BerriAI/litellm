@@ -3225,9 +3225,19 @@ class Router:
 
         kwargs["model_info"] = model_info
 
-        kwargs["timeout"] = self._get_timeout(
-            kwargs=kwargs, data=deployment["litellm_params"]
-        )
+        if function_name == "_ageneric_api_call_with_fallbacks":
+            from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+                resolve_llm_passthrough_timeout,
+            )
+
+            kwargs["timeout"] = resolve_llm_passthrough_timeout(
+                kwargs=kwargs,
+                litellm_params=deployment["litellm_params"],
+            )
+        else:
+            kwargs["timeout"] = self._get_timeout(
+                kwargs=kwargs, data=deployment["litellm_params"]
+            )
 
         self._update_kwargs_with_default_litellm_params(
             kwargs=kwargs, metadata_variable_name=metadata_variable_name
