@@ -5519,10 +5519,6 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
         client_secret="secret",
     )
 
-    mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
-        "echo"
-    ] = oauth_server.name
-
     captured: dict = {}
 
     async def fake_handle_managed_mcp_tool(**kwargs):
@@ -5533,6 +5529,10 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
         )
 
     with (
+        patch.dict(
+            mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {"echo": oauth_server.name},
+        ),
         patch.object(
             mcp_module.global_mcp_server_manager,
             "get_registry",
