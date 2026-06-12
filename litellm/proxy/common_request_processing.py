@@ -1378,6 +1378,7 @@ class ProxyBaseLLMRequestProcessing:
                                 proxy_logging_obj=proxy_logging_obj,
                                 user_api_key_dict=user_api_key_dict,
                                 custom_headers=custom_headers,
+                                request_headers=dict(request.headers),
                             )
                         )
                         if _early is not None:
@@ -1463,6 +1464,7 @@ class ProxyBaseLLMRequestProcessing:
                     proxy_logging_obj=proxy_logging_obj,
                     user_api_key_dict=user_api_key_dict,
                     custom_headers=_non_streaming_custom_headers,
+                    request_headers=dict(request.headers),
                 )
                 if _early is not None:
                     return _early
@@ -1816,6 +1818,7 @@ class ProxyBaseLLMRequestProcessing:
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
         custom_headers: dict,
+        request_headers: Dict[str, str],
     ) -> Optional[Response]:
         if not self._has_post_call_guardrails_for_passthrough():
             return None
@@ -1838,14 +1841,26 @@ class ProxyBaseLLMRequestProcessing:
         if response_status >= 300:
             return None
 
+        is_event_stream = LlmPassthroughRouteHandler.is_event_stream_response(
+            self.data.get("custom_llm_provider"), content_type
+        )
+        if not is_event_stream and "application/json" not in content_type:
+            return None
+
         response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
             headers=response.headers,  # type: ignore[union-attr]
             custom_headers=custom_headers,
         )
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=self.data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=request_headers,
+        )
+        if callback_headers:
+            response_headers.update(callback_headers)
 
-        if LlmPassthroughRouteHandler.is_event_stream_response(
-            self.data.get("custom_llm_provider"), content_type
-        ):
+        if is_event_stream:
             body_bytes = await response.aread()  # type: ignore[union-attr]
             modified_bytes = await self._handle_event_stream_allm_passthrough_route(
                 body_bytes=body_bytes,
@@ -1858,9 +1873,6 @@ class ProxyBaseLLMRequestProcessing:
                 media_type=content_type,
                 headers=response_headers,
             )
-
-        if "application/json" not in content_type:
-            return None
 
         body_bytes = await response.aread()  # type: ignore[union-attr]
         try:

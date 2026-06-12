@@ -141,12 +141,14 @@ class TestProxyBaseLLMRequestProcessing:
             return kwargs["response"]
 
         proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
 
         result = await processing_obj._handle_non_streaming_allm_passthrough_route(
             response=upstream,
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
             custom_headers={"x-litellm-call-id": "test-call-id"},
+            request_headers={},
         )
 
         assert isinstance(result, Response)
@@ -188,17 +190,68 @@ class TestProxyBaseLLMRequestProcessing:
             },
         )
 
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
         result = await processing_obj._handle_non_streaming_allm_passthrough_route(
             response=upstream,
-            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+            proxy_logging_obj=proxy_logging_obj,
             user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
             custom_headers={"x-litellm-call-id": "test-call-id"},
+            request_headers={},
         )
 
         assert isinstance(result, Response)
         assert result.body == b"rewritten-frames"
         assert result.headers["x-amzn-requestid"] == "bedrock-request-id"
         assert result.headers["x-litellm-call-id"] == "test-call-id"
+
+    @pytest.mark.asyncio
+    async def test_handle_non_streaming_allm_passthrough_route_applies_response_headers_hook(
+        self, monkeypatch
+    ):
+        """Guardrailed non-streaming passthrough responses must include headers
+        injected by post_call_response_headers_hook, matching the headers a
+        non-guardrailed passthrough response would carry."""
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"custom_llm_provider": "bedrock"}
+        )
+        monkeypatch.setattr(
+            processing_obj,
+            "_has_post_call_guardrails_for_passthrough",
+            lambda: True,
+        )
+
+        upstream = httpx.Response(
+            status_code=200,
+            content=b'{"output": {"message": {"content": [{"text": "hi"}]}}}',
+            headers={"content-type": "application/json"},
+        )
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+        async def fake_post_call_success_hook(**kwargs):
+            return kwargs["response"]
+
+        proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value={"x-litellm-custom": "from-hook"}
+        )
+
+        result = await processing_obj._handle_non_streaming_allm_passthrough_route(
+            response=upstream,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            custom_headers={"x-litellm-call-id": "test-call-id"},
+            request_headers={"authorization": "Bearer sk-test"},
+        )
+
+        assert isinstance(result, Response)
+        assert result.headers["x-litellm-custom"] == "from-hook"
+        assert result.headers["x-litellm-call-id"] == "test-call-id"
+        proxy_logging_obj.post_call_response_headers_hook.assert_awaited_once()
+        _, kwargs = proxy_logging_obj.post_call_response_headers_hook.call_args
+        assert kwargs["request_headers"] == {"authorization": "Bearer sk-test"}
 
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_pre_call_hook_receives_litellm_call_id(self, monkeypatch):
@@ -2493,6 +2546,7 @@ class TestAllmPassthroughRoutePostCallGuardrails:
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
                 custom_headers={},
+                request_headers={},
             )
 
         assert len(received_responses) == 1
@@ -2542,6 +2596,7 @@ class TestAllmPassthroughRoutePostCallGuardrails:
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
                 custom_headers={},
+                request_headers={},
             )
 
         assert isinstance(result, Response)
@@ -2579,6 +2634,7 @@ class TestAllmPassthroughRoutePostCallGuardrails:
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
                 custom_headers={},
+                request_headers={},
             )
 
         hook_spy.assert_not_awaited()
@@ -2619,6 +2675,7 @@ class TestAllmPassthroughRoutePostCallGuardrails:
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
                 custom_headers={},
+                request_headers={},
             )
 
         spy_read.assert_not_called()
@@ -2715,6 +2772,7 @@ class TestEventStreamAllmPassthroughRoute:
 
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.post_call_success_hook = mock_hook
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
 
         custom_headers = {
             "x-litellm-call-id": "test-call-123",
@@ -2729,6 +2787,7 @@ class TestEventStreamAllmPassthroughRoute:
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
                 custom_headers=custom_headers,
+                request_headers={},
             )
 
         assert result is not None
