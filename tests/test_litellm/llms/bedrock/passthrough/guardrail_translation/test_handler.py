@@ -19,7 +19,10 @@ from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
     _is_converse_endpoint,
     _write_back_texts,
 )
-from fastapi import HTTPException
+
+
+class GuardrailBlocked(Exception):
+    """Stand-in for a guardrail rejecting a request; the handler must let it propagate."""
 
 
 def _make_guardrail(apply_result: dict) -> MagicMock:
@@ -269,9 +272,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         guardrail.guardrail_name = "block-guard"
         guardrail.skip_system_message_in_guardrail = False
         guardrail.skip_tool_message_in_guardrail = False
-        guardrail.apply_guardrail = AsyncMock(side_effect=HTTPException(status_code=400, detail="Blocked"))
+        guardrail.apply_guardrail = AsyncMock(side_effect=GuardrailBlocked("Blocked"))
 
-        with pytest.raises(HTTPException):
+        with pytest.raises(GuardrailBlocked):
             await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
     @pytest.mark.asyncio
@@ -353,11 +356,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         guardrail.guardrail_name = "block-guard"
         guardrail.skip_system_message_in_guardrail = False
         guardrail.skip_tool_message_in_guardrail = False
-        guardrail.apply_guardrail = AsyncMock(
-            side_effect=HTTPException(status_code=400, detail="Blocked")
-        )
+        guardrail.apply_guardrail = AsyncMock(side_effect=GuardrailBlocked("Blocked"))
 
-        with pytest.raises(HTTPException):
+        with pytest.raises(GuardrailBlocked):
             await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
@@ -392,9 +393,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         }
         guardrail = MagicMock()
         guardrail.guardrail_name = "block-guard"
-        guardrail.apply_guardrail = AsyncMock(side_effect=HTTPException(status_code=400, detail="Blocked"))
+        guardrail.apply_guardrail = AsyncMock(side_effect=GuardrailBlocked("Blocked"))
 
-        with pytest.raises(HTTPException):
+        with pytest.raises(GuardrailBlocked):
             await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
     @pytest.mark.asyncio

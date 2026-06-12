@@ -1809,6 +1809,9 @@ class ProxyBaseLLMRequestProcessing:
         from litellm.llms.pass_through.guardrail_translation.handler import (
             LlmPassthroughRouteHandler,
         )
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            HttpPassThroughEndpointHelpers,
+        )
 
         try:
             response_status: int = response.status_code  # type: ignore[union-attr]
@@ -1819,9 +1822,10 @@ class ProxyBaseLLMRequestProcessing:
         if response_status >= 300:
             return None
 
-        response_headers = {
-            k: v for k, v in custom_headers.items() if k.lower() != "content-length"
-        }
+        response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=response.headers,  # type: ignore[union-attr]
+            custom_headers=custom_headers,
+        )
 
         if LlmPassthroughRouteHandler.is_event_stream_response(
             self.data.get("custom_llm_provider"), content_type

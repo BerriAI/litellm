@@ -109,6 +109,98 @@ class TestProxyBaseLLMRequestProcessing:
         assert json.loads(result.body) == guardrailed_body
 
     @pytest.mark.asyncio
+    async def test_handle_non_streaming_allm_passthrough_route_forwards_upstream_headers(
+        self, monkeypatch
+    ):
+        """The guardrail JSON path must forward upstream response headers (e.g.
+        x-amzn-requestid) alongside the x-litellm-* headers, matching the
+        non-guardrail passthrough path, while dropping length headers that no
+        longer match the rewritten body."""
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"custom_llm_provider": "bedrock"}
+        )
+        monkeypatch.setattr(
+            processing_obj,
+            "_has_post_call_guardrails_for_passthrough",
+            lambda: True,
+        )
+
+        upstream = httpx.Response(
+            status_code=200,
+            content=b'{"output": {"message": {"content": [{"text": "hi"}]}}}',
+            headers={
+                "content-type": "application/json",
+                "x-amzn-requestid": "bedrock-request-id",
+                "content-length": "999",
+            },
+        )
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+        async def fake_post_call_success_hook(**kwargs):
+            return kwargs["response"]
+
+        proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
+
+        result = await processing_obj._handle_non_streaming_allm_passthrough_route(
+            response=upstream,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            custom_headers={"x-litellm-call-id": "test-call-id"},
+        )
+
+        assert isinstance(result, Response)
+        assert result.status_code == 200
+        assert result.headers["x-amzn-requestid"] == "bedrock-request-id"
+        assert result.headers["x-litellm-call-id"] == "test-call-id"
+        assert result.headers["content-length"] == str(len(result.body))
+
+    @pytest.mark.asyncio
+    async def test_handle_event_stream_allm_passthrough_route_forwards_upstream_headers(
+        self, monkeypatch
+    ):
+        """The guardrail event-stream branch must also forward upstream response
+        headers alongside the x-litellm-* headers."""
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"custom_llm_provider": "bedrock"}
+        )
+        monkeypatch.setattr(
+            processing_obj,
+            "_has_post_call_guardrails_for_passthrough",
+            lambda: True,
+        )
+
+        async def fake_event_stream(**kwargs):
+            return b"rewritten-frames"
+
+        monkeypatch.setattr(
+            processing_obj,
+            "_handle_event_stream_allm_passthrough_route",
+            fake_event_stream,
+        )
+
+        upstream = httpx.Response(
+            status_code=200,
+            content=b"original-frames",
+            headers={
+                "content-type": "application/vnd.amazon.eventstream",
+                "x-amzn-requestid": "bedrock-request-id",
+            },
+        )
+
+        result = await processing_obj._handle_non_streaming_allm_passthrough_route(
+            response=upstream,
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            custom_headers={"x-litellm-call-id": "test-call-id"},
+        )
+
+        assert isinstance(result, Response)
+        assert result.body == b"rewritten-frames"
+        assert result.headers["x-amzn-requestid"] == "bedrock-request-id"
+        assert result.headers["x-litellm-call-id"] == "test-call-id"
+
+    @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_pre_call_hook_receives_litellm_call_id(self, monkeypatch):
         processing_obj = ProxyBaseLLMRequestProcessing(data={})
         mock_request = MagicMock(spec=Request)
