@@ -136,6 +136,54 @@ def test_usage_tail_seam_contract(provider: str, frozen_ambient) -> None:
         assert v1[-1]["usage"][key] == v2[-1]["usage"][key]
 
 
+def test_reasoning_stream_seam_obligation_canary(frozen_ambient) -> None:
+    """verifier-wave2a W1: the family's openai chunk parser typed-errors on
+    ``reasoning_content`` deltas as "unreachable for v2-sent requests" — a
+    claim wave 2a made STALE by serving reasoning_effort on perplexity/
+    deepinfra (and 1a on cerebras), whose real streams carry reasoning
+    deltas that v1's wrapper SERVES. No impact while streaming stays on v1
+    (the typed error is loud, never a silent drop), but the streaming seam
+    must teach the parser + dialect reasoning deltas before flag-on
+    streaming for reasoning-capable family members. This canary pins BOTH
+    halves so the obligation cannot rot silently: if the v2 half fails, the
+    parser learned reasoning deltas — delete this canary and add the
+    differential reasoning-stream rows in the same commit."""
+    from litellm.translation.providers.openai_compat.stream import parse_event
+
+    reasoning_event = {
+        "id": "chunk-r",
+        "object": "chat.completion.chunk",
+        "created": 1718000000,
+        "model": "sonar-reasoning",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "reasoning_content": "thinking"},
+                "finish_reason": None,
+            }
+        ],
+    }
+    # v2 half: today's family parser refuses the delta (typed, loud)
+    result = parse_event(copy.deepcopy(reasoning_event))
+    assert result.is_error()
+    assert "reasoning_content" in result.error.summary, result.error.summary
+    # v1 half: the wrapper SERVES the reasoning delta on the SDK path
+    v1 = _v1_chunks(
+        "perplexity",
+        [
+            reasoning_event,
+            {
+                "id": "chunk-r",
+                "object": "chat.completion.chunk",
+                "created": 1718000000,
+                "model": "sonar-reasoning",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            },
+        ],
+    )
+    assert v1[0]["choices"][0]["delta"]["reasoning_content"] == "thinking"
+
+
 def test_baseten_drop_canary(frozen_ambient) -> None:
     """baseten is DROPPED from wave 1a: the wrapper routes its chunks into a
     dedicated legacy decoder (``handle_baseten_chunk``,
