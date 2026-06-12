@@ -8705,6 +8705,7 @@ class ProxyStartupEvent:
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
 async def model_list(
+    request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     return_wildcard_routes: Optional[bool] = False,
     team_id: Optional[str] = None,
@@ -8745,9 +8746,14 @@ async def model_list(
         _user_has_admin_privileges,
     )
     from litellm.proxy.utils import (
+        create_anthropic_model_list_response,
         create_model_info_response,
         get_available_models_for_user,
     )
+
+    # Claude Code's gateway discovery sends the same anthropic-version header it
+    # uses for /v1/messages and only parses the Anthropic-native models shape.
+    wants_anthropic_format = request.headers.get("anthropic-version") is not None
 
     # Validate scope parameter if provided
     if scope is not None and scope != "expand":
@@ -8816,9 +8822,10 @@ async def model_list(
         if hidden_names:
             all_models = [m for m in all_models if m not in hidden_names]
 
-        # Surface the public team name by default; legacy internal keys via flag.
-        # The internal routing key drives the metadata/fallback lookup, while the
-        # public name is what the client sees as the model id.
+        if wants_anthropic_format:
+            return create_anthropic_model_list_response(all_models)
+
+        # Build response data with all proxy models
         model_data = []
         for response_id, lookup_id in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings):
             model_info = create_model_info_response(
@@ -8856,9 +8863,10 @@ async def model_list(
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
 
-    # Surface the public team name by default; legacy internal keys via flag.
-    # The internal routing key drives the metadata/fallback lookup, while the
-    # public name is what the client sees as the model id.
+    if wants_anthropic_format:
+        return create_anthropic_model_list_response(all_models)
+
+    # Build response data
     model_data = []
     for response_id, lookup_id in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings):
         model_info = create_model_info_response(

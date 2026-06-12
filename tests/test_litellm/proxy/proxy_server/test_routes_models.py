@@ -100,6 +100,28 @@ def test_get_models_happy_path(client, auth_as, patched_models, path):
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_get_models_anthropic_format_when_header_present(
+    client, auth_as, patched_models, path
+):
+    """Pins: ``GET /v1/models`` returns the Anthropic-native models shape when
+    the caller sends an ``anthropic-version`` header (Claude Code gateway
+    discovery), while the default OpenAI shape is unchanged without it."""
+    with auth_as():
+        response = client.get(path, headers={"anthropic-version": "2023-06-01"})
+    assert response.status_code == 200
+    body = response.json()
+    assert "object" not in body
+    assert body["has_more"] is False
+    assert body["first_id"] == "gpt-4"
+    assert body["last_id"] == "claude-sonnet"
+    assert [m["id"] for m in body["data"]] == ["gpt-4", "claude-sonnet"]
+    for entry in body["data"]:
+        assert entry["type"] == "model"
+        assert entry["display_name"] == entry["id"]
+        assert entry["created_at"].endswith("Z")
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
 def test_get_models_invalid_scope_returns_400(client, auth_as, patched_models, path):
     """Pins: ``GET /v1/models``, ``GET /models`` (error path: invalid scope)."""
     with auth_as():
