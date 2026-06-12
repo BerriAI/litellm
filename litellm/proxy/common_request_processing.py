@@ -1338,7 +1338,7 @@ class ProxyBaseLLMRequestProcessing:
                         else:
                             generator = response
 
-                        if self._has_post_call_guardrails():
+                        if self._has_post_call_guardrails_for_passthrough():
                             body_bytes = b"".join(
                                 [chunk async for chunk in generator]  # type: ignore[union-attr]
                             )
@@ -1748,6 +1748,23 @@ class ProxyBaseLLMRequestProcessing:
                 return True
         return False
 
+    @staticmethod
+    def _has_post_call_guardrails_for_passthrough() -> bool:
+        """
+        True when any guardrail runs at post_call for passthrough responses.
+
+        Unlike _has_post_call_guardrails, an event_hook=None guardrail counts:
+        should_run_guardrail treats it as matching every hook (post_call
+        included), so skipping the passthrough buffer here would forward the
+        raw upstream body and bypass that guardrail's output processing.
+        """
+        for cb in litellm.callbacks:
+            if not isinstance(cb, CustomGuardrail):
+                continue
+            if cb._event_hook_is_event_type(GuardrailEventHooks.post_call):
+                return True
+        return False
+
     async def _handle_non_streaming_allm_passthrough_route(
         self,
         response: Any,
@@ -1755,7 +1772,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_key_dict: "UserAPIKeyAuth",
         custom_headers: dict,
     ) -> Optional[Response]:
-        if not self._has_post_call_guardrails():
+        if not self._has_post_call_guardrails_for_passthrough():
             return None
 
         import json as _json

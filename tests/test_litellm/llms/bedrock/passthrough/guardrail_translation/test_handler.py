@@ -72,19 +72,19 @@ class TestExtractConverseTexts:
             "system": [{"text": "sys text"}],
             "messages": [{"role": "user", "content": [{"text": "user text"}]}],
         }
-        texts, mappings = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        texts, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert texts == ["sys text", "user text"]
-        assert mappings[0] == ("system", 0, -1)
-        assert mappings[1] == ("message", 0, 0)
+        assert holders[0] is body["system"][0]
+        assert holders[1] is body["messages"][0]["content"][0]
 
     def test_skip_system(self):
         body = {
             "system": [{"text": "sys text"}],
             "messages": [{"role": "user", "content": [{"text": "user text"}]}],
         }
-        texts, mappings = _extract_converse_texts(body, skip_system=True, skip_tool=False)
+        texts, holders = _extract_converse_texts(body, skip_system=True, skip_tool=False)
         assert texts == ["user text"]
-        assert all(m[0] == "message" for m in mappings)
+        assert holders == [body["messages"][0]["content"][0]]
 
     def test_skip_tool_blocks(self):
         body = {
@@ -107,6 +107,30 @@ class TestExtractConverseTexts:
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=True)
         assert texts == ["hello"]
 
+    def test_extracts_nested_tool_result_text(self):
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "hello"},
+                        {
+                            "toolResult": {
+                                "toolUseId": "1",
+                                "content": [
+                                    {"text": "blocked tool text"},
+                                    {"json": {"k": "v"}},
+                                ],
+                            }
+                        },
+                    ],
+                }
+            ]
+        }
+        texts, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        assert texts == ["hello", "blocked tool text"]
+        assert holders[1] is body["messages"][0]["content"][1]["toolResult"]["content"][0]
+
     def test_non_text_content_blocks_ignored(self):
         body = {
             "messages": [
@@ -123,13 +147,35 @@ class TestExtractConverseTexts:
 class TestWriteBackTexts:
     def test_writes_system_text(self):
         body = {"system": [{"text": "original"}], "messages": []}
-        _write_back_texts(body, ["replaced"], [("system", 0, -1)])
+        _, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        _write_back_texts(["replaced"], holders)
         assert body["system"][0]["text"] == "replaced"
 
     def test_writes_message_text(self):
         body = {"messages": [{"role": "user", "content": [{"text": "original"}]}]}
-        _write_back_texts(body, ["replaced"], [("message", 0, 0)])
+        _, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        _write_back_texts(["replaced"], holders)
         assert body["messages"][0]["content"][0]["text"] == "replaced"
+
+    def test_writes_nested_tool_result_text(self):
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "toolResult": {
+                                "toolUseId": "1",
+                                "content": [{"text": "original"}],
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+        _, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        _write_back_texts(["masked"], holders)
+        assert body["messages"][0]["content"][0]["toolResult"]["content"][0]["text"] == "masked"
 
     def test_extra_non_text_fields_untouched(self):
         body = {
@@ -151,7 +197,8 @@ class TestWriteBackTexts:
             "inferenceConfig": {"maxTokens": 100},
         }
         original = copy.deepcopy(body)
-        _write_back_texts(body, ["replaced"], [("message", 0, 0)])
+        _, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        _write_back_texts(["replaced"], holders)
         assert body["messages"][0]["content"][0]["text"] == "replaced"
         assert body["messages"][0]["content"][1] == original["messages"][0]["content"][1]
         assert body["inferenceConfig"] == original["inferenceConfig"]
@@ -202,6 +249,29 @@ class TestBedrockPassthroughGuardrailHandlerInput:
 
         with pytest.raises(HTTPException):
             await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    @pytest.mark.asyncio
+    async def test_tool_result_text_scanned_and_masked(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _converse_data()
+        data["data"]["messages"][0]["content"].append(
+            {
+                "toolResult": {
+                    "toolUseId": "t1",
+                    "content": [{"text": "My SSN is 123-45-6789"}],
+                }
+            }
+        )
+        guardrail = _make_guardrail(
+            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
+        )
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
+        assert "My SSN is 123-45-6789" in sent_texts
+        tool_result = result["data"]["messages"][0]["content"][2]["toolResult"]
+        assert tool_result["content"][0]["text"] == "[REDACTED]"
 
     @pytest.mark.asyncio
     async def test_non_converse_endpoint_skips_apply_guardrail(self):

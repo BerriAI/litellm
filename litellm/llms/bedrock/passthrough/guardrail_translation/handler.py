@@ -26,61 +26,55 @@ def _extract_converse_texts(
     body: dict,
     skip_system: bool,
     skip_tool: bool,
-) -> Tuple[List[str], List[Tuple[str, int, int]]]:
+) -> Tuple[List[str], List[dict]]:
     """
     Walk a Bedrock Converse request body and collect text content.
 
-    Returns (texts, task_mappings) where each task_mapping is
-    ("system", block_idx, -1) or ("message", msg_idx, content_idx).
+    Returns (texts, holders) where each holder is the dict that owns the
+    extracted ``text`` key, so write-back mutates it in place. Tool result
+    text lives under ``toolResult.content[].text`` rather than the top-level
+    block and is scanned too unless tool blocks are skipped.
     """
     texts: List[str] = []
-    task_mappings: List[Tuple[str, int, int]] = []
+    holders: List[dict] = []
+
+    def _collect(block: dict) -> None:
+        text = block.get("text")
+        if text:
+            texts.append(text)
+            holders.append(block)
 
     if not skip_system:
-        for i, block in enumerate(body.get("system") or []):
-            text = block.get("text") if isinstance(block, dict) else None
-            if text:
-                texts.append(text)
-                task_mappings.append(("system", i, -1))
+        for block in body.get("system") or []:
+            if isinstance(block, dict):
+                _collect(block)
 
-    for msg_idx, message in enumerate(body.get("messages") or []):
+    for message in body.get("messages") or []:
         if not isinstance(message, dict):
             continue
-        for content_idx, block in enumerate(message.get("content") or []):
+        for block in message.get("content") or []:
             if not isinstance(block, dict):
                 continue
             if skip_tool and ("toolUse" in block or "toolResult" in block):
                 continue
-            text = block.get("text")
-            if text:
-                texts.append(text)
-                task_mappings.append(("message", msg_idx, content_idx))
+            _collect(block)
+            tool_result = block.get("toolResult")
+            if isinstance(tool_result, dict):
+                for inner in tool_result.get("content") or []:
+                    if isinstance(inner, dict):
+                        _collect(inner)
 
-    return texts, task_mappings
+    return texts, holders
 
 
 def _write_back_texts(
-    body: dict,
     guardrailed_texts: List[str],
-    task_mappings: List[Tuple[str, int, int]],
+    holders: List[dict],
 ) -> None:
-    for idx, mapping in enumerate(task_mappings):
+    for idx, holder in enumerate(holders):
         if idx >= len(guardrailed_texts):
             break
-        location, outer_idx, inner_idx = mapping
-        if location == "system":
-            system = body.get("system")
-            if system and isinstance(system, list) and outer_idx < len(system):
-                system[outer_idx]["text"] = guardrailed_texts[idx]
-        else:
-            messages = body.get("messages")
-            if not (
-                messages and isinstance(messages, list) and outer_idx < len(messages)
-            ):
-                continue
-            content = messages[outer_idx].get("content")
-            if content and isinstance(content, list) and inner_idx < len(content):
-                content[inner_idx]["text"] = guardrailed_texts[idx]
+        holder["text"] = guardrailed_texts[idx]
 
 
 class BedrockPassthroughGuardrailHandler(BaseTranslation):
@@ -240,7 +234,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         skip_system = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
 
-        texts, task_mappings = _extract_converse_texts(body, skip_system, skip_tool)
+        texts, holders = _extract_converse_texts(body, skip_system, skip_tool)
 
         if not texts:
             return data
@@ -259,7 +253,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         guardrailed_texts = guardrailed_inputs.get("texts", [])
         if guardrailed_texts:
-            _write_back_texts(body, guardrailed_texts, task_mappings)
+            _write_back_texts(guardrailed_texts, holders)
 
         return data
 

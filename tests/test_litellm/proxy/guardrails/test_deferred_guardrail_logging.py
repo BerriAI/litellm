@@ -154,6 +154,50 @@ class TestHasPostCallGuardrails:
             assert ProxyBaseLLMRequestProcessing._has_post_call_guardrails() is False
 
 
+class TestHasPostCallGuardrailsForPassthrough:
+    """Passthrough buffering must include event_hook=None guardrails.
+
+    Those guardrails run at post_call (should_run_guardrail treats None as
+    matching every hook); skipping the buffer would forward the raw upstream
+    body and bypass output processing.
+    """
+
+    def test_returns_true_for_event_hook_none(self):
+        with patch("litellm.callbacks", [AllEventsGuardrail()]):
+            assert (
+                ProxyBaseLLMRequestProcessing._has_post_call_guardrails_for_passthrough()
+                is True
+            )
+
+    def test_returns_true_for_post_call_guardrail(self):
+        with patch("litellm.callbacks", [PostCallGuardrail()]):
+            assert (
+                ProxyBaseLLMRequestProcessing._has_post_call_guardrails_for_passthrough()
+                is True
+            )
+
+    def test_returns_false_for_pre_call_only(self):
+        with patch("litellm.callbacks", [PreCallGuardrail()]):
+            assert (
+                ProxyBaseLLMRequestProcessing._has_post_call_guardrails_for_passthrough()
+                is False
+            )
+
+    def test_returns_false_for_no_callbacks(self):
+        with patch("litellm.callbacks", []):
+            assert (
+                ProxyBaseLLMRequestProcessing._has_post_call_guardrails_for_passthrough()
+                is False
+            )
+
+    def test_ignores_non_guardrail_callbacks(self):
+        with patch("litellm.callbacks", ["langfuse", CustomLogger()]):
+            assert (
+                ProxyBaseLLMRequestProcessing._has_post_call_guardrails_for_passthrough()
+                is False
+            )
+
+
 # ---------------------------------------------------------------------------
 # 2. Non-streaming: deferral flag → closure stored, create_task skipped
 # ---------------------------------------------------------------------------

@@ -2394,7 +2394,7 @@ class TestAllmPassthroughRoutePostCallGuardrails:
         proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
         monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", capture_hook)
 
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=True):
             processing_obj = ProxyBaseLLMRequestProcessing(data={})
             result = await processing_obj._handle_non_streaming_allm_passthrough_route(
                 response=httpx_response,
@@ -2443,7 +2443,7 @@ class TestAllmPassthroughRoutePostCallGuardrails:
         proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
         monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", non_dict_hook)
 
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=True):
             processing_obj = ProxyBaseLLMRequestProcessing(data={})
             result = await processing_obj._handle_non_streaming_allm_passthrough_route(
                 response=httpx_response,
@@ -2499,8 +2499,9 @@ class TestAllmPassthroughRoutePostCallGuardrails:
     @pytest.mark.asyncio
     async def test_no_aread_when_no_post_call_guardrails(self, monkeypatch):
         """
-        When _has_post_call_guardrails() is False the httpx response must not be
-        read — the caller handles streaming or error paths normally.
+        When _has_post_call_guardrails_for_passthrough() is False the httpx
+        response must not be read — the caller handles streaming or error paths
+        normally.
         """
         import json
 
@@ -2519,7 +2520,7 @@ class TestAllmPassthroughRoutePostCallGuardrails:
         hook_spy = AsyncMock()
         monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", hook_spy)
 
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=False):
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=False):
             processing_obj = ProxyBaseLLMRequestProcessing(data={})
             result = await processing_obj._handle_non_streaming_allm_passthrough_route(
                 response=httpx_response,
@@ -2629,7 +2630,7 @@ class TestEventStreamAllmPassthroughRoute:
             "content-length": "99",
         }
 
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=True):
             processing_obj = ProxyBaseLLMRequestProcessing(data={})
             result = await processing_obj._handle_non_streaming_allm_passthrough_route(
                 response=mock_response,
