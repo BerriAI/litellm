@@ -1,0 +1,28 @@
+{
+  "messages": [
+    {
+      "content": "capital of France?",
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709",
+  "response_format": {
+    "json_schema": {
+      "name": "answer",
+      "schema": {
+        "additionalProperties": false,
+        "properties": {
+          "capital": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "capital"
+        ],
+        "type": "object"
+      },
+      "strict": true
+    },
+    "type": "json_schema"
+  }
+}

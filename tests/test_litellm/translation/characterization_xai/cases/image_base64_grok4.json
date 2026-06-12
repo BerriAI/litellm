@@ -1,0 +1,20 @@
+{
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "and this",
+          "type": "text"
+        },
+        {
+          "image_url": {
+            "url": "data:image/png;base64,iVBORw0KGgo="
+          },
+          "type": "image_url"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709"
+}

@@ -1,0 +1,29 @@
+{
+  "body": {
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "partial",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1718000007,
+    "id": "resp-c1",
+    "model": "grok-4-0709",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 100,
+      "prompt_tokens": 1000,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 512
+      },
+      "total_tokens": 1100
+    }
+  },
+  "model": "grok-4-0709"
+}

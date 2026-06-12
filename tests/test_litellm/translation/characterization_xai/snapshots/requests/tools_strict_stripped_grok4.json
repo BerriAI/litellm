@@ -1,0 +1,29 @@
+{
+  "messages": [
+    {
+      "content": "report this",
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709",
+  "tools": [
+    {
+      "function": {
+        "name": "report",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "body"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "messages": [
+    {
+      "content": "x",
+      "role": "user"
+    }
+  ],
+  "model": "grok-2-1212",
+  "stop": [
+    "END"
+  ]
+}

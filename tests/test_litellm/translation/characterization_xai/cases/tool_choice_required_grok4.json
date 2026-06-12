@@ -1,0 +1,30 @@
+{
+  "messages": [
+    {
+      "content": "Weather in Paris?",
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709",
+  "tool_choice": "required",
+  "tools": [
+    {
+      "function": {
+        "description": "Get weather",
+        "name": "get_weather",
+        "parameters": {
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

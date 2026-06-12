@@ -1,0 +1,36 @@
+{
+  "messages": [
+    {
+      "content": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "cached context",
+          "type": "text"
+        },
+        {
+          "text": "question",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709",
+  "tools": [
+    {
+      "function": {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "name": "lookup",
+        "parameters": {
+          "properties": {},
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

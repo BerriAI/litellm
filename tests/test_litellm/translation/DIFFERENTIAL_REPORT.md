@@ -1,4 +1,4 @@
-# Translation v2 differential report (anthropic + bedrock + openai + google + azure)
+# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai)
 
 v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
 explained FALLBACK that v1 serves) for a provider's flag to turn on.
@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: ff5c320127
+- commit: 3fe015ef6c
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -133,6 +133,75 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: text_no_leading_role
 - IDENTICAL: tools
 - SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; v1's wrapper synthesizes its final usage chunk from it, which is the streaming seam's envelope to reproduce)
+
+## xai: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON; v1 = get_optional_params('xai') + transform_request)
+
+- IDENTICAL: cache_control_stripped_grok4
+- IDENTICAL: image_base64_grok4
+- IDENTICAL: image_url_string_grok4
+- IDENTICAL: max_tokens_grok3mini
+- IDENTICAL: multiturn_stop_list_stream_grok3
+- IDENTICAL: nonuser_name_stripped_grok4
+- IDENTICAL: parallel_tool_calls_false_grok4
+- IDENTICAL: reasoning_effort_grok3mini
+- IDENTICAL: reasoning_effort_grok_code_fast
+- IDENTICAL: response_format_json_object_grok4
+- IDENTICAL: response_format_json_schema_strict_kept_grok4
+- IDENTICAL: stop_list_grok2
+- IDENTICAL: system_and_sampling_grok4
+- IDENTICAL: temperature_int_stays_int_grok4
+- IDENTICAL: text_grok4
+- IDENTICAL: tool_call_roundtrip_compact_grok4
+- IDENTICAL: tool_choice_required_grok4
+- IDENTICAL: tool_choice_specific_grok4
+- IDENTICAL: tools_auto_grok4
+- IDENTICAL: tools_strict_stripped_grok4
+- IDENTICAL: user_param_grok4
+- FALLBACK (v1 raises UnsupportedParamsError): frequency_penalty_on_grok4 (frequency_penalty)
+- FALLBACK (v1 raises UnsupportedParamsError): max_completion_tokens_any_grok (max_completion_tokens)
+- FALLBACK (v1 raises UnsupportedParamsError): max_completion_tokens_grok3mini (max_completion_tokens)
+- FALLBACK (v1 raises UnsupportedParamsError): reasoning_effort_on_non_reasoning_grok4 (reasoning_effort on non-reasoning xai model)
+- FALLBACK (v1 raises UnsupportedParamsError): stop_on_grok3mini (stop on grok-3-mini)
+- FALLBACK (v1 raises UnsupportedParamsError): stop_on_grok4 (stop on grok-4-0709)
+- FALLBACK (v1 raises UnsupportedParamsError): stop_on_grok_code_fast (stop on grok-code-fast-1)
+- FALLBACK (v1 serves it): both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): consecutive_user_messages (consecutive user messages)
+- FALLBACK (v1 serves it): empty_tools_list (empty tools list)
+- FALLBACK (v1 serves it): explicit_stream_false_reaches_wire (explicit stream: false)
+- FALLBACK (v1 serves it): frequency_penalty_supported_family_outside_ir (frequency_penalty)
+- FALLBACK (v1 serves it): image_detail_key (image_url detail/format)
+- FALLBACK (v1 serves it): logprobs_outside_ir (logprobs)
+- FALLBACK (v1 serves it): nested_tool_strict_below_function (nested 'strict' key)
+- FALLBACK (v1 serves it): presence_penalty_outside_ir (presence_penalty)
+- FALLBACK (v1 serves it): seed_outside_ir (seed)
+- FALLBACK (v1 serves it): stream_options_outside_ir (stream_options)
+- FALLBACK (v1 serves it): string_form_stop_supported_family (string-form stop)
+- FALLBACK (v1 serves it): top_k_not_an_xai_param (top_k)
+- FALLBACK (v1 serves it): use_xai_oauth_pkce_flow (PKCE)
+- FALLBACK (v1 serves it): user_message_name_forwarded_by_v1 (message name field)
+- FALLBACK (v1 serves it): web_search_options_responses_bridge (Responses-API bridge)
+
+## xai: responses (snapshot == v1 XAIChatConfig.transform_response == v2; the LIVE httpx-path normalizer incl. the usage post-steps)
+
+- IDENTICAL: cached_tokens_usage_passthrough
+- IDENTICAL: finish_empty_string_with_tool_calls
+- IDENTICAL: finish_stop_with_tool_calls_rewrites
+- IDENTICAL: reasoning_tokens_already_folded_idempotent
+- IDENTICAL: reasoning_tokens_folded
+- IDENTICAL: text_basic
+- IDENTICAL: total_tokens_normalized_up
+- IDENTICAL: websearch_sources_and_citations
+
+## xai: streams (snapshot == v1 line-seam replay through XAIChatCompletionStreamingHandler + CustomStreamWrapper('xai') == v2 xai dialect)
+
+- IDENTICAL: citations_dropped_by_the_dict_path
+- IDENTICAL: empty_keepalive_swallowed
+- IDENTICAL: reasoning_content
+- IDENTICAL: reasoning_renamed
+- IDENTICAL: text
+- IDENTICAL: text_no_leading_role
+- IDENTICAL: tools_typeless_continuation
+- SEAM CONTRACT: usage_tail_include_usage (v1's chunk_parser injects a dummy choice so the wrapper swallows the tail and synthesizes the final usage chunk; v2 passes the wire choices=[] chunk through with the FOLDED usage for the streaming seam to synthesize from)
 
 ## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)
 

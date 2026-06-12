@@ -1,0 +1,30 @@
+{
+  "body": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "cited answer",
+          "role": "assistant"
+        }
+      }
+    ],
+    "citations": [
+      "https://a.test",
+      "https://b.test"
+    ],
+    "created": 1718000005,
+    "id": "resp-w1",
+    "model": "grok-4-0709",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 9,
+      "num_sources_used": 3,
+      "prompt_tokens": 30,
+      "total_tokens": 39
+    }
+  },
+  "model": "grok-4-0709"
+}

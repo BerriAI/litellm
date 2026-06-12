@@ -1,0 +1,61 @@
+{
+  "events": [
+    {
+      "choices": [
+        {
+          "delta": {
+            "content": "c",
+            "role": "assistant"
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null
+        }
+      ],
+      "created": 1718000000,
+      "id": "cmpl-xs1",
+      "model": "grok-3-mini",
+      "object": "chat.completion.chunk",
+      "system_fingerprint": "fp_xai_s",
+      "usage": null
+    },
+    {
+      "choices": [
+        {
+          "delta": {
+            "content": "ited"
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null
+        }
+      ],
+      "citations": [
+        "https://a.test"
+      ],
+      "created": 1718000000,
+      "id": "cmpl-xs1",
+      "model": "grok-3-mini",
+      "object": "chat.completion.chunk",
+      "system_fingerprint": "fp_xai_s",
+      "usage": null
+    },
+    {
+      "choices": [
+        {
+          "delta": {},
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": null
+        }
+      ],
+      "created": 1718000000,
+      "id": "cmpl-xs1",
+      "model": "grok-3-mini",
+      "object": "chat.completion.chunk",
+      "system_fingerprint": "fp_xai_s",
+      "usage": null
+    }
+  ],
+  "stream_options": null
+}

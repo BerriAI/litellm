@@ -1,0 +1,10 @@
+{
+  "messages": [
+    {
+      "content": "x",
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709",
+  "user": "u-1"
+}

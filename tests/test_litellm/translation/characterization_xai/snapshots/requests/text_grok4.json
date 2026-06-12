@@ -1,0 +1,9 @@
+{
+  "messages": [
+    {
+      "content": "Hello, world",
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709"
+}

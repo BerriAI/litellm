@@ -1,0 +1,26 @@
+{
+  "body": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Hello there.",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1718000000,
+    "id": "resp-t1",
+    "model": "grok-4-0709",
+    "object": "chat.completion",
+    "system_fingerprint": "fp_xai_1",
+    "usage": {
+      "completion_tokens": 6,
+      "prompt_tokens": 12,
+      "total_tokens": 18
+    }
+  },
+  "model": "grok-4-0709"
+}

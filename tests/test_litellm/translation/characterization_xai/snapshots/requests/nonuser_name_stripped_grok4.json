@@ -1,0 +1,21 @@
+{
+  "messages": [
+    {
+      "content": "s",
+      "role": "system"
+    },
+    {
+      "content": "q",
+      "role": "user"
+    },
+    {
+      "content": "a",
+      "role": "assistant"
+    },
+    {
+      "content": "q2",
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709"
+}

@@ -1,0 +1,23 @@
+{
+  "max_tokens": 64,
+  "messages": [
+    {
+      "content": "Hello",
+      "role": "user"
+    },
+    {
+      "content": "Hi there",
+      "role": "assistant"
+    },
+    {
+      "content": "How are you?",
+      "role": "user"
+    }
+  ],
+  "model": "grok-3",
+  "stop": [
+    "END",
+    "STOP"
+  ],
+  "stream": true
+}

@@ -1,0 +1,16 @@
+{
+  "max_tokens": 50,
+  "messages": [
+    {
+      "content": "You are helpful",
+      "role": "system"
+    },
+    {
+      "content": "Hi",
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709",
+  "temperature": 0.5,
+  "top_p": 0.9
+}

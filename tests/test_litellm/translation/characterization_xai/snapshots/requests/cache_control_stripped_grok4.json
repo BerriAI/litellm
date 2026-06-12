@@ -1,0 +1,30 @@
+{
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "cached context",
+          "type": "text"
+        },
+        {
+          "text": "question",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709",
+  "tools": [
+    {
+      "function": {
+        "name": "lookup",
+        "parameters": {
+          "properties": {},
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

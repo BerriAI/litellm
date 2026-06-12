@@ -1,0 +1,25 @@
+{
+  "body": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "a",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1718000006,
+    "id": "resp-n1",
+    "model": "grok-4-0709",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 9,
+      "prompt_tokens": 30,
+      "total_tokens": 5
+    }
+  },
+  "model": "grok-4-0709"
+}

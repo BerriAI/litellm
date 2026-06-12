@@ -1,0 +1,75 @@
+{
+  "events": [
+    {
+      "choices": [
+        {
+          "delta": {
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "",
+                  "name": "get_weather"
+                },
+                "id": "call_1",
+                "index": 0,
+                "type": "function"
+              }
+            ]
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null
+        }
+      ],
+      "created": 1718000000,
+      "id": "cmpl-xs1",
+      "model": "grok-3-mini",
+      "object": "chat.completion.chunk",
+      "system_fingerprint": "fp_xai_s",
+      "usage": null
+    },
+    {
+      "choices": [
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"city\": \"Paris\"}"
+                },
+                "index": 0
+              }
+            ]
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null
+        }
+      ],
+      "created": 1718000000,
+      "id": "cmpl-xs1",
+      "model": "grok-3-mini",
+      "object": "chat.completion.chunk",
+      "system_fingerprint": "fp_xai_s",
+      "usage": null
+    },
+    {
+      "choices": [
+        {
+          "delta": {},
+          "finish_reason": "tool_calls",
+          "index": 0,
+          "logprobs": null
+        }
+      ],
+      "created": 1718000000,
+      "id": "cmpl-xs1",
+      "model": "grok-3-mini",
+      "object": "chat.completion.chunk",
+      "system_fingerprint": "fp_xai_s",
+      "usage": null
+    }
+  ],
+  "stream_options": null
+}
