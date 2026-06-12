@@ -301,6 +301,10 @@ def _base_family_allowed(model: str) -> frozenset:
 
 
 def _v2_allowed(provider: str, model: str, deps) -> frozenset:
+    """The per-model allowed set, re-derived from the SAME csp.ALLOWED table
+    serialization reads, with the three per-model narrowings the gates
+    apply (together capability fork, nvidia_nim static table, the base
+    list's gpt-4 name gate)."""
     if provider == "together_ai":
         allowed = (
             _base_family_allowed(model)
@@ -308,19 +312,12 @@ def _v2_allowed(provider: str, model: str, deps) -> frozenset:
             else _base_family_allowed(model) - csp._FUNCTION_CALLING_KEYS
         )
         return allowed
-    if provider == "cerebras":
-        return csp._CEREBRAS_LIST
     if provider == "nvidia_nim":
         return csp.nvidia_nim_allowed(model)
-    if provider == "featherless_ai":
-        return csp._FEATHERLESS_LIST
-    if provider == "nscale":
-        return csp._NSCALE_LIST
-    if provider == "hyperbolic":
-        return csp._HYPERBOLIC_LIST
-    if provider == "volcengine":
-        return csp._VOLCENGINE_LIST
-    return _base_family_allowed(model)
+    allowed = csp.ALLOWED[provider]
+    if allowed == csp._BASE_LIST:
+        return _base_family_allowed(model)
+    return allowed
 
 
 _SAMPLE_MODELS = {
@@ -359,6 +356,16 @@ def test_supported_list_mirrors_track_v1_at_head(provider: str) -> None:
             provider_config(provider, model).get_supported_openai_params(model)
         )
         allowed = _v2_allowed(provider, model, deps)
+        # The mirror's soundness rests on a DIRECTION argument: every key v2
+        # can ever SERVE is either in _MIRROR_KEYS or carries its own assert
+        # below (user, reasoning_effort), so a v1 list growing a key v2 lacks
+        # only widens the typed fallback (v1 serves its own new behavior).
+        # Encode the subset relation so a future allowed set cannot silently
+        # leave that argument (critic-wave1a N6).
+        assert allowed <= set(_MIRROR_KEYS) | {"user", "reasoning_effort"}, (
+            provider,
+            model,
+        )
         for key in _MIRROR_KEYS:
             assert (key in allowed) == (key in supported), (provider, model, key)
         if SPECS[provider]["user"]:

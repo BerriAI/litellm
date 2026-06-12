@@ -171,11 +171,19 @@ translation/
 │   │   │                #   the list); capability gates read deps over the
 │   │   │                #   LOAD-BEARING {provider}/{model} map keys
 │   │   │                #   (together_ai function calling, cerebras
-│   │   │                #   reasoning); nvidia_nim's static per-model table
-│   │   ├── serialize.py # frozen CompatProfile per provider (mct rename /
-│   │   │                #   user emission / together's rf-text drop /
-│   │   │                #   cerebras reasoning_effort) -> gates ->
-│   │   │                #   openai_compat assemble_body -> deltas
+│   │   │                #   reasoning); nvidia_nim's static per-model
+│   │   │                #   table; ALLOWED — the per-provider MAXIMAL
+│   │   │                #   allowed sets, the ONE source the gates narrow
+│   │   │                #   and serialization derives emission from
+│   │   ├── serialize.py # frozen CompatProfile per provider (gate + mct
+│   │   │                #   rename / together's rf-text drop; user and
+│   │   │                #   reasoning_effort emission DERIVED from
+│   │   │                #   params.ALLOWED, never cached as booleans) ->
+│   │   │                #   gates -> openai_compat assemble_body ->
+│   │   │                #   deltas; PROFILES is the family registry and
+│   │   │                #   SERIALIZERS its derived serializer table —
+│   │   │                #   pipeline splices them whole, one line per
+│   │   │                #   TABLE
 │   │   └── guard.py     # explicit stream:false (the SDK serializes the
 │   │                    #   key; absent-vs-false is lost in the IR), then
 │   │                    #   the shared openai guard with the full
@@ -210,9 +218,12 @@ translation/
 │                        #   default; the "xai" chunk dialect folds it
 └── engine/
     ├── pipeline.py # prepare (pure, drives the fallback decision) -> send;
-    │               #   per-provider serializer/parser/dialect tables; the
-    │               #   wire_body step strips transform-seam markers
-    │               #   (json_mode; converse additionalModelRequestFields.stream)
+    │               #   per-provider serializer/parser/dialect tables —
+    │               #   family packages register as DATA (compat_sdk's
+    │               #   SERIALIZERS spliced in whole; one line per table
+    │               #   per family, never per provider); the wire_body
+    │               #   step strips transform-seam markers (json_mode;
+    │               #   converse additionalModelRequestFields.stream)
     ├── http.py     # the injected HttpPort + ExecuteError values
     └── stream.py   # the ONE accumulator: lines OR parsed events -> IR
                     #   events -> chunks (fold_lines / fold_events)
@@ -478,8 +489,17 @@ v1's wrapper, so the synthesis covers the tail-chunk shape only).
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body
-relay). To add a provider: write
-`providers/<name>/`, register it in `engine/pipeline._SERIALIZERS` /
-`_RESPONSE_PARSERS` / `_RESPONSE_DIALECTS` (plus `_RAW_GUARDS` when the
-inbound schema is the provider's own family), add a differential corpus,
-keep the flag off until differential-green.
+relay). To add a provider that is a pure param-surface delta over an
+existing wire family, add DATA rows to that family's package instead of a
+new subpackage (the `compat_sdk/` shape, THE wave-1b/2 convention): an
+allowed frozenset + `ALLOWED` row in the family's params.py, a profile row
+in its serialize.py registry, and one dispatch `Provider` Literal line —
+pipeline already splices the family's exported `SERIALIZERS` table whole
+(one `**` line per table per FAMILY; never add per-provider rows for a
+family member), and the registration-completeness gate
+(`test_differential_compat_sdk_request.py`) fails any registered provider
+without a differential corpus row. To add a provider with its own wire
+format: write `providers/<name>/`, register it in
+`engine/pipeline._SERIALIZERS` / `_RESPONSE_PARSERS` / `_RESPONSE_DIALECTS`
+(plus `_RAW_GUARDS` when the inbound schema is the provider's own family),
+add a differential corpus, keep the flag off until differential-green.

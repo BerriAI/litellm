@@ -5,19 +5,25 @@ OpenAI SDK: ``get_optional_params`` runs the provider config's param gates,
 ``provider_config.transform_request`` (openai.py:727) runs the inherited
 base five-touch assembly, and none of the family overrides it. The v2 body
 is therefore ``openai_compat.assemble_body`` after the provider's gates,
-plus at most three mechanical deltas captured per provider in a frozen
+plus at most two mechanical deltas captured per provider in a frozen
 ``CompatProfile``:
 
 - ``rename_max_completion_tokens``: the configs whose map renames mct ->
   max_tokens (cerebras/nvidia_nim/nebius/wandb/featherless_ai and the
-  OpenAILike-based lambda_ai/volcengine). The IR already collapses mct into
-  ``max_tokens``, so the rename is emitting that collapsed key.
-- ``emit_user``: providers whose own supported list carries ``user``
-  unconditionally (cerebras, hyperbolic) — a typed fallback everywhere else.
+  OpenAILike-based lambda_ai/volcengine).
 - ``drop_text_response_format``: together_ai's map pops a verbatim
   ``{"type": "text"}`` response_format.
-- ``emit_reasoning_effort``: cerebras, gated per model in params.py before
-  emission ever happens.
+
+``user`` and ``reasoning_effort`` emission is NOT profile data: it is
+derived from ``params.ALLOWED[provider]`` — the same single source the
+gates narrow — so the emission facts can never desync from the gate facts
+(critic-wave1a M3).
+
+The registration surface is data too: ``PROFILES`` is the family registry
+and ``SERIALIZERS`` its derived serializer table; ``engine/pipeline.py``
+splices both so adding a provider to this family costs a profile row here,
+an allowed set + ALLOWED row in params.py, and one dispatch Literal line
+(critic-wave1a M1).
 
 The response side needs NO per-provider code: the live v1 normalizer is the
 same ``convert_to_model_response_object`` the openai_compat parser mirrors,
@@ -30,8 +36,9 @@ one would-be member that does NOT, and is dropped from the wave for it).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from expression import Error, Result
 
@@ -42,17 +49,16 @@ from ..openai_compat.serialize import assemble_body
 from . import params as p
 
 _SerializeResult = Result[Body, TranslationError]
+Serializer = Callable[[ChatRequest, TranslationDeps], _SerializeResult]
 _GateFn = Callable[[ChatRequest, TranslationDeps], str | None]
 
 
 @dataclass(frozen=True)
 class CompatProfile:
-    provider: str
+    provider: p.CompatSdkProvider
     unsupported: _GateFn
     rename_max_completion_tokens: bool = False
-    emit_user: bool = False
     drop_text_response_format: bool = False
-    emit_reasoning_effort: bool = False
 
 
 def serialize_with_profile(
@@ -66,22 +72,22 @@ def serialize_with_profile(
 
 def _with_deltas(body: Body, request: ChatRequest, profile: CompatProfile) -> Body:
     if profile.rename_max_completion_tokens and "max_completion_tokens" in body:
-        collapsed = request.params.max_tokens.default_value(None)
         body = {
             **{k: v for k, v in body.items() if k != "max_completion_tokens"},
-            "max_tokens": collapsed,
+            "max_tokens": body["max_completion_tokens"],
         }
     if profile.drop_text_response_format and body.get("response_format") == {
         "type": "text"
     }:
         body = {k: v for k, v in body.items() if k != "response_format"}
+    emittable = p.ALLOWED[profile.provider]
     extras: dict[str, PlainJson] = {}
-    user = request.user.default_value(None) if profile.emit_user else None
+    user = request.user.default_value(None) if "user" in emittable else None
     if user is not None:
         extras = {**extras, "user": user}
     effort = (
         request.reasoning_effort.default_value(None)
-        if profile.emit_reasoning_effort
+        if "reasoning_effort" in emittable
         else None
     )
     if effort is not None:
@@ -96,134 +102,66 @@ def _base_list_gate(provider: str) -> _GateFn:
     return gate
 
 
-TOGETHER_AI = CompatProfile(
-    provider="together_ai",
-    unsupported=p.together_ai_unsupported,
-    drop_text_response_format=True,
+_PROFILE_ROWS: tuple[CompatProfile, ...] = (
+    CompatProfile(
+        provider="together_ai",
+        unsupported=p.together_ai_unsupported,
+        drop_text_response_format=True,
+    ),
+    CompatProfile(
+        provider="cerebras",
+        unsupported=p.cerebras_unsupported,
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="nvidia_nim",
+        unsupported=p.nvidia_nim_unsupported,
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(provider="lm_studio", unsupported=_base_list_gate("lm_studio")),
+    CompatProfile(provider="llamafile", unsupported=_base_list_gate("llamafile")),
+    CompatProfile(
+        provider="lambda_ai",
+        unsupported=_base_list_gate("lambda_ai"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="nebius",
+        unsupported=_base_list_gate("nebius"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(provider="novita", unsupported=_base_list_gate("novita")),
+    CompatProfile(
+        provider="wandb",
+        unsupported=_base_list_gate("wandb"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="featherless_ai",
+        unsupported=p.featherless_ai_unsupported,
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(provider="nscale", unsupported=p.nscale_unsupported),
+    CompatProfile(provider="hyperbolic", unsupported=p.hyperbolic_unsupported),
+    CompatProfile(
+        provider="volcengine",
+        unsupported=p.volcengine_unsupported,
+        rename_max_completion_tokens=True,
+    ),
 )
-CEREBRAS = CompatProfile(
-    provider="cerebras",
-    unsupported=p.cerebras_unsupported,
-    rename_max_completion_tokens=True,
-    emit_user=True,
-    emit_reasoning_effort=True,
-)
-NVIDIA_NIM = CompatProfile(
-    provider="nvidia_nim",
-    unsupported=p.nvidia_nim_unsupported,
-    rename_max_completion_tokens=True,
-)
-LM_STUDIO = CompatProfile(
-    provider="lm_studio", unsupported=_base_list_gate("lm_studio")
-)
-LLAMAFILE = CompatProfile(
-    provider="llamafile", unsupported=_base_list_gate("llamafile")
-)
-LAMBDA_AI = CompatProfile(
-    provider="lambda_ai",
-    unsupported=_base_list_gate("lambda_ai"),
-    rename_max_completion_tokens=True,
-)
-NEBIUS = CompatProfile(
-    provider="nebius",
-    unsupported=_base_list_gate("nebius"),
-    rename_max_completion_tokens=True,
-)
-NOVITA = CompatProfile(provider="novita", unsupported=_base_list_gate("novita"))
-WANDB = CompatProfile(
-    provider="wandb",
-    unsupported=_base_list_gate("wandb"),
-    rename_max_completion_tokens=True,
-)
-FEATHERLESS_AI = CompatProfile(
-    provider="featherless_ai",
-    unsupported=p.featherless_ai_unsupported,
-    rename_max_completion_tokens=True,
-)
-NSCALE = CompatProfile(provider="nscale", unsupported=p.nscale_unsupported)
-HYPERBOLIC = CompatProfile(
-    provider="hyperbolic", unsupported=p.hyperbolic_unsupported, emit_user=True
-)
-VOLCENGINE = CompatProfile(
-    provider="volcengine",
-    unsupported=p.volcengine_unsupported,
-    rename_max_completion_tokens=True,
+
+PROFILES: Mapping[p.CompatSdkProvider, CompatProfile] = MappingProxyType(
+    {profile.provider: profile for profile in _PROFILE_ROWS}
 )
 
 
-def together_ai_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, TOGETHER_AI)
+def _profile_serializer(profile: CompatProfile) -> Serializer:
+    def serialize(request: ChatRequest, deps: TranslationDeps) -> _SerializeResult:
+        return serialize_with_profile(request, deps, profile)
+
+    return serialize
 
 
-def cerebras_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, CEREBRAS)
-
-
-def nvidia_nim_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, NVIDIA_NIM)
-
-
-def lm_studio_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, LM_STUDIO)
-
-
-def llamafile_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, LLAMAFILE)
-
-
-def lambda_ai_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, LAMBDA_AI)
-
-
-def nebius_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, NEBIUS)
-
-
-def novita_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, NOVITA)
-
-
-def wandb_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, WANDB)
-
-
-def featherless_ai_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, FEATHERLESS_AI)
-
-
-def nscale_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, NSCALE)
-
-
-def hyperbolic_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, HYPERBOLIC)
-
-
-def volcengine_serialize_request(
-    request: ChatRequest, deps: TranslationDeps
-) -> _SerializeResult:
-    return serialize_with_profile(request, deps, VOLCENGINE)
+SERIALIZERS: Mapping[p.CompatSdkProvider, Serializer] = MappingProxyType(
+    {provider: _profile_serializer(profile) for provider, profile in PROFILES.items()}
+)

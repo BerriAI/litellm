@@ -23,10 +23,27 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
+from typing import Literal
 
 from ...deps import TranslationDeps
 from ...ir import ChatRequest
 from ..openai_compat.params import unsupported_response_format
+
+CompatSdkProvider = Literal[
+    "together_ai",
+    "cerebras",
+    "nvidia_nim",
+    "lm_studio",
+    "llamafile",
+    "lambda_ai",
+    "nebius",
+    "novita",
+    "wandb",
+    "featherless_ai",
+    "nscale",
+    "hyperbolic",
+    "volcengine",
+]
 
 _Present = Callable[[ChatRequest], bool]
 
@@ -143,6 +160,9 @@ def together_ai_unsupported(request: ChatRequest, deps: TranslationDeps) -> str 
     ) or unsupported_response_format(request)
 
 
+# The MAXIMAL cerebras surface: ``reasoning_effort`` is capability-narrowed
+# per model in the gate below, so its membership here means "emittable", not
+# "always allowed" (the ALLOWED table at the bottom feeds emission).
 _CEREBRAS_LIST = frozenset(
     {
         "max_tokens",
@@ -155,6 +175,7 @@ _CEREBRAS_LIST = frozenset(
         "tool_choice",
         "response_format",
         "user",
+        "reasoning_effort",
     }
 )
 
@@ -165,9 +186,9 @@ def supports_cerebras_reasoning(model: str, deps: TranslationDeps) -> bool:
 
 def cerebras_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | None:
     allowed = (
-        _CEREBRAS_LIST | {"reasoning_effort"}
+        _CEREBRAS_LIST
         if supports_cerebras_reasoning(request.model, deps)
-        else _CEREBRAS_LIST
+        else _CEREBRAS_LIST - {"reasoning_effort"}
     )
     return unsupported_against(
         request,
@@ -324,3 +345,27 @@ def volcengine_unsupported(request: ChatRequest, deps: TranslationDeps) -> str |
             )
         },
     )
+
+
+# The single source of per-provider supported-surface truth: each provider's
+# MAXIMAL allowed set (capability and per-model gates above only ever NARROW
+# it). Serialization derives user/reasoning_effort emission from membership
+# here, so the gate facts and the emission facts can never desync
+# (critic-wave1a M3).
+ALLOWED: Mapping[CompatSdkProvider, frozenset[str]] = MappingProxyType(
+    {
+        "together_ai": _BASE_LIST,
+        "cerebras": _CEREBRAS_LIST,
+        "nvidia_nim": _NVIDIA_DEFAULT_LIST,
+        "lm_studio": _BASE_LIST,
+        "llamafile": _BASE_LIST,
+        "lambda_ai": _BASE_LIST,
+        "nebius": _BASE_LIST,
+        "novita": _BASE_LIST,
+        "wandb": _BASE_LIST,
+        "featherless_ai": _FEATHERLESS_LIST,
+        "nscale": _NSCALE_LIST,
+        "hyperbolic": _HYPERBOLIC_LIST,
+        "volcengine": _VOLCENGINE_LIST,
+    }
+)
