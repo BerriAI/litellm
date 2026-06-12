@@ -960,6 +960,23 @@ def _mistral_rows(lines: list) -> int:
         + "usage tail (v2 passes the wire choices=[] usage chunk through;"
         " the streaming seam owns v1's synthesized final chunk)"
     )
+    for name in sorted(stream._LOUD_CHUNKS):
+        event, fragment = stream._LOUD_CHUNKS[name]
+        result = stream.parse_event(copy.deepcopy(event))
+        ok = result.is_error() and fragment in result.error.summary
+        if ok and name != "unknown_delta_key":
+            try:
+                stream._v1_chunks([copy.deepcopy(event)])
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        label = (
+            "FALLBACK (unreachable for v2-sent requests)"
+            if name == "unknown_delta_key"
+            else "FALLBACK (v1 raises MidStreamFallbackError)"
+        )
+        lines.append(f"- {label if ok else 'DIVERGENT'}: {name}")
     return failures
 
 
