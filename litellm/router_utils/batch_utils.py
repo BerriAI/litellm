@@ -88,6 +88,19 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
             file_content_bytes = file_content.read()  # type: ignore
         elif isinstance(file_content, tuple):
             file_content_bytes = file_content[1]
+            # The tuple's content element may itself be a file handle: batch
+            # uploads stream from the spooled upload handle rather than bytes.
+            # Read it so the model rewrite is actually applied; otherwise a
+            # restricted body.model survives unmodified and bypasses the batch
+            # model allowlist (which validates the upload target alias).
+            if hasattr(file_content_bytes, "read"):
+                handle = file_content_bytes
+                file_content_bytes = handle.read()
+                if hasattr(handle, "seek"):
+                    try:
+                        handle.seek(0)
+                    except (OSError, ValueError):
+                        pass
         else:
             file_content_bytes = file_content
 

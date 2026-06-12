@@ -76,6 +76,29 @@ def test_tuple_input(sample_jsonl_bytes):
     assert result.content_type == "application/jsonl"
 
 
+def test_tuple_with_file_handle_rewrites_model(sample_jsonl_bytes):
+    """Security regression: when the tuple's content element is a file handle
+    (batch uploads stream from the spooled upload handle), the model must still
+    be rewritten. Otherwise a restricted body.model survives unmodified and
+    bypasses the batch model allowlist, which only checks the upload target."""
+    new_model = "approved-target-model"
+    handle = BytesIO(sample_jsonl_bytes)
+    test_tuple = ("test.jsonl", handle, "application/json")
+
+    result = replace_model_in_jsonl(test_tuple, new_model)
+
+    assert isinstance(result, InMemoryFile)
+    rows = [
+        json.loads(line)
+        for line in result.getvalue().decode("utf-8").splitlines()
+        if line.strip()
+    ]
+    assert rows, "rewrite must produce rows"
+    # every row now carries the rewritten target, not the original (restricted) model
+    assert all(row["body"]["model"] == new_model for row in rows)
+    assert all(row["body"]["model"] != "gpt-5.5" for row in rows)
+
+
 def test_file_like_object(sample_file_like):
     """Test with file-like object input"""
     new_model = "claude-3"
