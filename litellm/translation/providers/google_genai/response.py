@@ -20,6 +20,7 @@ from expression.collections import Block
 
 from ...errors import BoundaryError, TranslationError
 from ...ir import (
+    THOUGHT_SIGNATURE_SEPARATOR,
     ChatRequest,
     ChatResponse,
     ContentBlock,
@@ -168,7 +169,7 @@ def _function_call_block(part: dict[str, PlainJson]) -> ContentBlock | Translati
     identifier = native_id if isinstance(native_id, str) else ""
     signature = part.get("thoughtSignature")
     if isinstance(signature, str) and signature:
-        identifier = f"{identifier}{p.THOUGHT_SIGNATURE_SEPARATOR}{signature}"
+        identifier = f"{identifier}{THOUGHT_SIGNATURE_SEPARATOR}{signature}"
     return ContentBlock.of_tool_use(
         ToolUse(
             id=identifier,

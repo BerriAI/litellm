@@ -4,7 +4,17 @@ Split from translation_seam_google.py, which owns the pure deps/adapters."""
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Coroutine,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import litellm
 
@@ -12,9 +22,23 @@ from litellm.translation import TranslationDeps
 from litellm.translation.ir import Body
 from litellm.translation_seam import enabled_providers
 from litellm.translation_seam_google import (
+    GoogleProviderKey,
     build_google_deps,
     to_model_response_google,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.vertex_ai.common_utils import VertexAIModelRoute
+    from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+    from litellm.types.utils import ModelResponse
+
+    from litellm.translation.engine.pipeline import PreparedRequest
+
+_CompletionForkResult = Union[
+    "ModelResponse", Coroutine[Any, Any, "ModelResponse"], None
+]
 
 # ---------------------------------------------------------------------------
 # completion() forks (the bedrock fork's shape: return None to stay on v1)
@@ -44,8 +68,11 @@ _NON_BODY_ARGS = frozenset(
 
 
 def _raw_openai_body_google(
-    model: str, messages: list, optional_param_args: dict, non_default_params: dict
-) -> dict:
+    model: str,
+    messages: List["AllMessageValues"],
+    optional_param_args: Dict[str, Any],
+    non_default_params: Dict[str, Any],
+) -> Dict[str, Any]:
     """EVERY caller-set OpenAI param rides into the parse (not the shared
     seam's _BODY_FIELDS whitelist): anything v2 does not account for (n,
     seed, penalties, modalities, ...) becomes a typed boundary error and
@@ -58,10 +85,12 @@ def _raw_openai_body_google(
     return {"model": model, "messages": messages, **named, **non_default_params}
 
 
-def _prepare(provider_key: str, raw_body: dict, deps: TranslationDeps):
+def _prepare(
+    provider_key: GoogleProviderKey, raw_body: Dict[str, Any], deps: TranslationDeps
+) -> Optional["PreparedRequest"]:
     from litellm.translation.engine.pipeline import prepare_chat_request
 
-    prepared_result = prepare_chat_request(raw_body, provider_key, deps)  # type: ignore[arg-type]
+    prepared_result = prepare_chat_request(raw_body, provider_key, deps)
     if prepared_result.is_error():
         litellm.verbose_logger.debug(
             "translation v2 fallback to v1: %s", prepared_result.error.summary
@@ -70,24 +99,41 @@ def _prepare(provider_key: str, raw_body: dict, deps: TranslationDeps):
     return prepared_result.ok
 
 
+def _route_to_v2(provider_key: GoogleProviderKey) -> bool:
+    """``dispatch.route`` is the single v1/v2 fork (CLAUDE.md); the google
+    forks go through it like the anthropic fork instead of re-deriving the
+    allowlist check inline (critic-google M2)."""
+    from litellm.translation import route
+
+    if provider_key not in enabled_providers():
+        return False
+    decision = route(
+        schema="openai_chat",
+        provider=provider_key,
+        enabled_providers=frozenset({provider_key}),  # checked above
+        body_touching=False,
+    )
+    return decision.tag == "v2"
+
+
 def try_completion_v2_vertex(
     *,
-    model_route: Any,
+    model_route: "VertexAIModelRoute",
     model: str,
-    messages: list,
-    optional_param_args: dict,
-    non_default_params: dict,
+    messages: List["AllMessageValues"],
+    optional_param_args: Dict[str, Any],
+    non_default_params: Dict[str, Any],
     vertex_project: Optional[str],
     vertex_location: Optional[str],
-    vertex_credentials: Optional[Any],
+    vertex_credentials: Optional["VERTEX_CREDENTIALS_TYPES"],
     api_base: Optional[str],
     timeout: Optional[float],
     stream: Optional[bool],
     acompletion: Optional[bool],
-    logging_obj,
-    model_response,
+    logging_obj: "LiteLLMLoggingObj",
+    model_response: "ModelResponse",
     request_drop_params: Optional[bool],
-):
+) -> _CompletionForkResult:
     """The completion() fork for the vertex_ai branch (gemini + claude
     routes). The route comes from v1's own ``get_vertex_ai_model_route``
     (computed by the caller); everything else routes back to v1."""
@@ -98,6 +144,7 @@ def try_completion_v2_vertex(
 
     if stream is True or _ambient_blocks_v2():
         return None
+    provider_key: GoogleProviderKey
     if model_route == VertexAIModelRoute.GEMINI:
         provider_key = "vertex_ai"
     elif model_route == VertexAIModelRoute.PARTNER_MODELS and (
@@ -108,7 +155,7 @@ def try_completion_v2_vertex(
         provider_key = "vertex_anthropic"
     else:
         return None
-    if provider_key not in enabled_providers():
+    if not _route_to_v2(provider_key):
         return None
     raw_body = _raw_openai_body_google(
         model, messages, optional_param_args, non_default_params
@@ -142,22 +189,22 @@ def try_completion_v2_vertex(
 def try_completion_v2_gemini(
     *,
     model: str,
-    messages: list,
-    optional_param_args: dict,
-    non_default_params: dict,
+    messages: List["AllMessageValues"],
+    optional_param_args: Dict[str, Any],
+    non_default_params: Dict[str, Any],
     gemini_api_key: Optional[str],
     api_base: Optional[str],
     timeout: Optional[float],
     stream: Optional[bool],
     acompletion: Optional[bool],
-    logging_obj,
-    model_response,
+    logging_obj: "LiteLLMLoggingObj",
+    model_response: "ModelResponse",
     request_drop_params: Optional[bool],
-):
+) -> _CompletionForkResult:
     """The completion() fork for the Google AI Studio branch."""
     if stream is True or _ambient_blocks_v2():
         return None
-    if "gemini" not in enabled_providers():
+    if not _route_to_v2("gemini"):
         return None
     raw_body = _raw_openai_body_google(
         model, messages, optional_param_args, non_default_params
@@ -188,19 +235,22 @@ def try_completion_v2_gemini(
     return asyncio.run(coroutine)
 
 
-def _google_endpoint(
-    provider_key: str,
+async def _google_endpoint(
+    provider_key: GoogleProviderKey,
     model: str,
     gemini_api_key: Optional[str],
     vertex_project: Optional[str],
     vertex_location: Optional[str],
-    vertex_credentials: Optional[Any],
+    vertex_credentials: Optional["VERTEX_CREDENTIALS_TYPES"],
     api_base: Optional[str],
-    messages: list,
+    messages: List["AllMessageValues"],
     wire: Body,
-):
+) -> Tuple[str, Dict[str, str]]:
     """Resolve token + URL + headers through v1's own envelope helpers (the
-    vertex OAuth flow is I/O and stays here, injected as values)."""
+    vertex OAuth flow is I/O and stays here, injected as values). Async:
+    the GCP credential refresh is network I/O and runs inside the send
+    coroutine, so it must use v1's async variant or it would block the
+    caller's event loop on the acompletion path (critic-google M1)."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
         VertexLLM,
@@ -214,7 +264,7 @@ def _google_endpoint(
         from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
         vertex_llm = VertexLLM()
-        access_token, project = vertex_llm._ensure_access_token(
+        access_token, project = await vertex_llm._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider="vertex_ai",
@@ -238,12 +288,14 @@ def _google_endpoint(
         )
         return url, headers
 
-    custom_llm_provider = "vertex_ai" if provider_key == "vertex_ai" else "gemini"
+    custom_llm_provider: Literal["vertex_ai", "gemini"] = (
+        "vertex_ai" if provider_key == "vertex_ai" else "gemini"
+    )
     vertex_llm = VertexLLM()
-    _auth_header, project = vertex_llm._ensure_access_token(
+    _auth_header, project = await vertex_llm._ensure_access_token_async(
         credentials=vertex_credentials,
         project_id=vertex_project,
-        custom_llm_provider=custom_llm_provider,  # type: ignore[arg-type]
+        custom_llm_provider=custom_llm_provider,
     )
     auth_header, url = vertex_llm._get_token_and_url(
         model=model,
@@ -253,7 +305,7 @@ def _google_endpoint(
         vertex_location=vertex_location,
         vertex_credentials=vertex_credentials,
         stream=None,
-        custom_llm_provider=custom_llm_provider,  # type: ignore[arg-type]
+        custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         should_use_v1beta1_features=False,
     )
@@ -270,20 +322,20 @@ def _google_endpoint(
 
 async def _send_v2_google(
     *,
-    prepared,
-    provider_key: str,
+    prepared: "PreparedRequest",
+    provider_key: GoogleProviderKey,
     deps: TranslationDeps,
     model: str,
-    messages: list,
+    messages: List["AllMessageValues"],
     gemini_api_key: Optional[str],
     vertex_project: Optional[str],
     vertex_location: Optional[str],
-    vertex_credentials: Optional[Any],
+    vertex_credentials: Optional["VERTEX_CREDENTIALS_TYPES"],
     api_base: Optional[str],
     timeout: Optional[float],
-    logging_obj,
-    model_response,
-):
+    logging_obj: "LiteLLMLoggingObj",
+    model_response: "ModelResponse",
+) -> "ModelResponse":
     import httpx
 
     from litellm.llms.vertex_ai.common_utils import VertexAIError
@@ -295,8 +347,8 @@ async def _send_v2_google(
     )
     from litellm.translation_seam import to_model_response
 
-    wire = wire_body(prepared, provider_key)  # type: ignore[arg-type]
-    url, headers = _google_endpoint(
+    wire = wire_body(prepared, provider_key)
+    url, headers = await _google_endpoint(
         provider_key,
         model,
         gemini_api_key,
@@ -338,14 +390,12 @@ async def _send_v2_google(
             message=f"non-JSON google response: {raw.text[:200]}",
             headers=raw.headers,
         ) from parse_error
-    result = translate_chat_response(
-        payload, prepared.request, provider_key, deps  # type: ignore[arg-type]
-    )
+    result = translate_chat_response(payload, prepared.request, provider_key, deps)
     if result.is_error():
         raise VertexAIError(
             status_code=500, message=result.error.summary, headers=raw.headers
         )
-    dialect = response_dialect(provider_key)  # type: ignore[arg-type]
+    dialect = response_dialect(provider_key)
     if dialect == "gemini":
         return to_model_response_google(result.ok, model_response)
     return to_model_response(result.ok, model_response, usage_style=dialect)

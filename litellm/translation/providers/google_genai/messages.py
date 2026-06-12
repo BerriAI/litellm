@@ -24,6 +24,7 @@ from expression.collections import Block
 
 from ...errors import TranslationError
 from ...ir import (
+    THOUGHT_SIGNATURE_SEPARATOR,
     ContentBlock,
     Image,
     Message,
@@ -36,7 +37,6 @@ from ...ir import (
 )
 from .params import (
     DUMMY_THOUGHT_SIGNATURE,
-    THOUGHT_SIGNATURE_SEPARATOR,
     GoogleTarget,
     forwards_function_call_id,
     is_gemini_3_or_newer,

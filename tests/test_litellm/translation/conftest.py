@@ -98,4 +98,10 @@ def vertex_token_stub(monkeypatch):
             project_id or "char-test-project",
         ),
     )
+
+    async def _fake_token_async(self, credentials, project_id):
+        return ("char-vertex-token", project_id or "char-test-project")
+
+    # the v2 send coroutine resolves credentials through the async variant
+    monkeypatch.setattr(VertexBase, "get_access_token_async", _fake_token_async)
     yield

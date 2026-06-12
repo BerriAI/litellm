@@ -8,17 +8,21 @@ package stays pure. Route decisions call v1's own helpers
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR as _THOUGHT_SIGNATURE_SEPARATOR,
+)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
 from litellm.translation import TranslationDeps
 from litellm.translation.ir import Body
 
-GOOGLE_PROVIDER_KEYS = ("vertex_ai", "gemini", "vertex_anthropic")
+if TYPE_CHECKING:
+    from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
-_THOUGHT_SIGNATURE_SEPARATOR = "__thought__"
+GoogleProviderKey = Literal["vertex_ai", "gemini", "vertex_anthropic"]
 
 _VERTEX_RESPONSE_METADATA_FIELDS = (
     "vertex_ai_grounding_metadata",
@@ -32,13 +36,17 @@ def _supports_google(model: str, key: str, provider: str) -> bool:
     if key == "supports_response_schema":
         from litellm.utils import supports_response_schema
 
+        # v1's own helper: documented "Does not raise error. Defaults to
+        # 'False'", so the structured-output fork takes the SAME branch as
+        # v1 on a lookup failure.
         return supports_response_schema(model, provider)
     from litellm.utils import _supports_factory
 
-    try:
-        return _supports_factory(model=model, custom_llm_provider=provider, key=key)
-    except Exception:
-        return False
+    # No except->False here: _supports_factory raises on unmapped models,
+    # and swallowing that into capability-False would silently change the
+    # wire body instead of failing loudly (critic-google M6). No google
+    # serializer consults other keys today.
+    return _supports_factory(model=model, custom_llm_provider=provider, key=key)
 
 
 def _flag_google(model: str, key: str, provider: str) -> Optional[bool]:
@@ -50,7 +58,7 @@ def _flag_google(model: str, key: str, provider: str) -> Optional[bool]:
     return None
 
 
-def _vertex_claude_candidates(model: str) -> tuple:
+def _vertex_claude_candidates(model: str) -> tuple[str, str]:
     return (model, f"vertex_ai/{model}")
 
 
@@ -87,7 +95,7 @@ def _count_response_tokens(text: str) -> int:
 
 
 def build_google_deps(
-    provider_key: str, request_drop_params: Optional[bool] = None
+    provider_key: GoogleProviderKey, request_drop_params: Optional[bool] = None
 ) -> TranslationDeps:
     """Capability lookups resolve against the PROVIDER's model-map rows (the
     dossier's drift item 5: supports_reasoning can disagree between the
@@ -150,10 +158,12 @@ def _minted_message(message: Dict[str, Any]) -> Dict[str, Any]:
     return {**message, "tool_calls": minted}
 
 
-def _build_usage_gemini(payload: Dict[str, Any]):
+def _build_usage_gemini(payload: Dict[str, Any]) -> "Usage":
     """Construct ``Usage`` with v1 ``_calculate_usage``'s exact kwarg set:
     a five-field PromptTokensDetailsWrapper and a CompletionTokensDetails
-    wrapper whose fields are only assigned when the wire reported them."""
+    wrapper whose fields are only assigned when the wire reported them
+    (Usage serialization dumps explicitly-set fields only, so the wrapper
+    is built from the reported keys, bounded to its declared fields)."""
     from litellm.types.utils import (
         CompletionTokensDetailsWrapper,
         PromptTokensDetailsWrapper,
@@ -164,9 +174,14 @@ def _build_usage_gemini(payload: Dict[str, Any]):
     completion_payload = payload.get("completion_tokens_details")
     completion_details = None
     if isinstance(completion_payload, dict) and completion_payload:
-        completion_details = CompletionTokensDetailsWrapper()
-        for key, value in completion_payload.items():
-            setattr(completion_details, key, value)
+        declared = CompletionTokensDetailsWrapper.model_fields
+        completion_details = CompletionTokensDetailsWrapper(
+            **{
+                key: value
+                for key, value in completion_payload.items()
+                if key in declared
+            }
+        )
     return Usage(
         prompt_tokens=payload.get("prompt_tokens"),
         completion_tokens=payload.get("completion_tokens"),
@@ -184,7 +199,9 @@ def _build_usage_gemini(payload: Dict[str, Any]):
     )
 
 
-def to_model_response_google(body: Body, model_response=None):
+def to_model_response_google(
+    body: Body, model_response: Optional["ModelResponse"] = None
+) -> "ModelResponse":
     """Adapt a v2 gemini-dialect response body onto ModelResponse the way
     v1's ``_transform_google_generate_content_to_openai_model_response``
     assembles it (fresh Choices list, vertex metadata attrs, responseId)."""
@@ -225,7 +242,7 @@ def to_model_response_google(body: Body, model_response=None):
     return response
 
 
-def to_model_response_stream_google(body: Body):
+def to_model_response_stream_google(body: Body) -> "ModelResponseStream":
     """One v2 gemini chunk body -> ModelResponseStream, mirroring the two
     construction sites in v1 (the iterator's content chunks and the
     wrapper-synthesized finish chunk)."""

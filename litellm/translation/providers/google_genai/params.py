@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
+from typing import Literal
 
 from expression import Option
 from typing_extensions import assert_never
@@ -39,11 +40,10 @@ from ...ir import (
     ThinkingParam,
 )
 
-GoogleTarget = str  # "vertex_ai" | "gemini" (AI Studio)
+GoogleTarget = Literal["vertex_ai", "gemini"]  # "gemini" = AI Studio
 
 _GEMINI_2_PLUS = re.compile(r"gemini-([2-9]|[1-9]\d+)\.")
 
-THOUGHT_SIGNATURE_SEPARATOR = "__thought__"
 # google's recommended skip-validation signature (factory._get_dummy_thought_signature)
 DUMMY_THOUGHT_SIGNATURE = "c2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3I="
 

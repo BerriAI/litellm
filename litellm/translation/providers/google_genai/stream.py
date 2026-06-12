@@ -19,6 +19,7 @@ from expression.collections import Block
 
 from ...errors import BoundaryError, TranslationError
 from ...ir import (
+    THOUGHT_SIGNATURE_SEPARATOR,
     CompositeChunk,
     FinishReason,
     PlainJson,
@@ -187,7 +188,7 @@ def _tool_call(part: dict[str, PlainJson]) -> StreamToolCall | TranslationError:
     identifier = native_id if isinstance(native_id, str) else ""
     signature = part.get("thoughtSignature")
     if isinstance(signature, str) and signature:
-        identifier = f"{identifier}{p.THOUGHT_SIGNATURE_SEPARATOR}{signature}"
+        identifier = f"{identifier}{THOUGHT_SIGNATURE_SEPARATOR}{signature}"
     return StreamToolCall(
         id=identifier,
         name=name,

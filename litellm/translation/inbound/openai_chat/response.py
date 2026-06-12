@@ -30,6 +30,9 @@ from expression.collections import Block
 
 from ...deps import TranslationDeps
 from ...errors import BoundaryError, TranslationError
+from ...ir import (
+    THOUGHT_SIGNATURE_SEPARATOR as _THOUGHT_SIGNATURE_SEPARATOR,
+)
 from ...ir import Body, ChatResponse, ContentBlock, PlainJson, ResponseUsage
 
 ResponseDialect = Literal["anthropic", "bedrock_converse", "openai", "gemini"]
@@ -199,9 +202,6 @@ def _thinking_block_json(block: ContentBlock) -> PlainJson:
             return {**base, "signature": signature}
         case _:
             return base
-
-
-_THOUGHT_SIGNATURE_SEPARATOR = "__thought__"
 
 
 def _gemini_body(response: ChatResponse) -> Body:

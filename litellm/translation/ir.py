@@ -31,6 +31,12 @@ Body = dict[str, PlainJson]
 Sampling = int | float
 """A numeric parameter kept as the caller sent it (int stays int on the wire)."""
 
+THOUGHT_SIGNATURE_SEPARATOR = "__thought__"
+"""v1's public in-band encoding for gemini thought signatures riding tool-call
+ids (``call_<uuid>__thought__<sig>``; canonical declaration:
+litellm_core_utils/prompt_templates/factory.py). The package cannot import the
+v1 stack, so this is the ONE in-package mirror; the seam imports v1's."""
+
 
 @dataclass(frozen=True)
 class Unit:
