@@ -731,20 +731,28 @@ def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
     (Vertex AI) keep them separate.  When prompt_tokens_details is present we can
     derive the true total from its per-category fields and avoid double-counting.
     """
-    details: Final = usage.prompt_tokens_details
-    if details is not None:
-        raw_text_tokens: Final = _detail_token(details, "text_tokens")
-        text_tokens: Final = _loose_token_count(raw_text_tokens)
-        cached_tokens: Final = _loose_token_count(_detail_token(details, "cached_tokens"))
-        cache_creation: Final = _loose_token_count(_detail_token(details, "cache_creation_tokens"))
-        if text_tokens == 0:
-            return float(usage.prompt_tokens or 0) + cached_tokens + cache_creation
-        return text_tokens + cached_tokens + cache_creation
-
     prompt_tokens: Final = float(usage.prompt_tokens or 0)
-    cache_read_tokens: Final = _loose_model_extra_token(usage, "cache_read_input_tokens")
-    cache_creation_tokens: Final = _loose_model_extra_token(usage, "cache_creation_input_tokens")
-    return prompt_tokens + cache_read_tokens + cache_creation_tokens
+    details: Final = usage.prompt_tokens_details
+    if details is None:
+        cache_read_tokens: Final = _loose_model_extra_token(usage, "cache_read_input_tokens")
+        cache_creation_tokens: Final = _loose_model_extra_token(usage, "cache_creation_input_tokens")
+        return prompt_tokens + cache_read_tokens + cache_creation_tokens
+
+    raw_text_tokens: Final = _detail_token(details, "text_tokens")
+    cached_tokens: Final = _loose_token_count(_detail_token(details, "cached_tokens"))
+    cache_creation: Final = _loose_token_count(_detail_token(details, "cache_creation_tokens"))
+    if raw_text_tokens is None:
+        # Some providers populate prompt_tokens_details without text_tokens.
+        # If prompt_tokens already covers the cache detail total, use it as
+        # the rolled-up input total. Otherwise cache tokens were reported
+        # outside prompt_tokens and must be added for the tier threshold.
+        cache_detail_tokens: Final = cached_tokens + cache_creation
+        if cache_detail_tokens > 0 and prompt_tokens < cache_detail_tokens:
+            return prompt_tokens + cache_detail_tokens
+        return prompt_tokens
+
+    text_tokens: Final = float(raw_text_tokens)
+    return text_tokens + cached_tokens + cache_creation
 
 
 def _get_token_base_cost(
