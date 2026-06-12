@@ -93,6 +93,41 @@ CASES = {
             }
         ],
     },
+    "tools_schema_refs_stripped_4_levels_deep": {
+        # verifier-wave2b-beta F2: an ordinary $id four object levels inside
+        # parameters — v1's call site passes
+        # max_depth=DEFAULT_MAX_RECURSE_DEPTH (=100), NOT the signature
+        # default 10 the old _REFS_MAX_DEPTH pinned; both sides must strip.
+        "model": MODEL,
+        "messages": _U,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "f",
+                    "parameters": {
+                        "$id": "root",
+                        "type": "object",
+                        "properties": {
+                            "a": {
+                                "$id": "l1",
+                                "type": "object",
+                                "properties": {
+                                    "b": {
+                                        "$id": "l2",
+                                        "type": "object",
+                                        "properties": {
+                                            "c": {"$id": "l3", "type": "string"}
+                                        },
+                                    }
+                                },
+                            }
+                        },
+                    },
+                },
+            }
+        ],
+    },
     "response_format_json_object": {
         "model": MODEL,
         "messages": _U,
@@ -383,6 +418,50 @@ def test_schema_refs_strip_keeps_additional_properties_and_strict() -> None:
     assert function["parameters"]["additionalProperties"] is False
     assert "$id" not in function["parameters"]
     assert "$id" not in function["parameters"]["properties"]["a"]
+
+
+def _nested_id_schema(levels: int) -> dict:
+    nest: dict = {"$id": "deep", "type": "string"}
+    for _ in range(levels):
+        nest = {"type": "object", "child": nest}
+    return {"type": "object", "outer": nest}
+
+
+@pytest.mark.parametrize("levels", [40, 101])
+def test_refs_depth_cap_is_v1s_default_max_recurse_depth(levels: int) -> None:
+    """verifier-wave2b-beta F2 + the drift gate: v1 strips at
+    _remove_json_schema_refs(max_depth=DEFAULT_MAX_RECURSE_DEPTH) — 40
+    levels strip BOTH sides (the old cap of 10 left v2 keeping them), and
+    past the constant both sides keep the key. v2 imports the same
+    litellm.constants symbol, pinned here against v1's constant at HEAD so
+    neither the call-site argument nor the constant can drift unseen."""
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+    from litellm.translation.providers.mistral import serialize as mistral_serialize
+
+    assert DEFAULT_MAX_RECURSE_DEPTH == 100
+    assert (
+        mistral_serialize.DEFAULT_MAX_RECURSE_DEPTH is DEFAULT_MAX_RECURSE_DEPTH
+    ), "the serializer stopped reading v1's constant; re-pin the cap"
+    case = {
+        "model": MODEL,
+        "messages": _U,
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "f", "parameters": _nested_id_schema(levels)},
+            }
+        ],
+    }
+    v1_body = run_v1_request_transform(case)
+    result = _v2(case)
+    assert result.is_ok(), result.error.summary
+    assert _norm(result.ok) == _norm(v1_body)
+    deep = result.ok["tools"][0]["function"]["parameters"]
+    for _ in range(levels + 1):
+        deep = deep["outer"] if "outer" in deep else deep["child"]
+    stripped = "$id" not in deep
+    assert stripped == (levels < 96), "the cap boundary moved; re-derive"
 
 
 def test_empty_text_list_falls_back_v1_keeps_list_form() -> None:

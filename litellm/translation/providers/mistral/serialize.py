@@ -9,9 +9,13 @@ supported-list loop) then ``transform_request`` -> ``_transform_messages``
   a dict tool_choice is SILENTLY DROPPED by v1's ``isinstance(value, str)``
   arm, so the IR's ``specific`` tag is dropped here too (served delta);
 - tools: ``$id``/``$schema`` stripped recursively with v1's EXACT depth cap
-  (``_remove_json_schema_refs(max_depth=10)`` — levels deeper than the cap
-  keep their keys; additionalProperties/strict are KEPT, the v1 docstring
-  notwithstanding);
+  — ``_remove_json_schema_refs(max_depth=DEFAULT_MAX_RECURSE_DEPTH)``
+  (= 100 at HEAD; the ``max_depth=10`` signature default is dead at this
+  call site, verifier-wave2b-beta F2). Levels deeper than the cap keep
+  their keys; additionalProperties/strict are KEPT, the v1 docstring
+  notwithstanding. v2 imports the SAME ``litellm.constants`` symbol v1
+  reads (the allowed env-seeded leaf), so the env-overridable cap can
+  never drift between the two sides;
 - ``top_k`` emitted verbatim top-level (the generic passthrough);
 - ``stream`` only when True (assemble_body already matches v1's
   value-is-True arm).
@@ -35,6 +39,8 @@ from __future__ import annotations
 
 from expression import Error, Ok, Result
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
 from ...deps import TranslationDeps
 from ...errors import TranslationError
 from ...ir import Body, ChatRequest, PlainJson
@@ -42,8 +48,6 @@ from ..openai_compat.serialize import assemble_body
 from . import params as p
 
 _SerializeResult = Result[Body, TranslationError]
-
-_REFS_MAX_DEPTH = 10  # v1 _remove_json_schema_refs default, NOT the shared cap
 
 
 def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _SerializeResult:
@@ -86,10 +90,13 @@ def _mapped_tool_choice(value: PlainJson) -> PlainJson | None:
 
 
 def _without_schema_refs(value: PlainJson, depth: int) -> PlainJson:
-    """Mirror v1's ``_remove_json_schema_refs`` exactly: ``$id``/``$schema``
-    removed from dicts down to depth 10; DEEPER levels keep their keys (the
-    cap returns the subtree untouched)."""
-    if depth >= _REFS_MAX_DEPTH:
+    """Mirror v1's ``_remove_json_schema_refs(max_depth=
+    DEFAULT_MAX_RECURSE_DEPTH)`` exactly: v1 counts max_depth DOWN from the
+    constant starting at the tools list and strips while ``max_depth > 0``;
+    v2 counts UP from 0 at the same list, so a dict at v2-depth ``d`` is
+    stripped iff ``d < DEFAULT_MAX_RECURSE_DEPTH`` — the same node set.
+    DEEPER levels keep their keys (the cap returns the subtree untouched)."""
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH:
         return value
     if isinstance(value, dict):
         return {

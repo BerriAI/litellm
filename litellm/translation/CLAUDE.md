@@ -898,7 +898,10 @@ quirks pinned IDENTICAL: explicit stream:false (v1's map only copies True
 — NO guard arm, the IR collapse IS v1's drop), mct->max_tokens, top_k
 verbatim top-level (wire-proven — researcher-4 listed it as a raise, the
 probe refutes it), tool_choice required->any with the DICT form silently
-dropped, tools $id/$schema strip at v1's exact depth-10 cap
+dropped, tools $id/$schema strip at v1's exact call-site cap —
+``max_depth=DEFAULT_MAX_RECURSE_DEPTH`` (=100 at HEAD; v2 imports the same
+``litellm.constants`` symbol, so the env-overridable value cannot drift;
+the signature's ``max_depth=10`` default is dead there, verifier F2)
 (additionalProperties/strict KEPT — port the code, not the docstring),
 multi-text flatten, MistralToolCallMessage rebuild, empty-assistant
 removal, per-message None strip, the image branch's verbatim
