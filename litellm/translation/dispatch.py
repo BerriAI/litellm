@@ -26,6 +26,8 @@ Provider = Literal[
     "bedrock_invoke",
     "vertex_ai",
     "azure",
+    "azure_ai",
+    "azure_ai_anthropic",
     "openai_compat",
 ]
 
