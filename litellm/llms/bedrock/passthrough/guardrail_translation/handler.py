@@ -164,6 +164,13 @@ def _write_back_texts(
     guardrailed_texts: List[str],
     holders: List[_StringHolder],
 ) -> None:
+    if len(guardrailed_texts) < len(holders):
+        verbose_proxy_logger.warning(
+            "BedrockPassthroughGuardrailHandler: guardrail returned %d texts for %d "
+            "extracted fields; the unreturned fields keep their original text",
+            len(guardrailed_texts),
+            len(holders),
+        )
     for idx, (container, key) in enumerate(holders):
         if idx >= len(guardrailed_texts):
             break
@@ -238,7 +245,12 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 msg = next(iter(buf))
                 event_type = msg.headers.get(":event-type")
                 payload_bytes = msg.payload
-            except Exception:
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    "BedrockPassthroughGuardrailHandler: could not decode event-stream "
+                    "frame, forwarding it unmodified: %s",
+                    e,
+                )
                 frames.append({"raw": frame_raw, "texts": []})
                 continue
 
@@ -252,8 +264,12 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                             payload_dict.get("delta")
                         )
                     ]
-                except Exception:
-                    pass
+                except Exception as e:
+                    verbose_proxy_logger.debug(
+                        "BedrockPassthroughGuardrailHandler: could not parse "
+                        "contentBlockDelta payload, forwarding frame unmodified: %s",
+                        e,
+                    )
 
             frames.append({"raw": frame_raw, "texts": texts})
 

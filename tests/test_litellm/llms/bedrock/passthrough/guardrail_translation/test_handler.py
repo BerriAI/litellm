@@ -281,6 +281,27 @@ class TestWriteBackTexts:
         assert body["messages"][0]["content"][1] == original["messages"][0]["content"][1]
         assert body["inferenceConfig"] == original["inferenceConfig"]
 
+    def test_fewer_guardrailed_texts_logs_warning(self, monkeypatch):
+        body = {
+            "messages": [
+                {"role": "user", "content": [{"text": "a"}, {"text": "b"}]}
+            ]
+        }
+        _, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        assert len(holders) == 2
+
+        warnings = []
+        monkeypatch.setattr(
+            "litellm.llms.bedrock.passthrough.guardrail_translation.handler.verbose_proxy_logger.warning",
+            lambda *args, **kwargs: warnings.append(args),
+        )
+
+        _write_back_texts(["masked"], holders)
+
+        assert warnings, "mismatched guardrail output count must not be silently dropped"
+        assert body["messages"][0]["content"][0]["text"] == "masked"
+        assert body["messages"][0]["content"][1]["text"] == "b"
+
 
 class TestBedrockPassthroughGuardrailHandlerInput:
     @pytest.mark.asyncio
