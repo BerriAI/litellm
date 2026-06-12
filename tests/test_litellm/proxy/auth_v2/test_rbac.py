@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 from fastapi.security import SecurityScopes
 
+from litellm.proxy.auth_v2.authorization import RBACEngine, Role
 from litellm.proxy.auth_v2.models import AuthMethod, Principal, PrincipalType
-from litellm.proxy.auth_v2.rbac import RBACEngine, Role, has_required_scopes
 
 
 def _principal(*, scopes=None, roles=None) -> Principal:
@@ -24,17 +24,17 @@ def _principal(*, scopes=None, roles=None) -> Principal:
 
 def test_required_scopes_is_subset_check():
     principal = _principal(scopes=["models:read", "chat:write", "scim:write"])
-    assert has_required_scopes(SecurityScopes(["models:read"]), principal)
-    assert has_required_scopes(SecurityScopes(["models:read", "chat:write"]), principal)
+    assert principal.has_required_scopes(SecurityScopes(["models:read"]))
+    assert principal.has_required_scopes(SecurityScopes(["models:read", "chat:write"]))
 
 
 def test_missing_required_scope_fails():
     principal = _principal(scopes=["models:read"])
-    assert not has_required_scopes(SecurityScopes(["chat:write"]), principal)
+    assert not principal.has_required_scopes(SecurityScopes(["chat:write"]))
 
 
 def test_empty_required_scopes_always_passes():
-    assert has_required_scopes(SecurityScopes([]), _principal())
+    assert _principal().has_required_scopes(SecurityScopes([]))
 
 
 # --------------------------------------------------------------------------- #
@@ -159,7 +159,7 @@ def test_act_matcher_is_anchored(tmp_path):
     ],
 )
 def test_filter_claim_roles(roles, allowed, allow_platform, expected):
-    from litellm.proxy.auth_v2.rbac import filter_claim_roles
+    from litellm.proxy.auth_v2.authorization import filter_claim_roles
 
     assert filter_claim_roles(roles, allowed, allow_platform) == expected
 

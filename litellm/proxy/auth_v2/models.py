@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm.proxy.auth_v2.authorization import Role
+
+if TYPE_CHECKING:
+    from fastapi.security import SecurityScopes
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
@@ -123,3 +126,6 @@ class Principal(BaseModel):
     credential_ref: CredentialRef = Field(default_factory=CredentialRef)
     network: NetworkContext = Field(default_factory=NetworkContext)
     claims: Dict[str, Any] = Field(default_factory=dict)
+
+    def has_required_scopes(self, security_scopes: SecurityScopes) -> bool:
+        return set(security_scopes.scopes).issubset(self.scopes)

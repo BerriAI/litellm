@@ -18,7 +18,6 @@ from litellm.proxy.auth_v2.authorization import (
     Authorizer,
     RBACEngine,
     Role,
-    has_required_scopes,
 )
 from litellm.proxy.auth_v2.authenticators.session import SessionAuthenticator
 from litellm.proxy.auth_v2.resolvers import IdentityResolver
@@ -38,7 +37,9 @@ _REDIS_ENV_SIGNALS = (
 )
 
 
-def _open_session_store(namespace: str, *, default_ttl: int) -> SessionStore[SessionValue]:
+def _open_session_store(
+    namespace: str, *, default_ttl: int
+) -> SessionStore[SessionValue]:
     """Build the session/login-state store for ``namespace``.
 
     Uses Redis when configured via the environment (required so state is shared
@@ -102,7 +103,9 @@ class AuthSecurity:
         chain.append(SessionAuthenticator(config.session.cookie, self.session_store))
         self.authenticators = chain
 
-    async def principal(self, security_scopes: SecurityScopes, request: Request) -> Principal:
+    async def principal(
+        self, security_scopes: SecurityScopes, request: Request
+    ) -> Principal:
         """Resolve the caller to a Principal, enforcing scheme OR and required scopes."""
         credential = None
         for authenticator in self.authenticators:
@@ -113,8 +116,10 @@ class AuthSecurity:
             raise errors.unauthenticated(_combined_challenge(self.authenticators))
 
         resolved = await self.resolver.resolve(credential)
-        principal = resolved.model_copy(update={"network": resolve_network_context(request, self.config.network)})
-        if not has_required_scopes(security_scopes, principal):
+        principal = resolved.model_copy(
+            update={"network": resolve_network_context(request, self.config.network)}
+        )
+        if not principal.has_required_scopes(security_scopes):
             raise errors.insufficient_scope()
         return principal
 
