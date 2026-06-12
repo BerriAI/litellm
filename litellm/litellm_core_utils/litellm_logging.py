@@ -5359,13 +5359,18 @@ class StandardLoggingPayloadSetup:
 
         client_disconnect_error = metadata.get("error_information")
         if isinstance(client_disconnect_error, dict):
-            error_information = client_disconnect_error
+            error_information = cast(
+                StandardLoggingPayloadErrorInformation, client_disconnect_error
+            )
         else:
-            error_information = {
-                "error_code": "499",
-                "error_message": "Client disconnected the request",
-                "error_class": "ClientDisconnected",
-            }
+            error_information = cast(
+                StandardLoggingPayloadErrorInformation,
+                {
+                    "error_code": "499",
+                    "error_message": "Client disconnected the request",
+                    "error_class": "ClientDisconnected",
+                },
+            )
         if not error_str:
             error_str = "Client disconnected the request"
         return error_information, error_str

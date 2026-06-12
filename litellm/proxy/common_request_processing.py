@@ -125,10 +125,10 @@ async def _record_streaming_client_disconnect_if_needed(
 
 
 async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
-    for task in tasks:
-        if not task.done():
-            task.cancel()
-    for task in tasks:
+    pending_tasks = [task for task in tasks if not task.done()]
+    for task in pending_tasks:
+        task.cancel()
+    for task in pending_tasks:
         try:
             await task
         except asyncio.CancelledError:

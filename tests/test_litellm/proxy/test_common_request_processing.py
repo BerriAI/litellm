@@ -2553,6 +2553,21 @@ class TestCheckRequestDisconnection:
 
         assert hook_cancelled is True
 
+    @pytest.mark.asyncio
+    async def test_cancel_pending_gather_tasks_skips_already_done_tasks(self):
+        import asyncio
+
+        from litellm.proxy.common_request_processing import _cancel_pending_gather_tasks
+
+        async def failing_task():
+            raise ValueError("llm api error")
+
+        task = asyncio.create_task(failing_task())
+        with pytest.raises(ValueError, match="llm api error"):
+            await task
+
+        await _cancel_pending_gather_tasks([task])
+
 
 class TestStreamingClientDisconnectLogging:
     @pytest.mark.asyncio
