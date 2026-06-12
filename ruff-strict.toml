@@ -1,7 +1,7 @@
 extend = "ruff.toml"
 
 [lint]
-select = ["ANN001", "ANN002", "ANN003", "ANN401", "B006", "C901", "PLR0913", "PLW0603", "RUF012"]
+select = ["ANN001", "ANN002", "ANN003", "ANN401", "B006", "C901", "PLR0913", "PLW0603", "RUF012", "TID251"]
 extend-select = []
 
 [lint.mccabe]
@@ -9,3 +9,7 @@ max-complexity = 15
 
 [lint.pylint]
 max-args = 5
+
+[lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Define a frozen dataclass, NamedTuple, or TypedDict instead of Any."
+"typing.Dict".msg = "Use a structured type; if a mapping is truly needed, use Mapping with concrete value types."
