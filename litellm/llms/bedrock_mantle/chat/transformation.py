@@ -44,6 +44,7 @@ class BedrockMantleChatConfig(OpenAILikeChatConfig):
         region = (
             (litellm_params.aws_region_name if litellm_params else None)
             or get_secret_str("BEDROCK_MANTLE_REGION")
+            or get_secret_str("AWS_REGION_NAME")
             or get_secret_str("AWS_REGION")
             or BEDROCK_MANTLE_DEFAULT_REGION
         )

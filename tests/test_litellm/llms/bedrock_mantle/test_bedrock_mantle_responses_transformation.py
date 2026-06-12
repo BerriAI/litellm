@@ -351,6 +351,21 @@ class TestBedrockMantleResponsesTools:
         )
         assert "tools" not in params
 
+    def test_dropped_tools_are_logged_at_warning_level(self):
+        from unittest.mock import patch
+
+        cfg = BedrockMantleResponsesAPIConfig()
+        with patch(
+            "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
+        ) as mock_warning:
+            cfg.map_openai_params(
+                response_api_optional_params={"tools": [{"type": "web_search"}]},
+                model="openai.gpt-5.5",
+                drop_params=False,
+            )
+        assert mock_warning.call_count == 1
+        assert "web_search" in str(mock_warning.call_args)
+
 
 class TestBedrockMantleResponsesRegistry:
     def test_registry_returns_config_for_gpt_5_5(self):

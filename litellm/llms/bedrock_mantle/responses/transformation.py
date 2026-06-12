@@ -149,7 +149,7 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 dropped_types.append(str(tool_type))
 
         if dropped_types:
-            verbose_logger.debug(
+            verbose_logger.warning(
                 "Bedrock Mantle Responses API: dropping unsupported tool type(s) "
                 "%s (supported: %s).",
                 sorted(set(dropped_types)),
