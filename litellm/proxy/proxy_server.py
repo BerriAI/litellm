@@ -904,9 +904,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
         async def _prisma_readiness_task() -> None:
             db_wrapper = getattr(prisma_client, "db", None)
-            if db_wrapper is not None and hasattr(
-                db_wrapper, "wait_for_prisma_engine"
-            ):
+            if db_wrapper is not None and hasattr(db_wrapper, "wait_for_prisma_engine"):
                 engine_ready = await db_wrapper.wait_for_prisma_engine(
                     retries=10,
                     delay=2.0,

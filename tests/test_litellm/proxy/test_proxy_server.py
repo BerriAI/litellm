@@ -677,6 +677,7 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
             proxy_budget_rescheduler_max_time=2,
             proxy_batch_write_at=5,
             proxy_logging_obj=mock_proxy_logging,
+            prisma_ready_event=asyncio.Event(),
         )
 
         # Verify get_credentials was not called
@@ -695,6 +696,7 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
             proxy_budget_rescheduler_max_time=2,
             proxy_batch_write_at=5,
             proxy_logging_obj=mock_proxy_logging,
+            prisma_ready_event=asyncio.Event(),
         )
 
         # Verify get_credentials was called both directly and scheduled
@@ -5417,6 +5419,7 @@ async def test_store_model_in_db_db_override_when_config_false():
             proxy_budget_rescheduler_max_time=2,
             proxy_batch_write_at=5,
             proxy_logging_obj=mock_proxy_logging,
+            prisma_ready_event=asyncio.Event(),
         )
 
         import litellm.proxy.proxy_server as ps
@@ -5460,6 +5463,7 @@ async def test_store_model_in_db_db_check_skipped_when_already_true(monkeypatch)
             proxy_budget_rescheduler_max_time=2,
             proxy_batch_write_at=5,
             proxy_logging_obj=mock_proxy_logging,
+            prisma_ready_event=asyncio.Event(),
         )
 
         # The early DB check uses find_first with param_name="general_settings".
@@ -5506,6 +5510,7 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
             proxy_budget_rescheduler_max_time=2,
             proxy_batch_write_at=5,
             proxy_logging_obj=mock_proxy_logging,
+            prisma_ready_event=asyncio.Event(),
         )
 
         import litellm.proxy.proxy_server as ps
