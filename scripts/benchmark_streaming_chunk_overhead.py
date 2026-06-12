@@ -170,47 +170,58 @@ def _make_wrapper(
     )
 
 
-def drive_sync(provider_key: str, chunks_per_stream: int, n_streams: int) -> float:
+@dataclass
+class TimingSample:
+    wall_s: float
+    cpu_s: float
+
+
+def drive_sync(
+    provider_key: str, chunks_per_stream: int, n_streams: int
+) -> TimingSample:
     provider, factory = PROVIDERS[provider_key]
     # Pre-build the chunk lists; we only measure wrapper iteration cost.
     chunk_lists = [factory(chunks_per_stream) for _ in range(n_streams)]
     gc.collect()
     gc.disable()
     try:
-        start = time.perf_counter()
+        wall_start = time.perf_counter()
+        cpu_start = time.process_time()
         for chunks in chunk_lists:
             wrapper = _make_wrapper(chunks, provider, async_stream=False)
             for _ in wrapper:
                 pass
-        elapsed = time.perf_counter() - start
+        wall_elapsed = time.perf_counter() - wall_start
+        cpu_elapsed = time.process_time() - cpu_start
     finally:
         gc.enable()
-    return elapsed
+    return TimingSample(wall_s=wall_elapsed, cpu_s=cpu_elapsed)
 
 
 async def drive_async(
     provider_key: str, chunks_per_stream: int, n_streams: int
-) -> float:
+) -> TimingSample:
     provider, factory = PROVIDERS[provider_key]
     chunk_lists = [factory(chunks_per_stream) for _ in range(n_streams)]
     gc.collect()
     gc.disable()
     try:
-        start = time.perf_counter()
+        wall_start = time.perf_counter()
+        cpu_start = time.process_time()
         for chunks in chunk_lists:
             wrapper = _make_wrapper(chunks, provider, async_stream=True)
             async for _ in wrapper:
                 pass
-        elapsed = time.perf_counter() - start
+        wall_elapsed = time.perf_counter() - wall_start
+        cpu_elapsed = time.process_time() - cpu_start
     finally:
         gc.enable()
-    return elapsed
+    return TimingSample(wall_s=wall_elapsed, cpu_s=cpu_elapsed)
 
 
 # ---------------------------------------------------------------------------
 # Repeat × take-min runner
 # ---------------------------------------------------------------------------
-
 
 @dataclass
 class Result:
@@ -222,7 +233,11 @@ class Result:
     total_chunks: int
     elapsed_min_s: float
     elapsed_median_s: float
+    cpu_at_min_wall_s: float
+    cpu_median_s: float
     per_chunk_us: float
+    cpu_per_chunk_us: float
+    cpu_to_wall_ratio: float
     chunks_per_sec: float
     streams_per_sec: float
 
@@ -260,11 +275,16 @@ def run_case(
     else:
         raise ValueError(f"unknown mode {mode!r}")
 
-    elapsed_min = min(samples)
-    elapsed_median = statistics.median(samples)
+    best_sample = min(samples, key=lambda s: s.wall_s)
+    elapsed_min = best_sample.wall_s
+    elapsed_median = statistics.median(s.wall_s for s in samples)
+    cpu_at_min_wall = best_sample.cpu_s
+    cpu_median = statistics.median(s.cpu_s for s in samples)
     # Each stream emits chunks_per_stream text chunks + 1 finish/usage chunk.
     total_chunks = n_streams * (chunks_per_stream + 1)
     per_chunk_us = (elapsed_min * 1_000_000) / total_chunks
+    cpu_per_chunk_us = (cpu_at_min_wall * 1_000_000) / total_chunks
+    cpu_to_wall_ratio = cpu_at_min_wall / elapsed_min if elapsed_min > 0 else 0.0
     chunks_per_sec = total_chunks / elapsed_min if elapsed_min > 0 else 0.0
     streams_per_sec = n_streams / elapsed_min if elapsed_min > 0 else 0.0
 
@@ -277,7 +297,11 @@ def run_case(
         total_chunks=total_chunks,
         elapsed_min_s=elapsed_min,
         elapsed_median_s=elapsed_median,
+        cpu_at_min_wall_s=cpu_at_min_wall,
+        cpu_median_s=cpu_median,
         per_chunk_us=per_chunk_us,
+        cpu_per_chunk_us=cpu_per_chunk_us,
+        cpu_to_wall_ratio=cpu_to_wall_ratio,
         chunks_per_sec=chunks_per_sec,
         streams_per_sec=streams_per_sec,
     )
@@ -289,6 +313,8 @@ def format_result(r: Result) -> str:
         f"min={r.elapsed_min_s*1000:8.2f} ms  "
         f"median={r.elapsed_median_s*1000:8.2f} ms  "
         f"per-chunk={r.per_chunk_us:7.2f} μs  "
+        f"cpu/chunk={r.cpu_per_chunk_us:7.2f} μs  "
+        f"cpu/wall={r.cpu_to_wall_ratio:5.2f}x  "
         f"chunks/s={r.chunks_per_sec:>10,.0f}  "
         f"streams/s={r.streams_per_sec:>8,.1f}"
     )

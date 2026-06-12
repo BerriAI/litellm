@@ -125,6 +125,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
 )
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     CustomStreamWrapper,
@@ -2305,6 +2306,7 @@ class BaseLLMHTTPHandler:
 
         if extra_body:
             data.update(extra_body)
+        stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
         # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
@@ -2467,6 +2469,7 @@ class BaseLLMHTTPHandler:
 
         if extra_body:
             data.update(extra_body)
+        stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
         # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
@@ -5315,6 +5318,23 @@ class BaseLLMHTTPHandler:
             headers=error_headers,
         )
 
+    @staticmethod
+    def _append_query_params(
+        url: str, query_params: Optional[RealtimeQueryParams]
+    ) -> str:
+        """Append query_params to url, skipping keys already present in the URL."""
+        if not query_params:
+            return url
+        from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+        parsed = urlparse(url)
+        existing = dict(parse_qsl(parsed.query))
+        extras = {k: v for k, v in query_params.items() if k not in existing}
+        if not extras:
+            return url
+        new_query = parsed.query + ("&" if parsed.query else "") + urlencode(extras)
+        return urlunparse(parsed._replace(query=new_query))
+
     async def async_realtime(
         self,
         model: str,
@@ -5328,11 +5348,14 @@ class BaseLLMHTTPHandler:
         timeout: Optional[float] = None,
         user_api_key_dict: Optional[Any] = None,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        query_params: Optional[RealtimeQueryParams] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
 
-        url = provider_config.get_complete_url(api_base, model, api_key)
+        url = self._append_query_params(
+            provider_config.get_complete_url(api_base, model, api_key), query_params
+        )
         headers = provider_config.validate_environment(
             headers=headers,
             model=model,
@@ -5373,6 +5396,11 @@ class BaseLLMHTTPHandler:
                     model,
                     user_api_key_dict=user_api_key_dict,
                     request_data=_request_data,
+                    force_transcription_model=(
+                        model
+                        if (query_params or {}).get("intent") == "transcription"
+                        else None
+                    ),
                 )
                 if _session_config:
                     realtime_streaming.session_configuration_request = _session_config
@@ -5440,6 +5468,69 @@ class BaseLLMHTTPHandler:
         Uses provider_config (BaseRealtimeHTTPConfig) for URL construction and
         header auth when available; falls back to the legacy OpenAI-style defaults.
         """
+        return await self._async_realtime_session_post(
+            endpoint="client_secrets",
+            api_base=api_base,
+            api_key=api_key,
+            request_data=request_data,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            provider_config=provider_config,
+            model=model,
+            extra_headers=extra_headers,
+            client=client,
+            api_version=api_version,
+        )
+
+    async def async_realtime_transcription_session_handler(
+        self,
+        api_base: str,
+        api_key: str,
+        request_data: Dict[str, Any],
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        provider_config: Optional[Any] = None,
+        model: Optional[str] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_version: Optional[str] = None,
+    ) -> httpx.Response:
+        """Forward POST /v1/realtime/transcription_sessions to upstream provider."""
+        return await self._async_realtime_session_post(
+            endpoint="transcription_sessions",
+            api_base=api_base,
+            api_key=api_key,
+            request_data=request_data,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            provider_config=provider_config,
+            model=model,
+            extra_headers=extra_headers,
+            client=client,
+            api_version=api_version,
+        )
+
+    async def _async_realtime_session_post(
+        self,
+        endpoint: Literal["client_secrets", "transcription_sessions"],
+        api_base: str,
+        api_key: str,
+        request_data: Dict[str, Any],
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        provider_config: Optional[Any] = None,
+        model: Optional[str] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_version: Optional[str] = None,
+    ) -> httpx.Response:
+        """
+        Shared POST flow for the realtime HTTP session endpoints
+        (client_secrets and transcription_sessions).
+
+        Uses provider_config (BaseRealtimeHTTPConfig) for URL construction and
+        header auth when available; falls back to the legacy OpenAI-style defaults.
+        """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.OPENAI,
@@ -5448,14 +5539,19 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         if provider_config is not None:
-            url = provider_config.get_complete_url(
-                api_base=api_base, model=model or "", api_version=api_version
-            )
+            if endpoint == "transcription_sessions":
+                url = provider_config.get_transcription_session_url(
+                    api_base=api_base, model=model or "", api_version=api_version
+                )
+            else:
+                url = provider_config.get_complete_url(
+                    api_base=api_base, model=model or "", api_version=api_version
+                )
             headers: Dict[str, Any] = provider_config.validate_environment(
                 headers={}, model=model or "", api_key=api_key
             )
         else:
-            url = f"{api_base.rstrip('/')}/v1/realtime/client_secrets"
+            url = f"{api_base.rstrip('/')}/v1/realtime/{endpoint}"
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
