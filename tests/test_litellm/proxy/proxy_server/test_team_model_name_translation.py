@@ -486,3 +486,33 @@ async def test_model_info_v1_include_team_models_without_db_fails_fast(monkeypat
     assert exc_info.value.status_code == 500
     assert "DB not connected" in exc_info.value.detail["error"]
     enrich_spy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_litellm_model_id_team_id_without_db_fails_fast(
+    monkeypatch,
+):
+    """`litellm_model_id` + `teamId` without a connected DB must raise 500 too, not
+    return 200 with a model dict missing direct_access/access_via_team_ids."""
+    router = MagicMock()
+    router.model_list = [_team_row()]
+
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "llm_model_list", router.model_list)
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    admin = UserAPIKeyAuth(
+        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
+    )
+
+    with pytest.raises(ps.HTTPException) as exc_info:
+        await ps.model_info_v1(
+            user_api_key_dict=admin,
+            litellm_model_id="byok-id-1",
+            teamId="team-abc-123",
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "DB not connected" in exc_info.value.detail["error"]
+    router.get_deployment.assert_not_called()
