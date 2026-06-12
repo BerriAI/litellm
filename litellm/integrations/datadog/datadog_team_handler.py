@@ -71,11 +71,18 @@ class DataDogHandler:
         """
         Create a DataDogLogger from the credentials and cache it.
         """
+        # When the destination is caller-supplied (dd_agent_host/dd_site), never fall back to the
+        # proxy's DD_API_KEY env var, otherwise it would be sent to a team-controlled host.
+        allow_env_credentials = (
+            credentials.get("dd_agent_host") is None
+            and credentials.get("dd_site") is None
+        )
         datadog_logger = DataDogLogger(
             dd_api_key=credentials.get("dd_api_key"),
             dd_site=credentials.get("dd_site"),
             dd_agent_host=credentials.get("dd_agent_host"),
             dd_agent_port=credentials.get("dd_agent_port"),
+            allow_env_credentials=allow_env_credentials,
         )
         in_memory_dynamic_logger_cache.set_cache(
             credentials=credentials,

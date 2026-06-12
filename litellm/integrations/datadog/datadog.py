@@ -96,16 +96,20 @@ class DataDogLogger(
         dd_site: Optional[str] = None,
         dd_agent_host: Optional[str] = None,
         dd_agent_port: Optional[str] = None,
+        allow_env_credentials: bool = True,
         **kwargs,
     ):
         """
         Initializes the datadog logger, checks if the correct env variables are set
 
         Args:
-            dd_api_key: Datadog API key. Falls back to DD_API_KEY env var.
+            dd_api_key: Datadog API key. Falls back to DD_API_KEY env var when allow_env_credentials is True.
             dd_site: Datadog site (e.g. "us5.datadoghq.com"). Falls back to DD_SITE env var.
             dd_agent_host: Hostname or IP of DataDog agent. Falls back to LITELLM_DD_AGENT_HOST env var.
             dd_agent_port: Port of DataDog agent (default: 10518). Falls back to LITELLM_DD_AGENT_PORT env var.
+            allow_env_credentials: When False, the API key is never read from DD_API_KEY env var. Set to
+                False for team/key-scoped loggers whose destination (dd_agent_host/dd_site) is caller-supplied,
+                so the proxy's global DD_API_KEY is never sent to an untrusted host.
 
         Required environment variables (Direct API) when kwargs not provided:
         `DD_API_KEY` - your datadog api key
@@ -147,11 +151,13 @@ class DataDogLogger(
                     dd_agent_host=resolved_agent_host,
                     dd_agent_port=dd_agent_port,
                     dd_api_key=dd_api_key,
+                    allow_env_credentials=allow_env_credentials,
                 )
             else:
                 self._configure_dd_direct_api(
                     dd_api_key=dd_api_key,
                     dd_site=dd_site,
+                    allow_env_credentials=allow_env_credentials,
                 )
 
             # Optional override for testing
@@ -194,6 +200,7 @@ class DataDogLogger(
         dd_agent_host: str,
         dd_agent_port: Optional[str] = None,
         dd_api_key: Optional[str] = None,
+        allow_env_credentials: bool = True,
     ) -> None:
         """
         Configure DataDog Agent for log forwarding
@@ -201,14 +208,15 @@ class DataDogLogger(
         Args:
             dd_agent_host: Hostname or IP of DataDog agent
             dd_agent_port: Port of DataDog agent. Falls back to LITELLM_DD_AGENT_PORT env var (default: 10518).
-            dd_api_key: Datadog API key. Falls back to DD_API_KEY env var. Optional when using agent.
+            dd_api_key: Datadog API key. Falls back to DD_API_KEY env var when allow_env_credentials is True. Optional when using agent.
+            allow_env_credentials: When False, never read the API key from DD_API_KEY env var.
         """
         resolved_port = dd_agent_port or os.getenv(
             "LITELLM_DD_AGENT_PORT", "10518"
         )  # default port for logs
         self.intake_url = f"http://{dd_agent_host}:{resolved_port}/api/v2/logs"
-        self.DD_API_KEY = dd_api_key or os.getenv(
-            "DD_API_KEY"
+        self.DD_API_KEY = dd_api_key or (
+            os.getenv("DD_API_KEY") if allow_env_credentials else None
         )  # Optional when using agent
         verbose_logger.debug(f"Datadog: Using DD Agent at {self.intake_url}")
 
@@ -216,18 +224,22 @@ class DataDogLogger(
         self,
         dd_api_key: Optional[str] = None,
         dd_site: Optional[str] = None,
+        allow_env_credentials: bool = True,
     ) -> None:
         """
         Configure direct DataDog API connection
 
         Args:
-            dd_api_key: Datadog API key. Falls back to DD_API_KEY env var.
+            dd_api_key: Datadog API key. Falls back to DD_API_KEY env var when allow_env_credentials is True.
             dd_site: Datadog site. Falls back to DD_SITE env var.
+            allow_env_credentials: When False, never read the API key from DD_API_KEY env var.
 
         Raises:
             Exception: If required credentials are not provided via args or env vars
         """
-        resolved_api_key = dd_api_key or os.getenv("DD_API_KEY")
+        resolved_api_key = dd_api_key or (
+            os.getenv("DD_API_KEY") if allow_env_credentials else None
+        )
         resolved_site = dd_site or os.getenv("DD_SITE")
 
         if resolved_api_key is None:

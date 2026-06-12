@@ -83,6 +83,28 @@ class TestDataDogLoggerCredentialKwargs:
             with patch("asyncio.create_task"):
                 DataDogLogger()
 
+    def test_agent_mode_does_not_leak_env_api_key_when_disallowed(self, datadog_env):
+        """With allow_env_credentials=False, the agent logger must not pick up DD_API_KEY env var."""
+        with patch("asyncio.create_task"):
+            logger = DataDogLogger(
+                dd_agent_host="attacker.example.com",
+                allow_env_credentials=False,
+            )
+
+        assert logger.DD_API_KEY is None
+        assert "attacker.example.com" in logger.intake_url
+
+    def test_direct_api_mode_does_not_leak_env_api_key_when_disallowed(
+        self, datadog_env
+    ):
+        """With allow_env_credentials=False and no explicit key, init must fail rather than reuse env key."""
+        with pytest.raises(Exception, match="DD_API_KEY"):
+            with patch("asyncio.create_task"):
+                DataDogLogger(
+                    dd_site="attacker.example.com",
+                    allow_env_credentials=False,
+                )
+
 
 class TestDataDogHandler:
     """Test that DataDogHandler resolves the correct logger per team."""
@@ -150,6 +172,53 @@ class TestDataDogHandler:
         assert result_a is not result_b
         assert result_a.DD_API_KEY == "team_a_key"
         assert result_b.DD_API_KEY == "team_b_key"
+
+    def test_partial_agent_config_does_not_leak_env_api_key(self, datadog_env):
+        """A team-supplied dd_agent_host without dd_api_key must not exfiltrate the proxy DD_API_KEY."""
+        cache = DynamicLoggingCache()
+        params = StandardCallbackDynamicParams(
+            dd_agent_host="attacker.example.com",
+        )
+
+        with patch("asyncio.create_task"):
+            result = DataDogHandler.get_datadog_logger_for_request(
+                standard_callback_dynamic_params=params,
+                in_memory_dynamic_logger_cache=cache,
+            )
+
+        assert result.DD_API_KEY is None
+        assert "attacker.example.com" in result.intake_url
+
+    def test_partial_site_config_does_not_leak_env_api_key(self, datadog_env):
+        """A team-supplied dd_site without dd_api_key must not exfiltrate the proxy DD_API_KEY."""
+        cache = DynamicLoggingCache()
+        params = StandardCallbackDynamicParams(
+            dd_site="attacker.example.com",
+        )
+
+        with pytest.raises(Exception, match="DD_API_KEY"):
+            with patch("asyncio.create_task"):
+                DataDogHandler.get_datadog_logger_for_request(
+                    standard_callback_dynamic_params=params,
+                    in_memory_dynamic_logger_cache=cache,
+                )
+
+    def test_full_team_config_still_uses_supplied_key(self, datadog_env):
+        """When a team supplies its own key alongside a custom site, that key (not the env key) is used."""
+        cache = DynamicLoggingCache()
+        params = StandardCallbackDynamicParams(
+            dd_api_key="team_key",
+            dd_site="eu1.datadoghq.com",
+        )
+
+        with patch("asyncio.create_task"):
+            result = DataDogHandler.get_datadog_logger_for_request(
+                standard_callback_dynamic_params=params,
+                in_memory_dynamic_logger_cache=cache,
+            )
+
+        assert result.DD_API_KEY == "team_key"
+        assert "eu1.datadoghq.com" in result.intake_url
 
     def test_request_blocked_callback_params_includes_dd(self):
         """DD params should be blocked from request-level metadata (security)."""
