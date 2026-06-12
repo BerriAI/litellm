@@ -10907,16 +10907,26 @@ def get_direct_access_models(
     return direct_access_models
 
 
-async def get_all_team_and_direct_access_models(
+def _filter_models_to_user_accessible(all_models: List[Dict]) -> List[Dict]:
+    """Keep only deployments the caller can use via direct access or team membership."""
+    return [
+        _model
+        for _model in all_models
+        if _model.get("model_info", {}).get("direct_access", False)
+        or _model.get("model_info", {}).get("access_via_team_ids", [])
+    ]
+
+
+async def _populate_team_access_on_models(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     llm_router: Router,
     all_models: List[Dict],
 ) -> List[Dict]:
     """
-    Get all models across all teams user is in.
+    Populate `model_info.access_via_team_ids` and `model_info.direct_access`
+    without filtering the model list.
     """
-
     user_teams: Optional[Union[List[str], Literal["*"]]] = None
     direct_access_models: List[str] = []
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
@@ -10935,7 +10945,6 @@ async def get_all_team_and_direct_access_models(
                 user_db_object=user_object,
                 llm_router=llm_router,
             )
-    ## ADD ACCESS_VIA_TEAM_IDS TO ALL MODELS
     if user_teams is not None:
         team_models = await get_all_team_models(
             user_teams=user_teams,
@@ -10958,21 +10967,30 @@ async def get_all_team_and_direct_access_models(
                         model_id, []
                     )
 
-    ## ADD DIRECT_ACCESS TO RELEVANT MODELS
-
     for _model in all_models:
         model_id = _model.get("model_info", {}).get("id", None)
         if model_id is not None and model_id in direct_access_models:
             _model["model_info"]["direct_access"] = True
 
-    ## FILTER OUT MODELS THAT ARE NOT IN DIRECT_ACCESS_MODELS OR ACCESS_VIA_TEAM_IDS - only show user models they can call
-    all_models = [
-        _model
-        for _model in all_models
-        if _model.get("model_info", {}).get("direct_access", False)
-        or _model.get("model_info", {}).get("access_via_team_ids", [])
-    ]
     return all_models
+
+
+async def get_all_team_and_direct_access_models(
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    llm_router: Router,
+    all_models: List[Dict],
+) -> List[Dict]:
+    """
+    Get all models across all teams user is in.
+    """
+    all_models = await _populate_team_access_on_models(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        llm_router=llm_router,
+        all_models=all_models,
+    )
+    return _filter_models_to_user_accessible(all_models)
 
 
 def _enrich_model_info_with_litellm_data(
@@ -12461,6 +12479,14 @@ def _get_proxy_model_info(model: dict) -> dict:
 async def model_info_v1(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_model_id: Optional[str] = None,
+    include_team_models: Optional[bool] = fastapi.Query(
+        False,
+        description="When true, filter to deployments the caller can use via direct access or team membership.",
+    ),
+    teamId: Optional[str] = fastapi.Query(
+        None,
+        description="Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids",
+    ),
 ):
     """
     Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)
@@ -12470,6 +12496,11 @@ async def model_info_v1(  # noqa: PLR0915
 
         - When litellm_model_id is passed, it will return the info for that specific model
         - When litellm_model_id is not passed, it will return the info for all models
+        - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
+        - teamId: Filter to models accessible by the given team.
+
+    Each model in the list response includes `model_info.access_via_team_ids` and
+    `model_info.direct_access` when the proxy database is connected.
 
     Returns:
         Returns a dictionary containing information about each model.
@@ -12495,6 +12526,12 @@ async def model_info_v1(  # noqa: PLR0915
     ```
     """
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router, user_model
+
+    # Unit tests call this handler directly; FastAPI normally resolves Query defaults.
+    if not isinstance(include_team_models, bool):
+        include_team_models = False
+    if not isinstance(teamId, str):
+        teamId = None
 
     if user_model is not None:
         # user is trying to get specific model from litellm router
@@ -12562,6 +12599,32 @@ async def model_info_v1(  # noqa: PLR0915
         allowed_model_names=allowed_model_names,
     )
 
+    # Team BYOK deployments carry an internal routing key and other teams'
+    # public name/team_id/api_base; drop the ones the caller cannot access so
+    # listing the full router model_list does not leak cross-team metadata.
+    allowed_team_ids = await _get_caller_byok_team_scope(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+    all_models = [
+        model
+        for model in all_models
+        if not _byok_row_outside_caller_teams(
+            model.get("model_info") or {}, allowed_team_ids
+        )
+    ]
+
+    if prisma_client is not None:
+        all_models = await _populate_team_access_on_models(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+            all_models=all_models,
+        )
+
+    if include_team_models:
+        all_models = _filter_models_to_user_accessible(all_models)
+
     all_models = [
         _translate_model_name_for_response(
             _enrich_model_info_with_litellm_data(model=model, llm_router=llm_router)
@@ -12577,6 +12640,20 @@ async def model_info_v1(  # noqa: PLR0915
         models=all_models,
         user_api_key_dict=user_api_key_dict,
     )
+
+    if teamId is not None and teamId.strip():
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        all_models = await _filter_models_by_team_id(
+            all_models=all_models,
+            team_id=teamId.strip(),
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
