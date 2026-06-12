@@ -704,11 +704,124 @@ def _deepseek_rows(lines: list) -> int:
     return failures
 
 
+def _openrouter_rows(lines: list) -> int:
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import _own_module_corpus as own
+    from . import test_differential_openrouter_request as req
+    from . import test_differential_openrouter_response as resp
+    from . import test_differential_openrouter_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## openrouter: request bodies (v1 get_optional_params('openrouter')"
+        " + the LIVE httpx transform_request — dedicated elif main.py:3354,"
+        " incl. the always-injected usage:{include:true} — vs v2"
+        " providers/openrouter)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            own.run_v1_request_transform("openrouter", case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, reason = req.V1_RAISES[name]
+        result = req._v2(case)
+        try:
+            own.run_v1_request_transform("openrouter", case)
+            raised = False
+        except UnsupportedParamsError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req.EXPECTED_FALLBACKS):
+        case, reason = req.EXPECTED_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## openrouter: responses (v1 base GPT transform_response + the"
+        " usage.cost hidden-params post-step vs v2 shared openai parser; NO"
+        " model preset, bare wire model)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw).model_dump()
+        v2 = resp._v2_model_response(raw)
+        same = (
+            resp._norm(v2) == resp._norm(v1)
+            and v2["model"] == raw["model"]
+            and not str(v2["model"]).startswith("openrouter/")
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name} (no prefix)")
+    v1_cost = resp._v1_model_response(resp._RESPONSES["usage_cost"])
+    v2_cost = resp._v2_model_response(resp._RESPONSES["usage_cost"])
+    cost_ok = (
+        v1_cost._hidden_params.get("additional_headers", {}).get(resp._COST_HEADER)
+        == 0.0015
+        and v2_cost["usage"]["cost"] == 0.0015
+    )
+    failures += 0 if cost_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if cost_ok else "- DIVERGENT: ")
+        + "usage.cost hidden-params header (v1's transform copies the wire"
+        " usage.cost into _hidden_params additional_headers; the v2 body"
+        " retains usage.cost verbatim and the future completion() fork must"
+        " rebuild the header — CLAUDE.md HARD OBLIGATION)"
+    )
+    lines += [
+        "",
+        "## openrouter: streams (v1 line-seam replay through"
+        " OpenRouterChatCompletionStreamingHandler + CustomStreamWrapper"
+        "('openrouter') vs v2 openrouter parser — the 'unconditional'"
+        " ReasoningMode policy + missing-delta pre-step — with the xai chunk"
+        " dialect)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    return failures
+
+
 def _wave2b_alpha_rows(lines: list) -> int:
     """wave-2b-alpha own-module providers, researcher-4 ascending-risk
     order. APPEND-ONLY: each provider's row function lands in its own
     commit; the beta sibling appends its own section function."""
-    return _deepseek_rows(lines)
+    return _deepseek_rows(lines) + _openrouter_rows(lines)
 
 
 def _cometapi_rows(lines: list) -> int:

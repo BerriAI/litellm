@@ -80,6 +80,11 @@ from ..providers.openai_compat import (
 from ..providers.openai_compat import (
     unsupported_request_shapes as openai_compat_unsupported_request_shapes,
 )
+from ..providers.openrouter import parse_response as openrouter_parse_response
+from ..providers.openrouter import serialize_request as openrouter_serialize_request
+from ..providers.openrouter import (
+    unsupported_request_shapes as openrouter_unsupported_request_shapes,
+)
 from ..providers.vertex_anthropic import (
     parse_response as vertex_anthropic_parse_response,
 )
@@ -122,6 +127,7 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         # wave-2b-alpha own-module providers (per-provider rows: these are
         # NOT family members; each package owns its serializer).
         "deepseek": deepseek_serialize_request,
+        "openrouter": openrouter_serialize_request,
     }
 )
 
@@ -152,10 +158,13 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # lemonade request-model prefixes, which are parser scope (the
         # family's PARSERS table carries the per-provider truth).
         **compat_httpx_parsers,
-        # wave-2b-alpha own-module providers. deepseek: the base GPT
-        # transform_response is live on its httpx elif -> the shared openai
-        # parser with NO seam preset (bare wire model, the xai R4 rule).
+        # wave-2b-alpha own-module providers. deepseek/openrouter: the base
+        # GPT transform_response is live on their httpx elifs -> the shared
+        # openai parser with NO seam preset (bare wire model, the xai R4
+        # rule; openrouter's usage.cost hidden-params header is a fork
+        # obligation pinned in its response gate).
         "deepseek": deepseek_parse_response,
+        "openrouter": openrouter_parse_response,
     }
 )
 
@@ -188,6 +197,7 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # outbound bodies (per-provider stream truth lives in each package's
         # stream.py, composed from the shared httpx_chunk factory).
         "deepseek": _OPENAI_DIALECT,
+        "openrouter": _OPENAI_DIALECT,
     }
 )
 
@@ -214,6 +224,7 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         # wave-2b-alpha own-module providers (same-family wire formats; each
         # guard composes the shared openai guard with its provider arms).
         "deepseek": deepseek_unsupported_request_shapes,
+        "openrouter": openrouter_unsupported_request_shapes,
     }
 )
 

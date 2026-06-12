@@ -17,11 +17,15 @@ trajectory, applied one level up at the chunk seam). Consumers compose
 - cometapi: ``reasoning="copy_both"`` (v1 assigns WITHOUT popping, so both
   keys reach the Delta), key-presence error chunks, strict
   id/created/model/choices envelope (v1 KeyErrors -> CometAPIException).
-- wave 2b (groq: rename with pop semantics == "rename"; openrouter:
-  UNCONDITIONAL — every delta gains the key): extend ``ReasoningMode`` with
-  the new Literal value and its arm IN THE SAME COMMIT as the consumer and
-  its differential rows — never a third copy of this file's machinery, and
-  never an arm without a consumer (the placeholder-arm rule).
+- openrouter (wave-2b-alpha): ``reasoning="unconditional"`` — every delta
+  gains ``reasoning_content`` (None when ``reasoning`` is absent; a native
+  ``reasoning_content`` clobbered), key-presence error chunks, strict
+  id/created/model/choices envelope (v1 KeyErrors -> OpenRouterException).
+- wave 2b remaining (groq: rename with pop semantics == "rename"): extend
+  ``ReasoningMode`` with the new Literal value and its arm IN THE SAME
+  COMMIT as the consumer and its differential rows — never a third copy of
+  this file's machinery, and never an arm without a consumer (the
+  placeholder-arm rule).
 
 Shapes a v2-sent request cannot trigger (multiple choices, ``function_call``
 deltas, logprobs, unknown delta/tool_call keys) are loud error values.
@@ -42,11 +46,17 @@ from ...ir import JsonBlob, PlainJson, StreamEvent
 _EventResult = Result[StreamEvent | None, TranslationError]
 ParseEvent = Callable[[PlainJson], _EventResult]
 
-ReasoningMode = Literal["rename", "copy_both"]
+ReasoningMode = Literal["rename", "copy_both", "unconditional"]
 """How a wire ``delta.reasoning`` reaches the emitted delta: "rename" emits
 ``reasoning_content`` only (xai; groq's pop has the same output), "copy_both"
 keeps the original key beside the copy (cometapi). Native
-``reasoning_content`` deltas pass through verbatim in every mode."""
+``reasoning_content`` deltas pass through verbatim in those two modes.
+"unconditional" is openrouter's variant (wave-2b-alpha, added with its
+consumer per the no-consumer-no-arm rule): EVERY delta gains
+``reasoning_content = delta.get("reasoning")`` — ``None`` when ``reasoning``
+is absent, the original ``reasoning`` key kept beside it when present, and a
+native wire ``reasoning_content`` CLOBBERED by the assignment (v1
+openrouter's chunk_parser, replay-pinned)."""
 
 _DELTA_KEYS = (
     "content",
@@ -242,6 +252,11 @@ def _normalize_delta(
 def _reasoning_tail(
     mode: ReasoningMode, delta: dict[str, PlainJson], base: dict[str, PlainJson]
 ) -> dict[str, PlainJson]:
+    if mode == "unconditional":
+        value = _string_or_none(delta.get("reasoning"))
+        if "reasoning" in delta:
+            return {**base, "reasoning": value, "reasoning_content": value}
+        return {**base, "reasoning_content": value}
     if "reasoning" in delta:
         value = _string_or_none(delta.get("reasoning"))
         if mode == "copy_both":

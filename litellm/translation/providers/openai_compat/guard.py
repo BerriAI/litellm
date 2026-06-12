@@ -16,6 +16,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import cast
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
 from ...errors import TranslationError
 
 _Raw = Mapping[str, object]
@@ -33,6 +35,28 @@ def explicit_stream_false(raw: _Raw) -> TranslationError | None:
             "absent-vs-false is lost in the IR)"
         )
     return None
+
+
+def carries_cache_control(value: object, depth: int = 0) -> bool:
+    """Recursive ``cache_control`` scan over a raw subtree (messages/tools).
+    The shared mechanism behind the azure guard's verbatim-forward arm and
+    the openrouter guard's cache-capable-model arm (wave-2b-alpha lift of
+    azure/guard.py's private copy — one scan, two policies)."""
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        # exhaustion must never ADMIT a request: treat the unscannable tail
+        # as if it carried the marker (fall back to v1)
+        return True
+    if isinstance(value, Mapping):
+        mapping = cast(_Raw, value)
+        if "cache_control" in mapping:
+            return True
+        return any(carries_cache_control(item, depth + 1) for item in mapping.values())
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        return any(
+            carries_cache_control(item, depth + 1)
+            for item in cast(Sequence[object], value)
+        )
+    return False
 
 
 def unsupported_request_shapes(

@@ -609,6 +609,7 @@ def test_registered_providers_have_differential_coverage() -> None:
         "xai",  # test_differential_xai_*
         # wave-2b-alpha own-module providers
         "deepseek",  # test_differential_deepseek_{request,response,stream}
+        "openrouter",  # test_differential_openrouter_{request,response,stream}
     }
     assert providers == dedicated_gates | set(SPECS) | set(HTTPX_SPECS)
 

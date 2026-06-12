@@ -345,6 +345,31 @@ translation/
 │   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
 │   │                    #   OpenAIChatCompletionStreamingHandler) +
 │   │                    #   make_parse_line; "xai" chunk dialect
+│   ├── openrouter/      # wave-2b-alpha own module (httpx dedicated elif
+│   │   │                #   main.py:3354, transforms LIVE, bare wire model)
+│   │   ├── guard.py     # explicit stream:false + the cache-capable-model
+│   │   │                #   arm (claude/gemini/minimax/glm/z-ai substrings
+│   │   │                #   KEEP cache_control + get the message-level
+│   │   │                #   move; other models' base strip == the IR drop,
+│   │   │                #   served) + the shared openai guard
+│   │   ├── params.py    # base list + top_k (top-level passthrough:
+│   │   │                #   openrouter is NOT a compat provider — wire-
+│   │   │                #   proven) + reasoning_effort/thinking on DUAL-
+│   │   │                #   keyed reasoning models (openrouter/{m} OR bare
+│   │   │                #   {m}; openrouter/-prefixed ids answer False —
+│   │   │                #   v1's prefix-strip); thinking falls back BOTH
+│   │   │                #   ways (verbatim emission / UPE)
+│   │   ├── serialize.py # openai_compat body + usage:{include:true}
+│   │   │                #   ALWAYS + top_k/reasoning_effort verbatim
+│   │   ├── response.py  # shared openai parser re-export (bare wire
+│   │   │                #   model); usage.cost rides the dump verbatim and
+│   │   │                #   the _hidden_params cost header is a FORK
+│   │   │                #   obligation (gate-pinned)
+│   │   └── stream.py    # OWN v1 handler -> per-provider policy: the
+│   │                    #   "unconditional" ReasoningMode arm (added with
+│   │                    #   this consumer), key-presence error raise,
+│   │                    #   strict id/created/model/choices envelope +
+│   │                    #   the missing-delta pre-step
 │   └── xai/             # Grok over openai_compat (httpx path: NO model
 │       │                #   prefix anywhere, transform_response is LIVE):
 │       ├── guard.py     # web_search_options (v1's Responses-bridge reroute
@@ -504,7 +529,7 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to sixty-six providers out — `anthropic`,
+OpenAI-chat-in to sixty-seven providers out — `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
@@ -521,7 +546,7 @@ route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `datarobot`, `gradient_ai`, `ovhcloud`, `lemonade`), the five wave-2a
 providers (`perplexity`, `sambanova`, `deepinfra`, `moonshot` on the SDK
 path, `cometapi` on the httpx path), and the wave-2b-alpha own modules
-(`deepseek`) — request, response, and stream
+(`deepseek`, `openrouter`) — request, response, and stream
 translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk
@@ -743,6 +768,34 @@ response rows), streams fold providers/deepseek.parse_line with the "xai"
 chunk dialect at the SSE line seam, and the error-chunk PINNED DIVERGENCE
 (v1's base handler swallows; v2 is loud) extends to deepseek exactly like
 the compat_httpx family.
+Deliberate wave-2b-alpha (openrouter) fallback surfaces (each names the
+v1 path): thinking BOTH ways (reasoning-capable models: v1 serves the
+wire dict VERBATIM, an unported emission — the zai/minimax precedent;
+non-capable models: v1 raises UnsupportedParamsError, like
+reasoning_effort off the dual-keyed capability); cache_control on
+cache-capable models (claude/gemini/minimax/glm/z-ai substrings — v1
+keeps it and moves message-level markers into the last content block;
+on every OTHER model the base strip == the IR drop, SERVED and pinned);
+`transforms`/`models`/`route` (v1's top-level passthrough — the map's
+extra_body packing is DEAD at runtime, a dossier drift fact); user
+(model-list gated); explicit stream:false (guard arm). SERVED, never
+fallbacks: top_k (the top-level passthrough, wire-proven — openrouter is
+NOT in openai_compatible_providers so there is no extra_body crossing),
+reasoning_effort on dual-key-capable models (verbatim emission), and the
+ALWAYS-injected `usage: {"include": true}` body key. openrouter fork
+obligations (when the integrator wires it): NO model preset (fresh
+ModelResponse, bare wire model); streams fold providers/openrouter
+.parse_line (its OWN strict/raising policy row — NOT the family default)
+with the "xai" chunk dialect; and the HARD OBLIGATION from the response
+gate — v1 copies wire `usage.cost` into `_hidden_params
+["additional_headers"]["llm_provider-x-litellm-response-cost"]` as a
+float (the cost-calculator feed); the v2 body retains usage.cost
+verbatim, so the fork MUST rebuild that header from the body before the
+openrouter flag can turn on (pinned by
+test_v1_cost_hidden_param_is_the_fork_obligation and the report's
+SEAM CONTRACT row). The envelope (HTTP-Referer/X-Title headers, the
+litellm.OpenrouterConfig class-attr extra_body merge in the elif) stays
+fork scope.
 Streaming-seam obligations carried from wave 2a (verifier-wave2a W1/W2 —
 no impact while streaming stays on v1, pinned by
 `test_reasoning_stream_seam_obligation_canary`): the SDK family's openai

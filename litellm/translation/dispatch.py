@@ -112,9 +112,12 @@ Provider = Literal[
     "cometapi",
     # wave-2b-alpha own-module providers (providers/<name> packages, each
     # with dedicated differential gates; APPEND-ONLY, one line per provider
-    # in its own commit). All are httpx-path dedicated elifs. deepseek keeps
-    # the bare wire model (no seam preset — the xai R4 rule).
+    # in its own commit). All are httpx-path dedicated elifs. deepseek and
+    # openrouter keep the bare wire model (no seam preset — the xai R4
+    # rule); openrouter's usage.cost hidden-params header is a fork
+    # obligation (its response gate pins it).
     "deepseek",
+    "openrouter",
 ]
 
 NeverPortProvider = Literal[
