@@ -425,3 +425,37 @@ class TestPostCallFailureHookLiftsFirstApiCallStartTime:
         await self._run(request_data)
         assert "first_api_call_start_time" not in request_data
         assert "litellm_logging_obj" not in request_data
+
+
+from litellm.proxy.utils import create_anthropic_model_list_response
+
+
+def test_create_anthropic_model_list_response_shape():
+    response = create_anthropic_model_list_response(
+        ["claude-opus-4-6", "gpt-4o", "claude-haiku-4-5"]
+    )
+
+    assert "object" not in response
+    assert response["has_more"] is False
+    assert response["first_id"] == "claude-opus-4-6"
+    assert response["last_id"] == "claude-haiku-4-5"
+    assert [m["id"] for m in response["data"]] == [
+        "claude-opus-4-6",
+        "gpt-4o",
+        "claude-haiku-4-5",
+    ]
+    for entry in response["data"]:
+        assert entry["type"] == "model"
+        assert entry["display_name"] == entry["id"]
+        # ISO 8601 with a Z suffix, as the Anthropic Models API returns.
+        assert entry["created_at"].endswith("Z")
+        assert "+00:00" not in entry["created_at"]
+
+
+def test_create_anthropic_model_list_response_empty():
+    response = create_anthropic_model_list_response([])
+
+    assert response["data"] == []
+    assert response["has_more"] is False
+    assert response["first_id"] is None
+    assert response["last_id"] is None
