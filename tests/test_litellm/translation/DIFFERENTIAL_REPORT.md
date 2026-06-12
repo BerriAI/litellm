@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: 0c6531018c
+- commit: 4aacbce04a
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -2418,7 +2418,8 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 raises MidStreamFallbackError): error chunk (loud on both sides — the truthy-value check)
 - FALLBACK (v1 raises APIError): non-str delta reasoning (the F6 groq-local pre-step; the wrapper epilogue join TypeErrors in v1)
 - FALLBACK (v1 raises APIError): non-str delta reasoning_content (the F6 groq-local pre-step; the wrapper epilogue join TypeErrors in v1)
-- IDENTICAL: non-str refusal forwarded VERBATIM (the wave-2b-beta F6 INTEGRATOR-FLIP handoff, discharged at the sibling merge: the shared httpx_chunk factory used to null what v1 forwards; the refusal-on-finish half is the loud finish-chunk fallback where v1 silently drops the value — test_refusal_on_finish_chunk_is_loud_where_v1_drops_it)
+- IDENTICAL: non-str refusal forwarded VERBATIM (the wave-2b-beta F6 INTEGRATOR-FLIP handoff, discharged at the sibling merge: the shared httpx_chunk factory used to null what v1 forwards; the refusal-on-finish half is the failure-counted PINNED DIVERGENCE row below)
+- PINNED DIVERGENCE (fail-closed where v1 serves the lossy finish): refusal-on-finish: groq's v1 wrapper silently DROPS a refusal value riding the finish chunk and serves the lossy finish; v2 takes the loud finish-chunk fallback for any value type (test_refusal_on_finish_chunk_is_loud_where_v1_drops_it; critic-wave2b-final MAJOR-2 made the gate-pinned divergence a failure-counted report row)
 
 ## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)
 

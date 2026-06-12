@@ -2204,9 +2204,34 @@ def _groq_rows(lines: list) -> int:
         + "non-str refusal forwarded VERBATIM (the wave-2b-beta F6"
         " INTEGRATOR-FLIP handoff, discharged at the sibling merge: the"
         " shared httpx_chunk factory used to null what v1 forwards; the"
-        " refusal-on-finish half is the loud finish-chunk fallback where"
-        " v1 silently drops the value —"
-        " test_refusal_on_finish_chunk_is_loud_where_v1_drops_it)"
+        " refusal-on-finish half is the failure-counted PINNED DIVERGENCE"
+        " row below)"
+    )
+    finish_refusal = [
+        stream._chunk({"role": "assistant", "content": "x"}),
+        stream._chunk({"refusal": 7}, finish="stop"),
+    ]
+    v1 = stream._v1_chunks(finish_refusal)
+    dropped = "refusal" not in v1[-1]["choices"][0]["delta"]
+    loud = stream.parse_event(copy.deepcopy(finish_refusal[-1]))
+    ok = (
+        dropped
+        and loud.is_error()
+        and "finish chunk with a non-empty delta" in loud.error.summary
+    )
+    failures += 0 if ok else 1
+    lines.append(
+        (
+            "- PINNED DIVERGENCE (fail-closed where v1 serves the lossy finish): "
+            if ok
+            else "- DIVERGENT: "
+        )
+        + "refusal-on-finish: groq's v1 wrapper silently DROPS a refusal"
+        " value riding the finish chunk and serves the lossy finish; v2"
+        " takes the loud finish-chunk fallback for any value type"
+        " (test_refusal_on_finish_chunk_is_loud_where_v1_drops_it;"
+        " critic-wave2b-final MAJOR-2 made the gate-pinned divergence a"
+        " failure-counted report row)"
     )
     return failures
 
