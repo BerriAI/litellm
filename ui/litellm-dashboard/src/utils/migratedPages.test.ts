@@ -75,6 +75,17 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES["vector-stores"]).toBe("vector-stores");
     expect(MIGRATED_PAGES.memory).toBe("memory");
   });
+
+  it("maps the caching, cost-tracking, transform-request, ui-theme, and logs ids to their routes", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.caching).toBe("caching");
+    expect(MIGRATED_PAGES["cost-tracking"]).toBe("cost-tracking");
+    expect(MIGRATED_PAGES["transform-request"]).toBe("transform-request");
+    expect(MIGRATED_PAGES["ui-theme"]).toBe("ui-theme");
+    expect(MIGRATED_PAGES.logs).toBe("logs");
+  });
 });
 
 describe("dev server (NODE_ENV=development)", () => {

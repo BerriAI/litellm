@@ -3,13 +3,11 @@
 import ModelsAndEndpointsView from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import AdminPanel from "@/components/AdminPanel";
 import AgentsPanel from "@/components/agents";
-import CacheDashboard from "@/components/cache_dashboard";
 import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
-import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
 import GuardrailsPanel from "@/components/guardrails";
 import PoliciesPanel from "@/components/policies";
@@ -25,12 +23,9 @@ import PromptsPanel from "@/components/prompts";
 import PublicModelHub from "@/components/public_model_hub";
 import Settings from "@/components/settings";
 import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
-import TransformRequestPanel from "@/components/transform_request";
-import UIThemeSettings from "@/components/ui_theme_settings";
 import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
 import ToolPoliciesView from "@/components/ToolPoliciesView";
-import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -385,14 +380,8 @@ function CreateKeyPageContent() {
             <AgentsPanel accessToken={accessToken} userRole={userRole} teams={teams} />
           ) : page == "prompts" ? (
             <PromptsPanel accessToken={accessToken} userRole={userRole} />
-          ) : page == "transform-request" ? (
-            <TransformRequestPanel accessToken={accessToken} />
           ) : page == "router-settings" ? (
             <GeneralSettings userID={userID} userRole={userRole} accessToken={accessToken} modelData={modelData} />
-          ) : page == "ui-theme" ? (
-            <UIThemeSettings userID={userID} userRole={userRole} accessToken={accessToken} />
-          ) : page == "cost-tracking" ? (
-            <CostTrackingSettings userID={userID} userRole={userRole} accessToken={accessToken} />
           ) : page == "model-hub-table" ? (
             isAdminRole(userRole) ? (
               <ModelHubTable
@@ -404,28 +393,12 @@ function CreateKeyPageContent() {
             ) : (
               <PublicModelHub accessToken={accessToken} isEmbedded={true} />
             )
-          ) : page == "caching" ? (
-            <CacheDashboard
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              accessToken={accessToken}
-              premiumUser={premiumUser}
-            />
           ) : page == "pass-through-settings" ? (
             <PassThroughSettings
               userID={userID}
               userRole={userRole}
               accessToken={accessToken}
               modelData={modelData}
-              premiumUser={premiumUser}
-            />
-          ) : page == "logs" ? (
-            <SpendLogsTable
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              accessToken={accessToken}
               premiumUser={premiumUser}
             />
           ) : page == "skills" || page == "claude-code-plugins" ? (
