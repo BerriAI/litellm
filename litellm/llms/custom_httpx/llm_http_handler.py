@@ -1885,6 +1885,27 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
+    @staticmethod
+    def _resolve_anthropic_messages_timeout(
+        litellm_params: GenericLiteLLMParams, stream: bool
+    ) -> Optional[Union[float, httpx.Timeout]]:
+        from litellm.secret_managers.main import get_secret_str
+
+        stream_timeout = litellm_params.get("stream_timeout")
+        raw = (
+            stream_timeout
+            if stream and stream_timeout is not None
+            else litellm_params.get("timeout")
+        )
+        if raw is None or isinstance(raw, httpx.Timeout):
+            return raw
+        if isinstance(raw, str) and raw.startswith("os.environ/"):
+            raw = get_secret_str(raw)
+            if raw is None:
+                return None
+        timeout = float(raw)
+        return timeout if timeout > 0 else None
+
     async def _async_post_anthropic_messages_with_http_error_retry(
         self,
         async_httpx_client: AsyncHTTPHandler,
@@ -1900,6 +1921,7 @@ class BaseLLMHTTPHandler:
         litellm_params: GenericLiteLLMParams,
         api_key: Optional[str],
         model: str,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> httpx.Response:
         max_attempts = max(
             provider_config.max_retry_on_anthropic_messages_http_error, 1
@@ -1914,6 +1936,7 @@ class BaseLLMHTTPHandler:
                     data=signed_json_body or json.dumps(request_body),
                     stream=stream or False,
                     logging_obj=logging_obj,
+                    timeout=timeout,
                 )
                 response.raise_for_status()
                 return response
@@ -1972,6 +1995,10 @@ class BaseLLMHTTPHandler:
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
         from litellm.litellm_core_utils.get_provider_specific_headers import (
             ProviderSpecificHeaderUtils,
+        )
+
+        resolved_timeout = self._resolve_anthropic_messages_timeout(
+            litellm_params=litellm_params, stream=bool(stream)
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -2118,6 +2145,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             api_key=api_key,
             model=model,
+            timeout=resolved_timeout,
         )
 
         # used for logging + cost tracking
