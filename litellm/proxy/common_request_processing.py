@@ -1792,13 +1792,18 @@ class ProxyBaseLLMRequestProcessing:
 
         body_bytes = await response.aread()  # type: ignore[union-attr]
         parsed = _json.loads(body_bytes)
-        parsed = await proxy_logging_obj.post_call_success_hook(
+        processed = await proxy_logging_obj.post_call_success_hook(
             data=self.data,
             user_api_key_dict=user_api_key_dict,
             response=parsed,
         )
+        content = (
+            _json.dumps(processed).encode()
+            if isinstance(processed, dict)
+            else body_bytes
+        )
         return Response(
-            content=_json.dumps(parsed).encode(),
+            content=content,
             status_code=response_status,
             media_type="application/json",
             headers=response_headers,

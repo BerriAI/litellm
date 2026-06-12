@@ -2415,6 +2415,49 @@ class TestAllmPassthroughRoutePostCallGuardrails:
         ProxyLogging._callback_capabilities_cache.clear()
 
     @pytest.mark.asyncio
+    async def test_non_dict_hook_return_falls_back_to_original_body(self, monkeypatch):
+        """
+        When post_call_success_hook returns a non-dict (e.g. a non-serializable
+        object), the JSON branch must return the original body bytes unchanged
+        rather than raising a TypeError from json.dumps.
+        """
+        import json
+
+        original = {
+            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+            "stopReason": "end_turn",
+        }
+        httpx_response = httpx.Response(
+            status_code=200,
+            content=json.dumps(original).encode(),
+            headers={"content-type": "application/json"},
+        )
+
+        async def non_dict_hook(data, user_api_key_dict, response):
+            return object()
+
+        cb = self._make_guardrail_cb()
+        monkeypatch.setattr(litellm, "callbacks", [cb])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", non_dict_hook)
+
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
+            processing_obj = ProxyBaseLLMRequestProcessing(data={})
+            result = await processing_obj._handle_non_streaming_allm_passthrough_route(
+                response=httpx_response,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                custom_headers={},
+            )
+
+        assert isinstance(result, Response)
+        assert json.loads(result.body) == original
+
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
     async def test_no_aread_when_no_post_call_guardrails(self, monkeypatch):
         """
         When _has_post_call_guardrails() is False the httpx response must not be
