@@ -8237,7 +8237,7 @@ class ProxyStartupEvent:
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
 async def model_list(
-    request: Request,
+    request: Request = None,  # type: ignore[assignment]
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     return_wildcard_routes: Optional[bool] = False,
     team_id: Optional[str] = None,
@@ -8285,7 +8285,9 @@ async def model_list(
 
     # Claude Code's gateway discovery sends the same anthropic-version header it
     # uses for /v1/messages and only parses the Anthropic-native models shape.
-    wants_anthropic_format = request.headers.get("anthropic-version") is not None
+    wants_anthropic_format = (
+        request is not None and request.headers.get("anthropic-version") is not None
+    )
 
     # Validate scope parameter if provided
     if scope is not None and scope != "expand":
