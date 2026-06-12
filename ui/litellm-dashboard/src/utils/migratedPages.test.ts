@@ -40,6 +40,41 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES.api_ref).toBe("api-reference");
     expect(MIGRATED_PAGES["api-reference"]).toBe("api-reference");
   });
+
+  it("maps the llm-playground sidebar id to the playground route", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["llm-playground"]).toBe("playground");
+  });
+
+  it("maps the projects and access-groups sidebar ids to their routes", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.projects).toBe("projects");
+    expect(MIGRATED_PAGES["access-groups"]).toBe("access-groups");
+  });
+
+  it("maps the budgets, workflows, and guardrails-monitor sidebar ids to their routes", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.budgets).toBe("budgets");
+    expect(MIGRATED_PAGES.workflows).toBe("workflows");
+    expect(MIGRATED_PAGES["guardrails-monitor"]).toBe("guardrails-monitor");
+  });
+
+  it("maps the mcp-servers, search-tools, tag-management, vector-stores, and memory ids to their routes", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["mcp-servers"]).toBe("mcp-servers");
+    expect(MIGRATED_PAGES["search-tools"]).toBe("search-tools");
+    expect(MIGRATED_PAGES["tag-management"]).toBe("tag-management");
+    expect(MIGRATED_PAGES["vector-stores"]).toBe("vector-stores");
+    expect(MIGRATED_PAGES.memory).toBe("memory");
+  });
 });
 
 describe("dev server (NODE_ENV=development)", () => {
