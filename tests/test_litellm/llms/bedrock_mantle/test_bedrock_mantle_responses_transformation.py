@@ -83,6 +83,40 @@ class TestBedrockMantleResponsesURL:
         url = cfg.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses"
 
+    def test_url_region_from_aws_region_name_litellm_params(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(
+            api_base=None,
+            litellm_params={"aws_region_name": "us-east-2"},
+        )
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+    def test_url_aws_region_name_overrides_env_region(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-west-2")
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(
+            api_base=None,
+            litellm_params={"aws_region_name": "us-east-2"},
+        )
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+    def test_url_rejects_malicious_aws_region_name(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(ValueError):
+            cfg.get_complete_url(
+                api_base=None,
+                litellm_params={
+                    "aws_region_name": "us-east-1.api.aws.attacker.example/"
+                },
+            )
+
     def test_url_region_default_us_east_1(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
@@ -126,6 +160,52 @@ class TestBedrockMantleResponsesURL:
         cfg = BedrockMantleResponsesAPIConfig()
         url = cfg.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+    def test_url_aws_region_name_overrides_stale_api_base(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(
+            api_base="https://bedrock-mantle.us-east-1.api.aws/v1",
+            litellm_params={"aws_region_name": "us-east-2"},
+        )
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+
+class TestBedrockMantleGetLlmProviderRegion:
+    def test_get_llm_provider_uses_supplemental_litellm_params(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+        from litellm.types.router import GenericLiteLLMParams
+
+        _, provider, _, api_base = get_llm_provider(
+            model="bedrock_mantle/openai.gpt-5.5",
+            api_key="test-key",
+            litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
+        )
+        assert provider == "bedrock_mantle"
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+
+    def test_get_llm_provider_uses_aws_region_from_litellm_params(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+        from litellm.types.router import GenericLiteLLMParams
+
+        params = GenericLiteLLMParams(
+            custom_llm_provider="bedrock_mantle",
+            aws_region_name="us-east-2",
+        )
+        _, provider, _, api_base = get_llm_provider(
+            model="bedrock_mantle/openai.gpt-5.5",
+            litellm_params=params,
+        )
+        assert provider == "bedrock_mantle"
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
 
 
 class TestBedrockMantleResponsesAuth:
@@ -245,6 +325,46 @@ class TestBedrockMantleResponsesRequestBody:
         )
         assert body["model"] == "openai.gpt-oss-120b"
         assert "input" in body
+
+
+class TestBedrockMantleResponsesTools:
+    def test_map_openai_params_drops_unsupported_tools(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={
+                "tools": [
+                    {"type": "web_search"},
+                    {"type": "function", "name": "exec_command"},
+                ]
+            },
+            model="openai.gpt-5.5",
+            drop_params=False,
+        )
+        assert params["tools"] == [{"type": "function", "name": "exec_command"}]
+
+    def test_map_openai_params_removes_tools_when_all_unsupported(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [{"type": "web_search"}]},
+            model="openai.gpt-5.5",
+            drop_params=False,
+        )
+        assert "tools" not in params
+
+    def test_dropped_tools_are_logged_at_warning_level(self):
+        from unittest.mock import patch
+
+        cfg = BedrockMantleResponsesAPIConfig()
+        with patch(
+            "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
+        ) as mock_warning:
+            cfg.map_openai_params(
+                response_api_optional_params={"tools": [{"type": "web_search"}]},
+                model="openai.gpt-5.5",
+                drop_params=False,
+            )
+        assert mock_warning.call_count == 1
+        assert "web_search" in str(mock_warning.call_args)
 
 
 class TestBedrockMantleResponsesRegistry:
