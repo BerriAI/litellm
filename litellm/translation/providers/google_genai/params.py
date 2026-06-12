@@ -30,7 +30,6 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
 
-from ...deps import TranslationDeps
 from ...errors import TranslationError
 from ...ir import (
     ChatRequest,
@@ -210,28 +209,24 @@ def map_finish(raw: str | None, has_tool_calls: bool) -> FinishReason:
     return FINISH_MAP.get(raw, "stop")
 
 
-_TEMPERATURE_KEYS = (
-    ("temperature", "temperature"),
-    ("top_p", "top_p"),
-    ("top_k", "top_k"),
-)
-
-
 def sampling_entries(
-    request: ChatRequest, deps: TranslationDeps, target: GoogleTarget
+    request: ChatRequest,
 ) -> dict[str, PlainJson] | TranslationError:
     """top_k rides for BOTH targets: it is not an OpenAI param, so v1's
     get_optional_params forwards it as a provider kwarg even on AI Studio
     (verified in-process; the drift list's supported-params delta only gates
     OpenAI-named params)."""
-    del deps, target
     params = request.params
     entries: dict[str, PlainJson] = {}
-    for attr, key in _TEMPERATURE_KEYS:
-        value = getattr(params, attr).default_value(None)
-        if value is None:
-            continue
-        entries = {**entries, key: value}
+    temperature = params.temperature.default_value(None)
+    if temperature is not None:
+        entries = {**entries, "temperature": temperature}
+    top_p = params.top_p.default_value(None)
+    if top_p is not None:
+        entries = {**entries, "top_p": top_p}
+    top_k = params.top_k.default_value(None)
+    if top_k is not None:
+        entries = {**entries, "top_k": top_k}
     max_tokens = params.max_tokens.default_value(None)
     if max_tokens is not None:
         entries = {**entries, "max_output_tokens": max_tokens}

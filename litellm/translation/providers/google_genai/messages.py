@@ -112,6 +112,7 @@ def serialize_contents(
 def _user_runs(
     content: Block[ContentBlock],
 ) -> list[tuple[bool, list[ContentBlock]]]:
+    # runs is a local build-then-freeze accumulator; it never escapes
     runs: list[tuple[bool, list[ContentBlock]]] = []
     for block in content:
         is_tool = block.tag == "tool_result"

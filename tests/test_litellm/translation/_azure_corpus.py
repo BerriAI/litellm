@@ -78,6 +78,11 @@ def stream_snapshot_chunks(path: pathlib.Path) -> List[Dict[str, Any]]:
     ``preserve_upstream_non_openai_attributes`` copies whatever the installed
     SDK dumps. Everything else compares byte-for-byte."""
     chunks = load_json(path)
+    for chunk in chunks:
+        assert chunk.get("moderation") is None, (
+            "vendored stream snapshot carries a NON-NULL moderation payload; "
+            "the SDK-artifact strip only covers the null key"
+        )
     return [
         {key: value for key, value in chunk.items() if key != "moderation"}
         for chunk in chunks
@@ -87,6 +92,10 @@ def stream_snapshot_chunks(path: pathlib.Path) -> List[Dict[str, Any]]:
 def v2_comparable(snapshot_body: Dict[str, Any]) -> Dict[str, Any]:
     """Strip the two corpus-seam artifacts that never reach the wire (module
     docstring); everything else must match v2 byte-for-byte."""
+    assert snapshot_body.get("extra_body") in (None, {}), (
+        "snapshot carries a NON-EMPTY extra_body; the strip only covers the "
+        "always-empty corpus artifact"
+    )
     out = {k: v for k, v in snapshot_body.items() if k != "extra_body"}
     if out.get("stream") is False:
         out = {k: v for k, v in out.items() if k != "stream"}

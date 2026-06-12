@@ -149,6 +149,7 @@ def _converse_message(
 def _raw_reasoning_blocks(content: Block[ContentBlock]) -> PlainJson:
     blocks: list[PlainJson] = []
     for block in content:
+        # blocks is a local build-then-freeze accumulator; it never escapes
         if block.tag == "thinking":
             text_block: dict[str, PlainJson] = {"text": block.thinking.thinking}
             match block.thinking.signature:
@@ -262,11 +263,13 @@ def _gemini_thinking_blocks(content: Block[ContentBlock]) -> PlainJson:
                 entry = {**entry, "signature": signature}
             case _:
                 pass
+        # local build-then-freeze accumulator
         blocks.append(entry)  # nosemgrep: translation-no-mutation
     return blocks
 
 
 def _gemini_tool_calls(content: Block[ContentBlock]) -> list[PlainJson]:
+    # calls is a local build-then-freeze accumulator; it never escapes
     calls: list[PlainJson] = []
     index = 0
     for block in content:
@@ -296,6 +299,7 @@ def _gemini_tool_calls(content: Block[ContentBlock]) -> list[PlainJson]:
 
 
 def _thought_signatures(content: Block[ContentBlock]) -> list[PlainJson]:
+    # signatures is a local build-then-freeze accumulator; it never escapes
     signatures: list[PlainJson] = []
     for block in content:
         if block.tag == "thinking":

@@ -80,7 +80,9 @@ def _messages_reason(raw: _Raw) -> str | None:
     for item in messages:
         entry = _as_map(item)
         if entry is None:
-            return None
+            # parse rejects the non-object message with a boundary error;
+            # keep scanning so the guard stays locally conservative too
+            continue
         role = entry.get("role")
         if entry.get("name") is not None:
             return "message name field (not carried by the IR)"
@@ -181,7 +183,8 @@ def _tool_calls_reason(tool_calls: object) -> str | None:
     for item in calls:
         call = _as_map(item)
         if call is None:
-            return None
+            # parse rejects the non-object tool_call; keep scanning
+            continue
         if "index" in call:
             return "tool_call index key (not carried by the IR)"
         if call.get("type") != "function":

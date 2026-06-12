@@ -397,12 +397,14 @@ def _filter_anyof_only(schema: dict[str, PlainJson]) -> dict[str, PlainJson]:
     ):
         decorated: list[PlainJson] = []
         for item in anyof:
+            if not isinstance(item, dict):
+                continue  # the all() guard above proved dicts; narrows the type
             extra: dict[str, PlainJson] = {}
             if title:
                 extra = {**extra, "title": title}
             if description:
                 extra = {**extra, "description": description}
-            decorated = [*decorated, {**item, **extra}]  # type: ignore[dict-item]
+            decorated = [*decorated, {**item, **extra}]
         return {"anyOf": decorated}
     return {"anyOf": anyof}
 

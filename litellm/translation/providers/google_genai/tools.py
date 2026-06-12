@@ -10,8 +10,6 @@ The emitted key is v1's snake ``function_declarations``.
 
 from __future__ import annotations
 
-import copy
-
 from expression import Option
 from expression.collections import Block
 from typing_extensions import assert_never
@@ -44,7 +42,8 @@ def _declaration(tool: ToolDef) -> PlainJson | TranslationError:
             pass
     match tool.parameters:
         case Option(tag="some", some=blob):
-            raw = copy.deepcopy(blob.value)
+            # the strip passes reconstruct every node; no deepcopy needed
+            raw = blob.value
             if not isinstance(raw, dict):
                 return TranslationError.of_unsupported(
                     "non-object tool parameters; v1 forwards them unmodified"

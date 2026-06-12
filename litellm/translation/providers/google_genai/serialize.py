@@ -16,7 +16,6 @@ the message/tool converters decline.
 
 from __future__ import annotations
 
-import copy
 import json
 
 from expression import Error, Ok, Option, Result
@@ -244,7 +243,8 @@ def _json_schema_entries(
     if not isinstance(raw_schema, dict):
         # v1 only attaches the schema when it is a dict; the mime sticks.
         return Ok((entries, None))
-    schema = strip_strict(copy.deepcopy(raw_schema))
+    # strip_strict reconstructs every node; no defensive deepcopy needed
+    schema = strip_strict(raw_schema)
     if p.supports_response_json_schema(request.model):
         # gemini 2.x+: standard JSON Schema, passed through (_build_json_schema
         # is the identity).
@@ -270,7 +270,7 @@ def _generation_config(
     target: p.GoogleTarget,
     structured_entries: _StructuredEntries,
 ) -> Result[_StructuredEntries, TranslationError]:
-    sampling = p.sampling_entries(request, deps, target)
+    sampling = p.sampling_entries(request)
     if isinstance(sampling, TranslationError):
         return Error(sampling)
     entries: _StructuredEntries = {**sampling, **structured_entries}

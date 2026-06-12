@@ -50,7 +50,9 @@ def _azure_reason(raw: _Raw) -> str | None:
 
 def _carries_cache_control(value: object, depth: int) -> bool:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        return False
+        # exhaustion must never ADMIT a request: treat the unscannable tail
+        # as if it carried the marker (fall back to v1)
+        return True
     if isinstance(value, Mapping):
         mapping = cast(Mapping[str, object], value)
         if "cache_control" in mapping:
