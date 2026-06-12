@@ -127,9 +127,10 @@ corpus shapes in the same commit.
   not leak its bindings, and a for/while body counts as one loop generation so
   `state, out = step(state, event)` folds stay legal. Instead of
   build-by-rebinding, write one literal with conditional spreads
-  (`{**base, **({"k": v} if cond else {})}`) or bind each branch's value once
-  under a declared-then-assigned name (`x: T` followed by one `x = ...` per
-  match arm).
+  (`{**base, **({"k": v} if cond else {})}`); to unwrap an Option, prefer
+  `opt.map(f).default_value(fallback)` over a declare-then-assign match (no
+  distance between a name and its value). When a lambda's dict literal trips
+  pyright's invariance, lift it into a small named helper.
 - Exhaustiveness pattern (the only Expression-compatible form pyright strict
   proves): match on the union's `Literal` tag with one arm per case and
   `assert_never(x.tag)` AFTER the match. A `case never:` capture arm is flagged

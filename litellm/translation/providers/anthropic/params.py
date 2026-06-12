@@ -274,12 +274,9 @@ def _effort_outcome(
 def thinking_signaled(request: ChatRequest) -> bool:
     """v1 ``is_thinking_enabled``: thinking.type == enabled OR any
     reasoning_effort value is present (including 'none')."""
-    enabled: bool
-    match request.thinking:
-        case Option(tag="some", some=thinking):
-            enabled = thinking.tag == "enabled"
-        case _:
-            enabled = False
+    enabled = request.thinking.map(
+        lambda thinking: thinking.tag == "enabled"
+    ).default_value(False)
     return enabled or request.reasoning_effort.is_some()
 
 

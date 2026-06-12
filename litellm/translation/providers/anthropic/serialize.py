@@ -188,13 +188,9 @@ def _tool_choice_json(
 ) -> PlainJson | None:
     """v1 ``_map_tool_choice`` plus the request-level name forward map."""
     parallel: bool | None = request.parallel_tool_calls.default_value(None)
-    choice_json: dict[str, PlainJson] | None
-    is_none_choice: bool
-    match request.tool_choice:
-        case Option(tag="some", some=choice):
-            choice_json, is_none_choice = _choice_base(choice, name_forward)
-        case _:
-            choice_json, is_none_choice = None, False
+    choice_json, is_none_choice = request.tool_choice.map(
+        lambda choice: _choice_base(choice, name_forward)
+    ).default_value((None, False))
     if parallel is None:
         return choice_json
     if is_none_choice:

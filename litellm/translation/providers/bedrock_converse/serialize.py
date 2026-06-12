@@ -183,14 +183,9 @@ def _additional_fields(
                     return Error(err)
         case _:
             top_k_field = {}
-    parallel_field: dict[str, PlainJson]
-    match request.parallel_tool_calls:
-        case Option(tag="some", some=parallel) if p.is_claude_4_5_plus(request.model):
-            parallel_field = {
-                "tool_choice": {"disable_parallel_tool_use": not parallel}
-            }
-        case _:
-            parallel_field = {}
+    parallel_field = request.parallel_tool_calls.map(
+        lambda parallel: _parallel_tool_choice_field(request.model, parallel)
+    ).default_value({})
     return Ok(
         {
             "stream": request.stream,
@@ -199,6 +194,12 @@ def _additional_fields(
             **parallel_field,
         }
     )
+
+
+def _parallel_tool_choice_field(model: str, parallel: bool) -> dict[str, PlainJson]:
+    if not p.is_claude_4_5_plus(model):
+        return {}
+    return {"tool_choice": {"disable_parallel_tool_use": not parallel}}
 
 
 def _system_json(system: Block[SystemText], model: str) -> PlainJson | None:

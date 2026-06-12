@@ -25,7 +25,14 @@ from expression import Option
 from expression.collections import Block
 
 from ...deps import TranslationDeps
-from ...ir import Body, ChatResponse, ContentBlock, PlainJson, ResponseUsage
+from ...ir import (
+    Body,
+    CacheCreationDetails,
+    ChatResponse,
+    ContentBlock,
+    PlainJson,
+    ResponseUsage,
+)
 
 ResponseDialect = Literal["anthropic", "bedrock_converse"]
 
@@ -225,6 +232,13 @@ def _converse_usage_json(
     }
 
 
+def _creation_details_json(details: CacheCreationDetails) -> PlainJson:
+    return {
+        "ephemeral_5m_input_tokens": details.five_minute.default_value(None),
+        "ephemeral_1h_input_tokens": details.one_hour.default_value(None),
+    }
+
+
 def _usage_json(
     usage: ResponseUsage, reasoning: str | None, deps: TranslationDeps
 ) -> PlainJson:
@@ -239,15 +253,9 @@ def _usage_json(
     completion_tokens = usage.output_tokens
     estimated = deps.count_response_tokens(reasoning) if reasoning else 0
     reasoning_tokens = min(estimated, completion_tokens)
-    creation_details: PlainJson
-    match usage.cache_creation:
-        case Option(tag="some", some=details):
-            creation_details = {
-                "ephemeral_5m_input_tokens": details.five_minute.default_value(None),
-                "ephemeral_1h_input_tokens": details.one_hour.default_value(None),
-            }
-        case _:
-            creation_details = None
+    creation_details: PlainJson = usage.cache_creation.map(
+        _creation_details_json
+    ).default_value(None)
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
