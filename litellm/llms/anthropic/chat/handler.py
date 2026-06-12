@@ -275,6 +275,7 @@ class AnthropicChatCompletion(BaseLLM):
         json_mode: bool,
         litellm_params: dict,
         provider_config: "BaseConfig",
+        custom_llm_provider: str = "anthropic",
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
@@ -313,7 +314,7 @@ class AnthropicChatCompletion(BaseLLM):
                 headers=error_headers,
             )
 
-        return provider_config.transform_response(
+        initial_response = provider_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
@@ -326,6 +327,26 @@ class AnthropicChatCompletion(BaseLLM):
             encoding=encoding,
             json_mode=json_mode,
         )
+
+        if litellm_params.get("_websearch_interception_converted_stream", False):
+            logging_obj.model_call_details[
+                "websearch_interception_converted_stream"
+            ] = True
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        final_response = await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
+            response=initial_response,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            stream=False,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=litellm_params,
+        )
+
+        return final_response if final_response is not None else initial_response
 
     def completion(
         self,
@@ -443,6 +464,7 @@ class AnthropicChatCompletion(BaseLLM):
                     encoding=encoding,
                     api_key=api_key,
                     provider_config=config,
+                    custom_llm_provider=custom_llm_provider,
                     logging_obj=logging_obj,
                     optional_params=optional_params,
                     stream=stream,

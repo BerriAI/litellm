@@ -178,6 +178,88 @@ def test_fingerprint_agentic_tools_is_deterministic():
     ) == handler._fingerprint_agentic_tools(tools_b)
 
 
+def test_agentic_loop_kwargs_are_litellm_internal_not_provider_params():
+    """The agentic-loop bookkeeping kwargs must be recognized as litellm-internal
+    so they are routed to litellm_params and never serialized into the provider
+    request body. A provider like Anthropic rejects unknown body fields with
+    "Extra inputs are not permitted", which is exactly what happened before these
+    keys were added to ``all_litellm_params``."""
+    from litellm.utils import get_non_default_completion_params
+
+    non_default = get_non_default_completion_params(
+        kwargs={
+            "_agentic_loop_depth": 1,
+            "max_agentic_loops": 3,
+            "_agentic_loop_fingerprints": ["fp-1"],
+            "some_provider_param": "keep-me",
+        }
+    )
+
+    assert "_agentic_loop_depth" not in non_default
+    assert "max_agentic_loops" not in non_default
+    assert "_agentic_loop_fingerprints" not in non_default
+    assert non_default["some_provider_param"] == "keep-me"
+
+
+@pytest.mark.asyncio
+async def test_execute_chat_completion_agentic_plan_drops_native_tool_choice():
+    """The follow-up call feeds search results back and asks for a final answer,
+    so a forced (and provider-native) ``tool_choice`` from the original request
+    must not be replayed. The plan's optional_params are authoritative; the
+    executor must not resurrect keys the builder dropped."""
+    from litellm.types.integrations.custom_logger import (
+        AgenticLoopPlan,
+        AgenticLoopRequestPatch,
+    )
+
+    handler = BaseLLMHTTPHandler()
+
+    original_optional_params = {
+        "temperature": 0.5,
+        # Provider-native shape that fails OpenAI-spec validation on re-entry
+        "tool_choice": {"type": "tool", "name": "litellm_web_search"},
+    }
+    follow_up_messages = [{"role": "user", "content": "results here"}]
+    patch_optional_params = {"temperature": 0.5, "tools": [{"type": "function"}]}
+
+    plan = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(
+            model="claude-sonnet-4",
+            messages=follow_up_messages,
+            optional_params=patch_optional_params,
+            kwargs={},
+        ),
+    )
+
+    captured = {}
+
+    async def _fake_acompletion(*args, **kwargs):
+        captured.update(kwargs)
+        return Mock()
+
+    with patch.object(
+        litellm, "acompletion", new=AsyncMock(side_effect=_fake_acompletion)
+    ):
+        await handler._execute_chat_completion_agentic_plan(
+            plan=plan,
+            model="claude-sonnet-4",
+            messages=[{"role": "user", "content": "original"}],
+            optional_params=original_optional_params,
+            kwargs={},
+            custom_llm_provider="anthropic",
+            depth=0,
+            max_loops=3,
+            fingerprints=[],
+            fingerprint="fp-current",
+        )
+
+    assert "tool_choice" not in captured
+    assert captured["tools"] == [{"type": "function"}]
+    assert captured["_agentic_loop_depth"] == 1
+    assert captured["_agentic_loop_fingerprints"] == ["fp-current"]
+
+
 @pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_extra_headers():
     """

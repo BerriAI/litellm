@@ -4888,8 +4888,11 @@ class BaseLLMHTTPHandler:
         if "/" not in full_model_name:
             full_model_name = f"{custom_llm_provider}/{full_model_name}"
 
-        optional_params_for_followup = dict(optional_params)
-        optional_params_for_followup.update(patch.optional_params)
+        # The plan builder returns the complete follow-up optional_params (it
+        # copies everything it wants to keep), so treat it as authoritative
+        # instead of merging onto the original, which would resurrect keys the
+        # builder intentionally dropped (e.g. a provider-native tool_choice)
+        optional_params_for_followup = dict(patch.optional_params)
         if patch.tools is not None:
             optional_params_for_followup["tools"] = patch.tools
 

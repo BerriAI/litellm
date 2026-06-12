@@ -235,7 +235,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return litellm.AmazonConverseConfig()._transform_response(
+        initial_response = litellm.AmazonConverseConfig()._transform_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -247,6 +247,28 @@ class BedrockConverseLLM(BaseAWSLLM):
             optional_params=optional_params,
             encoding=encoding,
         )
+
+        if (litellm_params or {}).get(
+            "_websearch_interception_converted_stream", False
+        ):
+            logging_obj.model_call_details[
+                "websearch_interception_converted_stream"
+            ] = True
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        final_response = await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
+            response=initial_response,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            stream=False,
+            custom_llm_provider="bedrock",
+            kwargs=litellm_params or {},
+        )
+
+        return final_response if final_response is not None else initial_response
 
     def completion(  # noqa: PLR0915
         self,

@@ -1901,3 +1901,184 @@ def test_non_bash_tool_result_skipped():
     assert (
         len(code_results) == 0
     ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
+
+
+def _build_web_search_model_response() -> "litellm.ModelResponse":
+    """ModelResponse where the model asked to call the litellm_web_search tool."""
+    from litellm.types.utils import (
+        ChatCompletionMessageToolCall,
+        Choices,
+        Function,
+        Message,
+        ModelResponse,
+    )
+
+    return ModelResponse(
+        id="initial-resp",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_1",
+                            type="function",
+                            function=Function(
+                                name="litellm_web_search",
+                                arguments='{"query": "weather in SF"}',
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ],
+        model="claude-sonnet-4",
+        object="chat.completion",
+        created=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_chat_completion_runs_websearch_agentic_loop(monkeypatch):
+    """Regression: web search interception must run on the Anthropic chat-completion
+    handler. Before the fix, acompletion_function returned the raw tool_calls
+    response and the agentic loop never executed.
+    """
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+    from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    initial_response = _build_web_search_model_response()
+    final_response = ModelResponse(
+        id="final-resp",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(role="assistant", content="It is sunny in SF."),
+            )
+        ],
+        model="claude-sonnet-4",
+        object="chat.completion",
+        created=0,
+    )
+
+    websearch_logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+    websearch_logger._execute_search = AsyncMock(  # type: ignore[method-assign]
+        return_value=("SF weather: sunny, 65F", None)
+    )
+    monkeypatch.setattr(litellm, "callbacks", [websearch_logger])
+
+    follow_up = AsyncMock(return_value=final_response)
+    monkeypatch.setattr(litellm, "acompletion", follow_up)
+
+    provider_config = MagicMock()
+    provider_config.transform_response.return_value = initial_response
+
+    logging_obj = MagicMock()
+    logging_obj.dynamic_success_callbacks = []
+    logging_obj.model_call_details = {}
+
+    handler = AnthropicChatCompletion()
+    web_search_tool = {
+        "type": "function",
+        "function": {
+            "name": "litellm_web_search",
+            "description": "Search the web",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    }
+
+    result = await handler.acompletion_function(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "weather in SF?"}],
+        api_base="https://api.anthropic.com/v1/messages",
+        custom_prompt_dict={},
+        model_response=ModelResponse(),
+        print_verbose=lambda *a, **k: None,
+        timeout=60.0,
+        encoding=MagicMock(),
+        api_key="sk-test",
+        logging_obj=logging_obj,
+        stream=False,
+        _is_function_call=False,
+        data={},
+        optional_params={"tools": [web_search_tool]},
+        json_mode=False,
+        litellm_params={},
+        provider_config=provider_config,
+        custom_llm_provider="anthropic",
+        client=AsyncMock(),
+    )
+
+    follow_up.assert_awaited_once()
+    assert result is final_response
+    assert result.choices[0].message.content == "It is sunny in SF."
+    assert not result.choices[0].message.tool_calls
+
+
+@pytest.mark.asyncio
+async def test_anthropic_chat_completion_skips_loop_for_disabled_provider(monkeypatch):
+    """When the provider is not in enabled_providers, the handler must return the
+    original response untouched (no follow-up call).
+    """
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+    from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+    from litellm.types.utils import ModelResponse
+
+    initial_response = _build_web_search_model_response()
+
+    websearch_logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+    monkeypatch.setattr(litellm, "callbacks", [websearch_logger])
+
+    follow_up = AsyncMock()
+    monkeypatch.setattr(litellm, "acompletion", follow_up)
+
+    provider_config = MagicMock()
+    provider_config.transform_response.return_value = initial_response
+
+    logging_obj = MagicMock()
+    logging_obj.dynamic_success_callbacks = []
+    logging_obj.model_call_details = {}
+
+    handler = AnthropicChatCompletion()
+    web_search_tool = {
+        "type": "function",
+        "function": {"name": "litellm_web_search"},
+    }
+
+    result = await handler.acompletion_function(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "weather in SF?"}],
+        api_base="https://api.anthropic.com/v1/messages",
+        custom_prompt_dict={},
+        model_response=ModelResponse(),
+        print_verbose=lambda *a, **k: None,
+        timeout=60.0,
+        encoding=MagicMock(),
+        api_key="sk-test",
+        logging_obj=logging_obj,
+        stream=False,
+        _is_function_call=False,
+        data={},
+        optional_params={"tools": [web_search_tool]},
+        json_mode=False,
+        litellm_params={},
+        provider_config=provider_config,
+        custom_llm_provider="anthropic",
+        client=AsyncMock(),
+    )
+
+    follow_up.assert_not_awaited()
+    assert result is initial_response

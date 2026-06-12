@@ -3225,6 +3225,9 @@ all_litellm_params = (
         "order",
         "enable_json_schema_validation",
         "use_xai_oauth",
+        "max_agentic_loops",
+        "_agentic_loop_depth",
+        "_agentic_loop_fingerprints",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())

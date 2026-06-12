@@ -395,6 +395,159 @@ async def test_websearch_streaming_conversion():
         litellm.callbacks = []
 
 
+def _build_openai_web_search_response():
+    """ModelResponse where the model asked to call the litellm_web_search tool."""
+    from litellm.types.utils import (
+        ChatCompletionMessageToolCall,
+        Choices,
+        Function,
+        Message,
+    )
+
+    return ModelResponse(
+        id="initial-resp",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_1",
+                            type="function",
+                            function=Function(
+                                name="litellm_web_search",
+                                arguments='{"query": "weather in SF"}',
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ],
+        model="gpt-4o-mini",
+        object="chat.completion",
+        created=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_handler_runs_loop_and_drops_forced_tool_choice(monkeypatch):
+    """Regression: the OpenAI handler path must run the web search agentic loop
+    and must NOT replay a forced tool_choice on the follow-up call.
+
+    Before the fix the OpenAI handler used a private duplicate hook that merged the
+    original optional_params onto the follow-up patch, re-forcing the search tool so
+    the follow-up returned tool_calls again (finish_reason="tool_calls") instead of a
+    final answer. The OpenAI path now delegates to the shared agentic handler.
+    """
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+    from litellm.types.utils import Choices, Message
+
+    initial_response = _build_openai_web_search_response()
+    final_response = ModelResponse(
+        id="final-resp",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(role="assistant", content="It is sunny in SF."),
+            )
+        ],
+        model="gpt-4o-mini",
+        object="chat.completion",
+        created=0,
+    )
+
+    websearch_logger = WebSearchInterceptionLogger(
+        enabled_providers=[LlmProviders.OPENAI]
+    )
+    websearch_logger._execute_search = AsyncMock(  # type: ignore[method-assign]
+        return_value=("SF weather: sunny, 65F", None)
+    )
+    monkeypatch.setattr(litellm, "callbacks", [websearch_logger])
+
+    follow_up = AsyncMock(return_value=final_response)
+    monkeypatch.setattr(litellm, "acompletion", follow_up)
+
+    logging_obj = MagicMock()
+    logging_obj.dynamic_success_callbacks = []
+    logging_obj.model_call_details = {}
+
+    web_search_tool = {
+        "type": "function",
+        "function": {
+            "name": "litellm_web_search",
+            "description": "Search the web",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    }
+
+    handler = OpenAIChatCompletion()
+    result = await handler._call_agentic_completion_hooks_openai(
+        response=initial_response,
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "weather in SF?"}],
+        optional_params={
+            "tools": [web_search_tool],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "litellm_web_search"},
+            },
+        },
+        logging_obj=logging_obj,
+        stream=False,
+        litellm_params={"custom_llm_provider": "openai"},
+    )
+
+    follow_up.assert_awaited_once()
+    _, follow_up_kwargs = follow_up.call_args
+    assert "tool_choice" not in follow_up_kwargs
+    assert result is final_response
+    assert result.choices[0].message.content == "It is sunny in SF."
+
+
+@pytest.mark.asyncio
+async def test_openai_handler_skips_loop_for_disabled_provider(monkeypatch):
+    """When the provider is not enabled, the OpenAI handler must not run the loop."""
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    initial_response = _build_openai_web_search_response()
+
+    websearch_logger = WebSearchInterceptionLogger(
+        enabled_providers=[LlmProviders.BEDROCK]
+    )
+    monkeypatch.setattr(litellm, "callbacks", [websearch_logger])
+
+    follow_up = AsyncMock()
+    monkeypatch.setattr(litellm, "acompletion", follow_up)
+
+    logging_obj = MagicMock()
+    logging_obj.dynamic_success_callbacks = []
+    logging_obj.model_call_details = {}
+
+    handler = OpenAIChatCompletion()
+    result = await handler._call_agentic_completion_hooks_openai(
+        response=initial_response,
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "weather in SF?"}],
+        optional_params={
+            "tools": [{"type": "function", "function": {"name": "litellm_web_search"}}]
+        },
+        logging_obj=logging_obj,
+        stream=False,
+        litellm_params={"custom_llm_provider": "openai"},
+    )
+
+    follow_up.assert_not_awaited()
+    assert result is None
+
+
 if __name__ == "__main__":
     # Run with: pytest test_websearch_chat_completion.py -v -s
     pytest.main([__file__, "-v", "-s"])

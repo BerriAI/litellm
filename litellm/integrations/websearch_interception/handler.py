@@ -1150,12 +1150,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         if request_patch.messages is None:
             raise ValueError("WebSearchInterception: missing follow-up messages")
-        params = dict(optional_params)
-        params.update(request_patch.optional_params)
         return await litellm.acompletion(
             model=request_patch.model or model,
             messages=request_patch.messages,
-            **params,
+            **request_patch.optional_params,
             **request_patch.kwargs,
         )
 
@@ -1289,6 +1287,9 @@ class WebSearchInterceptionLogger(CustomLogger):
             if k
             not in {
                 "tools",
+                # Drop tool_choice so the follow-up lets the model answer from
+                # search results instead of re-forcing (and looping on) the tool
+                "tool_choice",
                 "extra_body",
                 "model_alias_map",
                 "stream_response",

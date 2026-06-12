@@ -459,13 +459,38 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 additional_args={"complete_input_dict": data},
             )
 
-            return convert_to_model_response_object(
+            initial_response = convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
                 hidden_params={"headers": headers},
                 _response_headers=headers,
                 convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
             )
+
+            _litellm_params = litellm_params or {}
+            if _litellm_params.get("_websearch_interception_converted_stream", False):
+                logging_obj.model_call_details[
+                    "websearch_interception_converted_stream"
+                ] = True
+
+            from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+            optional_params_for_hook = {
+                k: v for k, v in data.items() if k not in ("model", "messages")
+            }
+            final_response = (
+                await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
+                    response=initial_response,
+                    model=model,
+                    messages=data["messages"],
+                    optional_params=optional_params_for_hook,
+                    logging_obj=logging_obj,
+                    stream=False,
+                    custom_llm_provider="azure",
+                    kwargs=_litellm_params,
+                )
+            )
+            return final_response if final_response is not None else initial_response
         except AzureOpenAIError as e:
             ## LOGGING
             logging_obj.post_call(
