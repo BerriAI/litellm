@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: 18d2832d95
+- commit: 86697f4aa3
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -1755,6 +1755,12 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: lemonade usage_null_tokens
 - IDENTICAL: minimax usage_null_tokens
 - IDENTICAL: ovhcloud usage_null_tokens
+
+## compat_httpx family: non-string wire model (v1's OpenAILike construction raises pydantic ValidationError BEFORE the prefix overwrite; v2's family parser fails closed so the typed fallback reproduces the raise — verifier-longtail F2)
+
+- FALLBACK (v1 raises ValidationError): amazon_nova non_string_wire_model
+- FALLBACK (v1 raises ValidationError): compactifai non_string_wire_model
+- FALLBACK (v1 raises ValidationError): lemonade non_string_wire_model
 
 ## compat_httpx family: streams (v1 base OpenAIChatCompletionStreamingHandler + CustomStreamWrapper(provider) over SSE lines vs v2 family parser with the xai chunk dialect)
 
