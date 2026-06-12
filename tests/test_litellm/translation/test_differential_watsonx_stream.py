@@ -119,6 +119,62 @@ STREAMS = {
         _chunk({"role": "assistant", "content": "Hi"}),
         _chunk({}, finish="time_limit"),
     ],
+    # verifier-wave2b-beta F7: v1 SERVES "stop" for unknown finish strings
+    # (the live map_finish_reason default, run by the chunk envelope on
+    # BOTH sides now that v2 rides the wire string verbatim) and for truthy
+    # non-str hashable values (StreamingChoices maps them at validation) —
+    # the old conservative loud arm diverged on every one of these.
+    "unknown_finish_eos_token_serves_stop": [
+        _chunk({"role": "assistant", "content": "Hi"}),
+        _chunk({}, finish="eos_token"),
+    ],
+    "unknown_finish_string_serves_stop": [
+        _chunk({"role": "assistant", "content": "Hi"}),
+        _chunk({}, finish="totally_unknown_xyz"),
+    ],
+    "non_str_finish_int_serves_stop": [
+        _chunk({"role": "assistant", "content": "Hi"}),
+        _chunk({}, finish=5),
+    ],
+    "non_str_finish_bool_serves_stop": [
+        _chunk({"role": "assistant", "content": "Hi"}),
+        _chunk({}, finish=True),
+    ],
+    # critic-wave2b-beta B1.4: the validated Delta lax-coerces tool indexes
+    # (str "3" -> 3, bool -> 1) — the old tail rewrote both to 0, a served
+    # value rewrite.
+    "tool_index_str_lax_coerces": [
+        _chunk(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": "3",
+                        "id": "c",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ],
+            }
+        ),
+        _chunk({}, finish="tool_calls"),
+    ],
+    "tool_index_bool_lax_coerces": [
+        _chunk(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": True,
+                        "id": "c",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ],
+            }
+        ),
+        _chunk({}, finish="tool_calls"),
+    ],
 }
 
 USAGE_STREAM = [
@@ -265,6 +321,122 @@ _PINNED_DIVERGENCES = {
         None,
         "function",
     ),
+    # critic B1.4 / verifier F4: v1's Delta validation swallows each of
+    # these whole chunks; the old tail coerced id/name to None and index to
+    # 0 and SERVED an invented tool call in their place.
+    "tool_call_id_non_str": (
+        [
+            _chunk(
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": 42,
+                            "type": "function",
+                            "function": {"name": "f", "arguments": ""},
+                        }
+                    ],
+                }
+            )
+        ],
+        None,
+        "id is not a string",
+    ),
+    "tool_call_name_non_str": (
+        [
+            _chunk(
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "c",
+                            "type": "function",
+                            "function": {"name": 5, "arguments": ""},
+                        }
+                    ],
+                }
+            )
+        ],
+        None,
+        "name is not a string",
+    ),
+    "tool_call_type_non_str": (
+        [
+            _chunk(
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "c",
+                            "type": 7,
+                            "function": {"name": "f", "arguments": ""},
+                        }
+                    ],
+                }
+            )
+        ],
+        None,
+        "type is not a string",
+    ),
+    "tool_call_index_non_coercible": (
+        [
+            _chunk(
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": "x",
+                            "id": "c",
+                            "type": "function",
+                            "function": {"name": "f", "arguments": ""},
+                        }
+                    ],
+                }
+            )
+        ],
+        None,
+        "index is not an integer",
+    ),
+    "tool_call_index_fractional": (
+        [
+            _chunk(
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 1.5,
+                            "id": "c",
+                            "type": "function",
+                            "function": {"name": "f", "arguments": ""},
+                        }
+                    ],
+                }
+            )
+        ],
+        None,
+        "index is not an integer",
+    ),
+    # verifier F4: usage VALUES Usage's lax coercion rejects fail the
+    # ModelResponseStream construction — v1 swallows the WHOLE chunk
+    # (content lost) where the old arm served the content chunk.
+    "mid_stream_usage_bad_values": (
+        [
+            _chunk(
+                {"role": "assistant", "content": "Hi"},
+                usage={"prompt_tokens": "abc"},
+            )
+        ],
+        None,
+        "not an integer",
+    ),
+    "usage_tail_bad_values": (
+        [_chunk(choices=[], usage={"prompt_tokens": "abc"})],
+        None,
+        "not an integer",
+    ),
 }
 
 
@@ -289,3 +461,58 @@ def test_pinned_divergences_v1_swallows_v2_loud(name: str, frozen_ambient) -> No
         result = parse_event(copy.deepcopy(events[0]))
     assert result.is_error(), f"{name} unexpectedly parsed"
     assert fragment in result.error.summary, result.error.summary
+
+
+# verifier F4/F7/F10: shapes v1 does NOT swallow — the iterator/wrapper
+# RAISES out of the stream (AttributeError or TypeError escapes the
+# except-ValueError arm -> MidStreamFallbackError); v2 is a typed error
+# naming that raise, never a served chunk.
+_V1_RAISES_LOUD = {
+    "delta_non_dict": (
+        [_chunk(choices=[{"index": 0, "delta": "oops", "finish_reason": None}])],
+        "not an object",
+    ),
+    "mid_stream_usage_non_dict": (
+        [_chunk({"role": "assistant", "content": "Hi"}, usage="oops")],
+        "usage is not an object",
+    ),
+    "usage_tail_non_dict": (
+        [_chunk(choices=[], usage="oops")],
+        "usage tail is not an object",
+    ),
+    "finish_truthy_unhashable": (
+        [_chunk({}, finish={"reason": "stop"})],
+        "unhashable",
+    ),
+    "tool_calls_non_list": (
+        [_chunk({"role": "assistant", "tool_calls": {"a": 1}})],
+        "not a list",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_V1_RAISES_LOUD))
+def test_v1_raising_shapes_are_loud_typed_errors(name: str, frozen_ambient) -> None:
+    events, fragment = _V1_RAISES_LOUD[name]
+    result = parse_event(copy.deepcopy(events[0]))
+    assert result.is_error(), f"{name} unexpectedly parsed"
+    assert fragment in result.error.summary, result.error.summary
+    with pytest.raises(Exception):
+        _v1_chunks(events)
+
+
+def test_falsy_finish_is_no_finish_with_the_synthesized_tail(frozen_ambient) -> None:
+    """F7: a falsy finish_reason ("", {}) fails StreamingChoices' truthy
+    gate in v1 — NO finish rides the chunk and the wrapper synthesizes the
+    trailing stop at StopIteration (seam scope, the no-wire-finish
+    contract); the old arm errored on "" and served "stop" inline for {}."""
+    for falsy in ("", {}):
+        events = [
+            _chunk({"role": "assistant", "content": "Hi"}),
+            _chunk({}, finish=falsy),
+        ]
+        v1 = _v1_chunks(events)
+        v2 = _v2_chunks(events)
+        assert len(v1) == len(v2) + 1, falsy
+        assert _norm(v2) == _norm(v1[:-1]), falsy
+        assert v1[-1]["choices"][0]["finish_reason"] == "stop", falsy

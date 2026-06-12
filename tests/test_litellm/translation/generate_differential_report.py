@@ -1078,6 +1078,39 @@ def _watsonx_rows(lines: list) -> int:
             )
             + f"{name} — v1's iterator silently swallows it, v2 errors loudly"
         )
+    for name in sorted(stream._V1_RAISES_LOUD):
+        events, fragment = stream._V1_RAISES_LOUD[name]
+        result = stream.parse_event(copy.deepcopy(events[0]))
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                stream._v1_chunks(events)
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises MidStreamFallbackError)' if ok else 'DIVERGENT'}:"
+            f" {name}"
+        )
+    for falsy, label in (("", "empty-string"), ({}, "empty-object")):
+        events = [
+            stream._chunk({"role": "assistant", "content": "Hi"}),
+            stream._chunk({}, finish=falsy),
+        ]
+        v1 = stream._v1_chunks(events)
+        v2 = stream._v2_chunks(events)
+        ok = (
+            len(v1) == len(v2) + 1
+            and stream._norm(v2) == stream._norm(v1[:-1])
+            and v1[-1]["choices"][0]["finish_reason"] == "stop"
+        )
+        failures += 0 if ok else 1
+        lines.append(
+            ("- SEAM CONTRACT: " if ok else "- DIVERGENT: ")
+            + f"falsy ({label}) finish_reason — no finish rides (v1's truthy"
+            " gate); v2 == v1 minus the wrapper's synthesized stop tail"
+        )
     return failures
 
 

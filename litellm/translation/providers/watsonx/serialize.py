@@ -16,9 +16,12 @@ with the ``_prepare_payload`` injection merged into optional_params first
   ``_prepare_payload`` injects exactly one;
 - tools: ``additionalProperties`` removed ONLY where its value is False,
   and ``strict`` removed at EVERY depth (``_remove_additional_properties``
-  + ``_remove_strict_from_schema``, both uncapped in v1; the shared
-  recursion cap here returns the subtree untouched past depth 16 — the
-  xai ``_strip_cache`` precedent);
+  + ``_remove_strict_from_schema``, both UNCAPPED in v1; the shared
+  recursion cap here returns the subtree untouched past depth
+  ``DEFAULT_MAX_RECURSE_DEPTH`` = 100 at HEAD — the xai ``_strip_cache``
+  precedent. Residual divergence, recorded honestly (critic N2): a
+  >100-deep tool schema keeps ``strict``/``additionalProperties: false``
+  keys v1 strips — served, unpinned, depth-100+ only);
 - ``tool_choice``: the string options auto/none/required move to
   ``tool_choice_option``; the dict form rides ``tool_choice`` verbatim;
 - ``response_format``/``reasoning_effort`` verbatim (both in the list;

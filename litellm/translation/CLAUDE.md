@@ -942,15 +942,29 @@ ModelResponse(**json)-direct with the LIVE ``watsonx/{wire_model}`` prefix
 (model None -> the literal "watsonx/"; non-string wire model fails closed
 — the verifier-longtail F2 arm), and streams through the databricks
 GenericStreamingChunk iterator (researcher-4 drift: NOT the plain openai
-dialect) folded by the "generic" dialect — wire finish maps through
-map_finish_reason (IBM time_limit/cancelled/error -> stop, max_tokens ->
-length; unknown strings are conservative loud errors), name-only tool
-starts ride with validated arguments "", mid-stream usage is stripped, the
-choices=[] usage tail passes through (seam contract), and a stream without
-a wire finish gets v1's SYNTHESIZED trailing stop (seam scope, the cohere
-contract). PINNED DIVERGENCES (fail-closed on failure paths): non-JSON
-stream lines and chunks failing ModelResponseStream validation — v1's
-iterator swallows both silently, v2 errors loudly (named report rows).
+dialect) folded by the "generic" dialect — a truthy STRING wire finish
+rides VERBATIM and the chunk envelope runs v1's live map_finish_reason on
+BOTH sides (IBM time_limit/cancelled/error -> stop, max_tokens -> length,
+unknown strings -> stop — the verifier-F7 fix; v1 SERVES "stop", the old
+conservative loud arm is gone), truthy non-str hashable finishes -> stop
+(the map's .get default), falsy finishes ride as NO finish (StreamingChoices'
+truthy gate; the synthesized tail is seam scope), truthy unhashable
+finishes are loud (v1's map raises TypeError -> MidStreamFallbackError);
+name-only tool starts ride with validated arguments "" and tool indexes
+lax-coerce exactly like v1's Delta (str digits, bools, integral floats);
+mid-stream usage is stripped AFTER validation (non-dict usage raises in
+v1 -> loud; values Usage's lax coercion rejects swallow the whole chunk in
+v1 -> pinned divergence); the choices=[] usage tail passes through (seam
+contract — NOTE: v1's include_usage wrapper OVERRIDES null/zero tail
+values with token-counter ESTIMATES; the future streaming seam must
+reproduce the estimate arm), and a stream without a wire finish gets v1's
+SYNTHESIZED trailing stop (seam scope, the cohere contract). PINNED
+DIVERGENCES (fail-closed on failure paths): non-JSON stream lines, chunks
+failing ModelResponseStream validation (incl. non-str tool id/name/type
+and non-coercible tool indexes — v2 never invents id/name None or index 0
+where v1 drops the chunk, critic B1.4), non-str delta content, and
+lax-rejected usage values — v1 swallows each silently, v2 errors loudly
+(named report rows).
 Watsonx fork obligations (NOT wired; integrator scope): construction arm
 "openai_like" (NEVER "openai" — the construction-arm gate applies), no
 model preset, deps built with the resolved project/space ids, streams fold
