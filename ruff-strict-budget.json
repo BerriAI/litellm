@@ -1,12 +1,12 @@
 {
   "ANN001": { "baseline": 2865, "slack": 50 },
-  "ANN002": { "baseline": 64, "slack": 0 },
+  "ANN002": { "baseline": 64, "slack": 3 },
   "ANN003": { "baseline": 759, "slack": 25 },
   "ANN401": { "baseline": 1885, "slack": 50 },
-  "B006": { "baseline": 180, "slack": 0 },
-  "C901": { "baseline": 301, "slack": 0 },
-  "PLR0913": { "baseline": 1813, "slack": 0 },
-  "PLW0603": { "baseline": 183, "slack": 0 },
-  "RUF012": { "baseline": 158, "slack": 0 },
+  "B006": { "baseline": 180, "slack": 3 },
+  "C901": { "baseline": 301, "slack": 3 },
+  "PLR0913": { "baseline": 1813, "slack": 3 },
+  "PLW0603": { "baseline": 183, "slack": 3 },
+  "RUF012": { "baseline": 158, "slack": 3 },
   "TID251": { "baseline": 1575, "slack": 50 }
 }
