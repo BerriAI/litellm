@@ -726,10 +726,9 @@ def _loose_model_extra_token(usage: Usage, field_name: str) -> float:
 def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
     """Return the total effective input tokens for tier-threshold comparisons.
 
-    Some providers (Anthropic direct, Bedrock) roll cache_creation and cache_read
-    tokens into prompt_tokens before constructing the Usage object, while others
-    (Vertex AI) keep them separate.  When prompt_tokens_details is present we can
-    derive the true total from its per-category fields and avoid double-counting.
+    Some providers report cache tokens inside prompt_tokens, while others keep
+    them separate. When prompt_tokens_details is present, prefer the category
+    fields so the threshold check can avoid double-counting cache tokens.
     """
     prompt_tokens: Final = float(usage.prompt_tokens or 0)
     details: Final = usage.prompt_tokens_details
