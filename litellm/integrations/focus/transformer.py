@@ -12,6 +12,8 @@ from .schema import FOCUS_NORMALIZED_SCHEMA
 _TAG_KEYS = (
     "team_id",
     "team_alias",
+    "organization_id",
+    "organization_alias",
     "user_id",
     "user_email",
     "api_key_alias",

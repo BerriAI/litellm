@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.claude_code_endpoints import (
     ListPluginsResponse,
     PluginListItem,
@@ -71,7 +72,7 @@ async def get_marketplace():
     try:
         prisma_client = await _get_prisma_client()
 
-        plugins = await prisma_client.db.litellm_claudecodeplugintable.find_many(
+        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(
             where={"enabled": True}
         )
 
@@ -268,12 +269,12 @@ async def register_plugin(
             manifest["namespace"] = request.namespace
 
         # Check if plugin exists
-        existing = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
+        existing = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": request.name}
         )
 
         if existing:
-            plugin = await prisma_client.db.litellm_claudecodeplugintable.update(
+            plugin = await ClaudeCodePluginRepository(prisma_client).table.update(
                 where={"name": request.name},
                 data={
                     "version": request.version,
@@ -285,7 +286,7 @@ async def register_plugin(
             )
             action = "updated"
         else:
-            plugin = await prisma_client.db.litellm_claudecodeplugintable.create(
+            plugin = await ClaudeCodePluginRepository(prisma_client).table.create(
                 data={
                     "name": request.name,
                     "version": request.version,
@@ -348,7 +349,7 @@ async def list_plugins(
         prisma_client = await _get_prisma_client()
 
         where = {"enabled": True} if enabled_only else {}
-        plugins = await prisma_client.db.litellm_claudecodeplugintable.find_many(
+        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(
             where=where
         )
 
@@ -415,7 +416,7 @@ async def get_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": plugin_name}
         )
 
@@ -471,7 +472,7 @@ async def enable_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": plugin_name}
         )
         if not plugin:
@@ -480,7 +481,7 @@ async def enable_plugin(
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        await prisma_client.db.litellm_claudecodeplugintable.update(
+        await ClaudeCodePluginRepository(prisma_client).table.update(
             where={"name": plugin_name},
             data={"enabled": True, "updated_at": datetime.now(timezone.utc)},
         )
@@ -516,7 +517,7 @@ async def disable_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": plugin_name}
         )
         if not plugin:
@@ -525,7 +526,7 @@ async def disable_plugin(
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        await prisma_client.db.litellm_claudecodeplugintable.update(
+        await ClaudeCodePluginRepository(prisma_client).table.update(
             where={"name": plugin_name},
             data={"enabled": False, "updated_at": datetime.now(timezone.utc)},
         )
@@ -561,7 +562,7 @@ async def delete_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": plugin_name}
         )
         if not plugin:
@@ -570,7 +571,7 @@ async def delete_plugin(
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        await prisma_client.db.litellm_claudecodeplugintable.delete(
+        await ClaudeCodePluginRepository(prisma_client).table.delete(
             where={"name": plugin_name}
         )
 

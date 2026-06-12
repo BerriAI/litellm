@@ -28,6 +28,8 @@ jobs:
         tests/test_litellm/completion_extras
         tests/test_litellm/containers
         tests/test_litellm/experimental_mcp_client
+        tests/test_litellm/models
+        tests/test_litellm/repositories
         tests/test_litellm/images
         tests/test_litellm/interactions
         tests/test_litellm/passthrough

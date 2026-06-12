@@ -139,6 +139,44 @@ class TestVertexAIGeminiImageGenerationConfig:
         )
         assert request["generationConfig"]["imageConfig"]["imageSize"] == "4K"
 
+    def test_map_openai_params_web_search_options(self):
+        """Test web_search_options maps to googleSearch tool"""
+        result = self.config.map_openai_params(
+            {"web_search_options": {}}, {}, "gemini-3.1-flash-image-preview", False
+        )
+        assert result["tools"] == [{"googleSearch": {}}]
+
+    def test_transform_image_generation_request_with_web_search_tools(self):
+        """Test request transformation includes googleSearch tools"""
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image-preview",
+            prompt="Generate an image of the latest iPhone",
+            optional_params={"tools": [{"googleSearch": {}}]},
+            litellm_params={},
+            headers={},
+        )
+        assert request["tools"] == [{"googleSearch": {}}]
+
+    def test_transform_image_generation_request_forwards_tool_config(self):
+        """Test request transformation forwards toolConfig side-effects from tool mapping"""
+        mapped = self.config.map_openai_params(
+            {"tools": [{"googleMaps": {"latitude": 37.7, "longitude": -122.4}}]},
+            {},
+            "gemini-3.1-flash-image-preview",
+            False,
+        )
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image-preview",
+            prompt="Generate an image of a coffee shop nearby",
+            optional_params=mapped,
+            litellm_params={},
+            headers={},
+        )
+        assert request["tools"] == [{"googleMaps": {}}]
+        assert request["toolConfig"] == {
+            "retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}
+        }
+
     def test_transform_image_generation_request_with_candidate_count(self):
         """Test request transformation with candidate_count"""
         request = self.config.transform_image_generation_request(
@@ -310,6 +348,51 @@ class TestVertexAIGeminiImageGenerationConfig:
             result.data[0].provider_specific_fields["thought_signature"]
             == "test_signature_abc123"
         )
+
+    def test_transform_image_generation_response_tracks_web_search_requests(self):
+        """Grounding queries are carried onto usage so search spend can be billed"""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "base64_encoded_image_data",
+                                }
+                            }
+                        ]
+                    },
+                    "groundingMetadata": {
+                        "webSearchQueries": ["eiffel tower", "paris skyline"]
+                    },
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 93,
+                "candidatesTokenCount": 17,
+                "totalTokenCount": 110,
+            },
+        }
+        mock_response.headers = {}
+
+        from litellm.types.utils import ImageResponse
+
+        result = self.config.transform_image_generation_response(
+            model="gemini-2.5-flash-image",
+            raw_response=mock_response,
+            model_response=ImageResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.usage.web_search_requests == 2
 
 
 class TestVertexAIImagenImageGenerationConfig:

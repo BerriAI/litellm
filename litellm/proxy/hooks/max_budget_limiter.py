@@ -4,7 +4,10 @@ from litellm import verbose_logger
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.exceptions import RateLimitType
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
 
 class _PROXY_MaxBudgetLimiter(CustomLogger):
@@ -63,7 +66,15 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
 
             # CHECK IF REQUEST ALLOWED
             if curr_spend >= max_budget:
-                raise HTTPException(status_code=429, detail="Max budget limit reached.")
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+                    data.get("model") if data else None
+                )
+                raise ProxyRateLimitError(
+                    detail="Max budget limit reached.",
+                    rate_limit_type=RateLimitType.BUDGET,
+                    model=resolved_model,
+                    llm_provider=llm_provider,
+                )
         except HTTPException as e:
             raise e
         except Exception as e:

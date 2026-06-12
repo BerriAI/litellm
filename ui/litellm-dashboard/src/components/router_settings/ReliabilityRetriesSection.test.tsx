@@ -21,9 +21,9 @@ describe("ReliabilityRetriesSection", () => {
 
   it("should render input fields for non-excluded settings", () => {
     render(<ReliabilityRetriesSection routerSettings={baseSettings} routerFieldsMetadata={{}} />);
-    expect(screen.getByDisplayValue("3")).toBeInTheDocument();   // num_retries
-    expect(screen.getByDisplayValue("30")).toBeInTheDocument();  // timeout
-    expect(screen.getByDisplayValue("2")).toBeInTheDocument();   // allowed_fails
+    expect(screen.getByDisplayValue("3")).toBeInTheDocument(); // num_retries
+    expect(screen.getByDisplayValue("30")).toBeInTheDocument(); // timeout
+    expect(screen.getByDisplayValue("2")).toBeInTheDocument(); // allowed_fails
   });
 
   it("should not render inputs for excluded keys", () => {
@@ -42,23 +42,17 @@ describe("ReliabilityRetriesSection", () => {
     const metadata = {
       num_retries: { ui_field_name: "Number of Retries", field_description: "How many times to retry" },
     };
-    render(
-      <ReliabilityRetriesSection routerSettings={{ num_retries: 3 }} routerFieldsMetadata={metadata} />
-    );
+    render(<ReliabilityRetriesSection routerSettings={{ num_retries: 3 }} routerFieldsMetadata={metadata} />);
     expect(screen.getByText("Number of Retries")).toBeInTheDocument();
   });
 
   it("should fall back to the raw param name when no metadata label is available", () => {
-    render(
-      <ReliabilityRetriesSection routerSettings={{ num_retries: 3 }} routerFieldsMetadata={{}} />
-    );
+    render(<ReliabilityRetriesSection routerSettings={{ num_retries: 3 }} routerFieldsMetadata={{}} />);
     expect(screen.getByText("num_retries")).toBeInTheDocument();
   });
 
   it("should render null values as an empty input", () => {
-    render(
-      <ReliabilityRetriesSection routerSettings={{ timeout: null }} routerFieldsMetadata={{}} />
-    );
+    render(<ReliabilityRetriesSection routerSettings={{ timeout: null }} routerFieldsMetadata={{}} />);
     const input = screen.getByRole("textbox", { name: /timeout/i }) as HTMLInputElement;
     expect(input.value).toBe("");
   });
@@ -69,7 +63,7 @@ describe("ReliabilityRetriesSection", () => {
     // HTML input type=text strips newlines, so check that the key/value appears
     const input = screen.getByRole("textbox", { name: /retry_policy/i }) as HTMLInputElement;
     expect(input.value).toContain('"rate-limited"');
-    expect(input.value).toContain('2');
+    expect(input.value).toContain("2");
   });
 
   it("should render no inputs when routerSettings is empty", () => {

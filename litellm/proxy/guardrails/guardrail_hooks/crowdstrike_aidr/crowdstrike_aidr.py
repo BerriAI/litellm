@@ -105,6 +105,16 @@ def _extract_text_from_content(content: object) -> str:
     return ""
 
 
+def _merge_metadata_bags(request_data: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    merged: dict[str, Any] = {}
+    present = False
+    for bag in (request_data.get("metadata"), request_data.get("litellm_metadata")):
+        if isinstance(bag, Mapping):
+            present = True
+            merged.update(bag)
+    return merged if present else None
+
+
 class CrowdStrikeAIDRHandler(CustomGuardrail):
     """
     CrowdStrike AIDR AI Guardrail handler to interact with the CrowdStrike AIDR
@@ -312,10 +322,26 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             event_type = "output"
             hook_name = "apply_guardrail (response)"
 
-        ai_guard_payload = {
+        ai_guard_payload: dict[str, Any] = {
             "guard_input": guard_input.model_dump(mode="json"),
             "event_type": event_type,
         }
+
+        model = inputs.get("model")
+        if model:
+            ai_guard_payload["model"] = model
+
+        metadata = _merge_metadata_bags(request_data)
+        if metadata is not None:
+            user_id = metadata.get("user_api_key_user_id")
+            if user_id:
+                ai_guard_payload["user_id"] = user_id
+
+            extra_info: dict[str, str] = {}
+            user_email = metadata.get("user_api_key_user_email")
+            if user_email:
+                extra_info["user_name"] = user_email
+            ai_guard_payload["extra_info"] = extra_info
 
         ai_guard_response = await self._call_crowdstrike_aidr_guard(
             ai_guard_payload, hook_name

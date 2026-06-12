@@ -43,6 +43,10 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.repositories.table_repositories import (
+    ManagedFileRepository,
+    ManagedObjectRepository,
+)
 from litellm.types.llms.openai import OpenAIFileObject
 
 from .managed_id_codec import ManagedIdPayload, decode, is_managed, new_managed_id
@@ -323,7 +327,7 @@ async def _resolve_one(
                 )
         if not found and prisma_client is not None:
             try:
-                db_row = await prisma_client.db.litellm_managedfiletable.find_first(
+                db_row = await ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": managed_id}
                 )
                 if db_row is not None:
@@ -339,7 +343,7 @@ async def _resolve_one(
         # Object table (batches, responses)
         if prisma_client is not None:
             try:
-                obj_row = await prisma_client.db.litellm_managedobjecttable.find_first(
+                obj_row = await ManagedObjectRepository(prisma_client).table.find_first(
                     where={"unified_object_id": managed_id}
                 )
                 if obj_row is not None:
@@ -399,7 +403,7 @@ async def _guard_raw_provider_id(
         # id and scope to the current provider in the application layer (same as
         # _mint_or_reuse_file's dedup).
         try:
-            candidates = await prisma_client.db.litellm_managedfiletable.find_many(
+            candidates = await ManagedFileRepository(prisma_client).table.find_many(
                 where={"flat_model_file_ids": {"has": raw_id}},
             )
         except Exception:
@@ -425,7 +429,7 @@ async def _guard_raw_provider_id(
         # Object rows store model_object_id as "passthrough:{provider}:{raw}", so
         # the lookup is exact and already provider-scoped.
         try:
-            existing = await prisma_client.db.litellm_managedobjecttable.find_first(
+            existing = await ManagedObjectRepository(prisma_client).table.find_first(
                 where={"model_object_id": f"passthrough:{provider}:{raw_id}"}
             )
         except Exception:
@@ -492,7 +496,7 @@ async def _mint_or_reuse_file(
     # reuse a stable row instead of minting duplicate rows on every call.
     if prisma_client is not None:
         try:
-            candidates = await prisma_client.db.litellm_managedfiletable.find_many(
+            candidates = await ManagedFileRepository(prisma_client).table.find_many(
                 where={"flat_model_file_ids": {"has": raw_id}},
                 order={"created_at": "asc"},
             )
@@ -627,7 +631,7 @@ async def _mint_or_reuse_object(
             # the batch's latest state (e.g. output_file_id / error_file_id that
             # were null at creation but populated once the batch completed).
             try:
-                await prisma_client.db.litellm_managedobjecttable.update(
+                await ManagedObjectRepository(prisma_client).table.update(
                     where={"unified_object_id": existing.unified_object_id},
                     data={
                         "file_object": json.dumps(body_snapshot),
@@ -647,7 +651,7 @@ async def _mint_or_reuse_object(
 
     # Dedup: look up by the namespaced key — guaranteed unique per provider.
     try:
-        existing = await prisma_client.db.litellm_managedobjecttable.find_first(
+        existing = await ManagedObjectRepository(prisma_client).table.find_first(
             where={"model_object_id": namespaced_model_object_id}
         )
     except Exception:
@@ -666,7 +670,7 @@ async def _mint_or_reuse_object(
         raw_id.split("_", 1)[0],
     )
     try:
-        await prisma_client.db.litellm_managedobjecttable.upsert(
+        await ManagedObjectRepository(prisma_client).table.upsert(
             where={"unified_object_id": managed_id},
             data={
                 "create": {
@@ -690,7 +694,7 @@ async def _mint_or_reuse_object(
         # the winner's managed ID so both callers converge on one ID instead of
         # the loser silently keeping the raw id.
         try:
-            raced = await prisma_client.db.litellm_managedobjecttable.find_first(
+            raced = await ManagedObjectRepository(prisma_client).table.find_first(
                 where={"model_object_id": namespaced_model_object_id}
             )
         except Exception:
@@ -883,9 +887,9 @@ async def _build_list_where_with_cursor(
         return where, fetch_order
 
     cursor_table = (
-        prisma_client.db.litellm_managedfiletable
+        ManagedFileRepository(prisma_client).table
         if resource_kind == "files"
-        else prisma_client.db.litellm_managedobjecttable
+        else ManagedObjectRepository(prisma_client).table
     )
     cursor_field = (
         "unified_file_id" if resource_kind == "files" else "unified_object_id"
@@ -932,12 +936,12 @@ async def _fetch_list_rows(
     # across rows that share a created_at timestamp.
     try:
         if resource_kind == "files":
-            return await prisma_client.db.litellm_managedfiletable.find_many(
+            return await ManagedFileRepository(prisma_client).table.find_many(
                 where=where,
                 order=[{"created_at": fetch_order}, {"unified_file_id": fetch_order}],
                 take=fetch_limit,
             )
-        return await prisma_client.db.litellm_managedobjecttable.find_many(
+        return await ManagedObjectRepository(prisma_client).table.find_many(
             where={**where, "file_purpose": "batch"},
             order=[{"created_at": fetch_order}, {"unified_object_id": fetch_order}],
             take=fetch_limit,

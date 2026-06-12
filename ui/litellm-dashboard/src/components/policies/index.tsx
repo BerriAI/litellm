@@ -29,10 +29,7 @@ import {
   createGuardrailCall,
   enrichPolicyTemplate,
 } from "../networking";
-import {
-  Policy,
-  PolicyAttachment,
-} from "./types";
+import { Policy, PolicyAttachment } from "./types";
 import { Guardrail } from "../guardrails/types";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 
@@ -41,10 +38,7 @@ interface PoliciesPanelProps {
   userRole?: string;
 }
 
-const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
-  accessToken,
-  userRole,
-}) => {
+const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) => {
   const [policiesList, setPoliciesList] = useState<Policy[]>([]);
   const [attachmentsList, setAttachmentsList] = useState<PolicyAttachment[]>([]);
   const [guardrailsList, setGuardrailsList] = useState<Guardrail[]>([]);
@@ -221,7 +215,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     try {
       const existingGuardrailsResponse = await getGuardrailsList(accessToken);
       const existingNames = new Set<string>(
-        existingGuardrailsResponse.guardrails?.map((g: any) => g.guardrail_name as string) || []
+        existingGuardrailsResponse.guardrails?.map((g: any) => g.guardrail_name as string) || [],
       );
 
       setExistingGuardrailNames(existingNames);
@@ -243,7 +237,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
   const handleParameterConfirm = async (
     parameters: Record<string, string>,
-    enrichmentOptions?: { model?: string; competitors?: string[] }
+    enrichmentOptions?: { model?: string; competitors?: string[] },
   ) => {
     if (!accessToken || !pendingTemplate) return;
 
@@ -259,7 +253,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           pendingTemplate.id,
           parameters,
           enrichmentOptions?.model,
-          enrichmentOptions?.competitors
+          enrichmentOptions?.competitors,
         );
         // The backend returns the enriched guardrailDefinitions + discovered competitors
         enrichedTemplate = {
@@ -301,7 +295,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       // Create selected guardrails
       for (const guardrailDef of selectedGuardrailDefinitions) {
         const guardrailName = guardrailDef.guardrail_name;
-        
+
         try {
           await createGuardrailCall(accessToken, guardrailDef);
           createdGuardrails.push(guardrailName);
@@ -327,7 +321,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       // Show success message
       if (createdGuardrails.length > 0) {
         MessageManager.success(
-          `Created ${createdGuardrails.length} guardrail${createdGuardrails.length > 1 ? "s" : ""}! Complete the policy form to save.`
+          `Created ${createdGuardrails.length} guardrail${createdGuardrails.length > 1 ? "s" : ""}! Complete the policy form to save.`,
         );
       } else {
         MessageManager.success("Template ready! Complete the policy form to save.");
@@ -335,7 +329,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
       if (failedGuardrails.length > 0) {
         MessageManager.warning(
-          `Failed to create ${failedGuardrails.length} guardrail(s): ${failedGuardrails.join(", ")}. You may need to create them manually.`
+          `Failed to create ${failedGuardrails.length} guardrail(s): ${failedGuardrails.join(", ")}. You may need to create them manually.`,
         );
       }
 
@@ -343,9 +337,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       if (templateQueue.length > 0) {
         const [nextTemplate, ...remaining] = templateQueue;
         setTemplateQueue(remaining);
-        setTemplateQueueProgress((prev) =>
-          prev ? { ...prev, current: prev.current + 1 } : null
-        );
+        setTemplateQueueProgress((prev) => (prev ? { ...prev, current: prev.current + 1 } : null));
         // Small delay so user can see the success message
         setTimeout(() => handleUseTemplate(nextTemplate), 500);
       } else {
@@ -379,7 +371,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
         <TabPanels>
           <TabPanel>
-          <Alert
+            <Alert
               message="About Policies"
               description={
                 <div>
@@ -538,15 +530,29 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               description={
                 <div>
                   <p className="mb-3">
-                    Policy attachments control where your policies apply. Policies don&apos;t do anything until you attach them to specific teams, keys, models, tags, or globally.
+                    Policy attachments control where your policies apply. Policies don&apos;t do anything until you
+                    attach them to specific teams, keys, models, tags, or globally.
                   </p>
                   <p className="mb-2 font-semibold">Attachment Scopes:</p>
                   <ul className="list-disc list-inside mb-3 space-y-1 ml-2">
-                    <li><strong>Global (*)</strong> - Applies to all requests</li>
-                    <li><strong>Teams</strong> - Applies only to specific teams</li>
-                    <li><strong>Keys</strong> - Applies only to specific API keys (supports wildcards like dev-*)</li>
-                    <li><strong>Models</strong> - Applies only when specific models are used</li>
-                    <li><strong>Tags</strong> - Matches tags from key/team <code>metadata.tags</code> or tags passed dynamically in the request body (<code>metadata.tags</code>). Use this to enforce policies across groups, e.g. &quot;all keys tagged <code>healthcare</code> get HIPAA guardrails.&quot; Supports wildcards (<code>prod-*</code>).</li>
+                    <li>
+                      <strong>Global (*)</strong> - Applies to all requests
+                    </li>
+                    <li>
+                      <strong>Teams</strong> - Applies only to specific teams
+                    </li>
+                    <li>
+                      <strong>Keys</strong> - Applies only to specific API keys (supports wildcards like dev-*)
+                    </li>
+                    <li>
+                      <strong>Models</strong> - Applies only when specific models are used
+                    </li>
+                    <li>
+                      <strong>Tags</strong> - Matches tags from key/team <code>metadata.tags</code> or tags passed
+                      dynamically in the request body (<code>metadata.tags</code>). Use this to enforce policies across
+                      groups, e.g. &quot;all keys tagged <code>healthcare</code> get HIPAA guardrails.&quot; Supports
+                      wildcards (<code>prod-*</code>).
+                    </li>
                   </ul>
                   <a
                     href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies#attachments"
@@ -631,9 +637,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
             const [first, ...rest] = selectedTemplates;
             setTemplateQueue(rest);
             setTemplateQueueProgress(
-              selectedTemplates.length > 1
-                ? { current: 1, total: selectedTemplates.length }
-                : null
+              selectedTemplates.length > 1 ? { current: 1, total: selectedTemplates.length } : null,
             );
             handleUseTemplate(first);
           }

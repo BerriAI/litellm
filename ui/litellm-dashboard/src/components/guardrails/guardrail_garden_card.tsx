@@ -65,10 +65,7 @@ const GuardrailCard: React.FC<{ card: GuardrailCardInfo; onClick: () => void }> 
       </div>
 
       {/* Description */}
-      <p
-        className="line-clamp-3"
-        style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6, margin: 0, flex: 1 }}
-      >
+      <p className="line-clamp-3" style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6, margin: 0, flex: 1 }}>
         {card.description}
       </p>
 

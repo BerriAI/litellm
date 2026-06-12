@@ -309,9 +309,13 @@ class Cache:
                     param_value = kwargs[param]
                     cache_key += f"{str(param)}: {str(param_value)}"
 
-        verbose_logger.debug("\nCreated cache key: %s", cache_key)
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
+        verbose_logger.debug(
+            "\nCreated cache key: %s (source material length: %d)",
+            hashed_cache_key,
+            len(cache_key),
+        )
         # Remove preset_cache_key from kwargs to avoid "got multiple values" TypeError
         # when kwargs already contains preset_cache_key from upstream callers
         kwargs_for_preset = {k: v for k, v in kwargs.items() if k != "preset_cache_key"}
@@ -497,6 +501,34 @@ class Cache:
             return cached_response
         return cached_result
 
+    @staticmethod
+    def _get_safe_cache_lookup_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        cache_lookup_kwargs: Dict[str, Any] = {}
+        for prompt_kwarg in ("messages", "input"):
+            if prompt_kwarg in kwargs:
+                cache_lookup_kwargs[prompt_kwarg] = kwargs[prompt_kwarg]
+
+        if isinstance(kwargs.get("metadata"), dict):
+            cache_lookup_kwargs["metadata"] = {}
+
+        return cache_lookup_kwargs
+
+    @staticmethod
+    def _update_metadata_from_cache_lookup_kwargs(
+        original_kwargs: Dict[str, Any], cache_lookup_kwargs: Dict[str, Any]
+    ) -> None:
+        original_metadata = original_kwargs.get("metadata")
+        cache_lookup_metadata = cache_lookup_kwargs.get("metadata")
+        if not isinstance(original_metadata, dict) or not isinstance(
+            cache_lookup_metadata, dict
+        ):
+            return
+
+        if "semantic-similarity" in cache_lookup_metadata:
+            original_metadata["semantic-similarity"] = cache_lookup_metadata[
+                "semantic-similarity"
+            ]
+
     def get_cache(self, dynamic_cache_object: Optional[BaseCache] = None, **kwargs):
         """
         Retrieves the cached result for the given arguments.
@@ -511,7 +543,6 @@ class Cache:
         try:  # never block execution
             if self.should_use_cache(**kwargs) is not True:
                 return
-            messages = kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
@@ -523,12 +554,19 @@ class Cache:
                     or cache_control_args.get("s-max-age")
                     or float("inf")
                 )
+                cache_lookup_kwargs = self._get_safe_cache_lookup_kwargs(kwargs)
                 if dynamic_cache_object is not None:
                     cached_result = dynamic_cache_object.get_cache(
-                        cache_key, messages=messages
+                        cache_key, **cache_lookup_kwargs
                     )
                 else:
-                    cached_result = self.cache.get_cache(cache_key, messages=messages)
+                    cached_result = self.cache.get_cache(
+                        cache_key, **cache_lookup_kwargs
+                    )
+                self._update_metadata_from_cache_lookup_kwargs(
+                    original_kwargs=kwargs,
+                    cache_lookup_kwargs=cache_lookup_kwargs,
+                )
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
                 )
@@ -549,7 +587,6 @@ class Cache:
             if self.should_use_cache(**kwargs) is not True:
                 return
 
-            kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
@@ -654,6 +691,7 @@ class Cache:
         self,
         embedding_response: Any,
         model: Optional[str],
+        prompt_tokens: Optional[int] = None,
         prompt_tokens_details: Optional[dict] = None,
     ) -> CachedEmbedding:
         """
@@ -666,6 +704,7 @@ class Cache:
                     "index": embedding_response.get("index"),
                     "object": embedding_response.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_tokens_details": prompt_tokens_details,
                 }
             elif hasattr(embedding_response, "model_dump"):
@@ -675,6 +714,7 @@ class Cache:
                     "index": data.get("index"),
                     "object": data.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_tokens_details": prompt_tokens_details,
                 }
             else:
@@ -684,6 +724,7 @@ class Cache:
                     "index": data.get("index"),
                     "object": data.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_tokens_details": prompt_tokens_details,
                 }
         except KeyError as e:
@@ -732,6 +773,29 @@ class Cache:
                 per_item[key] = value
         return per_item if per_item else None
 
+    def _get_per_item_prompt_tokens(
+        self,
+        result: EmbeddingResponse,
+        idx_in_result_data: int,
+    ) -> Optional[int]:
+        """
+        Extract the per-item prompt_tokens from a response for caching.
+
+        Single-item responses store the full usage.prompt_tokens. Multi-item
+        responses distribute it evenly (with remainder) so that summing all
+        per-item values on retrieval reconstructs the original total.
+        """
+        if result.usage is None or result.usage.prompt_tokens is None:
+            return None
+
+        total = result.usage.prompt_tokens
+        num_items = len(result.data)
+        if num_items <= 1:
+            return total
+
+        quotient, remainder = divmod(total, num_items)
+        return quotient + (1 if idx_in_result_data < remainder else 0)
+
     def add_embedding_response_to_cache(
         self,
         result: EmbeddingResponse,
@@ -743,7 +807,11 @@ class Cache:
         kwargs["cache_key"] = preset_cache_key
         embedding_response = result.data[idx_in_result_data]
 
-        # Extract per-item prompt_tokens_details from response usage
+        # Extract per-item prompt_tokens + details from response usage
+        prompt_tokens = self._get_per_item_prompt_tokens(
+            result=result,
+            idx_in_result_data=idx_in_result_data,
+        )
         prompt_tokens_details = self._get_per_item_prompt_tokens_details(
             result=result,
             idx_in_result_data=idx_in_result_data,
@@ -754,6 +822,7 @@ class Cache:
         embedding_dict: CachedEmbedding = self._convert_to_cached_embedding(
             embedding_response,
             model_name,
+            prompt_tokens=prompt_tokens,
             prompt_tokens_details=prompt_tokens_details,
         )
 

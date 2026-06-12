@@ -35,7 +35,7 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
   };
 
   const getProviderDisplayName = (providerName: string) => {
-    const provider = availableProviders.find(p => p.provider_name === providerName);
+    const provider = availableProviders.find((p) => p.provider_name === providerName);
     return provider?.ui_friendly_name || providerName;
   };
 
@@ -53,10 +53,11 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
               size="small"
               icon={copiedStates["search-tool-name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(searchTool.search_tool_name, "search-tool-name")}
-              className={`left-2 z-10 transition-all duration-200 ${copiedStates["search-tool-name"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                }`}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["search-tool-name"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
             />
           </div>
           <div className="flex items-center cursor-pointer">
@@ -66,10 +67,11 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
               size="small"
               icon={copiedStates["search-tool-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(searchTool.search_tool_id, "search-tool-id")}
-              className={`left-2 z-10 transition-all duration-200 ${copiedStates["search-tool-id"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                }`}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["search-tool-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
             />
           </div>
         </div>
@@ -93,9 +95,7 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
         <Card>
           <Text>Created At</Text>
           <div className="mt-2">
-            <Text>
-              {searchTool.created_at ? new Date(searchTool.created_at).toLocaleString() : "Unknown"}
-            </Text>
+            <Text>{searchTool.created_at ? new Date(searchTool.created_at).toLocaleString() : "Unknown"}</Text>
           </div>
         </Card>
       </Grid>
@@ -111,15 +111,8 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
 
       {/* Search Tool Tester */}
       <div className="mt-6">
-        {accessToken && (
-          <SearchToolTester
-            searchToolName={searchTool.search_tool_name}
-            accessToken={accessToken}
-          />
-        )}
+        {accessToken && <SearchToolTester searchToolName={searchTool.search_tool_name} accessToken={accessToken} />}
       </div>
     </div>
   );
 };
-
-

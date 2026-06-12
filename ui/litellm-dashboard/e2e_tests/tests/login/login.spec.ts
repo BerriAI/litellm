@@ -21,9 +21,12 @@ test("user can log in", async ({ page }) => {
 
   // Filter by the popupRender wrapper class to disambiguate from other
   // ant-dropdown popups.
-  const popup = page.locator(".ant-dropdown:visible").filter({
-    has: page.locator(".bg-white.rounded-lg.shadow-lg"),
-  }).first();
+  const popup = page
+    .locator(".ant-dropdown:visible")
+    .filter({
+      has: page.locator(".bg-white.rounded-lg.shadow-lg"),
+    })
+    .first();
   await expect(popup).toBeVisible({ timeout: 5_000 });
   await expect(popup.getByText("Admin", { exact: true })).toBeVisible({ timeout: 5_000 });
   await expect(popup.getByText("default_user_id", { exact: true })).toBeVisible({ timeout: 5_000 });

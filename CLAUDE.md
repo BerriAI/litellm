@@ -42,7 +42,7 @@ When you must use real LLM models to, for example, write e2e tests, write a QA r
 
 If you're an internal contributor, when creating a new PR, the typical flow is to branch off litellm_internal_staging and create a branch prefixed with litellm_. Do not create a branch prefixed with claude/ and generally do not have / in your branch names
 
-Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages. Never use a `claude/` prefix or put a `/` in a branch name. Do not add "Generated with Claude Code" (or any similar attribution) to PR descriptions. Do not create a new PR/branch off the existing PR to fix/add something that is related and could've just been committed directly to the existing PR's branch
+Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages. Never use a `claude/` prefix or put a `/` in a branch name. Do not add "Generated with Claude Code" (or any similar attribution) to PR descriptions or comments. Do not create a new PR/branch off the existing PR to fix/add something that is related and could've just been committed directly to the existing PR's branch
 
 When working on a PR, keep the PR description in sync with new commits being made
 
@@ -51,6 +51,19 @@ Monkeypatching attributes of a class to do testing is an anti-pattern. Prefer de
 Do not put names of customers or customer company names in code, PRs, and issues. The codebase is public
 
 CI supply-chain safety: Never pipe a remote script into a shell (`curl ... | bash`, `wget ... | sh`); download the artifact to a file, verify its SHA-256 checksum, then install. Pin every external tool to a specific version with a full URL (not `latest` or `stable`). Verify checksums for all downloaded binaries, using the provider's official `.sha256` / `.sha256sum` sidecar when available. These rules apply to every download in CI
+
+Follow these coding conventions for new/updated code (a three-line fix in a legacy file shouldn't trigger huge drive-by refactors):
+
+- Composition over inheritance
+- Never-nester: early returns over deep nesting
+- Don't throw; model failures as values (One function (e.g., raise_public) maps error union to existing public exception contracts via exhaustive match + assert_never)
+- No mutation; instead of mutable lists and dicts, prefer tuples, NamedTuples, frozen dataclasses, etc.
+- Use dependency injection
+- Fully typed; no `Any` or coarse types like dict[str, Any]. Every function parameter must be strongly typed
+- Use tagged unions + match
+- No monster files or god objects
+
+Follow conventional commits for commit names and PR titles
 
 ## Think Before Coding
 

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import ssl
 import sys
@@ -10,8 +11,24 @@ import pytest
 sys.path.insert(0, "../../../")
 
 import litellm.experimental_mcp_client.client as mcp_client_module
-from litellm.experimental_mcp_client.client import MCPClient
+from litellm.experimental_mcp_client.client import (
+    MCPClient,
+    _first_non_cancelled_cause,
+)
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
+
+
+class _FakeExceptionGroup(Exception):
+    """Duck-typed stand-in for an anyio/builtin ExceptionGroup.
+
+    The production unwrapper reads ``.exceptions`` rather than depending on the
+    builtin ``ExceptionGroup`` type, so this exercises the same code path on
+    every Python version.
+    """
+
+    def __init__(self, message, exceptions):
+        super().__init__(message)
+        self.exceptions = tuple(exceptions)
 
 
 class TestMCPClient:
@@ -307,6 +324,26 @@ class TestMCPClient:
         assert headers["Authorization"] == "token my-token"
         assert headers["X-Custom-Header"] == "custom-value"
 
+    def test_get_auth_headers_strips_static_header_whitespace(self):
+        """
+        Static header names/values must be stripped of surrounding whitespace.
+
+        h11 rejects header values with leading/trailing whitespace as an
+        "Illegal header value", which silently aborts the MCP connection. A
+        stray space in a configured static header value would otherwise make
+        every request to that server fail with an opaque error.
+        """
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+            extra_headers={"X-Db-Url": " mew://host ", "  X-Pad  ": "v"},
+        )
+
+        headers = client._get_auth_headers()
+
+        assert headers["X-Db-Url"] == "mew://host"
+        assert headers["X-Pad"] == "v"
+
     def test_token_auth_enum_value(self):
         """Test that MCPAuth.token enum exists and has correct value"""
         assert hasattr(MCPAuth, "token")
@@ -386,6 +423,124 @@ class TestMCPClientInstructionsCapture:
 
         await client._execute_session_operation(transport_ctx, _op)
         assert client._last_initialize_instructions is None
+
+
+# ---------------------------------------------------------------------------
+# Transport error surfacing
+# ---------------------------------------------------------------------------
+
+
+class TestFirstNonCancelledCause:
+    """Unwrapping the real cause out of a (possibly nested) exception group."""
+
+    def test_returns_plain_non_cancelled(self):
+        err = ValueError("boom")
+        assert _first_non_cancelled_cause(err) is err
+
+    def test_returns_none_for_plain_cancelled(self):
+        assert _first_non_cancelled_cause(asyncio.CancelledError()) is None
+
+    def test_unwraps_group_to_non_cancelled_leaf(self):
+        target = httpx.ConnectError("refused")
+        group = _FakeExceptionGroup("g", [asyncio.CancelledError(), target])
+        assert _first_non_cancelled_cause(group) is target
+
+    def test_unwraps_nested_group(self):
+        target = httpx.LocalProtocolError("Illegal header value")
+        inner = _FakeExceptionGroup("inner", [asyncio.CancelledError(), target])
+        outer = _FakeExceptionGroup("outer", [asyncio.CancelledError(), inner])
+        assert _first_non_cancelled_cause(outer) is target
+
+    def test_all_cancelled_returns_none(self):
+        group = _FakeExceptionGroup(
+            "g", [asyncio.CancelledError(), asyncio.CancelledError()]
+        )
+        assert _first_non_cancelled_cause(group) is None
+
+    @pytest.mark.skipif(
+        sys.version_info < (3, 11), reason="builtin ExceptionGroup requires 3.11+"
+    )
+    def test_unwraps_builtin_exception_group(self):
+        target = httpx.ConnectError("refused")
+        group = ExceptionGroup("transport failed", [target])  # noqa: F821
+        assert _first_non_cancelled_cause(group) is target
+
+
+class TestExecuteSessionOperationSurfacesTransportError:
+    """_execute_session_operation should surface the real transport failure.
+
+    When the upstream transport's task group fails (illegal header, connection
+    refused, ...), the in-flight ``session.initialize()`` is cancelled and the
+    real error only appears when the transport context exits. The opaque
+    ``CancelledError`` must be replaced with that real cause.
+    """
+
+    def _make_session(self, mock_session_cls, initialize):
+        mock_session = AsyncMock()
+        mock_session.initialize = initialize
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_cls.return_value = session_ctx
+
+    def _make_transport(self, aexit_side_effect):
+        transport_ctx = MagicMock()
+        transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        transport_ctx.__aexit__ = AsyncMock(side_effect=aexit_side_effect)
+        return transport_ctx
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_surfaces_connect_error_over_cancelled(self, mock_session_cls):
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        self._make_session(
+            mock_session_cls,
+            AsyncMock(side_effect=asyncio.CancelledError("cancelled by group")),
+        )
+        connect_error = httpx.ConnectError("All connection attempts failed")
+        transport_ctx = self._make_transport(
+            _FakeExceptionGroup("transport", [connect_error])
+        )
+
+        async def _op(session):
+            return "done"
+
+        with pytest.raises(httpx.ConnectError):
+            await client._execute_session_operation(transport_ctx, _op)
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_genuine_cancellation_is_not_replaced(self, mock_session_cls):
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        self._make_session(
+            mock_session_cls, AsyncMock(side_effect=asyncio.CancelledError())
+        )
+        transport_ctx = self._make_transport(
+            _FakeExceptionGroup("teardown", [asyncio.CancelledError()])
+        )
+
+        async def _op(session):
+            return "done"
+
+        with pytest.raises(asyncio.CancelledError):
+            await client._execute_session_operation(transport_ctx, _op)
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_cleanup_error_after_success_is_swallowed(self, mock_session_cls):
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        init_result = MagicMock()
+        init_result.instructions = None
+        self._make_session(mock_session_cls, AsyncMock(return_value=init_result))
+        transport_ctx = self._make_transport(
+            _FakeExceptionGroup("late", [httpx.ConnectError("late cleanup error")])
+        )
+
+        async def _op(session):
+            return "done"
+
+        result = await client._execute_session_operation(transport_ctx, _op)
+        assert result == "done"
 
 
 if __name__ == "__main__":

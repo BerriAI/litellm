@@ -14,11 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  buildMcpOAuthAuthorizeUrl,
-  exchangeMcpOAuthToken,
-  registerMcpOAuthClient,
-} from "@/components/networking";
+import { buildMcpOAuthAuthorizeUrl, exchangeMcpOAuthToken, registerMcpOAuthClient } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
@@ -220,7 +216,9 @@ export const useToolsOAuthFlow = ({
       NotificationsManager.error(msg);
     } finally {
       clearStorage(FLOW_STATE_KEY);
-      setTimeout(() => { processingRef.current = false; }, 1000);
+      setTimeout(() => {
+        processingRef.current = false;
+      }, 1000);
     }
   }, [accessToken, serverId, userId]);
 

@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
+from litellm.litellm_core_utils.llm_cost_calc.utils import _get_web_search_requests
 from litellm.types.llms.openai import (
     FileSearchTool,
     ResponsesAPIResponse,
@@ -339,8 +340,7 @@ class StandardBuiltInToolCostTracking:
                 # and _handle_web_search_cost() is never called.
                 if (
                     hasattr(usage, "server_tool_use")
-                    and usage.server_tool_use is not None
-                    and usage.server_tool_use.web_search_requests is not None
+                    and _get_web_search_requests(usage.server_tool_use) is not None
                 ):
                     return True
             return False
@@ -352,8 +352,7 @@ class StandardBuiltInToolCostTracking:
         elif usage is not None:
             if (
                 hasattr(usage, "server_tool_use")
-                and usage.server_tool_use is not None
-                and usage.server_tool_use.web_search_requests is not None
+                and _get_web_search_requests(usage.server_tool_use) is not None
             ):
                 return True
             elif (

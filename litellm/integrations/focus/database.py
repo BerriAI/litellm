@@ -80,11 +80,15 @@ class FocusLiteLLMDatabase:
             vt.team_id,
             vt.key_alias as api_key_alias,
             tt.team_alias,
-            ut.user_email as user_email
+            ut.user_email as user_email,
+            COALESCE(vt.organization_id, tt.organization_id) as organization_id,
+            ot.organization_alias as organization_alias
         FROM "LiteLLM_DailyUserSpend" dus
         LEFT JOIN "LiteLLM_VerificationToken" vt ON dus.api_key = vt.token
         LEFT JOIN "LiteLLM_TeamTable" tt ON vt.team_id = tt.team_id
         LEFT JOIN "LiteLLM_UserTable" ut ON dus.user_id = ut.user_id
+        LEFT JOIN "LiteLLM_OrganizationTable" ot
+            ON ot.organization_id = COALESCE(vt.organization_id, tt.organization_id)
         {where_clause}
         ORDER BY dus.date DESC, dus.created_at DESC
         {limit_clause}

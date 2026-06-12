@@ -8,7 +8,15 @@ import useAuthorized from "./useAuthorized";
 // Unmock useAuthorized to test the actual implementation
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 
-const { replaceMock, clearTokenCookiesMock, getProxyBaseUrlMock, getUiConfigMock, decodeTokenMock, checkTokenValidityMock, buildLoginUrlWithReturnMock } = vi.hoisted(() => ({
+const {
+  replaceMock,
+  clearTokenCookiesMock,
+  getProxyBaseUrlMock,
+  getUiConfigMock,
+  decodeTokenMock,
+  checkTokenValidityMock,
+  buildLoginUrlWithReturnMock,
+} = vi.hoisted(() => ({
   replaceMock: vi.fn(),
   clearTokenCookiesMock: vi.fn(),
   getProxyBaseUrlMock: vi.fn(() => "http://proxy.example"),
@@ -102,7 +110,7 @@ describe("useAuthorized", () => {
       admin_ui_disabled: false,
       sso_configured: false,
     });
-    
+
     const decodedPayload = {
       key: "api-key-123",
       user_id: "user-1",
@@ -112,7 +120,7 @@ describe("useAuthorized", () => {
       disabled_non_admin_personal_key_creation: false,
       login_method: "username_password",
     };
-    
+
     decodeTokenMock.mockReturnValue(decodedPayload);
     checkTokenValidityMock.mockReturnValue(true);
 

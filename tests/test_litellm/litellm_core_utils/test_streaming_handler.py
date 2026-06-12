@@ -2118,3 +2118,172 @@ def test_gemini_legacy_vertex_tool_calls_finish_reason_with_stop_enum():
         f"Expected 'tool_calls' but got {final.choices[0].finish_reason!r}. "
         "STOP enum was not normalised through map_finish_reason()."
     )
+
+
+@pytest.mark.parametrize(
+    "finish_reason", ["stop", "tool_calls", "length", "content_filter"]
+)
+def test_chunk_creator_passes_through_model_response_stream(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    finish_reason: str,
+):
+    """
+    chunk_creator must pass ModelResponseStream chunks from custom providers
+    straight through and preserve finish_reason exactly — not force-cast to GChunk.
+    Regression test for issue #27389.
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="Hello", role="assistant"),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is not None
+    assert initialized_custom_stream_wrapper.received_finish_reason == finish_reason
+
+
+def test_chunk_creator_drops_empty_finish_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    A ModelResponseStream chunk with finish_reason but no content should return
+    None so finish_reason_handler() synthesises the final chunk — mirrors GChunk
+    behaviour via is_chunk_non_empty.
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=""),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is None
+    assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+
+
+def test_chunk_creator_stops_iteration_on_trailing_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    After received_finish_reason is set, any empty trailing chunk (e.g. provider
+    metadata flush) must raise StopIteration to end the stream cleanly.
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    litellm._custom_providers.append("my-custom-provider")
+
+    trailing_chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=None),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    with pytest.raises(StopIteration):
+        initialized_custom_stream_wrapper.chunk_creator(chunk=trailing_chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+
+def test_chunk_creator_strips_finish_reason_from_content_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    When content and finish_reason arrive in the same chunk, finish_reason must be
+    stripped so finish_reason_handler() emits it on the synthetic terminal chunk —
+    preventing two terminal chunks (double finish_reason bug).
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="Hello"),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is not None
+    assert (
+        result.choices[0].finish_reason is None
+    ), "finish_reason must be stripped from content chunks to avoid double terminal chunks"
+    assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+
+
+def test_chunk_creator_tool_calls_not_dropped_on_finish(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    A terminal chunk with finish_reason="tool_calls" and delta.tool_calls must NOT
+    be silently dropped — tool_calls counts as content so the chunk is passed through
+    (with finish_reason stripped) rather than returning None.
+    """
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id="call_abc",
+                            function=Function(name="get_weather", arguments='{"city":"NYC"}'),
+                            type="function",
+                            index=0,
+                        )
+                    ],
+                ),
+                finish_reason="tool_calls",
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is not None, "tool_calls chunk must not be dropped"
+    assert result.choices[0].delta.tool_calls is not None
+    assert result.choices[0].finish_reason is None
+    assert initialized_custom_stream_wrapper.received_finish_reason == "tool_calls"

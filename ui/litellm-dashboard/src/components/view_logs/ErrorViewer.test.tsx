@@ -51,9 +51,7 @@ describe("ErrorViewer", () => {
 
     await user.click(screen.getByText("main.py"));
 
-    expect(
-      screen.getByText("result = await client.chat(model=\"gpt-4\")")
-    ).toBeInTheDocument();
+    expect(screen.getByText('result = await client.chat(model="gpt-4")')).toBeInTheDocument();
   });
 
   it("should expand all frames when 'Expand All' is clicked", async () => {

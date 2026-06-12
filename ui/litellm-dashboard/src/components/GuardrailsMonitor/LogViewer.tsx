@@ -1,9 +1,4 @@
-import {
-  CheckCircleOutlined,
-  CloseOutlined,
-  DownOutlined,
-  WarningOutlined,
-} from "@ant-design/icons";
+import { CheckCircleOutlined, CloseOutlined, DownOutlined, WarningOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
 import { Button, Spin } from "antd";
@@ -66,18 +61,11 @@ export function LogViewer({
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const filteredLogs = logs.filter(
-    (log) => activeFilter === "all" || log.action === activeFilter
-  );
+  const filteredLogs = logs.filter((log) => activeFilter === "all" || log.action === activeFilter);
   const displayLogs = filteredLogs.slice(0, sampleSize);
   const total = totalLogs ?? logs.length;
   const sampleSizes = [10, 50, 100];
-  const filters: Array<"all" | "blocked" | "flagged" | "passed"> = [
-    "all",
-    "blocked",
-    "flagged",
-    "passed",
-  ];
+  const filters: Array<"all" | "blocked" | "flagged" | "passed"> = ["all", "blocked", "flagged", "passed"];
 
   const startTime = startDate
     ? moment(startDate).utc().format("YYYY-MM-DD HH:mm:ss")
@@ -103,8 +91,7 @@ export function LogViewer({
     enabled: Boolean(accessToken && selectedRequestId && drawerOpen),
   });
 
-  const selectedLog: ViewLogsLogEntry | null =
-    fullLogResponse?.data?.[0] ?? null;
+  const selectedLog: ViewLogsLogEntry | null = fullLogResponse?.data?.[0] ?? null;
 
   const handleLogClick = (log: LogEntry) => {
     setSelectedRequestId(log.id);
@@ -171,9 +158,7 @@ export function LogViewer({
         </div>
       )}
       {!logsLoading && displayLogs.length === 0 && (
-        <div className="py-12 text-center text-sm text-gray-500">
-          No logs to display. Adjust filters or date range.
-        </div>
+        <div className="py-12 text-center text-sm text-gray-500">No logs to display. Adjust filters or date range.</div>
       )}
       {!logsLoading && displayLogs.length > 0 && (
         <div className="divide-y divide-gray-100">
@@ -187,9 +172,7 @@ export function LogViewer({
                 onClick={() => handleLogClick(log)}
                 className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors flex items-start gap-3"
               >
-                <ActionIcon
-                  className={`w-4 h-4 mt-0.5 flex-shrink-0 ${config.color}`}
-                />
+                <ActionIcon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${config.color}`} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <span
@@ -199,13 +182,9 @@ export function LogViewer({
                     </span>
                     <span className="text-xs text-gray-400">{log.timestamp}</span>
                     <span className="text-xs text-gray-400">·</span>
-                    {log.model && (
-                      <span className="text-xs text-gray-500">{log.model}</span>
-                    )}
+                    {log.model && <span className="text-xs text-gray-500">{log.model}</span>}
                   </div>
-                  <p className="text-sm text-gray-800 truncate">
-                    {log.input_snippet ?? log.input ?? "—"}
-                  </p>
+                  <p className="text-sm text-gray-800 truncate">{log.input_snippet ?? log.input ?? "—"}</p>
                 </div>
                 <DownOutlined className="w-4 h-4 text-gray-400 flex-shrink-0 mt-1" />
               </button>

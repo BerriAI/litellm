@@ -6,17 +6,15 @@ import MCPSemanticFilterSettings from "./MCPSemanticFilterSettings";
 import { useMCPSemanticFilterSettings } from "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useMCPSemanticFilterSettings";
 import { useUpdateMCPSemanticFilterSettings } from "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useUpdateMCPSemanticFilterSettings";
 
-vi.mock(
-  "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useMCPSemanticFilterSettings",
-  () => ({ useMCPSemanticFilterSettings: vi.fn() })
-);
+vi.mock("@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useMCPSemanticFilterSettings", () => ({
+  useMCPSemanticFilterSettings: vi.fn(),
+}));
 
-vi.mock(
-  "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useUpdateMCPSemanticFilterSettings",
-  () => ({ useUpdateMCPSemanticFilterSettings: vi.fn() })
-);
+vi.mock("@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useUpdateMCPSemanticFilterSettings", () => ({
+  useUpdateMCPSemanticFilterSettings: vi.fn(),
+}));
 
-vi.mock("@/components/playground/llm_calls/fetch_models", () => ({
+vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([]),
 }));
 
@@ -104,9 +102,7 @@ describe("MCPSemanticFilterSettings", () => {
       error: new Error("Network error"),
     } as any);
     await renderSettings({ accessToken: "test-token" });
-    expect(
-      screen.getByText("Could not load MCP Semantic Filter settings")
-    ).toBeInTheDocument();
+    expect(screen.getByText("Could not load MCP Semantic Filter settings")).toBeInTheDocument();
     expect(screen.getByText("Network error")).toBeInTheDocument();
   });
 
@@ -136,9 +132,7 @@ describe("MCPSemanticFilterSettings", () => {
 
   it("should have Save Settings button disabled initially", async () => {
     await renderSettings({ accessToken: "test-token" });
-    expect(
-      screen.getByRole("button", { name: /save settings/i })
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: /save settings/i })).toBeDisabled();
   });
 
   it("should enable Save Settings button after a form field is changed", async () => {

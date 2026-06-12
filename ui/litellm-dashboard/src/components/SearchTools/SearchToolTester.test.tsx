@@ -31,7 +31,8 @@ const mockSearchResults = {
     {
       title: "Test Result 2",
       url: "https://example.com/result2",
-      snippet: "This is a longer snippet that exceeds two hundred characters and should be truncated when displayed in the results. It contains more detailed information about the search result that would normally be shown in a search engine result page.",
+      snippet:
+        "This is a longer snippet that exceeds two hundred characters and should be truncated when displayed in the results. It contains more detailed information about the search result that would normally be shown in a search engine result page.",
     },
   ],
 };
@@ -282,7 +283,7 @@ describe("SearchToolTester", () => {
   it("should handle search errors and show notification", async () => {
     const error = new Error("Search failed");
     vi.mocked(networking.searchToolQueryCall).mockRejectedValue(error);
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => { });
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const user = userEvent.setup();
     render(<SearchToolTester {...defaultProps} />);
     const input = screen.getByPlaceholderText("Enter your search query...");

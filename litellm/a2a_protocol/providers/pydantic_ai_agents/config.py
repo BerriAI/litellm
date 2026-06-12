@@ -31,6 +31,7 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
             params=params,
             api_base=api_base,
             timeout=kwargs.get("timeout", 60.0),
+            agent_extra_headers=kwargs.get("agent_extra_headers"),
         )
 
     async def handle_streaming(
@@ -50,5 +51,6 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
             timeout=kwargs.get("timeout", 60.0),
             chunk_size=kwargs.get("chunk_size", 50),
             delay_ms=kwargs.get("delay_ms", 10),
+            agent_extra_headers=kwargs.get("agent_extra_headers"),
         ):
             yield chunk

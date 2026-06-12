@@ -1,7 +1,21 @@
 import React, { useState } from "react";
 import {
-  Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title,
-  Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell,
+  Card,
+  Text,
+  Button,
+  Grid,
+  Tab,
+  TabList,
+  TabGroup,
+  TabPanel,
+  TabPanels,
+  Title,
+  Table,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableHeaderCell,
+  TableCell,
 } from "@tremor/react";
 import { ArrowLeftIcon, TrashIcon, RefreshIcon, PlusIcon } from "@heroicons/react/outline";
 import {
@@ -138,7 +152,7 @@ export default function UserInfoView({
         (teams || []).map((t: any) => ({
           team_id: t.team_id,
           team_alias: t.team_alias || t.team_id,
-        }))
+        })),
       );
     } catch (error) {
       console.error("Error fetching teams:", error);
@@ -235,9 +249,7 @@ export default function UserInfoView({
     setTeamToRemove(null);
   };
 
-  const availableTeamsForAdd = allTeams.filter(
-    (t) => !teamDetails.some((td) => td.team_id === t.team_id)
-  );
+  const availableTeamsForAdd = allTeams.filter((t) => !teamDetails.some((td) => td.team_id === t.team_id));
 
   const handleResetPassword = async () => {
     if (!accessToken) {
@@ -398,17 +410,11 @@ export default function UserInfoView({
           { label: "User ID", value: userData.user_id, code: true },
           {
             label: "Global Proxy Role",
-            value:
-              (userData.user_role && possibleUIRoles?.[userData.user_role]?.ui_label) ||
-              userData.user_role ||
-              "-",
+            value: (userData.user_role && possibleUIRoles?.[userData.user_role]?.ui_label) || userData.user_role || "-",
           },
           {
             label: "Total Spend (USD)",
-            value:
-              userData.spend !== null && userData.spend !== undefined
-                ? userData.spend.toFixed(2)
-                : undefined,
+            value: userData.spend !== null && userData.spend !== undefined ? userData.spend.toFixed(2) : undefined,
           },
         ]}
         onCancel={cancelDelete}
@@ -432,9 +438,7 @@ export default function UserInfoView({
                   <Title>${formatNumberWithCommas(userData.spend || 0, 4)}</Title>
                   <Text>
                     of{" "}
-                    {userData.max_budget !== null
-                      ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
-                      : "Unlimited"}
+                    {userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 4)}` : "Unlimited"}
                   </Text>
                 </div>
               </Card>
@@ -443,12 +447,7 @@ export default function UserInfoView({
                 <div className="flex justify-between items-center mb-2">
                   <Text>Teams</Text>
                   {isProxyAdmin && (
-                    <Button
-                      icon={PlusIcon}
-                      variant="light"
-                      size="xs"
-                      onClick={handleOpenAddTeamModal}
-                    >
+                    <Button icon={PlusIcon} variant="light" size="xs" onClick={handleOpenAddTeamModal}>
                       Add Team
                     </Button>
                   )}
@@ -456,53 +455,43 @@ export default function UserInfoView({
                 <div className="mt-2">
                   {teamDetails.length > 0 ? (
                     <div className="max-h-60 overflow-y-auto">
-                    <Table>
-                      <TableHead>
-                        <TableRow>
-                          <TableHeaderCell>Team Name</TableHeaderCell>
-                          {isProxyAdmin && <TableHeaderCell className="text-right">Actions</TableHeaderCell>}
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
-                          <TableRow key={team.team_id}>
-                            <TableCell>{team.team_alias || team.team_id}</TableCell>
-                            {isProxyAdmin && (
-                              <TableCell className="text-right">
-                                <Button
-                                  icon={TrashIcon}
-                                  variant="light"
-                                  size="xs"
-                                  color="red"
-                                  onClick={() => handleOpenRemoveTeamModal(team)}
-                                />
-                              </TableCell>
-                            )}
+                      <Table>
+                        <TableHead>
+                          <TableRow>
+                            <TableHeaderCell>Team Name</TableHeaderCell>
+                            {isProxyAdmin && <TableHeaderCell className="text-right">Actions</TableHeaderCell>}
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                        </TableHead>
+                        <TableBody>
+                          {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
+                            <TableRow key={team.team_id}>
+                              <TableCell>{team.team_alias || team.team_id}</TableCell>
+                              {isProxyAdmin && (
+                                <TableCell className="text-right">
+                                  <Button
+                                    icon={TrashIcon}
+                                    variant="light"
+                                    size="xs"
+                                    color="red"
+                                    onClick={() => handleOpenRemoveTeamModal(team)}
+                                  />
+                                </TableCell>
+                              )}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
                     </div>
                   ) : (
                     <Text>No teams</Text>
                   )}
                   {!isTeamsExpanded && teamDetails.length > 20 && (
-                    <Button
-                      variant="light"
-                      size="xs"
-                      className="mt-2"
-                      onClick={() => setIsTeamsExpanded(true)}
-                    >
+                    <Button variant="light" size="xs" className="mt-2" onClick={() => setIsTeamsExpanded(true)}>
                       +{teamDetails.length - 20} more
                     </Button>
                   )}
                   {isTeamsExpanded && teamDetails.length > 20 && (
-                    <Button
-                      variant="light"
-                      size="xs"
-                      className="mt-2"
-                      onClick={() => setIsTeamsExpanded(false)}
-                    >
+                    <Button variant="light" size="xs" className="mt-2" onClick={() => setIsTeamsExpanded(false)}>
                       Show Less
                     </Button>
                   )}
@@ -581,20 +570,12 @@ export default function UserInfoView({
 
                   <div>
                     <Text className="font-medium">Created</Text>
-                    <Text>
-                      {userData.created_at
-                        ? new Date(userData.created_at).toLocaleString()
-                        : "Unknown"}
-                    </Text>
+                    <Text>{userData.created_at ? new Date(userData.created_at).toLocaleString() : "Unknown"}</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Last Updated</Text>
-                    <Text>
-                      {userData.updated_at
-                        ? new Date(userData.updated_at).toLocaleString()
-                        : "Unknown"}
-                    </Text>
+                    <Text>{userData.updated_at ? new Date(userData.updated_at).toLocaleString() : "Unknown"}</Text>
                   </div>
 
                   <div>
@@ -672,10 +653,7 @@ export default function UserInfoView({
         width={500}
         maskClosable={!isAddingTeam}
       >
-        <Form
-          layout="vertical"
-          onFinish={handleAddTeamSubmit}
-        >
+        <Form layout="vertical" onFinish={handleAddTeamSubmit}>
           <Form.Item label="Team" required>
             <AntdSelect
               showSearch
@@ -708,19 +686,16 @@ export default function UserInfoView({
               <AntdSelect.Option value="admin">
                 <Tooltip title="Can create team keys, add members, and manage settings">
                   <span className="font-medium">admin</span>
-                  <span className="ml-2 text-gray-500 text-sm">- Can create team keys, add members, and manage settings</span>
+                  <span className="ml-2 text-gray-500 text-sm">
+                    - Can create team keys, add members, and manage settings
+                  </span>
                 </Tooltip>
               </AntdSelect.Option>
             </AntdSelect>
           </Form.Item>
 
           <div className="text-right mt-4">
-            <AntdButton
-              type="primary"
-              htmlType="submit"
-              loading={isAddingTeam}
-              disabled={!selectedTeamId}
-            >
+            <AntdButton type="primary" htmlType="submit" loading={isAddingTeam} disabled={!selectedTeamId}>
               {isAddingTeam ? "Adding..." : "Add to Team"}
             </AntdButton>
           </div>

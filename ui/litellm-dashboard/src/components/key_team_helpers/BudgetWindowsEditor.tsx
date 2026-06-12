@@ -7,10 +7,10 @@ export interface BudgetWindowEntry {
 }
 
 export const BUDGET_WINDOW_OPTIONS = [
-  { value: "1h",  label: "Hourly",   resetHint: "Resets every hour" },
-  { value: "24h", label: "Daily",    resetHint: "Resets daily at midnight UTC" },
-  { value: "7d",  label: "Weekly",   resetHint: "Resets every Sunday at midnight UTC" },
-  { value: "30d", label: "Monthly",  resetHint: "Resets on the 1st of every month at midnight UTC" },
+  { value: "1h", label: "Hourly", resetHint: "Resets every hour" },
+  { value: "24h", label: "Daily", resetHint: "Resets daily at midnight UTC" },
+  { value: "7d", label: "Weekly", resetHint: "Resets every Sunday at midnight UTC" },
+  { value: "30d", label: "Monthly", resetHint: "Resets on the 1st of every month at midnight UTC" },
 ];
 
 interface BudgetWindowsEditorProps {
@@ -55,27 +55,20 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                 style={{ width: 160 }}
                 prefix="$"
               />
-              <Button
-                type="text"
-                danger
-                size="small"
-                onClick={() => removeWindow(idx)}
-                style={{ padding: "0 4px" }}
-              >
+              <Button type="text" danger size="small" onClick={() => removeWindow(idx)} style={{ padding: "0 4px" }}>
                 ✕
               </Button>
             </div>
-            {hint && (
-              <div style={{ fontSize: 11, color: "#888", marginTop: 3, marginLeft: 2 }}>
-                ↻ {hint}
-              </div>
-            )}
+            {hint && <div style={{ fontSize: 11, color: "#888", marginTop: 3, marginLeft: 2 }}>↻ {hint}</div>}
           </div>
         );
       })}
       <Button
         size="small"
-        onClick={(e) => { e.preventDefault(); addWindow(); }}
+        onClick={(e) => {
+          e.preventDefault();
+          addWindow();
+        }}
       >
         + Add Budget Window
       </Button>

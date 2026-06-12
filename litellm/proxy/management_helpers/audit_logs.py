@@ -18,6 +18,7 @@ from litellm.proxy._types import (
     Optional,
     UserAPIKeyAuth,
 )
+from litellm.repositories.table_repositories import AuditLogRepository
 from litellm.types.utils import StandardAuditLogPayload
 
 _audit_log_callback_cache: Dict[str, CustomLogger] = {}
@@ -244,7 +245,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     _request_data = request_data.model_dump(exclude_none=True)
 
     try:
-        await prisma_client.db.litellm_auditlog.create(
+        await AuditLogRepository(prisma_client).table.create(
             data={
                 **_request_data,  # type: ignore
             }

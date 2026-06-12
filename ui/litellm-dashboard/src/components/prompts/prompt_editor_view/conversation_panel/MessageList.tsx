@@ -12,12 +12,7 @@ interface MessageListProps {
   messagesEndRef: React.RefObject<HTMLDivElement>;
 }
 
-const MessageList: React.FC<MessageListProps> = ({
-  messages,
-  isLoading,
-  hasVariables,
-  messagesEndRef,
-}) => {
+const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, hasVariables, messagesEndRef }) => {
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
   return (
@@ -39,4 +34,3 @@ const MessageList: React.FC<MessageListProps> = ({
 };
 
 export default MessageList;
-

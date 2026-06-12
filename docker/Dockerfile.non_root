@@ -95,7 +95,21 @@ RUN for i in 1 2 3; do \
       apk add --no-cache python3 bash openssl tzdata libsndfile nodejs && break || sleep 5; \
     done
 
-COPY --from=builder /app /app
+# Copy only what runtime needs. The application is installed inside the venv;
+# the rest of the builder's /app is source and build metadata that must not
+# ship (manifest-scanning tools attribute everything in it to this image).
+# entrypoint.sh invokes litellm/proxy/prisma_migration.py by source path.
+# Prisma caches live under /app/.cache here (XDG_CACHE_HOME /
+# PRISMA_BINARY_CACHE_DIR) so the runtime prisma generate finds them.
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/docker /app/docker
+COPY --from=builder /app/schema.prisma /app/schema.prisma
+COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
+# enterprise/ is imported by source path at runtime (proxy_cli puts the
+# working directory on sys.path; litellm/proxy/hooks resolves
+# enterprise.enterprise_hooks from it)
+COPY --from=builder /app/enterprise /app/enterprise
+COPY --from=builder /app/.cache /app/.cache
 COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
 COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
 

@@ -3,8 +3,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from litellm.proxy._types import MCPAuthType, MCPTransportType
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPAuthType, MCPTransportType
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 MCPInfo = Dict[str, Any]
@@ -42,6 +41,10 @@ class MCPServer(BaseModel):
     static_headers: Optional[Dict[str, str]] = (
         None  # static headers to forward to the MCP server
     )
+    # Admin-configured env vars. Each entry is {name, value, scope, description}.
+    # scope=="global" values are interpolated into static_headers using ${NAME}.
+    # scope=="user" values must be supplied per-user.
+    env_vars: Optional[List[Dict[str, Any]]] = None
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
@@ -109,12 +112,15 @@ class MCPServer(BaseModel):
     # Defaults to the token's expires_in minus the expiry buffer, or
     # MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
     token_storage_ttl_seconds: Optional[int] = None
+    timeout: Optional[float] = None
     # Resolved short-ID tool prefix when LITELLM_USE_SHORT_MCP_TOOL_PREFIX is
     # enabled.  Set by ``MCPServerManager._assign_unique_short_prefix`` at
     # registration time so that natural-hash collisions between two
     # different ``server_id`` values are bumped deterministically.  Left
     # ``None`` in default-prefix mode.
     short_prefix: Optional[str] = None
+    allow_sampling: bool = False
+    allow_elicitation: bool = False
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property

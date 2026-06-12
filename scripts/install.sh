@@ -2,12 +2,12 @@
 # LiteLLM Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
 #
+# Needs only curl: uv is bootstrapped if missing, and uv provisions a compatible
+# Python itself (reusing a suitable system one, else downloading a managed build).
+#
 # NOTE: set -e without pipefail for POSIX sh compatibility (dash on Ubuntu/Debian
 # ignores the shebang when invoked as `sh` and does not support `pipefail`).
 set -eu
-
-MIN_PYTHON_MAJOR=3
-MIN_PYTHON_MINOR=9
 
 # NOTE: before merging, this must stay as "litellm[proxy]" to install from PyPI.
 LITELLM_PACKAGE="litellm[proxy]"
@@ -52,27 +52,6 @@ esac
 
 info "Platform: $PLATFORM"
 
-# ── Python detection ───────────────────────────────────────────────────────
-PYTHON_BIN=""
-for candidate in python3 python; do
-  if command -v "$candidate" >/dev/null 2>&1; then
-    major="$("$candidate" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || true)"
-    minor="$("$candidate" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || true)"
-    if [ "${major:-0}" -ge "$MIN_PYTHON_MAJOR" ] && [ "${minor:-0}" -ge "$MIN_PYTHON_MINOR" ]; then
-      PYTHON_BIN="$(command -v "$candidate")"
-      info "Python: $("$candidate" --version 2>&1)"
-      break
-    fi
-  fi
-done
-
-if [ -z "$PYTHON_BIN" ]; then
-  die "Python ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}+ is required but not found.
-  Install it from https://python.org/downloads or via your package manager:
-    macOS:  brew install python@3
-    Ubuntu: sudo apt install python3"
-fi
-
 # ── uv detection / install ────────────────────────────────────────────────
 UV_BIN=""
 CURRENT_UV_VERSION=""
@@ -105,15 +84,18 @@ echo ""
 header "Installing litellm[proxy]…"
 echo ""
 
-"$UV_BIN" tool install --python "$PYTHON_BIN" --force "${LITELLM_PACKAGE}" \
-  || die "uv tool install failed. Try manually: $UV_BIN tool install --python '$PYTHON_BIN' '${LITELLM_PACKAGE}'"
+# --python-preference system: reuse a compatible system Python when present,
+# otherwise download a managed one. Either way uv honours litellm's requires-python,
+# so a too-old (3.9) or too-new (3.14+) system Python is skipped, not forced.
+"$UV_BIN" tool install --python-preference system --force "${LITELLM_PACKAGE}" \
+  || die "uv tool install failed. Try manually: $UV_BIN tool install '${LITELLM_PACKAGE}'"
 
 # ── find the litellm binary installed by uv tool ───────────────────────────
 SCRIPTS_DIR="$("$UV_BIN" tool dir --bin)"
 LITELLM_BIN="${SCRIPTS_DIR}/litellm"
 
 if [ ! -x "$LITELLM_BIN" ]; then
-  die "litellm binary not found after install. Try: $UV_BIN tool install --python '$PYTHON_BIN' '${LITELLM_PACKAGE}'"
+  die "litellm binary not found after install. Try: $UV_BIN tool install '${LITELLM_PACKAGE}'"
 fi
 
 # ── success banner ─────────────────────────────────────────────────────────

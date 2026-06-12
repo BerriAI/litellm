@@ -102,8 +102,7 @@ const sampleRealtimeResponse = {
             content: [
               {
                 type: "audio",
-                transcript:
-                  "I'm here to help with information and general questions.",
+                transcript: "I'm here to help with information and general questions.",
               },
             ],
           },
@@ -237,14 +236,8 @@ describe("RealtimePrettyView", () => {
 
   it("should display transcript text from response turns", () => {
     render(<RealtimePrettyView response={sampleRealtimeResponse} />);
-    expect(
-      screen.getByText("Hello! How's your day going?")
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "I'm here to help with information and general questions."
-      )
-    ).toBeInTheDocument();
+    expect(screen.getByText("Hello! How's your day going?")).toBeInTheDocument();
+    expect(screen.getByText("I'm here to help with information and general questions.")).toBeInTheDocument();
   });
 
   it("should display completed status tags for response turns", () => {
@@ -278,9 +271,7 @@ describe("RealtimePrettyView", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Instructions")).toBeInTheDocument();
-      expect(
-        screen.getByText("You are a helpful assistant.")
-      ).toBeInTheDocument();
+      expect(screen.getByText("You are a helpful assistant.")).toBeInTheDocument();
     });
   });
 
@@ -307,9 +298,7 @@ describe("RealtimePrettyView", () => {
       results: [{ type: "unknown.event" }],
     };
     render(<RealtimePrettyView response={emptyResponse} />);
-    expect(
-      screen.getByText("No recognized realtime events found")
-    ).toBeInTheDocument();
+    expect(screen.getByText("No recognized realtime events found")).toBeInTheDocument();
   });
 
   it("should handle response with no output items gracefully", () => {
@@ -331,10 +320,7 @@ describe("RealtimePrettyView", () => {
 
   it("should display metrics tokens when provided", () => {
     render(
-      <RealtimePrettyView
-        response={sampleRealtimeResponse}
-        metrics={{ completion_tokens: 500, output_cost: 0.005 }}
-      />
+      <RealtimePrettyView response={sampleRealtimeResponse} metrics={{ completion_tokens: 500, output_cost: 0.005 }} />,
     );
     expect(screen.getByText(/Tokens: 500/)).toBeInTheDocument();
     expect(screen.getByText(/Cost: \$0\.005000/)).toBeInTheDocument();

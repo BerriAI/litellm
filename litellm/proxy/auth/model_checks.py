@@ -6,6 +6,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
@@ -86,7 +87,7 @@ async def get_mcp_server_ids(
 
     # Make a direct SQL query to get just the mcp_servers
     try:
-        result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+        result = await ObjectPermissionRepository(prisma_client).table.find_unique(
             where={"object_permission_id": user_api_key_dict.object_permission_id},
         )
         if result and result.mcp_servers:
@@ -116,7 +117,10 @@ def get_key_models(
         all_models = list(
             user_api_key_dict.models
         )  # copy to avoid mutating cached objects
-        if SpecialModelNames.all_team_models.value in all_models:
+        if (
+            SpecialModelNames.all_team_models.value in all_models
+            and user_api_key_dict.team_id is not None
+        ):
             all_models = list(
                 user_api_key_dict.team_models
             )  # copy to avoid mutating cached objects

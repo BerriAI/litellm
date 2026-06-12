@@ -61,8 +61,7 @@ vi.mock("react-copy-to-clipboard", () => ({
 vi.mock("@tremor/react", () => {
   const React = require("react");
   const Stub = ({ children }: { children?: any }) => React.createElement("div", null, children);
-  const Button = ({ children, ...props }: { children?: any }) =>
-    React.createElement("button", props, children);
+  const Button = ({ children, ...props }: { children?: any }) => React.createElement("button", props, children);
   const TextInput = (props: any) => React.createElement("input", props);
 
   return {
@@ -91,7 +90,14 @@ vi.mock("antd", () => {
     return event;
   };
 
-  const Form = ({ children, onFinish, ...props }: { children?: any; onFinish?: (values: Record<string, any>) => void }) =>
+  const Form = ({
+    children,
+    onFinish,
+    ...props
+  }: {
+    children?: any;
+    onFinish?: (values: Record<string, any>) => void;
+  }) =>
     React.createElement(
       "form",
       {
@@ -119,7 +125,16 @@ vi.mock("antd", () => {
 
   Form.useForm = () => [formMock];
 
-  const Select = ({ children, onChange, options, ...props }: { children?: any; onChange?: (value: string) => void; options?: Array<{ value: string; label: string }> }) =>
+  const Select = ({
+    children,
+    onChange,
+    options,
+    ...props
+  }: {
+    children?: any;
+    onChange?: (value: string) => void;
+    options?: Array<{ value: string; label: string }>;
+  }) =>
     React.createElement(
       "select",
       {
@@ -130,8 +145,7 @@ vi.mock("antd", () => {
       options?.map((opt: any) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
     );
 
-  Select.Option = ({ children, ...props }: { children?: any }) =>
-    React.createElement("option", props, children);
+  Select.Option = ({ children, ...props }: { children?: any }) => React.createElement("option", props, children);
 
   const Input = (props: any) => React.createElement("input", props);
   Input.Password = (props: any) => React.createElement("input", { ...props, type: "password" });
@@ -140,8 +154,7 @@ vi.mock("antd", () => {
   const Modal = ({ children, open }: { children?: any; open?: boolean }) =>
     open ? React.createElement("div", null, children) : null;
 
-  const Radio = ({ children, ...props }: { children?: any }) =>
-    React.createElement("div", props, children);
+  const Radio = ({ children, ...props }: { children?: any }) => React.createElement("div", props, children);
 
   Radio.Group = ({ children, value }: { children?: any; value?: string }) => {
     radioGroupValueRef.current = value ?? null;
@@ -155,14 +168,10 @@ vi.mock("antd", () => {
   const Button = ({ children, htmlType, ...props }: { children?: any; htmlType?: string }) =>
     React.createElement("button", { ...props, type: htmlType ?? props.type }, children);
 
-  const Typography = ({ children, ...props }: { children?: any }) =>
-    React.createElement("div", props, children);
-  Typography.Text = ({ children, ...props }: { children?: any }) =>
-    React.createElement("span", props, children);
-  Typography.Paragraph = ({ children, ...props }: { children?: any }) =>
-    React.createElement("p", props, children);
-  Typography.Title = ({ children, ...props }: { children?: any }) =>
-    React.createElement("h1", props, children);
+  const Typography = ({ children, ...props }: { children?: any }) => React.createElement("div", props, children);
+  Typography.Text = ({ children, ...props }: { children?: any }) => React.createElement("span", props, children);
+  Typography.Paragraph = ({ children, ...props }: { children?: any }) => React.createElement("p", props, children);
+  Typography.Title = ({ children, ...props }: { children?: any }) => React.createElement("h1", props, children);
 
   return {
     Button,
@@ -227,10 +236,18 @@ vi.mock("../common_components/RouterSettingsAccordion", () => ({ default: () => 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useInfiniteTeams: () => ({
     data: {
-      pages: [{ teams: [
-        { team_id: "team-1", team_alias: "Team One" },
-        { team_id: "team-2", team_alias: "Team Two" },
-      ], total: 2, page: 1, page_size: 50, total_pages: 1 }],
+      pages: [
+        {
+          teams: [
+            { team_id: "team-1", team_alias: "Team One" },
+            { team_id: "team-2", team_alias: "Team Two" },
+          ],
+          total: 2,
+          page: 1,
+          page_size: 50,
+          total_pages: 1,
+        },
+      ],
     },
     fetchNextPage: vi.fn(),
     hasNextPage: false,
@@ -240,11 +257,7 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 }));
 vi.mock("../common_components/team_dropdown", () => ({
   default: ({ onChange, disabled }: { onChange?: (v: string) => void; disabled?: boolean }) => (
-    <select
-      data-testid="team-dropdown"
-      disabled={disabled}
-      onChange={(e) => onChange?.(e.target.value)}
-    >
+    <select data-testid="team-dropdown" disabled={disabled} onChange={(e) => onChange?.(e.target.value)}>
       <option value="">Select team</option>
       <option value="team-1">Team One</option>
       <option value="team-2">Team Two</option>
@@ -301,11 +314,7 @@ vi.mock("../common_components/OrganizationDropdown", () => ({
 
 vi.mock("../common_components/ProjectDropdown", () => ({
   default: ({ value, onChange }: { value?: string; onChange?: (v: string) => void }) => (
-    <input
-      data-testid="project-dropdown"
-      value={value || ""}
-      onChange={(e) => onChange?.(e.target.value)}
-    />
+    <input data-testid="project-dropdown" value={value || ""} onChange={(e) => onChange?.(e.target.value)} />
   ),
 }));
 
@@ -455,11 +464,7 @@ describe("CreateKey", () => {
 
   it("should apply owned_by another_user for admin", async () => {
     renderWithProviders(
-      <CreateKey
-        {...defaultProps}
-        autoOpenCreate={true}
-        prefillData={{ owned_by: "another_user" }}
-      />,
+      <CreateKey {...defaultProps} autoOpenCreate={true} prefillData={{ owned_by: "another_user" }} />,
     );
 
     await waitFor(() => {
@@ -468,13 +473,7 @@ describe("CreateKey", () => {
   });
 
   it("should prefill key_type when provided", async () => {
-    renderWithProviders(
-      <CreateKey
-        {...defaultProps}
-        autoOpenCreate={true}
-        prefillData={{ key_type: "management" }}
-      />,
-    );
+    renderWithProviders(<CreateKey {...defaultProps} autoOpenCreate={true} prefillData={{ key_type: "management" }} />);
 
     await waitFor(() => {
       expect(setFieldsValueMock).toHaveBeenCalledWith({ key_type: "management" });
@@ -523,9 +522,7 @@ describe("CreateKey", () => {
     });
 
     it("should render team dropdown alongside organization dropdown", async () => {
-      const teamsWithOrg = [
-        { team_id: "team-1", team_alias: "Team Alpha", organization_id: "org-1", models: [] },
-      ];
+      const teamsWithOrg = [{ team_id: "team-1", team_alias: "Team Alpha", organization_id: "org-1", models: [] }];
 
       renderWithProviders(<CreateKey {...defaultProps} teams={teamsWithOrg as any} />);
 

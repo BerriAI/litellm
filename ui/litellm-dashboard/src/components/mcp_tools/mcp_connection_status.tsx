@@ -22,7 +22,6 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
   canFetchTools,
   fetchTools,
 }) => {
-
   // Don't show anything if required fields aren't filled
   if (!canFetchTools && !formValues.url && !formValues.spec_path) {
     return null;
@@ -104,18 +103,20 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
                             key: "stack-trace",
                             label: "Stack Trace",
                             children: (
-                              <pre style={{ 
-                                whiteSpace: "pre-wrap", 
-                                wordBreak: "break-word",
-                                fontSize: "12px",
-                                fontFamily: "monospace",
-                                margin: 0,
-                                padding: "8px",
-                                backgroundColor: "#f5f5f5",
-                                borderRadius: "4px",
-                                maxHeight: "400px",
-                                overflow: "auto"
-                              }}>
+                              <pre
+                                style={{
+                                  whiteSpace: "pre-wrap",
+                                  wordBreak: "break-word",
+                                  fontSize: "12px",
+                                  fontFamily: "monospace",
+                                  margin: 0,
+                                  padding: "8px",
+                                  backgroundColor: "#f5f5f5",
+                                  borderRadius: "4px",
+                                  maxHeight: "400px",
+                                  overflow: "auto",
+                                }}
+                              >
                                 {toolsErrorStackTrace}
                               </pre>
                             ),

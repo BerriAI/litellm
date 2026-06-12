@@ -159,12 +159,7 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
           <div key={index} className="border rounded-lg p-4 bg-gray-50">
             <div className="flex items-center justify-between mb-3">
               <Text className="font-medium">Team {index + 1}</Text>
-              <Button
-                size="small"
-                danger
-                icon={<DeleteOutlined />}
-                onClick={() => removeTeam(index)}
-              >
+              <Button size="small" danger icon={<DeleteOutlined />} onClick={() => removeTeam(index)}>
                 Remove
               </Button>
             </div>
@@ -474,7 +469,9 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
               </Button>
             </div>
           ) : (
-            <Button type="primary" onClick={() => setIsEditing(true)}>Edit Settings</Button>
+            <Button type="primary" onClick={() => setIsEditing(true)}>
+              Edit Settings
+            </Button>
           ))}
       </div>
 

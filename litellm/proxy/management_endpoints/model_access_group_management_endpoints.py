@@ -19,6 +19,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     clear_cache,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.model_repository import ModelRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AccessGroupInfo,
     DeleteModelGroupResponse,
@@ -95,7 +96,7 @@ async def update_deployments_with_access_group(
         verbose_proxy_logger.debug(f"Updating deployments for model_name: {model_name}")
 
         # Get all deployments with this model_name
-        deployments = await prisma_client.db.litellm_proxymodeltable.find_many(
+        deployments = await ModelRepository(prisma_client).table.find_many(
             where={"model_name": model_name}
         )
 
@@ -124,7 +125,7 @@ async def update_deployments_with_access_group(
 
             # Only update in DB if modified
             if was_modified:
-                await prisma_client.db.litellm_proxymodeltable.update(
+                await ModelRepository(prisma_client).table.update(
                     where={"model_id": deployment.model_id},
                     data={"model_info": json.dumps(updated_model_info)},
                 )
@@ -152,7 +153,7 @@ async def update_specific_deployments_with_access_group(
     models_updated = 0
     for model_id in model_ids:
         verbose_proxy_logger.debug(f"Updating specific deployment model_id: {model_id}")
-        deployment = await prisma_client.db.litellm_proxymodeltable.find_unique(
+        deployment = await ModelRepository(prisma_client).table.find_unique(
             where={"model_id": model_id}
         )
         if deployment is None:
@@ -168,7 +169,7 @@ async def update_specific_deployments_with_access_group(
             access_group=access_group,
         )
         if was_modified:
-            await prisma_client.db.litellm_proxymodeltable.update(
+            await ModelRepository(prisma_client).table.update(
                 where={"model_id": model_id},
                 data={"model_info": json.dumps(updated_model_info)},
             )
@@ -215,7 +216,7 @@ async def get_all_access_groups_from_db(
         Dict[str, AccessGroupInfo]: Dictionary mapping access_group name to info
     """
     # Get all deployments
-    deployments = await prisma_client.db.litellm_proxymodeltable.find_many()
+    deployments = await ModelRepository(prisma_client).table.find_many()
 
     # Build access group map
     access_group_map: Dict[str, Dict[str, Any]] = {}
@@ -604,7 +605,7 @@ async def update_access_group(
 
     try:
         # Step 1: Remove access group from ALL DB deployments (skip config models)
-        all_deployments = await prisma_client.db.litellm_proxymodeltable.find_many()
+        all_deployments = await ModelRepository(prisma_client).table.find_many()
 
         for deployment in all_deployments:
             model_info = deployment.model_info or {}
@@ -615,7 +616,7 @@ async def update_access_group(
             )
 
             if was_modified:
-                await prisma_client.db.litellm_proxymodeltable.update(
+                await ModelRepository(prisma_client).table.update(
                     where={"model_id": deployment.model_id},
                     data={"model_info": json.dumps(updated_model_info)},
                 )
@@ -722,7 +723,7 @@ async def delete_access_group(
 
     try:
         # Remove access group from all DB deployments (skip config models)
-        all_deployments = await prisma_client.db.litellm_proxymodeltable.find_many()
+        all_deployments = await ModelRepository(prisma_client).table.find_many()
         models_updated = 0
 
         for deployment in all_deployments:
@@ -734,7 +735,7 @@ async def delete_access_group(
             )
 
             if was_modified:
-                await prisma_client.db.litellm_proxymodeltable.update(
+                await ModelRepository(prisma_client).table.update(
                     where={"model_id": deployment.model_id},
                     data={"model_info": json.dumps(updated_model_info)},
                 )

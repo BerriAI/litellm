@@ -3,14 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Fallbacks from "./Fallbacks";
 import * as networkingModule from "../../../networking";
-import * as fetchModelsModule from "../../../playground/llm_calls/fetch_models";
+import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
 
 vi.mock("../../../networking", () => ({
   getCallbacksCall: vi.fn(),
   setCallbacksCall: vi.fn(),
 }));
 
-vi.mock("../../../playground/llm_calls/fetch_models", () => ({
+vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
 
@@ -80,18 +80,11 @@ describe("Fallbacks", () => {
   const mockUserRole = "Admin";
   const mockUserID = "user-123";
   const mockModelData = {
-    data: [
-      { model_name: "gpt-4" },
-      { model_name: "gpt-3.5-turbo" },
-      { model_name: "claude-3-opus" },
-    ],
+    data: [{ model_name: "gpt-4" }, { model_name: "gpt-3.5-turbo" }, { model_name: "claude-3-opus" }],
   };
 
   const mockRouterSettings = {
-    fallbacks: [
-      { "gpt-4": ["gpt-3.5-turbo", "claude-3-opus"] },
-      { "claude-3-opus": ["gpt-4"] },
-    ],
+    fallbacks: [{ "gpt-4": ["gpt-3.5-turbo", "claude-3-opus"] }, { "claude-3-opus": ["gpt-4"] }],
   };
 
   const defaultProps = {
@@ -136,11 +129,7 @@ describe("Fallbacks", () => {
     render(<Fallbacks {...defaultProps} />);
 
     await waitFor(() => {
-      expect(networkingModule.getCallbacksCall).toHaveBeenCalledWith(
-        mockAccessToken,
-        mockUserID,
-        mockUserRole,
-      );
+      expect(networkingModule.getCallbacksCall).toHaveBeenCalledWith(mockAccessToken, mockUserID, mockUserRole);
     });
   });
 

@@ -44,10 +44,14 @@ def test_realtime_query_params_template_caches_each_pair_separately():
     params_with_intent_first = _realtime_query_params_template("gpt-4o", "intent-a")
     params_with_intent_second = _realtime_query_params_template("gpt-4o", "intent-a")
     params_without_intent = _realtime_query_params_template("gpt-4o", None)
+    params_transcription_without_model = _realtime_query_params_template(
+        None, "transcription"
+    )
 
     assert params_with_intent_first is params_with_intent_second
     assert params_with_intent_first == (("model", "gpt-4o"), ("intent", "intent-a"))
     assert params_without_intent == (("model", "gpt-4o"),)
+    assert params_transcription_without_model == (("intent", "transcription"),)
     assert params_with_intent_first is not params_without_intent
 
 

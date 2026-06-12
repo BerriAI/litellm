@@ -11,7 +11,16 @@ import {
 } from "@ant-design/icons";
 import { Badge, Select } from "antd";
 import React from "react";
-export type UsageOption = "global" | "my-usage" | "organization" | "team" | "customer" | "tag" | "agent" | "user" | "user-agent-activity";
+export type UsageOption =
+  | "global"
+  | "my-usage"
+  | "organization"
+  | "team"
+  | "customer"
+  | "tag"
+  | "agent"
+  | "user"
+  | "user-agent-activity";
 export interface UsageViewSelectProps {
   value: UsageOption;
   onChange: (value: UsageOption) => void;

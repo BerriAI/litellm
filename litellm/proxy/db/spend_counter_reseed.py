@@ -20,6 +20,16 @@ from typing import TYPE_CHECKING, ClassVar, Optional
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.table_repositories import (
+    SpendLogsRepository,
+    TeamMembershipRepository,
+)
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
@@ -83,25 +93,25 @@ class SpendCounterReseed:
         try:
             if counter_key.startswith("spend:key:"):
                 token = counter_key[len("spend:key:") :]
-                row = await prisma_client.db.litellm_verificationtoken.find_unique(
-                    where={"token": token}
-                )
+                row = await VerificationTokenRepository(
+                    prisma_client
+                ).table.find_unique(where={"token": token})
             elif counter_key.startswith("spend:team_member:"):
                 suffix = counter_key[len("spend:team_member:") :]
                 if ":" not in suffix:
                     return None
                 user_id, team_id = suffix.rsplit(":", 1)
-                row = await prisma_client.db.litellm_teammembership.find_unique(
+                row = await TeamMembershipRepository(prisma_client).table.find_unique(
                     where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
                 )
             elif counter_key.startswith("spend:team:"):
                 team_id = counter_key[len("spend:team:") :]
-                row = await prisma_client.db.litellm_teamtable.find_unique(
+                row = await TeamRepository(prisma_client).table.find_unique(
                     where={"team_id": team_id}
                 )
             elif counter_key.startswith("spend:user:"):
                 user_id = counter_key[len("spend:user:") :]
-                row = await prisma_client.db.litellm_usertable.find_unique(
+                row = await UserRepository(prisma_client).table.find_unique(
                     where={"user_id": user_id}
                 )
             elif counter_key.startswith("spend:end_user:"):
@@ -110,7 +120,7 @@ class SpendCounterReseed:
                 return None
             elif counter_key.startswith("spend:org:"):
                 org_id = counter_key[len("spend:org:") :]
-                row = await prisma_client.db.litellm_organizationtable.find_unique(
+                row = await OrganizationRepository(prisma_client).table.find_unique(
                     where={"organization_id": org_id}
                 )
             else:
@@ -243,7 +253,7 @@ class SpendCounterReseed:
             return None
 
         try:
-            response = await prisma_client.db.litellm_spendlogs.group_by(
+            response = await SpendLogsRepository(prisma_client).table.group_by(
                 by=[group_field],
                 where=where,  # type: ignore[arg-type]
                 sum={"spend": True},

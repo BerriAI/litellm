@@ -13,9 +13,7 @@ interface DefaultProxyAdminTagProps {
  * the well-known `default_user_id`, otherwise renders the raw value as
  * plain text.
  */
-export default function DefaultProxyAdminTag({
-  userId,
-}: DefaultProxyAdminTagProps) {
+export default function DefaultProxyAdminTag({ userId }: DefaultProxyAdminTagProps) {
   if (userId === DEFAULT_USER_ID) {
     return <Tag color="blue">Default Proxy Admin</Tag>;
   }

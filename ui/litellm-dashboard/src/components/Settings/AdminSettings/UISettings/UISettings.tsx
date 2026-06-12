@@ -17,8 +17,7 @@ export default function UISettings() {
   const disableTeamAdminDeleteProperty = schema?.properties?.disable_team_admin_delete_team_user;
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
-  const forwardLLMProviderAuthHeadersProperty =
-    schema?.properties?.forward_llm_provider_auth_headers;
+  const forwardLLMProviderAuthHeadersProperty = schema?.properties?.forward_llm_provider_auth_headers;
   const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const disableAgentsProperty = schema?.properties?.disable_agents_for_internal_users;
@@ -27,6 +26,7 @@ export default function UISettings() {
   const allowVectorStoresTeamAdminsProperty = schema?.properties?.allow_vector_stores_for_team_admins;
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
+  const disableUINudgesProperty = schema?.properties?.disable_ui_nudges;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
@@ -50,6 +50,20 @@ export default function UISettings() {
   const handleToggleTeamAdminDelete = (checked: boolean) => {
     updateSettings(
       { disable_team_admin_delete_team_user: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleDisableUINudges = (checked: boolean) => {
+    updateSettings(
+      { disable_ui_nudges: checked },
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully");
@@ -306,10 +320,7 @@ export default function UISettings() {
               disabled={isUpdating}
               loading={isUpdating}
               onChange={handleToggleForwardLLMProviderAuthHeaders}
-              aria-label={
-                forwardLLMProviderAuthHeadersProperty?.description ??
-                "Forward LLM provider auth headers"
-              }
+              aria-label={forwardLLMProviderAuthHeadersProperty?.description ?? "Forward LLM provider auth headers"}
             />
             <Space direction="vertical" size={4}>
               <Typography.Text strong>Forward LLM provider auth headers</Typography.Text>
@@ -449,6 +460,26 @@ export default function UISettings() {
               <Typography.Text type="secondary">
                 {disableCustomApiKeysProperty?.description ??
                   "If true, users cannot specify custom key values. All keys must be auto-generated."}
+              </Typography.Text>
+            </Space>
+          </Space>
+
+          <Divider />
+
+          {/* Disable in-product UI nudges */}
+          <Space align="start" size="middle">
+            <Switch
+              checked={Boolean(values.disable_ui_nudges)}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleDisableUINudges}
+              aria-label={disableUINudgesProperty?.description ?? "Disable UI nudges"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>Disable UI nudges</Typography.Text>
+              <Typography.Text type="secondary">
+                {disableUINudgesProperty?.description ??
+                  "If true, suppresses in-product UI nudges (survey and Claude Code feedback popups) for all users."}
               </Typography.Text>
             </Space>
           </Space>

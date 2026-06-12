@@ -6,6 +6,7 @@ import asyncio
 import os
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -20,7 +21,13 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ModelResponse,
+    TextCompletionResponse,
+    Usage,
+)
 
 
 class TimeController:
@@ -545,6 +552,68 @@ async def test_token_rate_limit_type_respected_v3(monkeypatch, token_rate_limit_
     assert (
         tpm_operation["increment_value"] == expected_tokens[token_rate_limit_type]
     ), f"Expected {expected_tokens[token_rate_limit_type]} tokens for type '{token_rate_limit_type}', got {tpm_operation['increment_value']}"
+
+
+@pytest.mark.parametrize(
+    "response_obj",
+    [
+        EmbeddingResponse(
+            model="text-embedding-3-small",
+            usage=Usage(prompt_tokens=50, completion_tokens=0, total_tokens=50),
+        ),
+        TextCompletionResponse(
+            model="gpt-3.5-turbo-instruct",
+            usage=Usage(prompt_tokens=20, completion_tokens=30, total_tokens=50),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_log_success_event_counts_non_chat_response_tokens(
+    monkeypatch, response_obj
+):
+    """
+    Embedding and text completion responses must increment the TPM counter,
+    not just chat completion ModelResponse objects.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+
+    _api_key = hash_token("sk-12345")
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    monkeypatch.setattr(
+        parallel_request_handler, "get_rate_limit_type", lambda: "total"
+    )
+
+    mock_kwargs = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        "model": response_obj.model,
+    }
+
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=mock_kwargs,
+        response_obj=response_obj,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    tpm_operation = next(
+        (op for op in captured_operations if op["key"].endswith(":tokens")), None
+    )
+    assert tpm_operation is not None, "Should have a TPM increment operation"
+    assert tpm_operation["increment_value"] == 50
 
 
 @pytest.mark.asyncio
@@ -3120,3 +3189,351 @@ def test_get_key_mcp_rpm_limit_precedence():
     none_set = UserAPIKeyAuth(api_key=hash_token("sk-mcp-key"))
     assert get_key_mcp_rpm_limit(none_set) is None
     assert get_team_mcp_rpm_limit(none_set) is None
+
+
+async def _seed_max_parallel_requests_counter(
+    dual_cache: DualCache, counter_key: str, window_size: int
+) -> None:
+    await dual_cache.async_increment_cache_pipeline(
+        increment_list=[
+            RedisPipelineIncrementOperation(
+                key=counter_key, increment_value=1, ttl=window_size
+            )
+        ]
+    )
+
+
+async def _build_seeded_limiter():
+    """Build a v3 limiter whose api-key counter already holds the pre-call +1."""
+    api_key = hash_token("sk-disconnect")
+    cache = DualCache()
+    limiter = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    counter_key = f"{{api_key:{api_key}}}:max_parallel_requests"
+    await _seed_max_parallel_requests_counter(cache, counter_key, limiter.window_size)
+    user_api_key_dict = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
+    return limiter, cache, counter_key, user_api_key_dict
+
+
+@contextmanager
+def _override_litellm_callbacks(new_callbacks):
+    """Swap litellm.callbacks so _callback_capabilities recomputes deterministically."""
+    saved = litellm.callbacks
+    litellm.callbacks = new_callbacks
+    try:
+        yield
+    finally:
+        litellm.callbacks = saved
+
+
+async def _drain_release_task():
+    # The disconnect release is scheduled fire-and-forget via create_task.
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_release_max_parallel_requests_on_disconnect_v3():
+    """
+    Regression for issue #27955: a stream cancelled mid-flight must release the
+    pre-call +1 reservation. The success/failure logging callbacks never fire
+    on cancellation, so without an explicit release the api-key counter climbs
+    by one per cancelled request until the key wedges at its limit. The release
+    must decrement the api-key max_parallel_requests counter by exactly one.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=2)
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    await _seed_max_parallel_requests_counter(
+        local_cache, counter_key, handler.window_size
+    )
+    assert await local_cache.async_get_cache(key=counter_key) == 1
+
+    await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
+    assert await local_cache.async_get_cache(key=counter_key) == 0
+
+
+@pytest.mark.asyncio
+async def test_release_max_parallel_requests_on_disconnect_noop_v3():
+    """
+    The release must be a no-op when the key never reserved a parallel slot
+    (no api_key, or max_parallel_requests unset). Otherwise a cancelled
+    no-limit request would drive an unrelated counter negative.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    await handler.async_release_max_parallel_requests_on_disconnect(
+        UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=None)
+    )
+    assert await local_cache.async_get_cache(key=counter_key) is None
+
+    await handler.async_release_max_parallel_requests_on_disconnect(
+        UserAPIKeyAuth(api_key=None, max_parallel_requests=5)
+    )
+    assert await local_cache.async_get_cache(key=counter_key) is None
+
+
+@pytest.mark.parametrize("disconnect", ["cancel", "aclose"])
+@pytest.mark.asyncio
+async def test_async_streaming_data_generator_releases_counter_on_disconnect_v3(
+    disconnect,
+):
+    """
+    Regression for issue #27955 on the outer SSE generator (used by /v1/messages
+    and other event-stream routes). A client that disconnects mid-stream raises
+    GeneratorExit (aclose) or CancelledError into async_streaming_data_generator;
+    both are BaseException and bypass the success/failure logging callbacks, so
+    the generator itself must refund the pre-call max_parallel_requests +1.
+    Releasing inside the nested iterator hook does not work because that
+    generator is only closed on garbage collection, which is non-deterministic.
+    """
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    limiter, cache, counter_key, user_api_key_dict = await _build_seeded_limiter()
+    assert await cache.async_get_cache(key=counter_key) == 1
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+
+    async def upstream():
+        yield ModelResponse()
+        if disconnect == "cancel":
+            raise asyncio.CancelledError()
+        while True:
+            yield ModelResponse()
+
+    with _override_litellm_callbacks([]):
+        gen = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=upstream(),
+            user_api_key_dict=user_api_key_dict,
+            request_data={"model": "claude-test"},
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        await gen.__anext__()
+        if disconnect == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await gen.__anext__()
+        else:
+            await gen.aclose()
+        await _drain_release_task()
+
+    assert await cache.async_get_cache(key=counter_key) == 0
+
+
+@pytest.mark.parametrize("disconnect", ["cancel", "aclose"])
+@pytest.mark.asyncio
+async def test_async_data_generator_releases_counter_on_disconnect_v3(disconnect):
+    """
+    Regression for issue #27955 on the chat-completions outer generator
+    (proxy_server.async_data_generator). With only the v3 parallel limiter
+    enabled, needs_iterator_wrap() is False, so this generator iterates the
+    upstream response directly and the iterator hook is bypassed entirely -- the
+    gap that let a disconnect leak the slot in the default limiter-only config.
+    A mid-stream disconnect must still refund the pre-call +1.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    limiter, cache, counter_key, user_api_key_dict = await _build_seeded_limiter()
+    proxy_logging_obj = proxy_server.proxy_logging_obj
+    saved_hook = proxy_logging_obj.proxy_hook_mapping.get("parallel_request_limiter")
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+
+    async def upstream():
+        yield ModelResponse()
+        if disconnect == "cancel":
+            raise asyncio.CancelledError()
+        while True:
+            yield ModelResponse()
+
+    try:
+        with _override_litellm_callbacks([]):
+            assert proxy_logging_obj.needs_iterator_wrap() is False
+            gen = proxy_server.async_data_generator(
+                response=upstream(),
+                user_api_key_dict=user_api_key_dict,
+                request_data={"model": "gpt-test"},
+            )
+            await gen.__anext__()
+            if disconnect == "cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await gen.__anext__()
+            else:
+                await gen.aclose()
+            await _drain_release_task()
+        assert await cache.async_get_cache(key=counter_key) == 0
+    finally:
+        if saved_hook is not None:
+            proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = (
+                saved_hook
+            )
+        else:
+            proxy_logging_obj.proxy_hook_mapping.pop("parallel_request_limiter", None)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_releases_counter_when_wrapped_v3():
+    """
+    Companion to the no-wrap case for issue #27955. With an iterator-override
+    callback active, needs_iterator_wrap() is True and async_data_generator
+    drives the chained iterator hook. The refund must still fire exactly once
+    from the outer generator: the counter returns to 0 (not -1), proving the
+    nested hook does not also refund and there is no double decrement.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    import litellm.proxy.proxy_server as proxy_server
+
+    class _PassthroughIteratorOverride(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(
+            self, user_api_key_dict, response, request_data
+        ):
+            async for chunk in response:
+                yield chunk
+
+    limiter, cache, counter_key, user_api_key_dict = await _build_seeded_limiter()
+    proxy_logging_obj = proxy_server.proxy_logging_obj
+    saved_hook = proxy_logging_obj.proxy_hook_mapping.get("parallel_request_limiter")
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+
+    async def upstream():
+        while True:
+            yield ModelResponse()
+
+    try:
+        with _override_litellm_callbacks([_PassthroughIteratorOverride()]):
+            assert proxy_logging_obj.needs_iterator_wrap() is True
+            gen = proxy_server.async_data_generator(
+                response=upstream(),
+                user_api_key_dict=user_api_key_dict,
+                request_data={"model": "gpt-test"},
+            )
+            await gen.__anext__()
+            await gen.aclose()
+            await _drain_release_task()
+        assert await cache.async_get_cache(key=counter_key) == 0
+    finally:
+        if saved_hook is not None:
+            proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = (
+                saved_hook
+            )
+        else:
+            proxy_logging_obj.proxy_hook_mapping.pop("parallel_request_limiter", None)
+
+
+def test_tpm_reservation_enabled_by_default(monkeypatch):
+    """Upfront TPM reservation is on unless explicitly disabled via env."""
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    assert handler.tpm_reservation_enabled is True
+
+
+@pytest.mark.parametrize("value", ["false", "False", "FALSE"])
+def test_tpm_reservation_disabled_via_env(monkeypatch, value):
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", value)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    assert handler.tpm_reservation_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_reserves_tpm_when_enabled(monkeypatch):
+    """
+    With reservation enabled, the pre-call hook reserves the estimated token
+    budget upfront and tells should_rate_limit to skip the :tokens counter so
+    only the reservation path owns it.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-tpm"), tpm_limit=10_000)
+
+    should_rate_limit_calls: List[Dict[str, Any]] = []
+    original_should_rate_limit = handler.should_rate_limit
+
+    async def spy_should_rate_limit(*args, **kwargs):
+        should_rate_limit_calls.append(kwargs)
+        return await original_should_rate_limit(*args, **kwargs)
+
+    reserve_calls: List[int] = []
+    original_reserve = handler.reserve_tpm_tokens
+
+    async def spy_reserve(*args, **kwargs):
+        reserve_calls.append(kwargs.get("estimated_tokens"))
+        return await original_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(handler, "should_rate_limit", spy_should_rate_limit)
+    monkeypatch.setattr(handler, "reserve_tpm_tokens", spy_reserve)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=handler.internal_usage_cache.dual_cache,
+        data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="completion",
+    )
+
+    assert len(reserve_calls) == 1, "reservation must run when enabled"
+    assert should_rate_limit_calls[0]["skip_tpm_check"] is True
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_skips_reservation_when_disabled(monkeypatch):
+    """
+    With reservation disabled, the pre-call hook never calls reserve_tpm_tokens
+    and enforces TPM directly in should_rate_limit (skip_tpm_check=False), the
+    pre-v1.82 post-call accounting behavior.
+    """
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-tpm"), tpm_limit=10_000)
+
+    should_rate_limit_calls: List[Dict[str, Any]] = []
+    original_should_rate_limit = handler.should_rate_limit
+
+    async def spy_should_rate_limit(*args, **kwargs):
+        should_rate_limit_calls.append(kwargs)
+        return await original_should_rate_limit(*args, **kwargs)
+
+    reserve_calls: List[Any] = []
+
+    async def spy_reserve(*args, **kwargs):
+        reserve_calls.append(kwargs)
+        raise AssertionError("reserve_tpm_tokens must not run when disabled")
+
+    monkeypatch.setattr(handler, "should_rate_limit", spy_should_rate_limit)
+    monkeypatch.setattr(handler, "reserve_tpm_tokens", spy_reserve)
+
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=handler.internal_usage_cache.dual_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    assert reserve_calls == [], "reservation must be skipped when disabled"
+    assert should_rate_limit_calls[0]["skip_tpm_check"] is False
+    # No reservation stash leaks into the request metadata.
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        TPM_RESERVED_TOKENS_KEY,
+    )
+
+    assert TPM_RESERVED_TOKENS_KEY not in (data.get("metadata") or {})

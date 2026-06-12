@@ -127,12 +127,14 @@ def test_get_supported_openai_params_parallel_tool_calls():
     config = FireworksAIConfig()
 
     supported_params = config.get_supported_openai_params(
-        "fireworks_ai/accounts/fireworks/models/glm-4p6"
+        "fireworks_ai/accounts/fireworks/models/glm-5p1"
     )
     assert "parallel_tool_calls" in supported_params
+    assert "tools" in supported_params
+    assert "tool_choice" in supported_params
 
     unsupported_params = config.get_supported_openai_params(
-        "fireworks_ai/accounts/fireworks/models/glm-5p1"
+        "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"
     )
     assert "parallel_tool_calls" not in unsupported_params
 
@@ -163,9 +165,9 @@ def test_get_model_info_respects_explicit_fireworks_capabilities():
     """Test that get_model_info preserves explicit capability flags from the model map."""
     model_info = get_model_info("fireworks_ai/accounts/fireworks/models/glm-5p1")
 
-    assert model_info["supports_function_calling"] is False
+    assert model_info["supports_function_calling"] is True
     assert model_info["supports_reasoning"] is True
-    assert model_info["supports_tool_choice"] is False
+    assert model_info["supports_tool_choice"] is True
 
 
 def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):
@@ -496,3 +498,59 @@ def test_transform_tools_skips_non_function_tools():
         "type": "object",
         "properties": {"id": {"type": "string"}},
     }
+
+
+def test_map_response_format_passes_json_schema_through_unchanged():
+    """
+    json_schema response_format must reach Fireworks unchanged.
+
+    Regression guard for the prior downgrade to {type: json_object, schema: ...}
+    which silently dropped `strict` and `name` and disabled grammar-guided
+    decoding on the Fireworks side.
+    """
+    config = FireworksAIConfig()
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "priority_classification",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "priority": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                    }
+                },
+                "required": ["priority"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    result = config.map_openai_params(
+        {"response_format": response_format},
+        {},
+        "fireworks_ai/accounts/fireworks/models/qwen3-32b",
+        drop_params=False,
+    )
+
+    rf = result["response_format"]
+    assert rf["type"] == "json_schema"
+    assert rf["json_schema"]["name"] == "priority_classification"
+    assert rf["json_schema"]["strict"] is True
+    assert rf["json_schema"]["schema"] == response_format["json_schema"]["schema"]
+
+
+def test_map_response_format_json_object_unchanged():
+    """
+    The plain json_object form keeps working as before.
+    """
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"response_format": {"type": "json_object"}},
+        {},
+        "fireworks_ai/accounts/fireworks/models/qwen3-32b",
+        drop_params=False,
+    )
+    assert result == {"response_format": {"type": "json_object"}}

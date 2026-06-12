@@ -1,4 +1,4 @@
-import { TokenUsage } from "../../../playground/chat_ui/ResponseMetrics";
+import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 
 export interface Message {
   role: string;
@@ -13,4 +13,3 @@ export interface ConversationPanelProps {
   prompt: any;
   accessToken: string | null;
 }
-

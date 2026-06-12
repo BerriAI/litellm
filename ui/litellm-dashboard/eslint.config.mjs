@@ -6,7 +6,7 @@ import unusedImports from "eslint-plugin-unused-imports";
 
 const eslintConfig = [
   {
-    ignores: [".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts"],
+    ignores: [".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts", "src/lib/http/schema.d.ts"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -36,7 +36,8 @@ const eslintConfig = [
         "error",
         {
           selector: "CallExpression[callee.name='fetch']",
-          message: "Use React Query (@tanstack/react-query) for data fetching instead of a raw fetch().",
+          message:
+            "Raw fetch() is only allowed in src/lib/http/. Use the shared client (createApiClient / apiClient) from @/lib/http/client instead.",
         },
       ],
       "no-restricted-imports": [
@@ -50,6 +51,12 @@ const eslintConfig = [
           ],
         },
       ],
+    },
+  },
+  {
+    files: ["src/lib/http/**"],
+    rules: {
+      "no-restricted-syntax": "off",
     },
   },
 ];

@@ -1,10 +1,10 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import S3VectorsConfig from "./S3VectorsConfig";
-import * as fetchModels from "../playground/llm_calls/fetch_models";
+import * as fetchModels from "@/components/llm_calls/fetch_models";
 
 // Mock fetchAvailableModels
-vi.mock("../playground/llm_calls/fetch_models", () => ({
+vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
 
@@ -38,7 +38,7 @@ describe("S3VectorsConfig", () => {
     render(<S3VectorsConfig {...defaultProps} />);
 
     expect(
-      screen.getByText(/AWS S3 Vectors allows you to store and query vector embeddings directly in S3/)
+      screen.getByText(/AWS S3 Vectors allows you to store and query vector embeddings directly in S3/),
     ).toBeInTheDocument();
     expect(screen.getByText(/Vector buckets and indexes will be automatically created/)).toBeInTheDocument();
     expect(screen.getByText(/Vector dimensions are auto-detected/)).toBeInTheDocument();

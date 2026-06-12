@@ -30,6 +30,7 @@ locally-running proxy.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -40,7 +41,6 @@ from typing import Iterator
 
 import httpx
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Skip gate
@@ -79,7 +79,9 @@ def _wait_for_health(base_url: str, proc: subprocess.Popen, deadline: float) -> 
         except httpx.HTTPError:
             pass
         time.sleep(0.5)
-    raise RuntimeError(f"litellm proxy did not become ready within {STARTUP_TIMEOUT_S}s")
+    raise RuntimeError(
+        f"litellm proxy did not become ready within {STARTUP_TIMEOUT_S}s"
+    )
 
 
 def _oci_env_from_profile() -> dict[str, str]:
@@ -106,38 +108,35 @@ def _oci_env_from_profile() -> dict[str, str]:
     }
 
 
-@pytest.fixture(scope="module")
-def proxy_url() -> Iterator[str]:
-    oci_env = _oci_env_from_profile()
-
-    port = _free_port()
-    base_url = f"http://127.0.0.1:{port}"
-
+def _serve(config_path: str) -> Iterator[str]:
+    """Boot the litellm proxy with the given config and yield its base URL."""
     env = os.environ.copy()
-    env.update(oci_env)
+    env.update(_oci_env_from_profile())
     # Avoid pulling in DB-backed features for this lightweight smoke run.
     env.pop("DATABASE_URL", None)
     env["STORE_MODEL_IN_DB"] = "False"
+
+    port = _free_port()
+    base_url = f"http://127.0.0.1:{port}"
 
     # Prefer the `litellm` console script that lives next to the active
     # Python so we inherit the test virtualenv. Fall back to PATH.
     cli = Path(sys.executable).parent / "litellm"
     if not cli.exists():
         cli = "litellm"
-    cmd = [
-        str(cli),
-        "--config",
-        str(CONFIG_PATH),
-        "--port",
-        str(port),
-        "--host",
-        "127.0.0.1",
-        "--num_workers",
-        "1",
-    ]
 
     proc = subprocess.Popen(
-        cmd,
+        [
+            str(cli),
+            "--config",
+            config_path,
+            "--port",
+            str(port),
+            "--host",
+            "127.0.0.1",
+            "--num_workers",
+            "1",
+        ],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -153,6 +152,27 @@ def proxy_url() -> Iterator[str]:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+
+
+@pytest.fixture(scope="module")
+def proxy_url() -> Iterator[str]:
+    yield from _serve(str(CONFIG_PATH))
+
+
+@pytest.fixture(scope="module")
+def proxy_url_no_drop_params(tmp_path_factory) -> Iterator[str]:
+    """A proxy WITHOUT drop_params, to prove benign params the proxy injects
+    (e.g. max_retries) don't break OCI calls."""
+    cfg = tmp_path_factory.mktemp("oci_nodrop") / "config.yaml"
+    cfg.write_text(
+        "model_list:\n"
+        "  - model_name: oci-cohere-command\n"
+        "    litellm_params:\n"
+        "      model: oci/cohere.command-latest\n"
+        "general_settings:\n"
+        f"  master_key: {MASTER_KEY}\n"
+    )
+    yield from _serve(str(cfg))
 
 
 # ---------------------------------------------------------------------------
@@ -206,9 +226,7 @@ def test_chat_completion_via_proxy(proxy_url: str, model: str) -> None:
     # Reasoning models may return empty content if their budget covers only
     # the thinking turn — accept either text or a non-empty reasoning field.
     has_content = bool(msg.get("content"))
-    has_reasoning = bool(msg.get("reasoning_content")) or bool(
-        msg.get("reasoning")
-    )
+    has_reasoning = bool(msg.get("reasoning_content")) or bool(msg.get("reasoning"))
     assert has_content or has_reasoning, f"empty assistant message for {model}: {msg}"
     usage = body.get("usage") or {}
     assert usage.get("total_tokens", 0) > 0
@@ -232,7 +250,7 @@ def test_chat_completion_streaming_via_proxy(proxy_url: str, model: str) -> None
                 continue
             if not line.startswith("data:"):
                 continue
-            payload = line[len("data:"):].strip()
+            payload = line[len("data:") :].strip()
             if payload == "[DONE]":
                 saw_done = True
                 break
@@ -260,7 +278,6 @@ def test_embedding_via_proxy(proxy_url: str) -> None:
     assert len(embedding) >= 64
     assert all(isinstance(x, (int, float)) for x in embedding)
 
-
 def test_model_list_advertises_oci_models(proxy_url: str) -> None:
     """The /v1/models registry advertises every OCI alias from the config."""
     r = httpx.get(
@@ -272,3 +289,124 @@ def test_model_list_advertises_oci_models(proxy_url: str) -> None:
     advertised = {row["id"] for row in r.json()["data"]}
     for expected in CHAT_MODELS + ["oci-embed"]:
         assert expected in advertised, f"{expected} missing from /v1/models: {advertised}"
+
+
+def test_chat_completion_no_drop_params(proxy_url_no_drop_params: str) -> None:
+    """A plain chat completion succeeds through a proxy without drop_params.
+
+    Regression for the HTTP 500 ``param `max_retries` is not supported on OCI``:
+    the proxy injects max_retries on every request, so without this fix any OCI
+    call through the proxy failed unless drop_params was set.
+    """
+    r = httpx.post(
+        f"{proxy_url_no_drop_params}/v1/chat/completions",
+        headers=_auth_headers(),
+        json=_chat_payload("oci-cohere-command"),
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    assert r.status_code == 200, f"no-drop_params -> {r.status_code}: {r.text}"
+    body = r.json()
+    assert body["object"] == "chat.completion"
+    assert body["choices"][0]["message"].get("content") is not None
+
+
+def test_cohere_default_n_via_proxy(proxy_url: str) -> None:
+    """A Cohere request carrying the default n=1 succeeds through the gateway.
+
+    Regression for the HTTP 500 ``param `n` is not supported on OCI`` that
+    rejected every client which always sends n=1 (e.g. the MLflow gateway),
+    since OCI Cohere has no numGenerations field.
+    """
+    payload = {**_chat_payload("oci-cohere-command"), "n": 1}
+    r = httpx.post(
+        f"{proxy_url}/v1/chat/completions",
+        headers=_auth_headers(),
+        json=payload,
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    assert r.status_code == 200, f"n=1 -> {r.status_code}: {r.text}"
+    body = r.json()
+    assert body["object"] == "chat.completion"
+    assert body["choices"][0]["message"].get("content") is not None
+
+
+@pytest.mark.parametrize("model", ["oci-cohere-command", "oci-llama"])
+def test_response_format_json_schema_via_proxy(proxy_url: str, model: str) -> None:
+    """A response_format json_schema succeeds through the gateway for both a
+    Cohere and a generic OCI model.
+    Regression for the HTTP 400 ``Please pass in correct format of request``
+    that rejected every json_schema request (which MLflow LLM judges always
+    send): generic models choke on OpenAI's ``strict`` key, and Cohere has no
+    JSON_SCHEMA type.
+    """
+    r = httpx.post(
+        f"{proxy_url}/v1/chat/completions",
+        headers=_auth_headers(),
+        json={
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Rate the answer 4 to 2+2. Give an integer score and a short rationale.",
+                }
+            ],
+            "max_tokens": 200,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "judgment",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "score": {"type": "integer"},
+                            "rationale": {"type": "string"},
+                        },
+                        "required": ["score", "rationale"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        },
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    assert r.status_code == 200, f"{model} json_schema -> {r.status_code}: {r.text}"
+    content = r.json()["choices"][0]["message"]["content"]
+    assert content is not None
+    assert "score" in json.loads(content)
+
+
+def test_omitted_max_tokens_not_truncated(proxy_url: str) -> None:
+    """A request that omits max_tokens completes instead of being cut off.
+    Regression for OCI's tiny server-side maxTokens default (~20 tokens): without
+    an injected default, a request that doesn't set max_tokens came back with
+    finish_reason "length" after ~19 tokens, so structured outputs (e.g. MLflow
+    judge JSON) arrived as unterminated strings. The OCI provider now injects a
+    sane default when the caller omits one.
+    """
+    r = httpx.post(
+        f"{proxy_url}/v1/chat/completions",
+        headers=_auth_headers(),
+        json={
+            "model": "oci-cohere-command",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "In four or five complete sentences, explain why the sky appears blue.",
+                }
+            ],
+        },
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    assert r.status_code == 200, f"omitted max_tokens -> {r.status_code}: {r.text}"
+    body = r.json()
+    choice = body["choices"][0]
+    assert (
+        choice["finish_reason"] != "length"
+    ), f"response truncated by token cap: {choice}"
+    assert choice["finish_reason"] == "stop"
+    content = choice["message"].get("content") or ""
+    assert content.strip(), f"empty content: {choice}"
+    # The ~20-token server default truncated well before this; a complete
+    # four-to-five sentence answer comfortably exceeds it.
+    assert body["usage"]["completion_tokens"] > 50, body["usage"]

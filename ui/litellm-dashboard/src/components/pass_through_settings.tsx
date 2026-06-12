@@ -38,6 +38,7 @@ export interface passThroughItem {
   headers: object;
   include_subpath?: boolean;
   cost_per_request?: number;
+  timeout?: number;
   auth?: boolean;
   methods?: string[];
   guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
@@ -59,7 +60,13 @@ const PasswordField: React.FC<{ value: object }> = ({ value }) => {
   );
 };
 
-const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData, premiumUser }) => {
+const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
+  accessToken,
+  userRole,
+  userID,
+  modelData,
+  premiumUser,
+}) => {
   const [generalSettings, setGeneralSettings] = useState<passThroughItem[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);

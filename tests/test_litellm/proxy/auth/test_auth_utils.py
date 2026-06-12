@@ -1551,6 +1551,40 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         )
 
 
+class TestIsRequestBodySafeBlocksBedrockProjectOverride:
+    """``aws_bedrock_project_id`` pins a deployment to a Bedrock project so
+    that project's data-retention policy applies to its requests. A
+    caller-supplied value would run the request under any project reachable
+    with the deployment's shared AWS credentials, bypassing the configured
+    retention/accounting association."""
+
+    def test_project_id_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="aws_bedrock_project_id"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "aws_bedrock_project_id": "proj_attacker000000",
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_project_id(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "aws_bedrock_project_id": "proj_byok000000",
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
 # ── is_request_body_safe nested-config recursion (VERIA-6) ────────────────────
 
 

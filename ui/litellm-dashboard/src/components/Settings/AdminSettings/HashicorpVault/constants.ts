@@ -1,8 +1,4 @@
-export const SENSITIVE_FIELDS = new Set([
-  "vault_token",
-  "approle_secret_id",
-  "client_key",
-]);
+export const SENSITIVE_FIELDS = new Set(["vault_token", "approle_secret_id", "client_key"]);
 
 export const FIELD_LABELS: Record<string, string> = {
   vault_addr: "Vault Address",

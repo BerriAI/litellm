@@ -44,8 +44,7 @@ const LoggingSettings: React.FC = () => {
 
   const handleFormSubmit = (formValues: StoreRequestInSpendLogsParams) => {
     const retentionPeriodValue = formValues.maximum_spend_logs_retention_period;
-    const hasRetentionPeriod =
-      typeof retentionPeriodValue === "string" && retentionPeriodValue.trim() !== "";
+    const hasRetentionPeriod = typeof retentionPeriodValue === "string" && retentionPeriodValue.trim() !== "";
 
     const updateParams: StoreRequestInSpendLogsParams = {
       store_prompts_in_spend_logs: formValues.store_prompts_in_spend_logs,
@@ -70,8 +69,7 @@ const LoggingSettings: React.FC = () => {
         field_name: GeneralSettingsFieldName.MAXIMUM_SPEND_LOGS_RETENTION_PERIOD,
       },
       {
-        onError: (deleteError) =>
-          console.warn("Failed to delete retention period field (may not exist):", deleteError),
+        onError: (deleteError) => console.warn("Failed to delete retention period field (may not exist):", deleteError),
         onSettled: submitUpdate,
       },
     );
@@ -114,8 +112,7 @@ const LoggingSettings: React.FC = () => {
             label="Maximum Spend Logs Retention Period (Optional)"
             name="maximum_spend_logs_retention_period"
             tooltip={
-              proxyConfigData?.find((f) => f.field_name === "maximum_spend_logs_retention_period")
-                ?.field_description ||
+              proxyConfigData?.find((f) => f.field_name === "maximum_spend_logs_retention_period")?.field_description ||
               "Set the maximum retention period for spend logs (e.g., '7d' for 7 days, '30d' for 30 days). Leave empty for no limit."
             }
           >
@@ -127,12 +124,7 @@ const LoggingSettings: React.FC = () => {
           </Form.Item>
 
           <Form.Item>
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={isPending || isDeletingField}
-              disabled={isLoadingConfig}
-            >
+            <Button type="primary" htmlType="submit" loading={isPending || isDeletingField} disabled={isLoadingConfig}>
               {isPending || isDeletingField ? "Saving..." : "Save Settings"}
             </Button>
           </Form.Item>

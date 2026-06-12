@@ -6,7 +6,7 @@ completion bridge that would otherwise strip the envelope.
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, cast
+from typing import Any, AsyncIterator, Dict, Optional, cast
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
@@ -29,6 +29,7 @@ class BedrockAgentCoreA2AHandler:
         request_id: str,
         params: Dict[str, Any],
         litellm_params: Dict[str, Any],
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Handle non-streaming A2A request to AgentCore.
@@ -37,6 +38,8 @@ class BedrockAgentCoreA2AHandler:
             request_id: A2A JSON-RPC request ID
             params: A2A MessageSendParams containing the message
             litellm_params: Agent's litellm_params (model, api_key, etc.)
+            agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
+                admin extra_headers) to forward on the upstream HTTP call.
 
         Returns:
             A2A JSON-RPC response dict from the AgentCore agent
@@ -47,6 +50,7 @@ class BedrockAgentCoreA2AHandler:
                 params=params,
                 litellm_params=litellm_params,
                 method="message/send",
+                agent_extra_headers=agent_extra_headers,
             )
         )
 
@@ -77,6 +81,7 @@ class BedrockAgentCoreA2AHandler:
         request_id: str,
         params: Dict[str, Any],
         litellm_params: Dict[str, Any],
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Handle streaming A2A request to AgentCore.
@@ -85,6 +90,8 @@ class BedrockAgentCoreA2AHandler:
             request_id: A2A JSON-RPC request ID
             params: A2A MessageSendParams containing the message
             litellm_params: Agent's litellm_params (model, api_key, etc.)
+            agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
+                admin extra_headers) to forward on the upstream HTTP call.
 
         Yields:
             A2A streaming response events from the AgentCore agent
@@ -96,6 +103,7 @@ class BedrockAgentCoreA2AHandler:
                 litellm_params=litellm_params,
                 method="message/send",
                 stream=True,
+                agent_extra_headers=agent_extra_headers,
             )
         )
 

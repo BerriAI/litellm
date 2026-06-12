@@ -71,8 +71,6 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
   }, [faviconUrl]);
 
   return (
-    <ThemeContext.Provider value={{ logoUrl, setLogoUrl, faviconUrl, setFaviconUrl }}>
-      {children}
-    </ThemeContext.Provider>
+    <ThemeContext.Provider value={{ logoUrl, setLogoUrl, faviconUrl, setFaviconUrl }}>{children}</ThemeContext.Provider>
   );
 };

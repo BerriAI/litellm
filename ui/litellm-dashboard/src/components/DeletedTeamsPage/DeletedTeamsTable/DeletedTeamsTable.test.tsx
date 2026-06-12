@@ -26,17 +26,13 @@ beforeEach(() => {
 });
 
 it("should render DeletedTeamsTable component", () => {
-  renderWithProviders(
-    <DeletedTeamsTable teams={[mockDeletedTeam]} isLoading={false} isFetching={false} />,
-  );
+  renderWithProviders(<DeletedTeamsTable teams={[mockDeletedTeam]} isLoading={false} isFetching={false} />);
 
   expect(screen.getByText("Test Team")).toBeInTheDocument();
 });
 
 it("should display team information correctly", () => {
-  renderWithProviders(
-    <DeletedTeamsTable teams={[mockDeletedTeam]} isLoading={false} isFetching={false} />,
-  );
+  renderWithProviders(<DeletedTeamsTable teams={[mockDeletedTeam]} isLoading={false} isFetching={false} />);
 
   expect(screen.getByText("Test Team")).toBeInTheDocument();
   expect(screen.getByText("team-1")).toBeInTheDocument();

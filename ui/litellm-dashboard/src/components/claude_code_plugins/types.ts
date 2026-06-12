@@ -5,9 +5,9 @@
 
 export interface PluginSource {
   source: "github" | "url" | "git-subdir";
-  repo?: string;  // Format: "org/repo" for GitHub
-  url?: string;   // Full URL for other sources
-  path?: string;  // Subdirectory path for git-subdir
+  repo?: string; // Format: "org/repo" for GitHub
+  url?: string; // Full URL for other sources
+  path?: string; // Subdirectory path for git-subdir
 }
 
 export interface PluginAuthor {
@@ -17,8 +17,8 @@ export interface PluginAuthor {
 
 export interface Plugin {
   id: string;
-  name: string;  // kebab-case
-  version?: string;  // semantic version
+  name: string; // kebab-case
+  version?: string; // semantic version
   description?: string;
   source: PluginSource;
   author?: PluginAuthor;
@@ -93,7 +93,7 @@ export interface MarketplaceOwner {
 }
 
 export interface MarketplaceResponse {
-  name: string;  // Marketplace name (e.g., "litellm")
+  name: string; // Marketplace name (e.g., "litellm")
   owner: MarketplaceOwner;
   plugins: MarketplacePluginEntry[];
 }
@@ -117,7 +117,7 @@ export interface PluginFormData {
   authorEmail: string;
   homepage: string;
   category: string;
-  keywords: string;  // Comma-separated string, will be split into array
+  keywords: string; // Comma-separated string, will be split into array
   domain: string;
   namespace: string;
 }

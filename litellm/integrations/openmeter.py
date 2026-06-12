@@ -65,7 +65,15 @@ class OpenMeterLogger(CustomLogger):
                 "total_tokens": response_obj["usage"].get("total_tokens"),
             }
 
-        user_param = kwargs.get("user", None)  # end-user passed in via 'user' param
+        # OPENMETER_TRUST_REQUEST_USER (default "true"): when set to "false",
+        # the request-supplied `user` field is ignored and the subject is
+        # resolved solely from the key-bound user_api_key_user_id. Proxies
+        # serving multi-tenant traffic enable this to prevent clients from
+        # forging attribution by setting `user` in the request body.
+        trust_request_user = (
+            os.getenv("OPENMETER_TRUST_REQUEST_USER", "true").lower() != "false"
+        )
+        user_param = kwargs.get("user", None) if trust_request_user else None
 
         # If no user provided directly, try to get it from token user_id
         if user_param is None:

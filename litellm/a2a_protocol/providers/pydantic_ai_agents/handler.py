@@ -28,6 +28,7 @@ class PydanticAIHandler:
         params: Dict[str, Any],
         api_base: Optional[str] = None,
         timeout: float = 60.0,
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Handle non-streaming request to Pydantic AI agent.
@@ -37,6 +38,8 @@ class PydanticAIHandler:
             params: A2A MessageSendParams containing the message
             api_base: Base URL of the Pydantic AI agent
             timeout: Request timeout in seconds
+            agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
+                admin extra_headers) to forward on the upstream HTTP call.
 
         Returns:
             A2A SendMessageResponse dict
@@ -51,6 +54,7 @@ class PydanticAIHandler:
             request_id=request_id,
             params=params,
             timeout=timeout,
+            agent_extra_headers=agent_extra_headers,
         )
 
         return response_data
@@ -63,6 +67,7 @@ class PydanticAIHandler:
         timeout: float = 60.0,
         chunk_size: int = 50,
         delay_ms: int = 10,
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Handle streaming request to Pydantic AI agent with fake streaming.
@@ -78,6 +83,8 @@ class PydanticAIHandler:
             timeout: Request timeout in seconds
             chunk_size: Number of characters per chunk
             delay_ms: Delay between chunks in milliseconds
+            agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
+                admin extra_headers) to forward on the upstream HTTP call.
 
         Yields:
             A2A streaming response events
@@ -94,6 +101,7 @@ class PydanticAIHandler:
             request_id=request_id,
             params=params,
             timeout=timeout,
+            agent_extra_headers=agent_extra_headers,
         )
 
         # Convert raw task response to fake streaming chunks

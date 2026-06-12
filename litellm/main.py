@@ -86,6 +86,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_for_health_check,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -1322,7 +1323,9 @@ def completion(  # type: ignore # noqa: PLR0915
     preset_cache_key = kwargs.get("preset_cache_key", None)
     hf_model_name = kwargs.get("hf_model_name", None)
     supports_system_message = kwargs.get("supports_system_message", None)
-    base_model = kwargs.get("base_model", None)
+    base_model = kwargs.get("base_model", None) or (
+        model_info.get("base_model") if isinstance(model_info, dict) else None
+    )
     ### DISABLE FLAGS ###
     disable_add_transform_inline_image_block = kwargs.get(
         "disable_add_transform_inline_image_block", None
@@ -1405,11 +1408,19 @@ def completion(  # type: ignore # noqa: PLR0915
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
+        _supplemental_provider_params = {
+            k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs
+        }
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             api_key=api_key,
+            litellm_params=(
+                GenericLiteLLMParams(**_supplemental_provider_params)
+                if _supplemental_provider_params
+                else None
+            ),
         )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
@@ -1534,11 +1545,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "logit_bias": logit_bias,
             "user": user,
             # params to identify the model
-            "model": (
-                model_info.get("base_model")
-                if isinstance(model_info, dict) and model_info.get("base_model")
-                else model
-            ),
+            "model": model,
             "custom_llm_provider": custom_llm_provider,
             "response_format": response_format,
             "seed": seed,
@@ -1640,6 +1647,8 @@ def completion(  # type: ignore # noqa: PLR0915
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
+            use_xai_oauth=kwargs.get("use_xai_oauth", False),
+            aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
             gigachat_scope=kwargs.get("gigachat_scope"),
             gigachat_auth_url=kwargs.get("gigachat_auth_url"),
             gigachat_access_token=kwargs.get("gigachat_access_token"),
@@ -2139,9 +2148,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             headers = headers or litellm.headers
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
-
             ## LOAD CONFIG - if set
             config = litellm.OpenAITextCompletionConfig.get_config()
             for k, v in config.items():
@@ -2167,6 +2173,7 @@ def completion(  # type: ignore # noqa: PLR0915
             _response = openai_text_completions.completion(
                 model=model,
                 messages=messages,
+                headers=headers,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 api_key=api_key,
@@ -6660,7 +6667,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
 
 
 @client
-def transcription(
+def transcription(  # noqa: PLR0915
     model: str,
     file: FileTypes,
     ## OPTIONAL OPENAI PARAMS ##
@@ -6851,6 +6858,35 @@ def transcription(
                 if isinstance(provider_config, NvidiaRivaAudioTranscriptionConfig)
                 else None
             ),
+        )
+    elif custom_llm_provider == "soniox":
+        from litellm.llms.soniox.audio_transcription.handler import (
+            SonioxAudioTranscriptionHandler,
+        )
+
+        response = SonioxAudioTranscriptionHandler().audio_transcriptions(
+            model=model,
+            audio_file=file,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            model_response=model_response,
+            atranscription=atranscription,
+            client=(
+                client
+                if client is not None
+                and (
+                    isinstance(client, HTTPHandler)
+                    or isinstance(client, AsyncHTTPHandler)
+                )
+                else None
+            ),
+            timeout=timeout,
+            max_retries=max_retries,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            headers=extra_headers,
+            provider_config=provider_config,  # type: ignore[arg-type]
         )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
@@ -7737,6 +7773,9 @@ def stream_chunk_builder(  # noqa: PLR0915
                     "cost",
                     logging_obj._response_cost_calculator(result=response),
                 )
+            processor.apply_provider_assembled_streaming_metadata(
+                response, chunks, logging_obj
+            )
             return response
 
         tool_call_chunks = [
@@ -7916,6 +7955,9 @@ def stream_chunk_builder(  # noqa: PLR0915
                 usage, "cost", logging_obj._response_cost_calculator(result=response)
             )
 
+        processor.apply_provider_assembled_streaming_metadata(
+            response, chunks, logging_obj
+        )
         return response
     except Exception as e:
         verbose_logger.exception(

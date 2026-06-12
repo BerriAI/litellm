@@ -129,6 +129,8 @@ services = Union[
         "datadog_llm_observability",
         "generic_api",
         "arize",
+        "galileo",
+        "newrelic",
         "sqs",
     ],
     str,
@@ -206,6 +208,8 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog_llm_observability",
             "generic_api",
             "arize",
+            "galileo",
+            "newrelic",
             "sqs",
         ]:
             raise HTTPException(
@@ -295,6 +299,19 @@ async def health_services_endpoint(  # noqa: PLR0915
                     else "Arize is healthy"
                 ),
             }
+        elif service == "galileo":
+            from litellm.integrations.galileo import GalileoObserve
+
+            galileo_logger = GalileoObserve()
+            response = await galileo_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Galileo is healthy"
+                ),
+            }
         elif service == "langfuse":
             from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
@@ -309,6 +326,26 @@ async def health_services_endpoint(  # noqa: PLR0915
             return {
                 "status": "success",
                 "message": "Mock LLM request made - check langfuse.",
+            }
+        elif service == "newrelic":
+            if not _is_proxy_admin(user_api_key_dict):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Only proxy admins can trigger the New Relic test event."
+                    },
+                )
+            from litellm.integrations.newrelic.newrelic import NewRelicLogger
+
+            newrelic_logger = NewRelicLogger()
+            response = await newrelic_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "New Relic is healthy — test event sent"
+                ),
             }
 
         if service == "webhook":

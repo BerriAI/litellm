@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
+from litellm.repositories.table_repositories import (
+    ManagedFileRepository,
+    ManagedObjectRepository,
+)
 from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
@@ -79,9 +83,10 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
     if not isinstance(file_id, str):
         return ""
     if "llm_batch_id" in file_id:
-        return file_id.split("llm_batch_id:")[1].split(",")[0]
+        batch_id = file_id.split("llm_batch_id:", 1)[1]
     else:
-        return file_id.split("generic_response_id:")[1].split(",")[0]
+        batch_id = file_id.split("generic_response_id:", 1)[1]
+    return re.split(r"[;,]", batch_id, maxsplit=1)[0]
 
 
 def encode_file_id_with_model(
@@ -614,8 +619,10 @@ async def extract_file_creation_params(
     # Extract target_storage (simplified - just use form parameter)
     target_storage = _extract_target_storage_simple(target_storage_form)
 
-    # Extract target_model_names (simplified - just use form parameter)
+    # Extract target_model_names from the form field, then fall back to the raw form
     target_model_names = _extract_target_model_names_simple(target_model_names_form)
+    if not target_model_names:
+        target_model_names = await _extract_target_model_names_from_form(request)
 
     # Extract model parameter
     model = _extract_model_param(request, request_body)
@@ -662,6 +669,77 @@ def _extract_target_model_names_simple(
     return []
 
 
+def _is_target_model_names_key(key: str) -> bool:
+    return key == "target_model_names" or (
+        key.startswith("target_model_names[") and key.endswith("]")
+    )
+
+
+async def _extract_target_model_names_from_form(request: "Request") -> List[str]:
+    """
+    Collect target_model_names from the raw multipart form.
+
+    Reads ``request.form()`` directly instead of the parsed request body, which is
+    built via ``dict(form_data)`` and keeps only the last value for repeated keys.
+    The OpenAI SDK sends a list ``extra_body`` as repeated ``target_model_names[]``
+    fields, so reading the form preserves every value instead of truncating to one.
+    Indexed keys like ``target_model_names[0]`` are handled the same way.
+    """
+    form_data = await request.form()
+
+    names: List[str] = []
+    for key, value in form_data.multi_items():
+        if _is_target_model_names_key(key) and isinstance(value, str):
+            names.extend(_extract_target_model_names_simple(value))
+
+    seen = set()
+    result: List[str] = []
+    for name in names:
+        if name and name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result
+
+
+def validate_managed_files_requirement(
+    target_model_names: List[str],
+    model: Optional[str] = None,
+) -> None:
+    """
+    Enforce proxy-level managed files when litellm.require_managed_files is enabled.
+
+    Raises:
+        HTTPException: 400 if the upload would bypass the managed-files flow, i.e.
+            target_model_names is missing or a model parameter routes the request
+            through the direct provider path instead of the managed-files hook.
+    """
+    import litellm
+    from fastapi import HTTPException
+
+    if litellm.require_managed_files is not True:
+        return
+
+    if not target_model_names:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "target_model_names is required when require_managed_files is enabled "
+                "in litellm_settings. Provide one or more model aliases via the "
+                "target_model_names form field (e.g. target_model_names=my-model-alias)."
+            ),
+        )
+
+    if model:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "model is not allowed when require_managed_files is enabled in "
+                "litellm_settings. Uploads must go through managed files using "
+                "target_model_names instead of the model parameter."
+            ),
+        )
+
+
 def _extract_model_param(request: "Request", request_body: dict) -> Optional[str]:
     """
     Extract model parameter from request.
@@ -696,7 +774,7 @@ async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
         and prisma_client
     ):
         try:
-            managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+            managed_file = await ManagedFileRepository(prisma_client).table.find_first(
                 where={"flat_model_file_ids": {"has": response.input_file_id}}
             )
             if managed_file:
@@ -718,7 +796,7 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
         if not raw_id or _is_base64_encoded_unified_file_id(raw_id):
             continue
         try:
-            managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+            managed_file = await ManagedFileRepository(prisma_client).table.find_first(
                 where={"flat_model_file_ids": {"has": raw_id}}
             )
             if managed_file:
@@ -820,6 +898,7 @@ async def get_batch_from_database(
         - response_batch: Parsed LiteLLMBatch object (or None)
     """
     import json
+
     from litellm.types.utils import LiteLLMBatch
 
     if managed_files_obj is None or not unified_batch_id:
@@ -829,7 +908,7 @@ async def get_batch_from_database(
         if not prisma_client:
             return None, None
 
-        db_batch_object = await prisma_client.db.litellm_managedobjecttable.find_first(
+        db_batch_object = await ManagedObjectRepository(prisma_client).table.find_first(
             where={"unified_object_id": batch_id}
         )
 
@@ -941,7 +1020,7 @@ async def update_batch_in_database(
             update_data["batch_processed"] = True
 
         try:
-            await prisma_client.db.litellm_managedobjecttable.update(
+            await ManagedObjectRepository(prisma_client).table.update(
                 where={"unified_object_id": batch_id},
                 data=update_data,
             )
@@ -957,7 +1036,7 @@ async def update_batch_in_database(
                     f"batch_processed column not found, retrying update without it: {col_err}"
                 )
                 update_data.pop("batch_processed", None)
-                await prisma_client.db.litellm_managedobjecttable.update(
+                await ManagedObjectRepository(prisma_client).table.update(
                     where={"unified_object_id": batch_id},
                     data=update_data,
                 )

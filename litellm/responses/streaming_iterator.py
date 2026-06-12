@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import traceback
+import uuid
 from datetime import datetime
 from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional
@@ -1230,6 +1231,10 @@ RESPONSES_WS_LOGGED_EVENT_TYPES = [
     "error",
 ]
 
+RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES = frozenset(
+    {"input_text", "output_text", "text"}
+)
+
 
 class ResponsesWebSocketStreaming:
     """
@@ -1252,6 +1257,9 @@ class ResponsesWebSocketStreaming:
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[Dict] = None,
         first_message: Optional[str] = None,
+        guardrail_callbacks: Optional[List[Any]] = None,
+        output_guardrail_callbacks: Optional[List[Any]] = None,
+        authorized_model: Optional[str] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -1261,6 +1269,11 @@ class ResponsesWebSocketStreaming:
         self.messages: list[Dict] = []
         self.input_messages: list[Dict[str, str]] = []
         self.first_message = first_message
+        self.guardrail_callbacks: List[Any] = guardrail_callbacks or []
+        self.output_guardrail_callbacks: List[Any] = output_guardrail_callbacks or []
+        # Model name authorized at connection time; enforced on every
+        # response.create frame to prevent deployment-substitution attacks.
+        self.authorized_model: Optional[str] = authorized_model
 
     def _should_store_event(self, event_obj: dict) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
@@ -1351,8 +1364,33 @@ class ResponsesWebSocketStreaming:
                 else:
                     response_str = raw_response
 
-                self._store_event(response_str)
-                await self.websocket.send_text(response_str)
+                # When apply_to_output masking is active, suppress delta events
+                # and the text-bearing "done" events. Per-fragment Presidio
+                # cannot reliably catch PII spanning multiple delta chunks (e.g.
+                # "alice@" + "example.com"), and the done events carry the full
+                # output text that response.completed already delivers in
+                # fully-masked form; forwarding them would leak unmasked PII
+                # before response.completed arrives. The client receives only the
+                # masked response.completed.
+                if self.output_guardrail_callbacks:
+                    try:
+                        _evt_type = json.loads(response_str).get("type")
+                    except (json.JSONDecodeError, TypeError):
+                        _evt_type = None
+                    if (
+                        _evt_type in self._DELTA_EVENT_TYPES
+                        or _evt_type in self._OUTPUT_DONE_EVENT_TYPES
+                    ):
+                        continue
+
+                unmasked_str = self._unmask_response_event(response_str)
+                output_masked_str = await self._mask_response_completed(unmasked_str)
+
+                # Log the output-masked form so PII redacted by apply_to_output
+                # guardrails does not appear in success logs.
+                self._store_event(output_masked_str)
+
+                await self.websocket.send_text(output_masked_str)
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
             verbose_logger.debug("Responses WS backend connection closed: %s", e)
@@ -1361,20 +1399,316 @@ class ResponsesWebSocketStreaming:
         finally:
             await self._log_messages()
 
+    def _enforce_authorized_model(self, msg_obj: dict) -> bool:
+        """
+        Overwrite any ``model`` field in a ``response.create`` frame with the
+        connection-authorized model to prevent deployment-substitution attacks.
+
+        Handles both shapes:
+          flat:   ``{"type": "response.create", "model": "...", ...}``
+          nested: ``{"type": "response.create", "response": {"model": "...", ...}}``
+
+        Returns True if the object was modified.
+        """
+        if not self.authorized_model:
+            return False
+        modified = False
+        nested = msg_obj.get("response")
+        if isinstance(nested, dict):
+            if nested.get("model") != self.authorized_model:
+                nested["model"] = self.authorized_model
+                modified = True
+            if "model" in msg_obj and msg_obj["model"] != self.authorized_model:
+                msg_obj["model"] = self.authorized_model
+                modified = True
+        elif msg_obj.get("model") != self.authorized_model:
+            msg_obj["model"] = self.authorized_model
+            modified = True
+        return modified
+
+    async def _mask_response_create(self, message: str) -> str:
+        """
+        Enforce the authorized model and apply Presidio PII masking to a
+        ``response.create`` message before it is forwarded to the upstream
+        provider.
+
+        - Overwrites any ``model`` field with the connection-authorized model
+          to prevent deployment-substitution attacks (always applied).
+        - Walks the ``input`` and ``instructions`` fields, calls ``check_pii``
+          on every text block, and stores the resulting ``pii_tokens`` map in
+          ``self.request_data["metadata"]`` for later unmasking.
+
+        Non-``response.create`` messages are returned unchanged.
+        """
+        try:
+            msg_obj = json.loads(message)
+        except (json.JSONDecodeError, TypeError):
+            return message
+
+        if msg_obj.get("type") != "response.create":
+            return message
+
+        # Always enforce the authorized model, even when PII masking is off.
+        model_modified = self._enforce_authorized_model(msg_obj)
+
+        if not self.guardrail_callbacks:
+            return json.dumps(msg_obj) if model_modified else message
+
+        if "metadata" not in self.request_data:
+            self.request_data["metadata"] = {}
+
+        modified = model_modified
+        for cb in self.guardrail_callbacks:
+            presidio_config = cb.get_presidio_settings_from_request_data(
+                self.request_data
+            )
+            # response.create carries client text in two shapes:
+            #   flat:   {"type": "response.create", "input": ..., "instructions": ...}
+            #   nested: {"type": "response.create", "response": {"input": ..., "instructions": ...}}
+            # Mask "input" and "instructions" in both shapes so PII is never
+            # forwarded unmasked regardless of where the client places it.
+            nested_response = (
+                msg_obj.get("response")
+                if isinstance(msg_obj.get("response"), dict)
+                else None
+            )
+            text_containers: list[tuple[dict, str]] = []
+            for container in (msg_obj, nested_response):
+                if container is None:
+                    continue
+                if "input" in container:
+                    text_containers.append((container, "input"))
+                if isinstance(container.get("instructions"), str):
+                    text_containers.append((container, "instructions"))
+
+            for container, key in text_containers:
+                field_value = container[key]
+
+                if isinstance(field_value, str):
+                    container[key] = await cb.check_pii(
+                        text=field_value,
+                        output_parse_pii=True,
+                        presidio_config=presidio_config,
+                        request_data=self.request_data,
+                    )
+                    modified = True
+
+                elif isinstance(field_value, list):
+                    for item in field_value:
+                        if not isinstance(item, dict):
+                            continue
+                        for item_field in ("content", "output"):
+                            value = item.get(item_field)
+                            if isinstance(value, str):
+                                item[item_field] = await cb.check_pii(
+                                    text=value,
+                                    output_parse_pii=True,
+                                    presidio_config=presidio_config,
+                                    request_data=self.request_data,
+                                )
+                                modified = True
+                            elif isinstance(value, list):
+                                for block in value:
+                                    if (
+                                        isinstance(block, dict)
+                                        and block.get("type")
+                                        in RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES
+                                        and isinstance(block.get("text"), str)
+                                    ):
+                                        block["text"] = await cb.check_pii(
+                                            text=block["text"],
+                                            output_parse_pii=True,
+                                            presidio_config=presidio_config,
+                                            request_data=self.request_data,
+                                        )
+                                        modified = True
+
+        return json.dumps(msg_obj) if modified else message
+
+    # Delta event types whose ``delta`` field may contain PII tokens.
+    _DELTA_EVENT_TYPES = frozenset(
+        {
+            "response.output_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.refusal.delta",
+            "response.function_call_arguments.delta",
+        }
+    )
+
+    # Terminal events that carry the full output text or tool-call arguments
+    # already delivered by ``response.completed``. Suppressed when output masking
+    # is active so the unmasked copy never reaches the client before the masked
+    # completed event.
+    _OUTPUT_DONE_EVENT_TYPES = frozenset(
+        {
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.function_call_arguments.done",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_summary_part.done",
+        }
+    )
+
+    def _unmask_response_event(self, response_str: str) -> str:
+        """
+        Apply Presidio PII unmasking to backend events before forwarding to
+        the client.
+
+        Handles two shapes:
+        - ``response.completed``: walks ``response.output[*].content[*].text``
+        - streaming delta events (``response.output_text.delta``, etc.):
+          replaces tokens in the ``delta`` field
+
+        Uses the ``pii_tokens`` map stored during ``_mask_response_create`` to
+        replace every token (e.g. ``<EMAIL_ADDRESS_1>``) with the original
+        value.  Events with no stored tokens are returned unchanged.
+        """
+        if not self.guardrail_callbacks:
+            return response_str
+
+        pii_tokens: Dict[str, str] = (self.request_data.get("metadata") or {}).get(
+            "pii_tokens", {}
+        )
+        if not pii_tokens:
+            return response_str
+
+        try:
+            evt_obj = json.loads(response_str)
+        except (json.JSONDecodeError, TypeError):
+            return response_str
+
+        cb = self.guardrail_callbacks[0]
+        event_type = evt_obj.get("type")
+
+        if event_type == "response.completed":
+            modified = False
+            response_obj = evt_obj.get("response") or {}
+            if not isinstance(response_obj, dict):
+                return response_str
+            for output_item in response_obj.get("output") or []:
+                if not isinstance(output_item, dict):
+                    continue
+                content = output_item.get("content") or []
+                if not isinstance(content, list):
+                    continue
+                for content_block in content:
+                    if not isinstance(content_block, dict):
+                        continue
+                    text = content_block.get("text")
+                    if isinstance(text, str):
+                        unmasked = cb._unmask_pii_text(text, pii_tokens)
+                        if unmasked != text:
+                            content_block["text"] = unmasked
+                            modified = True
+            return json.dumps(evt_obj) if modified else response_str
+
+        if event_type in self._DELTA_EVENT_TYPES:
+            delta = evt_obj.get("delta")
+            if isinstance(delta, str):
+                unmasked = cb._unmask_pii_text(delta, pii_tokens)
+                if unmasked != delta:
+                    evt_obj["delta"] = unmasked
+                    return json.dumps(evt_obj)
+
+        return response_str
+
+    async def _mask_response_completed(self, response_str: str) -> str:
+        """
+        Apply Presidio output masking (apply_to_output=True) to the
+        ``response.completed`` event before it is forwarded to the client.
+
+        Walks ``response.output[*].content[*].text`` and masks every text block,
+        as well as ``response.output[*].arguments`` on function-call items and
+        ``response.output[*].summary[*].text`` on reasoning items. Delta and
+        ``*.done`` events are suppressed upstream in ``backend_to_client`` when
+        output masking is active, so only the authoritative full-output view
+        reaches this method; events of other types are returned unchanged.
+        """
+        if not self.output_guardrail_callbacks:
+            return response_str
+
+        try:
+            evt_obj = json.loads(response_str)
+        except (json.JSONDecodeError, TypeError):
+            return response_str
+
+        if evt_obj.get("type") != "response.completed":
+            return response_str
+
+        modified = False
+        for cb in self.output_guardrail_callbacks:
+            presidio_config = cb.get_presidio_settings_from_request_data(
+                self.request_data
+            )
+            response_obj = evt_obj.get("response") or {}
+            if not isinstance(response_obj, dict):
+                continue
+            for output_item in response_obj.get("output") or []:
+                if not isinstance(output_item, dict):
+                    continue
+                arguments = output_item.get("arguments")
+                if isinstance(arguments, str):
+                    masked_args = await cb.check_pii(
+                        text=arguments,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=self.request_data,
+                    )
+                    if masked_args != arguments:
+                        output_item["arguments"] = masked_args
+                        modified = True
+                summary = output_item.get("summary") or []
+                if isinstance(summary, list):
+                    for summary_block in summary:
+                        if not isinstance(summary_block, dict):
+                            continue
+                        summary_text = summary_block.get("text")
+                        if isinstance(summary_text, str):
+                            masked_summary = await cb.check_pii(
+                                text=summary_text,
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=self.request_data,
+                            )
+                            if masked_summary != summary_text:
+                                summary_block["text"] = masked_summary
+                                modified = True
+                content = output_item.get("content") or []
+                if not isinstance(content, list):
+                    continue
+                for content_block in content:
+                    if not isinstance(content_block, dict):
+                        continue
+                    text = content_block.get("text")
+                    if isinstance(text, str):
+                        masked = await cb.check_pii(
+                            text=text,
+                            output_parse_pii=False,
+                            presidio_config=presidio_config,
+                            request_data=self.request_data,
+                        )
+                        if masked != text:
+                            content_block["text"] = masked
+                            modified = True
+
+        return json.dumps(evt_obj) if modified else response_str
+
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
             if self.first_message is not None:
-                self._store_input(self.first_message)
-                self._store_event(self.first_message)
-                await self.backend_ws.send(self.first_message)  # type: ignore[union-attr]
+                masked_first = await self._mask_response_create(self.first_message)
+                self._store_input(masked_first)
+                self._store_event(masked_first)
+                await self.backend_ws.send(masked_first)  # type: ignore[union-attr]
 
             while True:
                 message = await self.websocket.receive_text()
-
-                self._store_input(message)
-                self._store_event(message)
-                await self.backend_ws.send(message)  # type: ignore[union-attr]
+                masked = await self._mask_response_create(message)
+                self._store_input(masked)
+                self._store_event(masked)
+                await self.backend_ws.send(masked)  # type: ignore[union-attr]
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
@@ -1418,6 +1752,8 @@ _MANAGED_WS_SKIP_KWARGS: frozenset = frozenset(
     }
 )
 
+_WARMUP_RESPONSE_ID_PREFIX = "resp_warmup_"
+
 
 class ManagedResponsesWebSocketHandler:
     """
@@ -1455,6 +1791,9 @@ class ManagedResponsesWebSocketHandler:
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.litellm_metadata: Dict[str, Any] = litellm_metadata or {}
+        self.model_group: Optional[str] = self.litellm_metadata.get(
+            "model_group"
+        ) or self.litellm_metadata.get("deployment_model_name")
         self.api_key = api_key
         self.api_base = api_base
         self.timeout = timeout
@@ -1613,6 +1952,71 @@ class ManagedResponsesWebSocketHandler:
         return msg_obj
 
     @staticmethod
+    def _is_warmup_frame(msg_obj: Dict[str, Any]) -> bool:
+        """Return True for a response.create whose generate flag is false."""
+        nested = msg_obj.get("response")
+        source = nested if isinstance(nested, dict) and nested else msg_obj
+        return source.get("generate") is False
+
+    @staticmethod
+    def _is_warmup_response_id(response_id: Optional[str]) -> bool:
+        """Return True for synthetic warmup IDs that only exist on this connection."""
+        if not response_id:
+            return False
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            response_id
+        )
+        raw_id = decoded.get("response_id", response_id)
+        return str(raw_id).startswith(_WARMUP_RESPONSE_ID_PREFIX)
+
+    @staticmethod
+    def _warmup_source_params(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+        nested = msg_obj.get("response")
+        if isinstance(nested, dict) and nested:
+            return nested
+        return {k: v for k, v in msg_obj.items() if k != "type"}
+
+    def _build_warmup_response(self, msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+        """Build a minimal completed Responses API object for a warmup ack."""
+        source = self._warmup_source_params(msg_obj)
+        wire_model = source.get("model") or self.model_group or self.model
+        return {
+            "id": f"{_WARMUP_RESPONSE_ID_PREFIX}{uuid.uuid4().hex}",
+            "object": "response",
+            "created_at": int(time.time()),
+            "status": "completed",
+            "model": wire_model,
+            "output": [],
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+
+    async def _send_warmup_ack(self, msg_obj: Dict[str, Any]) -> None:
+        """
+        Acknowledge a generate=false prewarm without calling the provider.
+
+        Codex blocks on the warmup turn until it receives response.created and
+        response.completed over the WebSocket. Managed HTTP providers cannot
+        honor an empty-input warmup, so we synthesize the completion locally.
+        """
+        response = self._build_warmup_response(msg_obj)
+        for event_type, status in (
+            ("response.created", "in_progress"),
+            ("response.completed", "completed"),
+        ):
+            event = {
+                "type": event_type,
+                "response": {**response, "status": status},
+            }
+            serialized = self._serialize_chunk(event)
+            if serialized is None:
+                continue
+            await self.websocket.send_text(serialized)
+
+    @staticmethod
     def _build_base_call_kwargs(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract Responses API params from the event, handling both wire formats:
@@ -1640,6 +2044,12 @@ class ManagedResponsesWebSocketHandler:
     ) -> None:
         """Prepend in-memory turn history, or fall back to DB-based reconstruction."""
         if not previous_response_id:
+            return
+        if self._is_warmup_response_id(previous_response_id):
+            verbose_logger.debug(
+                "ManagedResponsesWS: ignoring synthetic warmup previous_response_id=%s",
+                previous_response_id,
+            )
             return
         if prior_history:
             call_kwargs["input"] = prior_history + current_messages
@@ -1807,10 +2217,31 @@ class ManagedResponsesWebSocketHandler:
         if msg_obj is None:
             return
 
+        # generate=false is a prompt-cache warmup hint (sent by codex prewarm).
+        # Native provider sockets handle it server-side, but there is no HTTP
+        # equivalent and the frame carries empty input. Managed providers must
+        # synthesize a completion so clients like Codex can proceed.
+        if self._is_warmup_frame(msg_obj):
+            try:
+                await self._send_warmup_ack(msg_obj)
+            except Exception as exc:
+                verbose_logger.debug(
+                    "ManagedResponsesWS: error sending warmup ack: %s", exc
+                )
+            return
+
         call_kwargs = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
-        model = call_kwargs.pop("model", None) or self.model
+        # A frame that repeats the connection's public alias (model_group) must
+        # reuse the router-resolved self.model; passing the alias raw to
+        # litellm.aresponses fails in get_llm_provider. A genuinely different
+        # provider-prefixed per-frame model is still honored.
+        requested_model = call_kwargs.pop("model", None)
+        if requested_model is None or requested_model == self.model_group:
+            model = self.model
+        else:
+            model = requested_model
 
         previous_response_id: Optional[str] = call_kwargs.pop(
             "previous_response_id", None
@@ -1828,7 +2259,9 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs, previous_response_id, current_messages, prior_history
         )
         self._inject_credentials(call_kwargs, model=model)
-        self._update_proxy_request(call_kwargs, model)
+        self._update_proxy_request(
+            call_kwargs, requested_model or self.model_group or model
+        )
         call_kwargs.update(self.extra_kwargs)
 
         try:

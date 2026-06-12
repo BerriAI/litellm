@@ -52,6 +52,22 @@ jobs:
             // are stable maintenance releases, not pre-releases.
             const isPrerelease = /(?:rc|nightly|alpha|beta|[-.]dev)/i.test(tag);
 
+            // A stable release should only claim the repo "latest" badge when its
+            // version is >= the current latest. Otherwise a backport (e.g. 1.84.6)
+            // would steal "latest" from a newer line (e.g. 1.88.1).
+            const versionKey = (rawTag) => {
+              const m = String(rawTag).match(/^v?(\d+)\.(\d+)\.(\d+)/);
+              if (!m) return null;
+              const maintenance = String(rawTag).match(/(?:\.post|\.patch\.)(\d+)/i);
+              return [Number(m[1]), Number(m[2]), Number(m[3]), maintenance ? Number(maintenance[1]) : 0];
+            };
+            const isAtLeast = (a, b) => {
+              for (let i = 0; i < a.length; i++) {
+                if (a[i] !== b[i]) return a[i] > b[i];
+              }
+              return true;
+            };
+
             const cosignSection = [
               `## Verify Docker Image Signature`,
               ``,
@@ -90,6 +106,22 @@ jobs:
             ].join('\n');
 
             try {
+              let makeLatest = "false";
+              const newVersion = versionKey(tag);
+              if (!isPrerelease && newVersion) {
+                let latestVersion = null;
+                try {
+                  const latest = await github.rest.repos.getLatestRelease({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                  });
+                  latestVersion = versionKey(latest.data.tag_name);
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                }
+                makeLatest = (!latestVersion || isAtLeast(newVersion, latestVersion)) ? "true" : "false";
+              }
+
               const response = await github.rest.repos.createRelease({
                 draft: true,
                 generate_release_notes: true,
@@ -108,6 +140,7 @@ jobs:
                 release_id: response.data.id,
                 body: updatedBody,
                 draft: false,
+                make_latest: makeLatest,
               });
 
             } catch (error) {
