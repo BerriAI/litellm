@@ -1,36 +1,199 @@
-suite: "hpa with behavior"
+suite: test hpa
 templates:
   - hpa.yaml
 tests:
-  - it: "renders behavior when set"
+  - it: should render custom autoscaling metrics and behavior
+    template: hpa.yaml
     set:
-      autoscaling.enabled: true
-      autoscaling.behavior:
-        scaleUp:
-          stabilizationWindowSeconds: 60
-          policies:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 10
+        metrics:
+        - type: Object
+          object:
+            describedObject:
+              apiVersion: v1
+              kind: Service
+              name: litellm-helm
+            metric:
+              name: litellm_requests_per_second
+            target:
+              type: AverageValue
+              averageValue: "20"
+        behavior:
+          scaleUp:
+            stabilizationWindowSeconds: 0
+            selectPolicy: Max
+            policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 60
+            - type: Pods
+              value: 4
+              periodSeconds: 60
+          scaleDown:
+            stabilizationWindowSeconds: 300
+            selectPolicy: Max
+            policies:
+            - type: Percent
+              value: 50
+              periodSeconds: 60
+    asserts:
+      - isKind:
+          of: HorizontalPodAutoscaler
+      - equal:
+          path: spec.minReplicas
+          value: 2
+      - equal:
+          path: spec.maxReplicas
+          value: 10
+      - equal:
+          path: spec.metrics
+          value:
+          - type: Object
+            object:
+              describedObject:
+                apiVersion: v1
+                kind: Service
+                name: litellm-helm
+              metric:
+                name: litellm_requests_per_second
+              target:
+                type: AverageValue
+                averageValue: "20"
+      - equal:
+          path: spec.behavior
+          value:
+            scaleUp:
+              stabilizationWindowSeconds: 0
+              selectPolicy: Max
+              policies:
+              - type: Percent
+                value: 100
+                periodSeconds: 60
+              - type: Pods
+                value: 4
+                periodSeconds: 60
+            scaleDown:
+              stabilizationWindowSeconds: 300
+              selectPolicy: Max
+              policies:
+              - type: Percent
+                value: 50
+                periodSeconds: 60
+
+  - it: should keep rendering cpu and memory metrics when custom metrics are not set
+    template: hpa.yaml
+    set:
+      autoscaling:
+        enabled: true
+        targetCPUUtilizationPercentage: 75
+        targetMemoryUtilizationPercentage: 70
+    asserts:
+      - isKind:
+          of: HorizontalPodAutoscaler
+      - equal:
+          path: spec.metrics
+          value:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 75
+          - type: Resource
+            resource:
+              name: memory
+              target:
+                type: Utilization
+                averageUtilization: 70
+      - isNull:
+          path: spec.behavior
+
+  - it: should prefer custom metrics over cpu and memory targets
+    template: hpa.yaml
+    set:
+      autoscaling:
+        enabled: true
+        targetCPUUtilizationPercentage: 75
+        targetMemoryUtilizationPercentage: 70
+        metrics:
+        - type: Object
+          object:
+            describedObject:
+              apiVersion: v1
+              kind: Service
+              name: litellm-helm
+            metric:
+              name: litellm_requests_per_second
+            target:
+              type: AverageValue
+              averageValue: "20"
+    asserts:
+      - isKind:
+          of: HorizontalPodAutoscaler
+      - equal:
+          path: spec.metrics
+          value:
+          - type: Object
+            object:
+              describedObject:
+                apiVersion: v1
+                kind: Service
+                name: litellm-helm
+              metric:
+                name: litellm_requests_per_second
+              target:
+                type: AverageValue
+                averageValue: "20"
+
+  - it: should render behavior when set
+    template: hpa.yaml
+    set:
+      autoscaling:
+        enabled: true
+        behavior:
+          scaleUp:
+            stabilizationWindowSeconds: 60
+            policies:
             - type: Pods
               value: 2
               periodSeconds: 60
-        scaleDown:
-          stabilizationWindowSeconds: 90
-          policies:
+          scaleDown:
+            stabilizationWindowSeconds: 90
+            policies:
             - type: Pods
               value: 1
               periodSeconds: 60
     asserts:
-      - isKind: { of: HorizontalPodAutoscaler }
-      - equal: { path: spec.behavior.scaleUp.stabilizationWindowSeconds, value: 60 }
-      - equal: { path: spec.behavior.scaleDown.stabilizationWindowSeconds, value: 90 }
+      - isKind:
+          of: HorizontalPodAutoscaler
+      - equal:
+          path: spec.behavior.scaleUp.stabilizationWindowSeconds
+          value: 60
+      - equal:
+          path: spec.behavior.scaleDown.stabilizationWindowSeconds
+          value: 90
 
----
-suite: "hpa without behavior"
-templates:
-  - hpa.yaml
-tests:
-  - it: "does not render behavior when not set"
+  - it: should omit metrics when no metric sources are set
+    template: hpa.yaml
     set:
-      autoscaling.enabled: true
+      autoscaling:
+        enabled: true
+        targetCPUUtilizationPercentage: null
+        targetMemoryUtilizationPercentage: null
+        metrics: []
     asserts:
-      - isKind: { of: HorizontalPodAutoscaler }
-      - isNull: { path: spec.behavior }
+      - isKind:
+          of: HorizontalPodAutoscaler
+      - isNull:
+          path: spec.metrics
+
+  - it: should not render when autoscaling is disabled
+    template: hpa.yaml
+    set:
+      autoscaling.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
