@@ -12757,6 +12757,12 @@ async def model_info_v1(  # noqa: PLR0915
         )
         return {"data": [_deployment_info_dict]}
 
+    if teamId is not None and teamId.strip() and prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
     # Return router deployments (same source as /v2/model/info), not wildcard-
     # expanded model names from get_complete_model_list(). Team-scoped rows
     # use internal routing keys (model_name_{team_id}_{uuid}) and were omitted
@@ -12806,15 +12812,10 @@ async def model_info_v1(  # noqa: PLR0915
     ]
 
     if teamId is not None and teamId.strip():
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": CommonProxyErrors.db_not_connected_error.value},
-            )
         all_models = await _filter_models_by_team_id(
             all_models=all_models,
             team_id=teamId.strip(),
-            prisma_client=prisma_client,
+            prisma_client=cast(PrismaClient, prisma_client),
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
         )
