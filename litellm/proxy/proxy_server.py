@@ -12755,6 +12755,15 @@ async def model_info_v1(  # noqa: PLR0915
         _deployment_info_dict = _get_proxy_model_info(
             model=deployment_info.model_dump(exclude_none=True)
         )
+        if prisma_client is not None:
+            _deployment_info_dict = (
+                await _populate_team_access_on_models(
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=prisma_client,
+                    llm_router=llm_router,
+                    all_models=[_deployment_info_dict],
+                )
+            )[0]
         return {"data": [_deployment_info_dict]}
 
     if prisma_client is None and (
