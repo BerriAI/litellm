@@ -2458,6 +2458,45 @@ class TestAllmPassthroughRoutePostCallGuardrails:
         ProxyLogging._callback_capabilities_cache.clear()
 
     @pytest.mark.asyncio
+    async def test_malformed_json_body_passes_through_without_500(self, monkeypatch):
+        """
+        A 2xx response advertising application/json but carrying a non-JSON body
+        must pass the original bytes through unchanged instead of raising
+        JSONDecodeError (which would surface as a 500). The post-call hook is
+        never invoked since there is no dict to guardrail.
+        """
+        malformed_body = b"not-json-at-all"
+        httpx_response = httpx.Response(
+            status_code=200,
+            content=malformed_body,
+            headers={"content-type": "application/json"},
+        )
+
+        cb = self._make_guardrail_cb()
+        monkeypatch.setattr(litellm, "callbacks", [cb])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        hook_spy = AsyncMock()
+        monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", hook_spy)
+
+        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=True):
+            processing_obj = ProxyBaseLLMRequestProcessing(data={})
+            result = await processing_obj._handle_non_streaming_allm_passthrough_route(
+                response=httpx_response,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                custom_headers={},
+            )
+
+        hook_spy.assert_not_awaited()
+        assert isinstance(result, Response)
+        assert result.status_code == 200
+        assert result.body == malformed_body
+
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
     async def test_no_aread_when_no_post_call_guardrails(self, monkeypatch):
         """
         When _has_post_call_guardrails() is False the httpx response must not be

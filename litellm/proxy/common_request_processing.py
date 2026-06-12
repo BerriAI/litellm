@@ -1791,7 +1791,15 @@ class ProxyBaseLLMRequestProcessing:
             return None
 
         body_bytes = await response.aread()  # type: ignore[union-attr]
-        parsed = _json.loads(body_bytes)
+        try:
+            parsed = _json.loads(body_bytes)
+        except (_json.JSONDecodeError, UnicodeDecodeError):
+            return Response(
+                content=body_bytes,
+                status_code=response_status,
+                media_type="application/json",
+                headers=response_headers,
+            )
         processed = await proxy_logging_obj.post_call_success_hook(
             data=self.data,
             user_api_key_dict=user_api_key_dict,
