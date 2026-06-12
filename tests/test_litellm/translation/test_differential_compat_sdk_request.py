@@ -79,14 +79,41 @@ for _p in PROVIDERS:
             {"model": _m(_p), "parallel_tool_calls": False, "messages": _USER},
             "parallel_tool_calls",
         )
-    # no provider in the family supports reasoning_effort except cerebras
-    # (capability-gated, pinned below)
-    if _p != "cerebras":
+    if not _spec.top_p:
+        V1_RAISES[f"{_p}:top_p"] = (
+            _p,
+            {"model": _m(_p), "top_p": 0.9, "messages": _USER},
+            "top_p",
+        )
+    if not _spec.temperature:
+        V1_RAISES[f"{_p}:temperature"] = (
+            _p,
+            {"model": _m(_p), "temperature": 0.4, "messages": _USER},
+            "temperature",
+        )
+    if not _spec.stop:
+        V1_RAISES[f"{_p}:stop"] = (
+            _p,
+            {"model": _m(_p), "stop": ["END"], "messages": _USER},
+            "stop",
+        )
+    if not _spec.max_tokens:
+        V1_RAISES[f"{_p}:max_tokens"] = (
+            _p,
+            {"model": _m(_p), "max_tokens": 16, "messages": _USER},
+            "max_tokens",
+        )
+    # reasoning_effort raises everywhere except the providers whose ALLOWED
+    # carries it (cerebras capability-gated on a model the corpus row lacks;
+    # inception unconditional — its served row is pinned below)
+    if "reasoning_effort" not in csp.ALLOWED[_p]:
         V1_RAISES[f"{_p}:reasoning_effort"] = (
             _p,
             {"model": _m(_p), "reasoning_effort": "high", "messages": _USER},
             "reasoning_effort",
         )
+    # cerebras' capability-narrowed raise keeps its explicit row below;
+    # inception's unconditional serve is pinned by its own test below
 
 V1_RAISES.update(
     {
@@ -240,6 +267,76 @@ for _p in PROVIDERS:
 
 EXPECTED_FALLBACKS.update(
     {
+        # wave-1b per-provider guard arms (each names the v1 path)
+        "dashscope:cache_control_preserved": (
+            "dashscope",
+            {
+                "model": _m("dashscope"),
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "x",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            "cache_control",
+        ),
+        "zai:cache_control_preserved": (
+            "zai",
+            {
+                "model": _m("zai"),
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "x",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            "cache_control",
+        ),
+        "docker_model_runner:content_list_flatten": (
+            "docker_model_runner",
+            {
+                "model": _m("docker_model_runner"),
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "a"},
+                            {"type": "text", "text": "b"},
+                        ],
+                    }
+                ],
+            },
+            "list-form message content",
+        ),
+        "publicai:content_list_flatten": (
+            "publicai",
+            {
+                "model": _m("publicai"),
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "a"},
+                            {"type": "text", "text": "b"},
+                        ],
+                    }
+                ],
+            },
+            "list-form message content",
+        ),
+        "zai:thinking_verbatim_copy": (
+            "zai",
+            {
+                "model": "glm-5",
+                "thinking": {"type": "enabled"},
+                "messages": _USER,
+            },
+            "thinking on zai",
+        ),
         "volcengine:thinking_extra_body_packing": (
             "volcengine",
             {
@@ -285,10 +382,14 @@ def _request_rows():
 def test_registered_providers_have_differential_coverage() -> None:
     """Green-but-untested registration is impossible (verifier-wave1a F3):
     every dispatch Literal member is registered in every pipeline table,
-    the compat_sdk family registry equals the corpus SPECS exactly, and a
-    provider outside the family must be in the dedicated-gates set below.
-    Add a provider to that set ONLY in the commit that adds its
-    differential corpus, naming the gate files."""
+    each family registry equals its corpus SPECS exactly, and a provider
+    outside the families must be in the dedicated-gates set below. Add a
+    provider to that set ONLY in the commit that adds its differential
+    corpus, naming the gate files."""
+    from litellm.translation.providers import compat_httpx
+
+    from ._compat_httpx_corpus import SPECS as HTTPX_SPECS
+
     providers = set(get_args(Provider))
     assert providers == set(pipeline._SERIALIZERS)
     assert providers == set(pipeline._RESPONSE_PARSERS)
@@ -296,6 +397,11 @@ def test_registered_providers_have_differential_coverage() -> None:
     assert set(pipeline._RAW_GUARDS) <= providers
     assert set(compat_sdk.PROFILES) == set(SPECS)
     assert set(compat_sdk.ALLOWED) == set(SPECS)
+    assert set(compat_sdk.GUARDS) == set(SPECS)
+    assert set(compat_httpx.PROFILES) == set(HTTPX_SPECS)
+    assert set(compat_httpx.ALLOWED) == set(HTTPX_SPECS)
+    assert set(compat_httpx.PARSERS) == set(HTTPX_SPECS)
+    assert set(compat_httpx.GUARDS) == set(HTTPX_SPECS)
     dedicated_gates = {
         "anthropic",  # test_differential_anthropic_{request,response,stream}
         "bedrock_converse",  # test_differential_bedrock_*
@@ -309,7 +415,7 @@ def test_registered_providers_have_differential_coverage() -> None:
         "azure_ai_anthropic",  # test_differential_azure_ai_request (Claude route)
         "xai",  # test_differential_xai_*
     }
-    assert providers == dedicated_gates | set(SPECS)
+    assert providers == dedicated_gates | set(SPECS) | set(HTTPX_SPECS)
 
 
 @pytest.mark.parametrize("provider,name", _request_rows())
@@ -384,9 +490,9 @@ def _base_family_allowed(model: str) -> frozenset[str]:
 
 def _v2_allowed(provider: str, model: str, deps) -> frozenset[str]:
     """The per-model allowed set, re-derived from the SAME csp.ALLOWED table
-    serialization reads, with the three per-model narrowings the gates
-    apply (together capability fork, nvidia_nim static table, the base
-    list's gpt-4 name gate)."""
+    serialization reads, with the per-model narrowings the gates apply
+    (together capability fork, nvidia_nim static table, the JSON-registry
+    function-calling fork, the base list's gpt-4 name gate)."""
     if provider == "together_ai":
         allowed = (
             _base_family_allowed(model)
@@ -396,6 +502,11 @@ def _v2_allowed(provider: str, model: str, deps) -> frozenset[str]:
         return allowed
     if provider == "nvidia_nim":
         return csp.nvidia_nim_allowed(model)
+    if provider in csp.JSON_REGISTRY_PROVIDERS:
+        allowed = _base_family_allowed(model)
+        if not csp.supports_json_provider_tools(model, deps, provider):
+            allowed = allowed - csp._JSON_TOOL_KEYS
+        return allowed
     allowed = csp.ALLOWED[provider]
     if allowed == csp._BASE_LIST:
         return _base_family_allowed(model)
@@ -416,6 +527,31 @@ _SAMPLE_MODELS = {
     ),
     "lm_studio": ("qwen2.5-7b-instruct-1m", "gpt-4", "gpt-3.5-turbo-16k"),
     "llamafile": ("LLaMA_CPP", "gpt-4"),
+    # wave-1b providers with no (or too few) model-map chat rows: fixed name
+    # samples; "gpt-4" exercises the base list's response_format name gate
+    # for the configs that inherit it
+    "ai21_chat": ("jamba-large-1.7", "jamba-mini-1.7"),
+    "docker_model_runner": ("ai/llama3.1", "ai/smollm2"),
+    "empower": ("empower-functions", "empower-functions-small"),
+    "galadriel": ("llama3.1", "llama3.1-70b"),
+    "github": ("Llama-3.2-90B-Vision-Instruct", "Meta-Llama-3.1-405B-Instruct"),
+    "inception": ("mercury-2", "mercury-coder"),
+    "dashscope": ("qwen-flash", "gpt-4"),
+    "vercel_ai_gateway": ("openai/gpt-4o", "gpt-4"),
+    "meta_llama": ("Llama-4-Maverick-17B-128E-Instruct-FP8", "gpt-4"),
+    "helicone": ("llama-3.3-70b", "gpt-4"),
+    "xiaomi_mimo": ("mimo-7b", "gpt-4"),
+    "scaleway": ("llama-3.3-70b-instruct", "gpt-4"),
+    "synthetic": ("deepseek-v3", "gpt-4"),
+    "apertis": ("apertis-large", "gpt-4"),
+    "nano-gpt": ("llama-3.3-70b-instruct", "gpt-4"),
+    "poe": ("claude-sonnet-4", "gpt-4"),
+    "chutes": ("deepseek-ai/DeepSeek-V3", "gpt-4"),
+    "assemblyai": ("assembly-best", "gpt-4"),
+    "charity_engine": ("llama-3.1-8b", "gpt-4"),
+    "neosantara": ("nusantara-base", "gpt-4"),
+    "tensormesh": ("tm-llama-3.1-8b", "gpt-4"),
+    "parasail": ("parasail-llama-33-70b", "gpt-4"),
 }
 
 
@@ -456,6 +592,9 @@ def test_supported_list_mirrors_track_v1_at_head(provider: str) -> None:
             assert csp.supports_cerebras_reasoning(model, deps) == (
                 "reasoning_effort" in supported
             ), model
+        elif provider == "inception":
+            # unconditional in InceptionChatConfig's static list
+            assert "reasoning_effort" in supported, model
         else:
             assert "reasoning_effort" not in supported, (provider, model)
 
@@ -558,3 +697,182 @@ def test_nvidia_gemma_arm_serves_its_reduced_list() -> None:
     result = _v2("nvidia_nim", case)
     assert result.is_ok(), result.error.summary
     assert _norm(result.ok) == _norm(run_v1_request_transform("nvidia_nim", case))
+
+
+# ---------------------------------------------------------------------------
+# wave-1b pins and canaries
+# ---------------------------------------------------------------------------
+
+
+def test_meta_llama_non_json_schema_response_format_dropped_like_v1() -> None:
+    """LlamaAPIConfig's map POPS response_format unless type == json_schema;
+    json_object is silently dropped on both sides, json_schema passes."""
+    dropped = {
+        "model": _m("meta_llama"),
+        "response_format": {"type": "json_object"},
+        "messages": _USER,
+    }
+    v1 = run_v1_request_transform("meta_llama", dropped)
+    assert "response_format" not in v1
+    result = _v2("meta_llama", dropped)
+    assert result.is_ok(), result.error.summary
+    assert "response_format" not in result.ok
+    assert _norm(result.ok) == _norm(v1)
+    kept = {
+        "model": _m("meta_llama"),
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "a", "schema": {"type": "object"}, "strict": True},
+        },
+        "messages": _USER,
+    }
+    v1_kept = run_v1_request_transform("meta_llama", kept)
+    assert "response_format" in v1_kept
+    result_kept = _v2("meta_llama", kept)
+    assert result_kept.is_ok(), result_kept.error.summary
+    assert _norm(result_kept.ok) == _norm(v1_kept)
+
+
+def test_inception_reasoning_effort_served_unconditionally() -> None:
+    case = {"model": "mercury-2", "reasoning_effort": "low", "messages": _USER}
+    v1 = run_v1_request_transform("inception", case)
+    assert v1.get("reasoning_effort") == "low"
+    result = _v2("inception", case)
+    assert result.is_ok(), result.error.summary
+    assert _norm(result.ok) == _norm(v1)
+
+
+def test_publicai_tools_served_on_fc_capable_model() -> None:
+    """The dynamic JSON config's function-calling fork serves tools when the
+    model map carries supports_function_calling for {slug}/{model}."""
+    case = {
+        "model": "aisingapore/Gemma-SEA-LION-v4-27B-IT",
+        "tools": _TOOLS,
+        "messages": _USER,
+    }
+    v1 = run_v1_request_transform("publicai", case)
+    assert v1.get("tools")
+    result = _v2("publicai", case)
+    assert result.is_ok(), result.error.summary
+    assert _norm(result.ok) == _norm(v1)
+
+
+def test_json_rename_set_mirrors_providers_json_at_head() -> None:
+    """The _JSON_RENAME frozenset in compat_sdk/serialize.py must track
+    providers.json param_mappings (the mapping arm runs FIRST in the dynamic
+    config's map), and the registered JSON cohort must be exactly the enum
+    members of the registry at HEAD."""
+    import json as jsonlib
+    from pathlib import Path
+
+    import litellm as litellm_module
+    from litellm.types.utils import LlmProviders
+
+    from litellm.translation.providers.compat_sdk.serialize import _JSON_RENAME
+
+    registry_path = (
+        Path(litellm_module.__file__).parent / "llms" / "openai_like" / "providers.json"
+    )
+    registry = jsonlib.loads(registry_path.read_text())
+    renames = {
+        slug
+        for slug, config in registry.items()
+        if config.get("param_mappings", {}).get("max_completion_tokens") == "max_tokens"
+    }
+    enum_names = {provider.value for provider in LlmProviders}
+    enum_members = {slug for slug in registry if slug in enum_names}
+    assert set(csp.JSON_REGISTRY_PROVIDERS) == enum_members
+    assert _JSON_RENAME == renames & enum_members
+    for slug in csp.JSON_REGISTRY_PROVIDERS:
+        # no JSON provider carries the (currently dead) temperature
+        # constraints arm or a chat-relevant special_handling beyond
+        # publicai's flatten (guard-pinned) and parasail's
+        # force_store_false (Responses-API-only, dormant on chat)
+        constraints = registry[slug].get("constraints", {})
+        assert not constraints, (slug, constraints)
+        special = dict(registry[slug].get("special_handling", {}))
+        special.pop("force_store_false", None)
+        if slug == "publicai":
+            assert special == {"convert_content_list_to_string": True}
+        else:
+            assert special == {}, (slug, special)
+
+
+def test_json_non_enum_providers_stay_dropped() -> None:
+    """The 7 JSON-registry providers WITHOUT LlmProviders enum membership
+    dispatch through v1's generic openai fallback arms (provider_config is
+    None at param time, OpenAIConfig() at transform time) — their JSON param
+    gates are dead, so they are DROPPED, not registered. If this canary
+    fails, upstream gave them enum membership: re-evaluate porting them as
+    ordinary JSON rows."""
+    from litellm.types.utils import LlmProviders
+
+    non_enum = (
+        "veniceai",
+        "abliteration",
+        "llamagate",
+        "gmi",
+        "sarvam",
+        "aihubmix",
+        "crusoe",
+    )
+    enum_names = {provider.value for provider in LlmProviders}
+    for slug in non_enum:
+        assert slug not in enum_names, f"{slug} gained enum membership; re-evaluate"
+        assert slug not in get_args(Provider)
+        assert slug not in pipeline._SERIALIZERS
+        assert slug not in pipeline._RESPONSE_PARSERS
+
+
+def test_aiml_drop_canary() -> None:
+    """aiml is DROPPED: AIMLChatConfig is unregistered in the provider
+    config map at HEAD, so v1 serves aiml through the generic fallback stack
+    (openai supported list + the bare OpenAILikeChatConfig map arm — mct
+    RENAMES today). If the config resolution half fails, upstream registered
+    the config (which has NO rename: mct would flip to verbatim) —
+    re-evaluate aiml as an ordinary compat_sdk row."""
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    from litellm.utils import get_optional_params
+
+    resolved = ProviderConfigManager.get_provider_chat_config(
+        model="llama-x", provider=LlmProviders("aiml")
+    )
+    assert resolved is None, "AIMLChatConfig got registered; re-evaluate the drop"
+    # the transform side substitutes OpenAIConfig() (openai.py no-config
+    # fallback), so only the param chain is probed here: the OpenAILike
+    # else-arm renames mct — AIMLChatConfig (OpenAIGPT-based) would NOT
+    optional = get_optional_params(
+        model="llama-x", custom_llm_provider="aiml", max_completion_tokens=9
+    )
+    assert optional.get("max_tokens") == 9
+    assert "max_completion_tokens" not in optional
+    assert "aiml" not in get_args(Provider)
+    assert "aiml" not in pipeline._SERIALIZERS
+
+
+def test_vercel_ai_gateway_routing_facts() -> None:
+    """The dedicated vercel elif in completion() is dead code: compat-list
+    membership matches the big SDK elif first. The always-injected
+    ``extra_body`` is empty (popped by the invoker exactly like the SDK
+    spread) unless the non-IR ``providerOptions`` rides — which the inbound
+    boundary rejects typed."""
+    import litellm as litellm_module
+
+    assert "vercel_ai_gateway" in litellm_module.openai_compatible_providers
+    v1 = run_v1_request_transform(
+        "vercel_ai_gateway",
+        {"model": _m("vercel_ai_gateway"), "messages": _USER},
+    )
+    assert "extra_body" not in v1
+    result = _v2(
+        "vercel_ai_gateway",
+        {
+            "model": _m("vercel_ai_gateway"),
+            "providerOptions": {"gateway": {"order": ["x"]}},
+            "messages": _USER,
+        },
+    )
+    assert result.is_error()
+    assert "providerOptions" in result.error.summary

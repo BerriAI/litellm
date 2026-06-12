@@ -374,7 +374,127 @@ def _compat_sdk_rows(lines: list) -> int:
         " handle_baseten_chunk wrapper branch, not the openai dialect;"
         " unregistered, typed v1 fallback; canary"
         " test_baseten_drop_canary pins the evidence)",
+        "- DROPPED FROM WAVE 1B: aiml (AIMLChatConfig unregistered at HEAD;"
+        " v1 serves it through the generic openai fallback stack whose mct"
+        " rename flips the day the config registers; canary"
+        " test_aiml_drop_canary)",
+        "- DROPPED FROM WAVE 1B: veniceai, abliteration, llamagate, gmi,"
+        " sarvam, aihubmix, crusoe (JSON-registry rows WITHOUT LlmProviders"
+        " enum membership: no provider config at param/transform time, the"
+        " JSON gates are dead in v1; canary"
+        " test_json_non_enum_providers_stay_dropped)",
     ]
+    return failures
+
+
+def _compat_httpx_rows(lines: list) -> int:
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import _compat_httpx_corpus as corpus
+    from . import test_differential_compat_httpx_request as req
+    from . import test_differential_compat_httpx_response as resp
+    from . import test_differential_compat_httpx_stream as stream
+
+    failures = 0
+    for provider in corpus.PROVIDERS:
+        lines += [
+            "",
+            f"## {provider}: request bodies (v1 get_optional_params('{provider}')"
+            " + the LIVE httpx transform_request vs v2 compat_httpx)",
+            "",
+        ]
+        for name in sorted(corpus.corpus_for(provider)):
+            case = corpus.corpus_for(provider)[name]
+            result = req._v2(provider, case)
+            same = result.is_ok() and req._norm(result.ok) == req._norm(
+                corpus.run_v1_request_transform(provider, case)
+            )
+            failures += 0 if same else 1
+            lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+        for name in sorted(k for k in req.V1_RAISES if k.startswith(f"{provider}:")):
+            p, case, reason = req.V1_RAISES[name]
+            result = req._v2(p, case)
+            try:
+                corpus.run_v1_request_transform(p, case)
+                raised = False
+            except UnsupportedParamsError:
+                raised = True
+            ok = result.is_error() and reason in result.error.summary and raised
+            failures += 0 if ok else 1
+            label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+            lines.append(f"- {label}: {name} ({reason})")
+        for name in sorted(
+            k for k in req.EXPECTED_FALLBACKS if k.startswith(f"{provider}:")
+        ):
+            p, case, reason = req.EXPECTED_FALLBACKS[name]
+            result = req._v2(p, case)
+            ok = result.is_error() and reason in result.error.summary
+            failures += 0 if ok else 1
+            label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+            lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## compat_httpx family: responses (v1's LIVE transform_response over a"
+        " FRESH ModelResponse — no seam preset; cdr style for heroku/minimax/"
+        "ovhcloud, ModelResponse(**json) style for the rest — vs v2 family"
+        " parser + the per-style seam arm; includes the request-model prefix"
+        " pins and the usage-null row)",
+        "",
+    ]
+    for provider, name in resp._rows():
+        raw = resp._RESPONSES[name]
+        v1 = corpus.run_v1_response_transform(
+            provider, raw, corpus.SPECS[provider].model
+        ).model_dump()
+        same = resp._norm(resp._v2_model_response(provider, raw)) == resp._norm(v1)
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} {name}")
+    for provider in corpus.PROVIDERS:
+        v1 = corpus.run_v1_response_transform(
+            provider, resp._NULL_USAGE_BODY, corpus.SPECS[provider].model
+        ).model_dump()
+        same = resp._norm(
+            resp._v2_model_response(provider, resp._NULL_USAGE_BODY)
+        ) == resp._norm(v1)
+        failures += 0 if same else 1
+        lines.append(
+            f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} usage_null_tokens"
+        )
+    lines += [
+        "",
+        "## compat_httpx family: streams (v1 base"
+        " OpenAIChatCompletionStreamingHandler + CustomStreamWrapper(provider)"
+        " over SSE lines vs v2 family parser with the xai chunk dialect)",
+        "",
+    ]
+    for provider, name in stream._rows():
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            corpus.replay_v1_sse_lines(provider, events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} {name}")
+    for provider in corpus.PROVIDERS:
+        v1 = corpus.replay_v1_sse_lines(
+            provider, stream.USAGE_STREAM, stream_options={"include_usage": True}
+        )
+        v2 = stream._v2_chunks(stream.USAGE_STREAM)
+        tail_ok = (
+            len(v1) == len(v2)
+            and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+            and v2[-1]["choices"] == []
+            and all(
+                v1[-1]["usage"][k] == v2[-1]["usage"][k]
+                for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+            )
+        )
+        failures += 0 if tail_ok else 1
+        lines.append(
+            ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+            + f"{provider} usage tail (v2 passes the wire choices=[] usage"
+            " chunk through; the streaming seam owns v1's synthesized final"
+            " chunk)"
+        )
     return failures
 
 
@@ -849,7 +969,7 @@ def main() -> None:
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the wave-1a compat_sdk family)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b) + the wave-1b compat_httpx family)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -864,6 +984,7 @@ def main() -> None:
     failures += _openai_rows(lines)
     failures += _xai_rows(lines)
     failures += _compat_sdk_rows(lines)
+    failures += _compat_httpx_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

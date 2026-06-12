@@ -84,6 +84,29 @@ def test_usage_tail_seam_contract(provider: str, frozen_ambient) -> None:
         assert v1[-1]["usage"][key] == v2[-1]["usage"][key]
 
 
+def test_ai21_chat_coercion_canary() -> None:
+    """ai21 is registered as ``ai21_chat`` only. The get_llm_provider
+    coercion to "ai21_chat" is CONDITIONAL on ``litellm.ai21_chat_models``
+    membership (researcher-4 correction found at HEAD: it is NOT
+    unconditional — e.g. "ai21/jamba-large" keeps provider "ai21"), and the
+    legacy ``handle_ai21_chunk`` wrapper arm (a ``.decode``-based decoder
+    like baseten's) matches the literal "ai21" string. So: coerced names
+    serve through ai21_chat's registration; everything still carrying
+    "ai21" has NO dispatch row and falls back typed to v1 (the baseten
+    steady state). If the membership/coercion facts move upstream, re-pin
+    before trusting either half."""
+    import litellm as litellm_module
+
+    _, coerced, _, _ = litellm_module.get_llm_provider(model="ai21/jamba-1.5-large")
+    assert coerced == "ai21_chat"
+    _, uncoerced, _, _ = litellm_module.get_llm_provider(model="ai21/jamba-large")
+    assert uncoerced == "ai21"
+    assert hasattr(CustomStreamWrapper, "handle_ai21_chunk")
+    assert "ai21_chat" in get_args(Provider)
+    assert "ai21" not in get_args(Provider)
+    assert "ai21" not in pipeline._SERIALIZERS
+
+
 def test_baseten_drop_canary(frozen_ambient) -> None:
     """baseten is DROPPED from wave 1a: the wrapper routes its chunks into a
     dedicated legacy decoder (``handle_baseten_chunk``,

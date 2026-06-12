@@ -27,11 +27,15 @@ _Case = dict[str, object]
 
 
 class CompatSpec(NamedTuple):
-    """One row per surviving wave-1a provider: the corpus model, which
+    """One row per surviving wave-1a/1b provider: the corpus model, which
     optional surfaces the provider serves (drives generated
     corpus/raise/fallback rows), and how max_completion_tokens behaves in
     v1 ("rename" -> max_tokens, "verbatim" -> passes through, "raise" ->
-    outside the supported list)."""
+    outside the supported list).
+
+    The four sampling flags (wave-1b: ai21_chat has no top_p; morph serves
+    NOTHING but stream; v0 serves only stream/tools/tool_choice) default to
+    True so the wave-1a rows read unchanged."""
 
     model: str
     tools: bool
@@ -39,6 +43,10 @@ class CompatSpec(NamedTuple):
     parallel_tool_calls: bool
     user: bool
     mct: Literal["rename", "verbatim", "raise"]
+    top_p: bool = True
+    temperature: bool = True
+    stop: bool = True
+    max_tokens: bool = True
 
 
 SPECS: Mapping[str, CompatSpec] = MappingProxyType(
@@ -147,6 +155,241 @@ SPECS: Mapping[str, CompatSpec] = MappingProxyType(
             user=False,
             mct="rename",
         ),
+        # --- wave-1b SDK-path shims (mct flags verified in-process at HEAD;
+        # see compat_sdk/serialize.py rows) ---
+        "ai21_chat": CompatSpec(
+            model="jamba-large-1.7",  # a litellm.ai21_chat_models member (the coerced set)
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+            top_p=False,  # NOT in AI21ChatConfig's list — raises
+        ),
+        "dashscope": CompatSpec(
+            model="qwen-flash",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="verbatim",
+        ),
+        "docker_model_runner": CompatSpec(
+            model="ai/llama3.1",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="rename",  # the config's own explicit map arm
+        ),
+        "empower": CompatSpec(
+            model="empower-functions",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="rename",
+        ),
+        "friendliai": CompatSpec(
+            model="meta-llama-3.1-8b-instruct",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="rename",
+        ),
+        "galadriel": CompatSpec(
+            model="llama3.1",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="rename",
+        ),
+        "github": CompatSpec(
+            model="Llama-3.2-90B-Vision-Instruct",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="rename",
+        ),
+        "inception": CompatSpec(
+            model="mercury-2",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+            top_p=False,  # NOT in InceptionChatConfig's list — raises
+        ),
+        "meta_llama": CompatSpec(
+            model="Llama-4-Maverick-17B-128E-Instruct-FP8",
+            tools=True,
+            # response_format json_object is SILENTLY DROPPED by v1's map
+            # (kept only for json_schema) — the corpus json_object row pins
+            # the drop on both sides, the json_schema row pins passthrough
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="verbatim",
+        ),
+        "morph": CompatSpec(
+            model="morph-v3-fast",
+            tools=False,
+            response_format=False,
+            parallel_tool_calls=False,
+            user=False,
+            mct="raise",
+            top_p=False,
+            temperature=False,
+            stop=False,
+            max_tokens=False,  # messages/model/stream is the ENTIRE list
+        ),
+        "v0": CompatSpec(
+            model="v0-1.5-md",
+            tools=True,
+            response_format=False,
+            parallel_tool_calls=False,
+            user=False,
+            mct="raise",
+            top_p=False,
+            temperature=False,
+            stop=False,
+            max_tokens=False,
+        ),
+        "zai": CompatSpec(
+            model="glm-4.6",
+            tools=True,
+            response_format=False,
+            parallel_tool_calls=False,
+            user=False,
+            mct="raise",  # no OpenAILike rename arm: OpenAIGPT-based config
+        ),
+        "vercel_ai_gateway": CompatSpec(
+            model="openai/gpt-4o",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="verbatim",
+        ),
+        # --- wave-1b JSON-registry providers (dynamic JSONProviderConfig;
+        # tools=False because the corpus models carry no
+        # supports_function_calling map flag — the publicai fc-capable row
+        # is pinned separately; mct follows providers.json param_mappings)
+        "publicai": CompatSpec(
+            model="swiss-ai/apertus-70b-instruct",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+        "helicone": CompatSpec(
+            model="llama-3.3-70b",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="verbatim",
+        ),
+        "xiaomi_mimo": CompatSpec(
+            model="mimo-7b",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+        "scaleway": CompatSpec(
+            model="llama-3.3-70b-instruct",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="verbatim",
+        ),
+        "synthetic": CompatSpec(
+            model="deepseek-v3",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+        "apertis": CompatSpec(
+            model="apertis-large",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+        "nano-gpt": CompatSpec(
+            model="llama-3.3-70b-instruct",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+        "poe": CompatSpec(
+            model="claude-sonnet-4",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+        "chutes": CompatSpec(
+            model="deepseek-ai/DeepSeek-V3",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+        "assemblyai": CompatSpec(
+            model="assembly-best",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="verbatim",
+        ),
+        "charity_engine": CompatSpec(
+            model="llama-3.1-8b",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+        "neosantara": CompatSpec(
+            model="nusantara-base",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+        "tensormesh": CompatSpec(
+            model="tm-llama-3.1-8b",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+        "parasail": CompatSpec(
+            model="parasail-llama-33-70b",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="verbatim",
+        ),
     }
 )
 
@@ -202,24 +445,36 @@ def corpus_for(provider: str) -> dict[str, _Case]:
     user_msg = [{"role": "user", "content": "Hello, world"}]
     cases: dict[str, _Case] = {
         "text": {"model": model, "messages": user_msg},
-        "system_and_sampling": {
+        "stream_true": {"model": model, "stream": True, "messages": user_msg},
+    }
+    sampling: _Case = {}
+    if spec.max_tokens:
+        sampling["max_tokens"] = 64
+    if spec.temperature:
+        sampling["temperature"] = 0.5
+    if spec.top_p:
+        sampling["top_p"] = 0.9
+    if sampling:
+        cases["system_and_sampling"] = {
             "model": model,
-            "max_tokens": 64,
-            "temperature": 0.5,
-            "top_p": 0.9,
+            **sampling,
             "messages": [
                 {"role": "system", "content": "You are helpful"},
                 {"role": "user", "content": "Hi"},
             ],
-        },
-        "stream_true": {"model": model, "stream": True, "messages": user_msg},
-        "stop_list": {"model": model, "stop": ["END", "STOP"], "messages": user_msg},
-        "temperature_int_stays_int": {
+        }
+    if spec.stop:
+        cases["stop_list"] = {
+            "model": model,
+            "stop": ["END", "STOP"],
+            "messages": user_msg,
+        }
+    if spec.temperature:
+        cases["temperature_int_stays_int"] = {
             "model": model,
             "temperature": 1,
             "messages": user_msg,
-        },
-    }
+        }
     if spec.mct in ("rename", "verbatim"):
         cases["max_completion_tokens"] = {
             "model": model,
