@@ -1856,6 +1856,10 @@ class BlockKeyRequest(LiteLLMPydanticObjectBase):
     key: str  # required
 
 
+class BlockModelRequest(LiteLLMPydanticObjectBase):
+    model_id: str  # required
+
+
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
     callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
@@ -2231,8 +2235,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     health_check_concurrency: Optional[int] = Field(
         None,
         description=(
-            "limit concurrent health checks per cycle; when unset, "
-            "health checks run without a concurrency cap"
+            "limit concurrent health checks per cycle; when unset, health checks run without a concurrency cap"
         ),
     )
     health_check_skip_disabled_background_models: bool = Field(
@@ -2299,6 +2302,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
+    )
+    use_spend_logs_partitioning: Optional[bool] = Field(
+        None,
+        description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
     )
     mcp_internal_ip_ranges: Optional[List[str]] = Field(
         None,
@@ -3088,6 +3095,14 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "GALILEO_PASSWORD",
         ],
         ui_callback_name="Galileo",
+    )
+
+    newrelic: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="newrelic",
+        ui_callback_name="New Relic",
+        litellm_callback_params=[
+            "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED",
+        ],
     )
 
 

@@ -25,7 +25,7 @@ import { DocsMenu } from "../HelpLink";
 import HowItWorks from "./how_it_works";
 import { useDiscountConfig } from "./use_discount_config";
 import { useMarginConfig } from "./use_margin_config";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 
 const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, userRole, accessToken }) => {
   const { t } = useTranslation();

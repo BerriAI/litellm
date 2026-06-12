@@ -3,7 +3,7 @@ import { TextInput, Text } from "@tremor/react";
 import { Select } from "antd";
 import { RobotOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 
 interface ModelSelectorProps {
   accessToken: string;

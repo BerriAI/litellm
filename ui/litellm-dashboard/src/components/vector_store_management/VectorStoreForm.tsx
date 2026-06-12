@@ -11,7 +11,7 @@ import {
   getProviderSpecificFields,
   VectorStoreFieldConfig,
 } from "../vector_store_providers";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import NotificationsManager from "../molecules/notifications_manager";
 
 interface VectorStoreFormProps {
