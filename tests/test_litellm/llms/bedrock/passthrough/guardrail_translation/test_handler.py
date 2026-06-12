@@ -515,3 +515,42 @@ class TestDeAnonymizeConverseStream:
         ]
         assert "".join(texts) == "John Acme"
         assert all(t != "" for t in texts), f"Expected no empty chunks, got: {texts}"
+
+    @pytest.mark.asyncio
+    async def test_trailing_bytes_after_last_frame_preserved(self):
+        import json
+        from botocore.eventstream import EventStreamBuffer
+
+        trailing = b"\xde\xad\xbe"
+        stream_bytes = (
+            _build_event_stream_frame(
+                "contentBlockDelta",
+                {"contentBlockIndex": 0, "delta": {"text": "<PERSON_1>"}},
+            )
+            + trailing
+        )
+
+        de_anon_response = {
+            "output": {"message": {"role": "assistant", "content": [{"text": "Jane"}]}},
+            "stopReason": "end_turn",
+        }
+
+        async def mock_hook(data, user_api_key_dict, response):
+            return de_anon_response
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(mock_hook),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        assert result.endswith(trailing)
+        buf = EventStreamBuffer()
+        buf.add_data(result[: -len(trailing)])
+        texts = [
+            json.loads(msg.payload)["delta"]["text"]
+            for msg in buf
+            if msg.headers.get(":event-type") == "contentBlockDelta"
+        ]
+        assert "".join(texts) == "Jane"

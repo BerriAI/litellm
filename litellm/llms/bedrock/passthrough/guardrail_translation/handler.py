@@ -136,6 +136,8 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 {"raw": frame_raw, "is_text_delta": is_text_delta, "text": text}
             )
 
+        trailing_bytes = body_bytes[offset:]
+
         if not text_delta_indices:
             return body_bytes
 
@@ -213,6 +215,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 prelude + prelude_crc_b + headers_bytes + new_payload + msg_crc_b
             )
 
+        result_parts.append(trailing_bytes)
         return b"".join(result_parts)
 
     async def process_input_messages(
