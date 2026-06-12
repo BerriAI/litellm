@@ -71,7 +71,7 @@ class CloudflareChatConfig(BaseConfig):
             )
         headers = {
             "accept": "application/json",
-            "content-type": "apbplication/json",
+            "content-type": "application/json",
             "Authorization": "Bearer " + api_key,
         }
         return headers
