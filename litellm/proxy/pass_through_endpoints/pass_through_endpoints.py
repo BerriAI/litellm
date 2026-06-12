@@ -697,7 +697,8 @@ def _carry_guardrail_logging_info(
 
 
 from litellm.passthrough.timeout_utils import (
-    DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,  # noqa: F401 - re-exported for backward compat
+    resolve_llm_passthrough_timeout,  # noqa: F401 - re-exported for backward compat
     resolve_pass_through_request_timeout,
 )
 
