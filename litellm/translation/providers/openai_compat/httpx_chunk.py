@@ -115,7 +115,10 @@ on the ``choices: []`` tail only). ONE name for the shared truth
 five base-handler own modules (deepseek, hosted_vllm, fireworks_ai,
 snowflake, huggingface) all compose ``make_parse_event(BASE_HANDLER_POLICY)``
 — a family-policy fix is a one-site edit here, and each consumer's docstring
-stays the provider-specific pinned truth (v1 = the base handler)."""
+stays the provider-specific pinned truth (v1 = the base handler). groq also
+composes it (sibling-merge sweep): its v1 handler is its OWN class whose
+pop-rename + value-checked-error behavior is output-identical to this
+policy — the groq stream gate's replays pin that equivalence."""
 
 
 def _envelope_error(

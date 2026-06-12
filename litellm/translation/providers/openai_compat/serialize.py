@@ -39,9 +39,11 @@ def make_gated_serializer(gate: _GateFn, with_deltas: _DeltasFn) -> _Serializer:
     """The own-module ``serialize_request`` shape — params gate ->
     ``assemble_body`` -> provider deltas — as ONE factory instead of five
     identical wrappers (critic-wave2b-alpha NIT-1). Consumers: deepseek,
-    openrouter, hosted_vllm, fireworks_ai, huggingface. snowflake binds the
-    chain explicitly: its deltas return a Result (the fail-closed tool arm),
-    so it is deliberately not a row here."""
+    openrouter, hosted_vllm, fireworks_ai, huggingface, and (sibling-merge
+    sweep) cohere, sagemaker_chat, groq. Deliberately NOT rows: snowflake
+    and mistral bind the chain explicitly (their deltas return a Result —
+    the fail-closed tool arm / the two-branch message munge), and watsonx
+    does too (its deltas read deps for the project/space injection)."""
 
     def serialize_request(
         request: ChatRequest, deps: TranslationDeps

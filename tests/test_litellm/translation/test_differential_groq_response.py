@@ -23,7 +23,11 @@ from litellm.types.utils import ModelResponse
 from litellm.translation.inbound.openai_chat import parse_request
 from litellm.translation.inbound.openai_chat.response import serialize_response
 from litellm.translation.providers.groq import parse_response
-from litellm.translation_seam import build_translation_deps, to_model_response
+from litellm.translation_seam import (
+    UsageStyle,
+    build_translation_deps,
+    to_model_response,
+)
 
 MODEL = "llama-3.3-70b-versatile"
 _REQUEST = {"model": MODEL, "messages": [{"role": "user", "content": "hi"}]}
@@ -144,11 +148,18 @@ def _v2_parse(raw: dict):
     return parse_response(copy.deepcopy(raw), parsed.ok)
 
 
-def _v2_model_response(raw: dict) -> dict:
+def _v2_with_style(raw: dict, style: UsageStyle) -> dict:
     response = _v2_parse(raw)
     assert response.is_ok(), response.error.summary
     body = serialize_response(response.ok, build_translation_deps(), "openai")
-    return to_model_response(body, None, usage_style="openai_like").model_dump()
+    return to_model_response(body, None, usage_style=style).model_dump()
+
+
+def _v2_model_response(raw: dict) -> dict:
+    # groq is DIRECT construction (bare wire model, x_groq extras survive) —
+    # the truth is pipeline.OWN_MODULE_RESPONSE_STYLES["groq"],
+    # divergence-pinned below
+    return _v2_with_style(raw, "openai_like")
 
 
 def _norm(payload: dict) -> str:
@@ -195,3 +206,29 @@ def test_non_string_wire_model_falls_back_where_v1_raises(frozen_ambient) -> Non
     assert "non-string wire model" in result.error.summary
     with pytest.raises(Exception):
         _v1_model_response(raw)
+
+
+def test_wrong_construction_arm_diverges_and_the_table_pins_it(
+    frozen_ambient,
+) -> None:
+    """Sibling-merge consistency sweep: alpha's MAJOR-4 table
+    (pipeline.OWN_MODULE_RESPONSE_STYLES) now covers the beta own modules;
+    groq is an openai_like member, so the wrong arm must be a PROVEN
+    divergence, not prose (the fireworks_ai/snowflake template): the openai
+    (cdr) arm rebuilds choices under enumerate, rewriting a verbatim wire
+    index 5 to 0, while v1's ModelResponse(**json) keeps it."""
+    from litellm.translation.engine.pipeline import OWN_MODULE_RESPONSE_STYLES
+
+    assert OWN_MODULE_RESPONSE_STYLES["groq"] == "openai_like"
+    raw = copy.deepcopy(_RESPONSES["text_tier_clamped_to_auto"])
+    raw["choices"][0]["index"] = 5
+    v1 = _v1_model_response(raw)
+    correct = _v2_with_style(raw, OWN_MODULE_RESPONSE_STYLES["groq"])
+    wrong = _v2_with_style(raw, "openai")
+    assert _norm(correct) == _norm(v1)
+    assert correct["choices"][0]["index"] == 5
+    assert wrong["choices"][0]["index"] == 0
+    assert _norm(wrong) != _norm(v1), (
+        "the construction arms stopped diverging on the index-rewrite body — "
+        "the MAJOR-4 gate lost its discriminator; re-decide before relying on it"
+    )

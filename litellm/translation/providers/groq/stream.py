@@ -31,13 +31,16 @@ from expression.collections import Block
 
 from ...errors import BoundaryError, TranslationError
 from ...ir import PlainJson, StreamEvent
-from ..openai_compat.httpx_chunk import HttpxChunkPolicy, make_parse_event
+from ..openai_compat.httpx_chunk import BASE_HANDLER_POLICY, make_parse_event
 from ..openai_compat.stream import make_parse_line
 
 _EventResult = Result[StreamEvent | None, TranslationError]
 
-_POLICY = HttpxChunkPolicy(reasoning="rename")
-_family_parse_event = make_parse_event(_POLICY)
+# groq's v1 handler is its OWN class, but its policy VALUE is exactly the
+# family truth (rename + value-checked errors + no envelope keys) — ONE
+# name, never a re-declared HttpxChunkPolicy(reasoning="rename") copy
+# (sibling-merge consistency sweep; critic-wave2b-alpha NIT-1's rule).
+_family_parse_event = make_parse_event(BASE_HANDLER_POLICY)
 
 
 def parse_event(event: PlainJson) -> _EventResult:

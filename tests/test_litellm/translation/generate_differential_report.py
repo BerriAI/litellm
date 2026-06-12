@@ -3,7 +3,6 @@
 Run:  python -m tests.test_litellm.translation.generate_differential_report
 """
 
-import json
 import pathlib
 import subprocess
 import sys
@@ -576,6 +575,9 @@ def _compat_httpx_rows(lines: list) -> int:
         # wave-2b-alpha: the own-module base-handler consumers share this
         # exact divergence — ONE named row covers them all, failure-counted
         and _wave2b_alpha_error_chunk_pins()
+        # wave-2b-beta (sibling-merge sweep): mistral inherits the base
+        # handler's swallow through MistralChatResponseIterator
+        and _wave2b_beta_error_chunk_pins()
     )
     failures += 0 if divergence_pinned else 1
     lines.append(
@@ -587,8 +589,9 @@ def _compat_httpx_rows(lines: list) -> int:
         + "mid-stream {'error': ...} chunks — v1's BASE handler silently"
         " swallows them (no error surface in the emitted sequence; asserted"
         " in-process for all nine base-handler members AND the wave-2b-alpha"
-        " own-module base-handler consumers, per their dedicated stream"
-        " gates), v2's family parser"
+        " own-module base-handler consumers AND mistral, whose v1 iterator"
+        " subclasses the base handler — sibling-merge sweep — per their"
+        " dedicated stream gates), v2's family parser"
         " surfaces a LOUD typed boundary error naming the chunk"
         " (test_error_chunk_divergence_two_sided; cometapi differs: its v1"
         " handler RAISES and its policy row mirrors the raise — see the"
@@ -641,6 +644,33 @@ def _wave2b_alpha_error_chunk_pins() -> bool:
         if not (folded.is_error() and "provider stream error" in folded.error.summary):
             return False
     return True
+
+
+def _wave2b_beta_error_chunk_pins() -> bool:
+    """The wave-2b-beta half of the family's ONE pinned divergence (the
+    sibling-merge consistency sweep): MistralChatResponseIterator subclasses
+    the base handler and inherits the silent error-chunk swallow — mistral
+    is the only beta provider on the base-handler swallow (cohere/watsonx
+    have their own pinned iterator-swallow rows; groq/sagemaker v1 handlers
+    RAISE — policy rows). APPEND-ONLY, the alpha twin's convention."""
+    import json as _json
+
+    from litellm.translation.engine.stream import fold_lines
+    from litellm.translation.inbound.openai_chat.stream import initial_state
+    from litellm.translation.providers import mistral as _mistral_pkg
+
+    from . import test_differential_mistral_stream as _mi_stream
+
+    v1 = _mi_stream._v1_chunks(_mi_stream._ERROR_CHUNK_STREAM)
+    if "error" in _json.dumps(v1, default=str):
+        return False
+    lines = [
+        f"data: {_json.dumps(e)}" for e in _mi_stream._ERROR_CHUNK_STREAM
+    ]
+    folded = fold_lines(
+        lines, _mistral_pkg.parse_line, initial_state(_mi_stream.MODEL, dialect="xai")
+    )
+    return folded.is_error() and "provider stream error" in folded.error.summary
 
 
 def _deepseek_rows(lines: list) -> int:
@@ -1178,7 +1208,6 @@ def _snowflake_rows(lines: list) -> int:
 
 
 def _huggingface_rows(lines: list) -> int:
-    from . import _own_module_corpus as own
     from . import test_differential_huggingface_request as req
     from . import test_differential_huggingface_response as resp
     from . import test_differential_huggingface_stream as stream

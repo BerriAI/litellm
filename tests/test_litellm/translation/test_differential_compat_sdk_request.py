@@ -630,6 +630,14 @@ def test_registered_providers_have_differential_coverage() -> None:
         "fireworks_ai",
         "snowflake",
         "huggingface",
+        # wave-2b-beta own modules (sibling-merge consistency sweep): the
+        # construction-style truth covers ALL eleven wave-2b own modules
+        "cohere",
+        "cohere_chat",
+        "mistral",
+        "watsonx",
+        "sagemaker_chat",
+        "groq",
     }
     # critic-wave2b-alpha MAJOR-4: every own-module provider must carry a row
     # in pipeline.OWN_MODULE_RESPONSE_STYLES (the construction-style truth the

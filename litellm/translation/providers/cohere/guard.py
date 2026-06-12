@@ -21,10 +21,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from ...errors import TranslationError
-from ..openai_compat.guard import explicit_stream_false
-from ..openai_compat.guard import (
-    unsupported_request_shapes as openai_unsupported_request_shapes,
-)
+from ..openai_compat.guard import stream_false_then_unsupported_shapes
 
 _Raw = Mapping[str, object]
 
@@ -41,7 +38,6 @@ def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
             "explicit 'v2/' model prefix: v1's cohere completion() branch "
             "strips it before transform (envelope rewrite); v1 owns it"
         )
-    stream_false = explicit_stream_false(raw)
-    if stream_false is not None:
-        return stream_false
-    return openai_unsupported_request_shapes(raw)
+    # the ONE shared composition after the route predicates
+    # (critic-wave2b-alpha NIT-1; sibling-merge sweep)
+    return stream_false_then_unsupported_shapes(raw)

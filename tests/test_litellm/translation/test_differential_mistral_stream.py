@@ -289,3 +289,40 @@ def test_loud_chunk_shapes(name: str, frozen_ambient) -> None:
     if name != "unknown_delta_key":
         with pytest.raises(Exception):
             _v1_chunks([event])
+
+
+_ERROR_CHUNK_STREAM = [
+    _chunk({"role": "assistant", "content": "He"}),
+    {
+        "id": "chunk-1",
+        "object": "chat.completion.chunk",
+        "created": 1718000000,
+        "model": MODEL,
+        "error": {"message": "upstream exploded", "code": 502},
+    },
+    _chunk({"content": "llo"}),
+    _chunk({}, finish="stop"),
+]
+
+
+def test_error_chunk_divergence_two_sided(frozen_ambient) -> None:
+    """Sibling-merge consistency sweep: MistralChatResponseIterator SUBCLASSES
+    the base OpenAIChatCompletionStreamingHandler, so mistral INHERITS the
+    family's silent error-chunk swallow (probed two-sided at the merge: v1
+    serves 3 chunks with no error surface; v2's parse_line is a LOUD typed
+    boundary error naming the chunk). Mistral therefore joins the report's
+    ONE failure-counted PINNED DIVERGENCE row via
+    _wave2b_beta_error_chunk_pins — the wave-2b-alpha merge-notes obligation
+    ("any beta provider riding the BASE handler with the silent swallow
+    joins the same row; never a second PINNED row"). Flag-on cannot lose
+    data (v2 is louder, not quieter). If the v1 half fails, the iterator
+    learned to raise: re-decide the divergence and update the report row in
+    the same commit."""
+    v1 = _v1_chunks(_ERROR_CHUNK_STREAM)
+    assert "error" not in json.dumps(v1, default=str), v1
+    assert [c["choices"][0]["delta"].get("content") for c in v1[:2]] == ["He", "llo"]
+    lines = [f"data: {json.dumps(e)}" for e in copy.deepcopy(_ERROR_CHUNK_STREAM)]
+    folded = fold_lines(lines, parse_line, initial_state(MODEL, dialect="xai"))
+    assert folded.is_error()
+    assert "provider stream error" in folded.error.summary, folded.error.summary
+    assert "upstream exploded" in folded.error.summary

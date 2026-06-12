@@ -18,10 +18,14 @@ drops it (serializer delta, not a fallback).
 
 from __future__ import annotations
 
+from ...deps import TranslationDeps
 from ...ir import ChatRequest
 
 
-def unsupported_params(request: ChatRequest) -> str | None:
+def unsupported_params(request: ChatRequest, deps: TranslationDeps) -> str | None:
+    # deps is unused here — the uniform own-module gate signature
+    # (critic-wave2b-beta N5's recorded convention), which lets the
+    # serializer compose openai_compat.make_gated_serializer directly
     if request.response_format.is_some():
         return (
             "response_format is outside cohere v2's supported list; v1's "

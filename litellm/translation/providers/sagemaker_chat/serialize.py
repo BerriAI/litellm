@@ -14,22 +14,9 @@ mirrors v1's transform output exactly.
 
 from __future__ import annotations
 
-from expression import Error, Result
-
-from ...deps import TranslationDeps
-from ...errors import TranslationError
 from ...ir import Body, ChatRequest
-from ..openai_compat.serialize import assemble_body
+from ..openai_compat.serialize import make_gated_serializer
 from . import params as p
-
-_SerializeResult = Result[Body, TranslationError]
-
-
-def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _SerializeResult:
-    reason = p.unsupported_params(request)
-    if reason is not None:
-        return Error(TranslationError.of_unsupported(reason))
-    return assemble_body(request).map(lambda body: _with_top_k(body, request))
 
 
 def _with_top_k(body: Body, request: ChatRequest) -> Body:
@@ -37,3 +24,6 @@ def _with_top_k(body: Body, request: ChatRequest) -> Body:
     if top_k is None:
         return body
     return {**body, "top_k": top_k}
+
+
+serialize_request = make_gated_serializer(p.unsupported_params, _with_top_k)

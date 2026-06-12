@@ -282,6 +282,20 @@ OWN_MODULE_RESPONSE_STYLES: Mapping[Provider, ResponseStyle] = MappingProxyType(
         "huggingface": "openai",
         "fireworks_ai": "openai_like",
         "snowflake": "openai_like",
+        # wave-2b-beta own modules, registered at the sibling merge
+        # (integrator consistency sweep — the gate's coverage now spans ALL
+        # eleven wave-2b own modules). cohere/mistral/sagemaker_chat ride
+        # the cdr arm ("openai"); watsonx and groq are DIRECT
+        # ModelResponse(**json) construction ("openai_like") with wrong-arm
+        # divergence pins in their response gates (the fireworks/snowflake
+        # template: wire index 5 rides verbatim on the correct arm, the cdr
+        # arm enumerate-rewrites it to 0).
+        "cohere": "openai",
+        "cohere_chat": "openai",
+        "mistral": "openai",
+        "sagemaker_chat": "openai",
+        "watsonx": "openai_like",
+        "groq": "openai_like",
     }
 )
 

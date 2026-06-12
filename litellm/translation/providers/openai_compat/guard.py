@@ -73,9 +73,13 @@ def stream_false_then_unsupported_shapes(raw: _Raw) -> TranslationError | None:
     this module's guard with the FULL message-``name`` fallback. ONE home
     for the shared composition (critic-wave2b-alpha NIT-1: it was four
     byte-identical bodies): compat_sdk's family default and the deepseek /
-    hosted_vllm / fireworks_ai / huggingface own modules all bind it
-    (snowflake deliberately does NOT — stream is always a body key there,
-    so explicit false SERVES)."""
+    hosted_vllm / fireworks_ai / huggingface / sagemaker_chat / groq own
+    modules all bind it, and cohere's guard runs it after its route
+    predicates (sibling-merge sweep: sagemaker_chat/groq/cohere had
+    re-declared the composition). snowflake deliberately does NOT — stream
+    is always a body key there, so explicit false SERVES; mistral and
+    watsonx have no stream:false arm (v1's map only copies stream=True /
+    the wire always carries the key)."""
     return explicit_stream_false(raw) or unsupported_request_shapes(raw)
 
 

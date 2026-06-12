@@ -17,15 +17,9 @@ at HEAD):
 
 from __future__ import annotations
 
-from expression import Error, Result
-
-from ...deps import TranslationDeps
-from ...errors import TranslationError
 from ...ir import Body, ChatRequest, PlainJson
-from ..openai_compat.serialize import assemble_body
+from ..openai_compat.serialize import make_gated_serializer
 from . import params as p
-
-_SerializeResult = Result[Body, TranslationError]
 
 _RENAMES = (
     ("top_p", "p"),
@@ -34,11 +28,6 @@ _RENAMES = (
 )
 
 
-def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _SerializeResult:
-    reason = p.unsupported_params(request)
-    if reason is not None:
-        return Error(TranslationError.of_unsupported(reason))
-    return assemble_body(request).map(lambda body: _with_cohere_deltas(body, request))
 
 
 def _with_cohere_deltas(body: Body, request: ChatRequest) -> Body:
@@ -59,3 +48,6 @@ def _renamed_key(key: str) -> str:
         if key == original:
             return wire
     return key
+
+
+serialize_request = make_gated_serializer(p.unsupported_params, _with_cohere_deltas)

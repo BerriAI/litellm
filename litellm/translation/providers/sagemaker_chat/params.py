@@ -17,12 +17,16 @@ v1's gate is ``_check_valid_arg`` over the BASE OpenAI GPT supported list
 
 from __future__ import annotations
 
+from ...deps import TranslationDeps
 from ...ir import ChatRequest
 
 _RESPONSE_FORMAT_RAISE_NAMES = ("gpt-4", "gpt-3.5-turbo-16k")
 
 
-def unsupported_params(request: ChatRequest) -> str | None:
+def unsupported_params(request: ChatRequest, deps: TranslationDeps) -> str | None:
+    # deps is unused here — the uniform own-module gate signature
+    # (critic-wave2b-beta N5's recorded convention), which lets the
+    # serializer compose openai_compat.make_gated_serializer directly
     if request.thinking.is_some():
         return "thinking is not a sagemaker_chat param; v1 raises or drops it"
     if request.reasoning_effort.is_some():
