@@ -39,6 +39,13 @@ from ..providers.bedrock_invoke import parse_response as bedrock_invoke_parse_re
 from ..providers.bedrock_invoke import (
     serialize_request as bedrock_invoke_serialize_request,
 )
+from ..providers.openai_compat import parse_response as openai_compat_parse_response
+from ..providers.openai_compat import (
+    serialize_request as openai_compat_serialize_request,
+)
+from ..providers.openai_compat import (
+    unsupported_request_shapes as openai_compat_unsupported_request_shapes,
+)
 from .http import Endpoint, ExecuteError, HttpPort, ProviderHttpError
 
 _Serializer = Callable[[ChatRequest, TranslationDeps], Result[Body, TranslationError]]
@@ -51,6 +58,7 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "anthropic": serialize_request,
         "bedrock_converse": bedrock_converse_serialize_request,
         "bedrock_invoke": bedrock_invoke_serialize_request,
+        "openai_compat": openai_compat_serialize_request,
     }
 )
 
@@ -59,6 +67,7 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         "anthropic": parse_response,
         "bedrock_converse": bedrock_converse_parse_response,
         "bedrock_invoke": bedrock_invoke_parse_response,
+        "openai_compat": openai_compat_parse_response,
     }
 )
 
@@ -67,8 +76,27 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         "anthropic": "anthropic",
         "bedrock_converse": "bedrock_converse",
         "bedrock_invoke": "anthropic",  # invoke delegates to the anthropic transform
+        "openai_compat": "openai",  # same-family: the wire-derived body
     }
 )
+
+_RawGuard = Callable[[Mapping[str, object]], TranslationError | None]
+
+_RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
+    # Same-family providers run a raw-shape fidelity guard BEFORE parse: the
+    # inbound parse normalizes wire forms v1 forwards verbatim, so shapes it
+    # cannot round-trip losslessly fall back to v1 as typed errors.
+    {
+        "openai_compat": openai_compat_unsupported_request_shapes,
+    }
+)
+
+
+def _raw_guard_error(
+    raw: Mapping[str, object], provider: Provider
+) -> TranslationError | None:
+    guard = _RAW_GUARDS.get(provider)
+    return guard(raw) if guard is not None else None
 
 
 def response_dialect(provider: Provider) -> ResponseDialect:
@@ -85,6 +113,9 @@ def translate_chat_request(
                 f"provider {provider!r} has no v2 chat serializer yet"
             )
         )
+    guard_error = _raw_guard_error(raw, provider)
+    if guard_error is not None:
+        return Error(guard_error)
     return parse_request(raw).bind(lambda request: serializer(request, deps))
 
 
@@ -127,6 +158,9 @@ def prepare_chat_request(
                 f"provider {provider!r} is not fully ported to v2 yet"
             )
         )
+    guard_error = _raw_guard_error(raw, provider)
+    if guard_error is not None:
+        return Error(guard_error)
     match parse_request(raw):
         case Result(tag="ok", ok=request):
             pass

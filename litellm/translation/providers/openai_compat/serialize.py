@@ -16,8 +16,9 @@ from __future__ import annotations
 
 from expression import Error, Ok, Option, Result
 from expression.collections import Block
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from typing_extensions import assert_never
+
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 from ...deps import TranslationDeps
 from ...errors import TranslationError

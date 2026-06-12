@@ -1,4 +1,4 @@
-# Translation v2 differential report (anthropic + bedrock)
+# Translation v2 differential report (anthropic + bedrock + openai)
 
 v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
 explained FALLBACK that v1 serves) for a provider's flag to turn on.
@@ -6,7 +6,7 @@ Bedrock rows additionally pin the characterization-corpus snapshot, so
 each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: a10779c756
+- commit: c1fee272a0
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -75,6 +75,59 @@ each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: text
 - IDENTICAL: thinking
 - IDENTICAL: tools
+
+## openai_compat: request bodies (v1 map_openai_params + transform_request vs v2)
+
+- IDENTICAL: cache_control_stripped_everywhere
+- IDENTICAL: image_base64
+- IDENTICAL: image_url_string_to_object
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: multiturn_stop_list_stream
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_roundtrip
+- IDENTICAL: tool_choice_none
+- IDENTICAL: tool_choice_required
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- IDENTICAL: tools_strict
+- FALLBACK (v1 serves it): both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): consecutive_user_messages (consecutive user messages)
+- FALLBACK (v1 serves it): empty_tools_list (empty tools list)
+- FALLBACK (v1 serves it): gpt5_model (OpenAIGPT5Config)
+- FALLBACK (v1 serves it): http_pdf_file_id (messages)
+- FALLBACK (v1 serves it): image_detail_key (image_url detail/format)
+- FALLBACK (v1 serves it): legacy_function_call (function_call)
+- FALLBACK (v1 serves it): message_name_field (message name field)
+- FALLBACK (v1 serves it): o_series_model (OpenAIOSeriesConfig)
+- FALLBACK (v1 serves it): reasoning_effort_plain_gpt (reasoning_effort)
+- FALLBACK (v1 serves it): response_format_on_gpt4 (outside v1's supported set)
+- FALLBACK (v1 serves it): single_text_content_list (single-text content list)
+- FALLBACK (v1 serves it): stop_string_form (string-form stop)
+- FALLBACK (v1 serves it): stream_options_unsupported (stream_options)
+- FALLBACK (v1 serves it): tool_call_compact_arguments (non-canonical JSON spacing)
+- FALLBACK (v1 serves it): top_k_not_openai (top_k)
+- FALLBACK (v1 serves it): user_param_model_list_gate (open_ai_chat_completion_models)
+
+## openai_compat: responses (v1 convert_to_model_response_object vs v2)
+
+- IDENTICAL: cached_and_reasoning_usage_details
+- IDENTICAL: reasoning_content_key
+- IDENTICAL: text
+- IDENTICAL: think_tag_extraction
+- IDENTICAL: tool_calls_rewrites_stop
+
+## openai_compat: streams (v1 CustomStreamWrapper over SDK chunks vs v2 fold)
+
+- IDENTICAL: empty_keepalive_swallowed
+- IDENTICAL: text
+- IDENTICAL: text_no_leading_role
+- IDENTICAL: tools
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; v1's wrapper synthesizes its final usage chunk from it, which is the streaming seam's envelope to reproduce)
 
 ## bedrock_converse: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON)
 

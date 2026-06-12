@@ -55,13 +55,27 @@ translation/
 │   │   ├── response.py  # converse JSON -> IR (properties-unwrap json rewrite)
 │   │   └── stream.py    # PARSED converse events -> IR events (pinned at the
 │   │                    #   parsed-event seam; AWS framing is botocore's)
-│   └── bedrock_invoke/  # anthropic serializer + envelope deltas ONLY:
-│       ├── serialize.py # pop model/stream, inject anthropic_version, spoof
-│       │                #   model for response_format (v1's json-tool forcing)
-│       ├── response.py  # re-export of anthropic parse_response (invoke
-│       │                #   response body IS anthropic wire format)
-│       └── stream.py    # re-export of anthropic parse_event (invoke stream
-│                        #   = anthropic events over AWS framing)
+│   ├── bedrock_invoke/  # anthropic serializer + envelope deltas ONLY:
+│   │   ├── serialize.py # pop model/stream, inject anthropic_version, spoof
+│   │   │                #   model for response_format (v1's json-tool forcing)
+│   │   ├── response.py  # re-export of anthropic parse_response (invoke
+│   │   │                #   response body IS anthropic wire format)
+│   │   └── stream.py    # re-export of anthropic parse_event (invoke stream
+│   │                    #   = anthropic events over AWS framing)
+│   └── openai_compat/   # the same-family hub serializer (GPT first consumer)
+│       ├── guard.py     # raw-shape fidelity guard run BEFORE parse: shapes
+│       │                #   the IR cannot round-trip losslessly (string stop,
+│       │                #   message name, image detail, max-tokens key split,
+│       │                #   tool-arg spacing) fall back to v1 as typed errors
+│       ├── serialize.py # v1's five-touch passthrough body assembly
+│       ├── messages.py  # IR -> openai wire messages (inverse of inbound)
+│       ├── params.py    # o-series/gpt-5 family gates (fail closed until
+│       │                #   their param families are ported), user gate
+│       ├── response.py  # mirrors convert_to_model_response_object (the LIVE
+│       │                #   normalizer; transform_response is dead on the SDK
+│       │                #   path); rides the outbound body on ChatResponse.wire
+│       └── stream.py    # SSE chunk -> wire_chunk events normalized to the
+│                        #   SDK-dump shape; the openai chunk dialect folds them
 └── engine/
     ├── pipeline.py # prepare (pure, drives the fallback decision) -> send;
     │               #   per-provider serializer/parser/dialect tables; the
@@ -178,22 +192,36 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to three providers out — `anthropic`, `bedrock_converse`,
-`bedrock_invoke` — request, response, and stream translation,
-differential-green (anthropic: 46-shape corpus + responses + stream replays;
-bedrock: the characterization corpus per route + quirk corpus), fail-closed
-everywhere else, with non-streaming flag-gated seams live in `completion()`.
+OpenAI-chat-in to four providers out — `anthropic`, `bedrock_converse`,
+`bedrock_invoke`, `openai_compat` — request, response, and stream
+translation, differential-green (anthropic: 46-shape corpus + responses +
+stream replays; bedrock: the characterization corpus per route + quirk
+corpus; openai: 17-shape request corpus + 17 typed-fallback rows + response
+and SDK-chunk stream replays), fail-closed everywhere else, with
+non-streaming flag-gated seams live in `completion()` for the anthropic and
+bedrock routes (the openai seam fork is integrator scope and NOT wired).
 Deliberate bedrock fallback surfaces (each names the v1 path): non-Claude
 bedrock models, native structured outputs (outputConfig), adaptive-effort
 output_config/beta, response_format+stream (fake_stream), response_format
 with thinking on invoke (the model spoof crossing), tool history without
 tools (modify_params dummy tool), empty user text on converse
 (string-vs-list ambiguity), provisioned `model_id`, `guardrailConfig`, and
-`<thinking>`-tagged text in converse responses. Not yet here, each its own
-follow-up: streaming seams live; the other inbound schemas
-(`anthropic_messages`, `google_genai`, `responses`, `completions`); the other
-providers (vertex, azure, `openai_compat`); the same-family fast path
-(waits on the opaque-body relay). To add a provider: write
+`<thinking>`-tagged text in converse responses. Deliberate openai fallback
+surfaces: o-series and gpt-5 model families (their param-rewrite configs are
+unported), every raw shape the IR cannot round-trip byte-identically (the
+guard's list: string stop, both max-tokens keys, message `name`, image
+`detail`/`format`, consecutive same-role turns, single-text content lists,
+empty tools/stop lists, non-canonical tool-argument JSON spacing, null/
+non-function tool_calls), the `user` param (model-list gated in v1),
+`response_format` on gpt-4/gpt-3.5-turbo-16k, `stream_options`, file blocks
+(v1 downloads http pdf file_ids in-transform), and `http://` image URLs. On
+streams, the trailing `choices: []` usage chunk passes through verbatim and
+the wrapper's synthesized final usage chunk stays a seam/envelope concern.
+Not yet here, each its own follow-up: streaming seams live; the other
+inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
+`completions`); the other providers (vertex, azure); the same-family fast
+path (waits on the opaque-body relay). To add a provider: write
 `providers/<name>/`, register it in `engine/pipeline._SERIALIZERS` /
-`_RESPONSE_PARSERS` / `_RESPONSE_DIALECTS`, add a differential corpus, keep
-the flag off until differential-green.
+`_RESPONSE_PARSERS` / `_RESPONSE_DIALECTS` (plus `_RAW_GUARDS` when the
+inbound schema is the provider's own family), add a differential corpus,
+keep the flag off until differential-green.

@@ -63,6 +63,77 @@ def _anthropic_rows(lines: list) -> int:
     return failures
 
 
+def _openai_rows(lines: list) -> int:
+    from litellm.translation import translate_chat_request
+
+    from . import test_differential_openai_request as req
+    from . import test_differential_openai_response as resp
+    from . import test_differential_openai_stream as stream
+    from .conftest import build_real_deps
+
+    failures = 0
+    lines += [
+        "",
+        "## openai_compat: request bodies (v1 map_openai_params + transform_request vs v2)",
+        "",
+    ]
+    for name in sorted(req.CORPUS):
+        result = req._v2_body(req.CORPUS[name])
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req._v1_body(req.CORPUS[name])
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.EXPECTED_FALLBACKS):
+        case, reason = req.EXPECTED_FALLBACKS[name]
+        result = translate_chat_request(dict(case), "openai_compat", build_real_deps())
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## openai_compat: responses (v1 convert_to_model_response_object vs v2)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        same = resp._norm(resp._v2_model_response(resp._RESPONSES[name])) == resp._norm(
+            resp._v1_model_response(resp._RESPONSES[name])
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## openai_compat: streams (v1 CustomStreamWrapper over SDK chunks vs v2 fold)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        same = stream._norm(stream._v2_chunks(stream.STREAMS[name])) == stream._norm(
+            stream._v1_chunks(stream.STREAMS[name])
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through; v1's"
+        " wrapper synthesizes its final usage chunk from it, which is the"
+        " streaming seam's envelope to reproduce)"
+    )
+    return failures
+
+
 def _bedrock_request_rows(lines: list) -> int:
     from litellm.translation import translate_chat_request
 
@@ -195,7 +266,7 @@ def main() -> None:
     _freeze_ambient()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock)",
+        "# Translation v2 differential report (anthropic + bedrock + openai)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -207,6 +278,7 @@ def main() -> None:
         "",
     ]
     failures = _anthropic_rows(lines)
+    failures += _openai_rows(lines)
     failures += _bedrock_request_rows(lines)
     failures += _bedrock_response_rows(lines)
     failures += _bedrock_stream_rows(lines)
