@@ -2,29 +2,19 @@
 
 import ModelsAndEndpointsView from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import AgentsPanel from "@/components/agents";
-import CacheDashboard from "@/components/cache_dashboard";
-import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
-import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
-import GuardrailsPanel from "@/components/guardrails";
-import PoliciesPanel from "@/components/policies";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components/networking";
 import OldTeams from "@/components/OldTeams";
 import { fetchUserModels, CreateKeyPrefillData } from "@/components/organisms/create_key_button";
 import Organizations, { fetchOrganizations } from "@/components/organizations";
 import PassThroughSettings from "@/components/pass_through_settings";
-import PromptsPanel from "@/components/prompts";
 import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
-import TransformRequestPanel from "@/components/transform_request";
-import UIThemeSettings from "@/components/ui_theme_settings";
 import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
-import ToolPoliciesView from "@/components/ToolPoliciesView";
-import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -365,30 +355,10 @@ function CreateKeyPageContent() {
               userRole={userRole}
               premiumUser={premiumUser}
             />
-          ) : page == "guardrails" ? (
-            <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
-          ) : page == "policies" ? (
-            <PoliciesPanel accessToken={accessToken} userRole={userRole} />
           ) : page == "agents" ? (
             <AgentsPanel accessToken={accessToken} userRole={userRole} teams={teams} />
-          ) : page == "prompts" ? (
-            <PromptsPanel accessToken={accessToken} userRole={userRole} />
-          ) : page == "transform-request" ? (
-            <TransformRequestPanel accessToken={accessToken} />
           ) : page == "router-settings" ? (
             <GeneralSettings userID={userID} userRole={userRole} accessToken={accessToken} modelData={modelData} />
-          ) : page == "ui-theme" ? (
-            <UIThemeSettings userID={userID} userRole={userRole} accessToken={accessToken} />
-          ) : page == "cost-tracking" ? (
-            <CostTrackingSettings userID={userID} userRole={userRole} accessToken={accessToken} />
-          ) : page == "caching" ? (
-            <CacheDashboard
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              accessToken={accessToken}
-              premiumUser={premiumUser}
-            />
           ) : page == "pass-through-settings" ? (
             <PassThroughSettings
               userID={userID}
@@ -397,18 +367,6 @@ function CreateKeyPageContent() {
               modelData={modelData}
               premiumUser={premiumUser}
             />
-          ) : page == "logs" ? (
-            <SpendLogsTable
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              accessToken={accessToken}
-              premiumUser={premiumUser}
-            />
-          ) : page == "skills" || page == "claude-code-plugins" ? (
-            <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
-          ) : page == "tool-policies" ? (
-            <ToolPoliciesView accessToken={accessToken} userRole={userRole} />
           ) : (
             <Usage
               userID={userID}

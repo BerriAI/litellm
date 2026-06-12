@@ -213,9 +213,10 @@ async def test_encrypted_content_affinity_model_group_config_is_additive():
     )
 
     assert unfiltered == healthy_deployments
-    assert "encrypted_content_affinity_enabled" not in disabled_request_kwargs[
-        "litellm_metadata"
-    ]
+    assert (
+        "encrypted_content_affinity_enabled"
+        not in disabled_request_kwargs["litellm_metadata"]
+    )
 
     global_check = EncryptedContentAffinityCheck(
         enable_global_affinity=True,
@@ -1265,10 +1266,16 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
         # calling the helper through async_function_with_fallbacks).
         kwargs["model"] = "not-gemini-2.5-flash"
 
-    with patch.object(router, "async_get_available_deployment") as mock_dep, \
-         patch.object(router, "_update_kwargs_with_deployment", side_effect=inject_alias_into_kwargs), \
-         patch.object(router, "async_routing_strategy_pre_call_checks"), \
-         patch.object(router, "_get_client", return_value=None):
+    with (
+        patch.object(router, "async_get_available_deployment") as mock_dep,
+        patch.object(
+            router,
+            "_update_kwargs_with_deployment",
+            side_effect=inject_alias_into_kwargs,
+        ),
+        patch.object(router, "async_routing_strategy_pre_call_checks"),
+        patch.object(router, "_get_client", return_value=None),
+    ):
         mock_dep.return_value = {
             "model_name": "not-gemini-2.5-flash",
             "litellm_params": {
@@ -1282,9 +1289,9 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
             original_generic_function=capture_model,
         )
 
-    assert captured["model"] == "vertex_ai/gemini-2.5-flash", (
-        f"Expected deployment model 'vertex_ai/gemini-2.5-flash', got '{captured['model']}'"
-    )
+    assert (
+        captured["model"] == "vertex_ai/gemini-2.5-flash"
+    ), f"Expected deployment model 'vertex_ai/gemini-2.5-flash', got '{captured['model']}'"
 
 
 def test_router_get_model_access_groups_team_only_models():
@@ -2920,6 +2927,33 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     ), f"Expected '/model/us.meta.llama3-8b-instruct-v1:0/invoke', got '{result['endpoint']}'"
 
 
+def test_update_kwargs_with_deployment_uses_pass_through_request_timeout():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-bedrock-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0",
+                },
+            }
+        ],
+    )
+    deployment = router.model_list[0]
+    kwargs: dict = {}
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"pass_through_request_timeout": 6},
+    ):
+        router._update_kwargs_with_deployment(
+            deployment=deployment,
+            kwargs=kwargs,
+            function_name="_ageneric_api_call_with_fallbacks",
+        )
+
+    assert kwargs["timeout"] == 6.0
+
+
 @pytest.mark.asyncio
 async def test_router_acompletion_with_unknown_model_and_default_fallback():
     """
@@ -4466,6 +4500,82 @@ def test_get_fully_blocked_model_names_treats_missing_key_as_unblocked():
         ]
     )
     assert router.get_fully_blocked_model_names() == set()
+
+
+def _seed_unhealthy_states(router, unhealthy_ids, timestamp=None):
+    import time
+
+    ts = timestamp if timestamp is not None else time.time()
+    router.health_state_cache.set_deployment_health_states(
+        {
+            uid: {"is_healthy": False, "timestamp": ts, "reason": "test_unhealthy"}
+            for uid in unhealthy_ids
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_marks_name_when_all_unhealthy():
+    router = _router_with_two_deployments([False, False])
+    _seed_unhealthy_states(router, {"dep-0", "dep-1"})
+    assert await router.async_get_fully_unhealthy_model_names() == {"gpt-4o"}
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_keeps_name_when_partial():
+    router = _router_with_two_deployments([False, False])
+    _seed_unhealthy_states(router, {"dep-0"})
+    assert await router.async_get_fully_unhealthy_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_empty_without_health_state():
+    router = _router_with_two_deployments([False, False])
+    assert await router.async_get_fully_unhealthy_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_ignores_stale_state():
+    import time
+
+    router = _router_with_two_deployments([False, False])
+    stale_ts = time.time() - (router.health_state_cache.staleness_threshold + 10)
+    _seed_unhealthy_states(router, {"dep-0", "dep-1"}, timestamp=stale_ts)
+    assert await router.async_get_fully_unhealthy_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_includes_team_alias():
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {
+                    "id": "dep-0",
+                    "team_id": "team-1",
+                    "team_public_model_name": "team-gpt",
+                },
+            }
+        ]
+    )
+    _seed_unhealthy_states(router, {"dep-0"})
+    assert await router.async_get_fully_unhealthy_model_names() == {
+        "gpt-4o",
+        "team-gpt",
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_noop_with_allowed_fails_policy():
+    from litellm.types.router import AllowedFailsPolicy
+
+    router = _router_with_two_deployments([False, False])
+    router.allowed_fails_policy = AllowedFailsPolicy(BadRequestErrorAllowedFails=1)
+    _seed_unhealthy_states(router, {"dep-0", "dep-1"})
+    assert await router.async_get_fully_unhealthy_model_names() == set()
 
 
 @pytest.mark.asyncio

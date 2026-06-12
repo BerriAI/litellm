@@ -133,3 +133,9 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
         "/fallback/login",
     }
 )
+
+BACKEND_MOUNT_PATHS: frozenset[str] = frozenset(
+    {
+        "/swagger",  # API documentation static assets belong to the backend
+    }
+)

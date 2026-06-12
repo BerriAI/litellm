@@ -924,11 +924,21 @@ async def get_daily_activity(
             where=where_conditions
         )
 
-        # Fetch paginated results
+        # Fetch paginated results.
+        # ``date`` alone is not a unique sort key -- a busy tenant has many
+        # rows per date (one per api_key, model, model_group, provider,
+        # endpoint, ...), so offset pagination over ``date desc`` lands on
+        # arbitrary boundaries and the same row can be skipped on one page
+        # and returned on another. A client that pages through and sums the
+        # per-page metrics (the Usage dashboard) then gets a non-deterministic
+        # total. Adding ``id`` (the row's UUID primary key, present on both
+        # LiteLLM_DailyUserSpend and LiteLLM_DailyTeamSpend) as a tiebreaker
+        # gives every page a stable cursor (#30164).
         daily_spend_data = await getattr(prisma_client.db, table_name).find_many(
             where=where_conditions,
             order=[
                 {"date": "desc"},
+                {"id": "asc"},
             ],
             skip=(page - 1) * page_size,
             take=page_size,

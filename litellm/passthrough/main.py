@@ -20,7 +20,6 @@ from typing import (
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -201,12 +200,6 @@ def llm_passthrough_route(
 
     _is_async = allm_passthrough_route
 
-    if client is None:
-        if _is_async:
-            client = litellm.module_level_aclient
-        else:
-            client = litellm.module_level_client
-
     litellm_logging_obj = cast("LiteLLMLoggingObj", kwargs.get("litellm_logging_obj"))
 
     model, custom_llm_provider, api_key, api_base = get_llm_provider(
@@ -217,6 +210,26 @@ def llm_passthrough_route(
     )
 
     litellm_params_dict = get_litellm_params(**kwargs)
+
+    if client is None:
+        from litellm.llms.custom_httpx.http_handler import (
+            _get_httpx_client,
+            get_async_httpx_client,
+        )
+        from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
+        from litellm.types.llms.custom_http import httpxSpecialProvider
+
+        resolved_timeout = resolve_llm_passthrough_timeout(
+            kwargs=kwargs,
+            litellm_params=litellm_params_dict,
+        )
+        if _is_async:
+            client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+                params={"timeout": resolved_timeout},
+            )
+        else:
+            client = _get_httpx_client(params={"timeout": resolved_timeout})
 
     # Add model_id to litellm_params if present in kwargs (for Bedrock Application Inference Profiles)
     if "model_id" in kwargs:

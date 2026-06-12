@@ -1856,6 +1856,10 @@ class BlockKeyRequest(LiteLLMPydanticObjectBase):
     key: str  # required
 
 
+class BlockModelRequest(LiteLLMPydanticObjectBase):
+    model_id: str  # required
+
+
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
     callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
@@ -2045,6 +2049,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=0.0,
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
     )
+    timeout: Optional[float] = Field(
+        default=None,
+        description="Upstream request timeout in seconds for this pass-through endpoint. If unset, uses general_settings.pass_through_request_timeout (default 600).",
+    )
     auth: bool = Field(
         default=True,
         description="Whether authentication is required for the pass-through endpoint. Defaults to True so a pass-through silently created without an explicit value still requires a valid LiteLLM API key — set to False only if the endpoint is meant to be a public forwarder (e.g. an unauthenticated webhook target).",
@@ -2218,6 +2226,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
     )
+    cancel_on_disconnect: Optional[bool] = Field(
+        None,
+        description="cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure",
+    )
     infer_model_from_keys: Optional[bool] = Field(
         None,
         description="for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)",
@@ -2231,8 +2243,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     health_check_concurrency: Optional[int] = Field(
         None,
         description=(
-            "limit concurrent health checks per cycle; when unset, "
-            "health checks run without a concurrency cap"
+            "limit concurrent health checks per cycle; when unset, health checks run without a concurrency cap"
         ),
     )
     health_check_skip_disabled_background_models: bool = Field(
@@ -2274,6 +2285,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     enable_public_model_hub: bool = Field(
         default=False,
         description="Public model hub for users to see what models they have access to, supported openai params, etc.",
+    )
+    pass_through_request_timeout: Optional[float] = Field(
+        default=None,
+        description="Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.",
     )
     pass_through_endpoints: Optional[List[PassThroughGenericEndpoint]] = Field(
         default=None,
@@ -3092,6 +3107,14 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "GALILEO_PASSWORD",
         ],
         ui_callback_name="Galileo",
+    )
+
+    newrelic: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="newrelic",
+        ui_callback_name="New Relic",
+        litellm_callback_params=[
+            "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED",
+        ],
     )
 
 
