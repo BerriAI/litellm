@@ -955,6 +955,102 @@ class TestNativeWebSocketGuardrails:
         sent_payload = client_ws.send_text.call_args[0][0]
         assert json.loads(sent_payload)["type"] == "response.completed"
 
+    @pytest.mark.asyncio
+    async def test_output_masking_suppresses_text_bearing_done_events(self):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        import websockets.exceptions
+
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        class MaskingGuardrail:
+            def __init__(self):
+                self.check_pii_calls = []
+
+            def get_presidio_settings_from_request_data(self, request_data):
+                return None
+
+            def _unmask_pii_text(self, text, pii_tokens):
+                return text
+
+            async def check_pii(
+                self, text, output_parse_pii, presidio_config, request_data
+            ):
+                self.check_pii_calls.append(text)
+                return text.replace("alice@example.com", "<EMAIL_ADDRESS>")
+
+        class FakeBackendWS:
+            def __init__(self, events):
+                self._events = list(events)
+
+            async def recv(self, decode=False):
+                if self._events:
+                    return self._events.pop(0)
+                raise websockets.exceptions.ConnectionClosed(None, None)
+
+        guardrail = MaskingGuardrail()
+        client_ws = MagicMock()
+        client_ws.send_text = AsyncMock()
+        logging_obj = MagicMock()
+        logging_obj.async_success_handler = AsyncMock()
+
+        done_events = [
+            json.dumps(
+                {"type": "response.output_text.done", "text": "alice@example.com"}
+            ),
+            json.dumps(
+                {
+                    "type": "response.content_part.done",
+                    "part": {"type": "output_text", "text": "alice@example.com"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": "alice@example.com"}
+                        ],
+                    },
+                }
+            ),
+        ]
+        completed_event = json.dumps(
+            {
+                "type": "response.completed",
+                "response": {
+                    "output": [
+                        {
+                            "content": [
+                                {"type": "output_text", "text": "alice@example.com"}
+                            ]
+                        }
+                    ]
+                },
+            }
+        )
+
+        handler = ResponsesWebSocketStreaming(
+            websocket=client_ws,
+            backend_ws=FakeBackendWS(done_events + [completed_event]),
+            logging_obj=logging_obj,
+            output_guardrail_callbacks=[guardrail],
+        )
+
+        await handler.backend_to_client()
+
+        # Text-bearing done events carry the full output before response.completed
+        # arrives; they must be suppressed so unmasked PII never reaches the
+        # client, and Presidio is only invoked for response.completed.
+        assert guardrail.check_pii_calls == ["alice@example.com"]
+        client_ws.send_text.assert_called_once()
+        sent_payload = client_ws.send_text.call_args[0][0]
+        assert json.loads(sent_payload)["type"] == "response.completed"
+        assert "alice@example.com" not in sent_payload
+        assert "<EMAIL_ADDRESS>" in sent_payload
+
 
 class _FakeWSGuardrail:
     """Presidio-like guardrail double for the WebSocket masking hooks.

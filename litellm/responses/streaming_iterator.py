@@ -1359,18 +1359,23 @@ class ResponsesWebSocketStreaming:
                 else:
                     response_str = raw_response
 
-                # When apply_to_output masking is active, suppress delta events:
-                # per-fragment Presidio cannot reliably catch PII that spans
-                # multiple delta chunks (e.g. "alice@" + "example.com"), and the
-                # client receives the fully-masked response.completed instead.
-                # Drop them before masking so no Presidio call is wasted on a
-                # fragment that is never forwarded.
+                # When apply_to_output masking is active, suppress delta events
+                # and the text-bearing "done" events. Per-fragment Presidio
+                # cannot reliably catch PII spanning multiple delta chunks (e.g.
+                # "alice@" + "example.com"), and the done events carry the full
+                # output text that response.completed already delivers in
+                # fully-masked form; forwarding them would leak unmasked PII
+                # before response.completed arrives. The client receives only the
+                # masked response.completed.
                 if self.output_guardrail_callbacks:
                     try:
                         _evt_type = json.loads(response_str).get("type")
                     except (json.JSONDecodeError, TypeError):
                         _evt_type = None
-                    if _evt_type in self._DELTA_EVENT_TYPES:
+                    if (
+                        _evt_type in self._DELTA_EVENT_TYPES
+                        or _evt_type in self._OUTPUT_DONE_EVENT_TYPES
+                    ):
                         continue
 
                 unmasked_str = self._unmask_response_event(response_str)
@@ -1516,6 +1521,17 @@ class ResponsesWebSocketStreaming:
             "response.reasoning_summary_text.delta",
             "response.refusal.delta",
             "response.function_call_arguments.delta",
+        }
+    )
+
+    # Terminal events that carry the full output text already delivered by
+    # ``response.completed``. Suppressed when output masking is active so the
+    # unmasked copy never reaches the client before the masked completed event.
+    _OUTPUT_DONE_EVENT_TYPES = frozenset(
+        {
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
         }
     )
 
