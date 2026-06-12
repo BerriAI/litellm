@@ -3542,9 +3542,9 @@ def completion(  # type: ignore # noqa: PLR0915
 
             api_base = api_base or litellm.api_base or get_secret("GEMINI_API_BASE")
             if custom_llm_provider == "gemini" and litellm.translation_v2_providers:
-                from litellm import translation_seam_google
+                from litellm import translation_seam_google_send
 
-                _v2_response = translation_seam_google.try_completion_v2_gemini(
+                _v2_response = translation_seam_google_send.try_completion_v2_gemini(
                     model=model,
                     messages=messages,
                     optional_param_args=optional_param_args,
@@ -3610,9 +3610,9 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             if litellm.translation_v2_providers:
-                from litellm import translation_seam_google
+                from litellm import translation_seam_google_send
 
-                _v2_response = translation_seam_google.try_completion_v2_vertex(
+                _v2_response = translation_seam_google_send.try_completion_v2_vertex(
                     model_route=model_route,
                     model=model,
                     messages=messages,
