@@ -1175,6 +1175,60 @@ class TestNativeWebSocketGuardrailMasking:
         assert blocks[1]["image_url"] == "http://x"
 
     @pytest.mark.asyncio
+    async def test_mask_response_create_function_call_output_string(self):
+        guardrail = _FakeWSGuardrail()
+        handler = _make_streaming(request_data={}, guardrail_callbacks=[guardrail])
+
+        masked = await handler._mask_response_create(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "input": [
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call_1",
+                            "output": "tool returned alice@example.com",
+                        }
+                    ],
+                }
+            )
+        )
+        obj = json.loads(masked)
+
+        assert obj["input"][0]["output"] == "tool returned <EMAIL_ADDRESS_1>"
+        assert handler.request_data["metadata"]["pii_tokens"] == {
+            "<EMAIL_ADDRESS_1>": "alice@example.com"
+        }
+
+    @pytest.mark.asyncio
+    async def test_mask_response_create_function_call_output_blocks(self):
+        guardrail = _FakeWSGuardrail()
+        handler = _make_streaming(request_data={}, guardrail_callbacks=[guardrail])
+
+        masked = await handler._mask_response_create(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "input": [
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call_1",
+                            "output": [
+                                {"type": "output_text", "text": "alice@example.com"},
+                                {"type": "input_image", "image_url": "http://x"},
+                            ],
+                        }
+                    ],
+                }
+            )
+        )
+        obj = json.loads(masked)
+        blocks = obj["input"][0]["output"]
+
+        assert blocks[0]["text"] == "<EMAIL_ADDRESS_1>"
+        assert blocks[1]["image_url"] == "http://x"
+
+    @pytest.mark.asyncio
     async def test_mask_response_create_nested_shape(self):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(

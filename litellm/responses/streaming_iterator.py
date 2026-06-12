@@ -1230,6 +1230,10 @@ RESPONSES_WS_LOGGED_EVENT_TYPES = [
     "error",
 ]
 
+RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES = frozenset(
+    {"input_text", "output_text", "text"}
+)
+
 
 class ResponsesWebSocketStreaming:
     """
@@ -1492,29 +1496,31 @@ class ResponsesWebSocketStreaming:
                     for item in field_value:
                         if not isinstance(item, dict):
                             continue
-                        content = item.get("content", [])
-                        if isinstance(content, str):
-                            item["content"] = await cb.check_pii(
-                                text=content,
-                                output_parse_pii=True,
-                                presidio_config=presidio_config,
-                                request_data=self.request_data,
-                            )
-                            modified = True
-                        elif isinstance(content, list):
-                            for block in content:
-                                if (
-                                    isinstance(block, dict)
-                                    and block.get("type") == "input_text"
-                                    and isinstance(block.get("text"), str)
-                                ):
-                                    block["text"] = await cb.check_pii(
-                                        text=block["text"],
-                                        output_parse_pii=True,
-                                        presidio_config=presidio_config,
-                                        request_data=self.request_data,
-                                    )
-                                    modified = True
+                        for item_field in ("content", "output"):
+                            value = item.get(item_field)
+                            if isinstance(value, str):
+                                item[item_field] = await cb.check_pii(
+                                    text=value,
+                                    output_parse_pii=True,
+                                    presidio_config=presidio_config,
+                                    request_data=self.request_data,
+                                )
+                                modified = True
+                            elif isinstance(value, list):
+                                for block in value:
+                                    if (
+                                        isinstance(block, dict)
+                                        and block.get("type")
+                                        in RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES
+                                        and isinstance(block.get("text"), str)
+                                    ):
+                                        block["text"] = await cb.check_pii(
+                                            text=block["text"],
+                                            output_parse_pii=True,
+                                            presidio_config=presidio_config,
+                                            request_data=self.request_data,
+                                        )
+                                        modified = True
 
         return json.dumps(msg_obj) if modified else message
 
