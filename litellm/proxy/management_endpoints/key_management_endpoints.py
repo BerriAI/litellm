@@ -4794,12 +4794,27 @@ async def reset_key_spend_fn(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        try:
-            from litellm.proxy.proxy_server import _invalidate_spend_counter
+        # Set Redis spend counter to the new value so get_current_spend()
+        # returns the correct amount immediately instead of the stale pre-reset value.
+        # We use reset_to (not 0.0) so partial resets are reflected correctly.
+        from litellm.proxy.proxy_server import spend_counter_cache
 
-            await _invalidate_spend_counter(counter_key=f"spend:key:{hashed_api_key}")
-        except Exception:
-            pass
+        _counter_key = f"spend:key:{hashed_api_key}"
+        spend_counter_cache.in_memory_cache.set_cache(
+            key=_counter_key, value=reset_to, ttl=60
+        )
+        if spend_counter_cache.redis_cache is not None:
+            try:
+                await spend_counter_cache.redis_cache.async_set_cache(
+                    key=_counter_key, value=reset_to, ttl=60
+                )
+            except Exception as redis_err:
+                verbose_proxy_logger.warning(
+                    "Failed to update spend counter %s in Redis: %s. "
+                    "Budget checks may use stale value until counter expires.",
+                    _counter_key,
+                    redis_err,
+                )
 
         max_budget = updated_key.max_budget
         budget_reset_at = updated_key.budget_reset_at
