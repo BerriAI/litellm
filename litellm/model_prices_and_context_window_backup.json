@@ -4409,6 +4409,23 @@
             "/v1/audio/transcriptions"
         ]
     },
+    "azure/gpt-realtime-whisper": {
+        "input_cost_per_second": 0.0002833333333333333,
+        "litellm_provider": "azure",
+        "mode": "audio_transcription",
+        "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/gpt-realtime-whisper",
+        "supported_endpoints": [
+            "/v1/realtime",
+            "/v1/realtime/transcription_sessions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
     "azure/gpt-5.1-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
@@ -7555,6 +7572,45 @@
         "output_cost_per_token": 4.56e-06,
         "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/announcing-deepseek-v3-on-azure-ai-foundry-and-github/4390438",
         "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "azure_ai/deepseek-v3.1": {
+        "input_cost_per_token": 1.23e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.94e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "azure_ai/deepseek-v4-pro": {
+        "input_cost_per_token": 1.74e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 3.48e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "azure_ai/deepseek-v4-flash": {
+        "input_cost_per_token": 1.9e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 5.1e-07,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "azure_ai/embed-v-4-0": {
@@ -10854,38 +10910,6 @@
         "supports_system_messages": true,
         "supports_tool_choice": false
     },
-    "deepseek-v4-flash": {
-        "cache_read_input_token_cost": 2.8e-09,
-        "input_cost_per_token": 1.4e-07,
-        "litellm_provider": "deepseek",
-        "max_input_tokens": 1000000,
-        "mode": "chat",
-        "output_cost_per_token": 2.8e-07,
-        "source": "https://api-docs.deepseek.com/quick_start/pricing",
-        "supports_function_calling": true,
-        "supports_native_streaming": true,
-        "supports_parallel_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true
-    },
-    "deepseek-v4-pro": {
-        "cache_read_input_token_cost": 3.625e-09,
-        "input_cost_per_token": 4.35e-07,
-        "litellm_provider": "deepseek",
-        "max_input_tokens": 1000000,
-        "mode": "chat",
-        "output_cost_per_token": 8.7e-07,
-        "source": "https://api-docs.deepseek.com/quick_start/pricing",
-        "supports_function_calling": true,
-        "supports_native_streaming": true,
-        "supports_parallel_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true
-    },
     "dashscope/qwen-coder": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "dashscope",
@@ -13476,38 +13500,6 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
-    },
-    "deepseek/deepseek-v4-flash": {
-        "cache_read_input_token_cost": 2.8e-09,
-        "input_cost_per_token": 1.4e-07,
-        "litellm_provider": "deepseek",
-        "max_input_tokens": 1000000,
-        "mode": "chat",
-        "output_cost_per_token": 2.8e-07,
-        "source": "https://api-docs.deepseek.com/quick_start/pricing",
-        "supports_function_calling": true,
-        "supports_native_streaming": true,
-        "supports_parallel_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true
-    },
-    "deepseek/deepseek-v4-pro": {
-        "cache_read_input_token_cost": 3.625e-09,
-        "input_cost_per_token": 4.35e-07,
-        "litellm_provider": "deepseek",
-        "max_input_tokens": 1000000,
-        "mode": "chat",
-        "output_cost_per_token": 8.7e-07,
-        "source": "https://api-docs.deepseek.com/quick_start/pricing",
-        "supports_function_calling": true,
-        "supports_native_streaming": true,
-        "supports_parallel_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
         "supports_tool_choice": true
     },
     "deepseek.v3-v1:0": {
@@ -40980,6 +40972,23 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "gpt-realtime-whisper": {
+        "input_cost_per_second": 0.0002833333333333333,
+        "litellm_provider": "openai",
+        "mode": "audio_transcription",
+        "source": "https://platform.openai.com/docs/models/gpt-realtime-whisper",
+        "supported_endpoints": [
+            "/v1/realtime",
+            "/v1/realtime/transcription_sessions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
     "sora-2": {
         "litellm_provider": "openai",
         "mode": "video_generation",
@@ -42194,5 +42203,106 @@
         "supports_system_messages": true,
         "supports_reasoning": true,
         "source": "https://serverless.tensormesh.ai/v1/models/openrouter"
+    }
+,
+    "deepseek-v4-flash": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 2.8e-09,
+        "input_cost_per_token": 1.4e-07,
+        "input_cost_per_token_cache_hit": 2.8e-09,
+        "litellm_provider": "deepseek",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "source": "https://api-docs.deepseek.com/quick_start/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "deepseek-v4-pro": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 3.625e-09,
+        "input_cost_per_token": 4.35e-07,
+        "input_cost_per_token_cache_hit": 3.625e-09,
+        "litellm_provider": "deepseek",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 8.7e-07,
+        "source": "https://api-docs.deepseek.com/quick_start/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "deepseek/deepseek-v4-flash": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 2.8e-09,
+        "input_cost_per_token": 1.4e-07,
+        "input_cost_per_token_cache_hit": 2.8e-09,
+        "litellm_provider": "deepseek",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "source": "https://api-docs.deepseek.com/quick_start/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "deepseek/deepseek-v4-pro": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 3.625e-09,
+        "input_cost_per_token": 4.35e-07,
+        "input_cost_per_token_cache_hit": 3.625e-09,
+        "litellm_provider": "deepseek",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 8.7e-07,
+        "source": "https://api-docs.deepseek.com/quick_start/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
     }
 }
