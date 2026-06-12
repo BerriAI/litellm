@@ -2,7 +2,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "../../../../../tests/test-utils";
 import ProviderDiscountTable from "./provider_discount_table";
 
 vi.mock("@heroicons/react/outline", () => ({

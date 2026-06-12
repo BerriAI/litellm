@@ -2,7 +2,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../../tests/test-utils";
+import { renderWithProviders } from "../../../../../../tests/test-utils";
 import PricingCalculator from "./index";
 import type { ModelEntry } from "./types";
 import type { MultiModelResult } from "./types";

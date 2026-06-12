@@ -1,6 +1,6 @@
 "use client";
 
-import TransformRequestPanel from "@/components/transform_request";
+import TransformRequestPanel from "./TransformRequestPanel";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function TransformRequest() {

@@ -1,6 +1,6 @@
 "use client";
 
-import UIThemeSettings from "@/components/ui_theme_settings";
+import UIThemeSettings from "./UIThemeSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function UITheme() {

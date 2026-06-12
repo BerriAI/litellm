@@ -2,7 +2,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "../../../../../tests/test-utils";
 import CostTrackingSettings from "./cost_tracking_settings";
 
 // Mock sub-hooks so we can control their state without network calls
@@ -37,7 +37,7 @@ vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("../HelpLink", () => ({
+vi.mock("@/components/HelpLink", () => ({
   DocsMenu: () => null,
 }));
 
@@ -45,7 +45,7 @@ vi.mock("./how_it_works", () => ({
   default: () => <div data-testid="how-it-works">How It Works</div>,
 }));
 
-vi.mock("../provider_info_helpers", () => ({
+vi.mock("@/components/provider_info_helpers", () => ({
   Providers: { OpenAI: "OpenAI" },
   provider_map: { OpenAI: "openai" },
   providerLogoMap: {},

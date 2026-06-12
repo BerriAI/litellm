@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { TextInput, Icon, Text } from "@tremor/react";
 import { TrashIcon, PencilAltIcon, CheckIcon, XIcon } from "@heroicons/react/outline";
-import { SimpleTable } from "../common_components/simple_table";
+import { SimpleTable } from "@/components/common_components/simple_table";
 import { MarginConfig } from "./types";
 import { getProviderDisplayInfo, handleImageError } from "./provider_display_helpers";
 

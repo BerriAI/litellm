@@ -2,11 +2,11 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "../../../../../tests/test-utils";
 import AddProviderForm from "./add_provider_form";
 import { DiscountConfig } from "./types";
 
-vi.mock("../provider_info_helpers", () => ({
+vi.mock("@/components/provider_info_helpers", () => ({
   Providers: {
     OpenAI: "OpenAI",
     Anthropic: "Anthropic",

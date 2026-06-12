@@ -2,8 +2,8 @@ import React, { useState } from "react";
 import { Button } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
 import { Title } from "@tremor/react";
-import { transformRequestCall } from "./networking";
-import NotificationsManager from "./molecules/notifications_manager";
+import { transformRequestCall } from "@/components/networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 interface TransformRequestPanelProps {
   accessToken: string | null;
 }

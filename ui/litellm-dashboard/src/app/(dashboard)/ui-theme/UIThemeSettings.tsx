@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Card, Title, Text, TextInput, Button } from "@tremor/react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
-import NotificationsManager from "./molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
 interface UIThemeSettingsProps {
   userID: string | null;

@@ -1,9 +1,9 @@
 import { useState, useCallback } from "react";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
-import NotificationsManager from "../molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import { MarginConfig } from "./types";
 import { getProviderBackendValue } from "./provider_display_helpers";
-import { Providers } from "../provider_info_helpers";
+import { Providers } from "@/components/provider_info_helpers";
 
 export interface UseMarginConfigProps {
   accessToken: string | null;

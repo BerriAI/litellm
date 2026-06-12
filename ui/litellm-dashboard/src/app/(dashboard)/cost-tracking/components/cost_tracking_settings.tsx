@@ -20,7 +20,7 @@ import ProviderMarginTable from "./provider_margin_table";
 import AddMarginForm from "./add_margin_form";
 import PricingCalculator from "./pricing_calculator/index";
 import { ExclamationCircleOutlined } from "@ant-design/icons";
-import { DocsMenu } from "../HelpLink";
+import { DocsMenu } from "@/components/HelpLink";
 import HowItWorks from "./how_it_works";
 import { useDiscountConfig } from "./use_discount_config";
 import { useMarginConfig } from "./use_margin_config";

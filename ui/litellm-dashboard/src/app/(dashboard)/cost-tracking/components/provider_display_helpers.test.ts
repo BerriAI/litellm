@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getProviderDisplayInfo, getProviderBackendValue, handleImageError } from "./provider_display_helpers";
 
-vi.mock("../provider_info_helpers", () => ({
+vi.mock("@/components/provider_info_helpers", () => ({
   Providers: {
     OpenAI: "OpenAI",
     Anthropic: "Anthropic",

@@ -16,11 +16,11 @@ import {
   Text,
 } from "@tremor/react";
 import React, { useEffect, useState } from "react";
-import NotificationsManager from "./molecules/notifications_manager";
-import UsageDatePicker from "./shared/usage_date_picker";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import UsageDatePicker from "@/components/shared/usage_date_picker";
 
 import { RefreshIcon } from "@heroicons/react/outline";
-import { adminGlobalCacheActivity, cachingHealthCheckCall } from "./networking";
+import { adminGlobalCacheActivity, cachingHealthCheckCall } from "@/components/networking";
 
 // Import the new component
 import { CacheHealthTab } from "./cache_health";

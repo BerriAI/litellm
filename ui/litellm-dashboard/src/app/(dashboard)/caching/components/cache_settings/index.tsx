@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
-import { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } from "../networking";
-import NotificationsManager from "../molecules/notifications_manager";
+import { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } from "@/components/networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import RedisTypeSelector from "./RedisTypeSelector";
 import CacheFieldRenderer from "./CacheFieldRenderer";
 import { gatherFormValues, groupFieldsByCategory } from "./cacheSettingsUtils";

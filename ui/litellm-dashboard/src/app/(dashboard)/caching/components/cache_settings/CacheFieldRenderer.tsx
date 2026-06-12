@@ -5,7 +5,7 @@ import { NumberInput, TextInput } from "@tremor/react";
 import { Select } from "antd";
 import React, { useEffect, useState } from "react";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-import NumericalInput from "../shared/numerical_input";
+import NumericalInput from "@/components/shared/numerical_input";
 
 interface CacheFieldRendererProps {
   field: any;

@@ -293,77 +293,77 @@
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/add_margin_form.tsx": {
+  "src/app/(dashboard)/cost-tracking/components/add_margin_form.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/add_provider_form.tsx": {
+  "src/app/(dashboard)/cost-tracking/components/add_provider_form.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/cost_tracking_settings.tsx": {
+  "src/app/(dashboard)/cost-tracking/components/cost_tracking_settings.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/how_it_works.tsx": {
+  "src/app/(dashboard)/cost-tracking/components/how_it_works.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/pricing_calculator/multi_cost_results.test.tsx": {
+  "src/app/(dashboard)/cost-tracking/components/pricing_calculator/multi_cost_results.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/pricing_calculator/multi_cost_results.tsx": {
+  "src/app/(dashboard)/cost-tracking/components/pricing_calculator/multi_cost_results.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/pricing_calculator/multi_export_dropdown.test.tsx": {
+  "src/app/(dashboard)/cost-tracking/components/pricing_calculator/multi_export_dropdown.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/pricing_calculator/multi_export_dropdown.tsx": {
+  "src/app/(dashboard)/cost-tracking/components/pricing_calculator/multi_export_dropdown.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/pricing_calculator/use_multi_cost_estimate.ts": {
+  "src/app/(dashboard)/cost-tracking/components/pricing_calculator/use_multi_cost_estimate.ts": {
     "no-restricted-syntax": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/provider_discount_table.test.tsx": {
+  "src/app/(dashboard)/cost-tracking/components/provider_discount_table.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/provider_discount_table.tsx": {
+  "src/app/(dashboard)/cost-tracking/components/provider_discount_table.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/provider_display_helpers.test.ts": {
+  "src/app/(dashboard)/cost-tracking/components/provider_display_helpers.test.ts": {
     "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/provider_margin_table.tsx": {
+  "src/app/(dashboard)/cost-tracking/components/provider_margin_table.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/use_discount_config.ts": {
+  "src/app/(dashboard)/cost-tracking/components/use_discount_config.ts": {
     "no-restricted-syntax": {
       "count": 2
     }
   },
-  "src/components/CostTrackingSettings/use_margin_config.ts": {
+  "src/app/(dashboard)/cost-tracking/components/use_margin_config.ts": {
     "no-restricted-syntax": {
       "count": 2
     }
@@ -826,7 +826,7 @@
       "count": 1
     }
   },
-  "src/components/cache_dashboard.tsx": {
+  "src/app/(dashboard)/caching/components/cache_dashboard.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -837,22 +837,22 @@
       "count": 2
     }
   },
-  "src/components/cache_health.tsx": {
+  "src/app/(dashboard)/caching/components/cache_health.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/cache_settings/CacheFieldRenderer.tsx": {
+  "src/app/(dashboard)/caching/components/cache_settings/CacheFieldRenderer.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/cache_settings/RedisTypeSelector.tsx": {
+  "src/app/(dashboard)/caching/components/cache_settings/RedisTypeSelector.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/cache_settings/index.tsx": {
+  "src/app/(dashboard)/caching/components/cache_settings/index.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -2001,12 +2001,12 @@
       "count": 1
     }
   },
-  "src/components/transform_request.tsx": {
+  "src/app/(dashboard)/transform-request/TransformRequestPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/ui_theme_settings.tsx": {
+  "src/app/(dashboard)/ui-theme/UIThemeSettings.tsx": {
     "no-restricted-imports": {
       "count": 1
     },

@@ -1,4 +1,4 @@
-import { Providers, provider_map, providerLogoMap } from "../provider_info_helpers";
+import { Providers, provider_map, providerLogoMap } from "@/components/provider_info_helpers";
 
 export interface ProviderDisplayInfo {
   displayName: string;
