@@ -215,12 +215,20 @@ def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
     """
     if usage.prompt_tokens_details is not None:
         details = usage.prompt_tokens_details
-        text_tokens = float(getattr(details, "text_tokens", None) or 0)
-        if text_tokens == 0:
-            # text_tokens not set by this provider; fall back to prompt_tokens
-            text_tokens = float(getattr(usage, "prompt_tokens", 0) or 0)
+        raw_text_tokens = getattr(details, "text_tokens", None)
         cached_tokens = float(getattr(details, "cached_tokens", 0) or 0)
         cache_creation = float(getattr(details, "cache_creation_tokens", 0) or 0)
+        if raw_text_tokens is None:
+            # Some providers populate prompt_tokens_details without text_tokens.
+            # If prompt_tokens already covers the cache detail total, use it as
+            # the rolled-up input total. Otherwise cache tokens were reported
+            # outside prompt_tokens and must be added for the tier threshold.
+            prompt_tokens = float(getattr(usage, "prompt_tokens", 0) or 0)
+            cache_detail_tokens = cached_tokens + cache_creation
+            if cache_detail_tokens > 0 and prompt_tokens < cache_detail_tokens:
+                return prompt_tokens + cache_detail_tokens
+            return prompt_tokens
+        text_tokens = float(raw_text_tokens or 0)
         return text_tokens + cached_tokens + cache_creation
 
     # No prompt_tokens_details — add explicit cache fields only if they are

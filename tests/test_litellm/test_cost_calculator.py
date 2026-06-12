@@ -2971,6 +2971,73 @@ def test_custom_pricing_above_200k_cache_creation_tokens_uses_tiered_rate():
         litellm.model_cost.pop(f"vertex_ai/{model_id}", None)
 
 
+def test_custom_pricing_does_not_double_count_cached_tokens_when_text_tokens_missing():
+    """
+    Providers can send prompt_tokens_details without text_tokens while the rolled
+    up prompt_tokens value already includes cache tokens. Tier checks should not
+    add those cache tokens a second time.
+    """
+
+    model_id = "tiered-custom-pricing-anthropic-details-test"
+    model_info = {
+        "litellm_provider": "anthropic",
+        "mode": "chat",
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000025,
+        "cache_creation_input_token_cost": 0.00000625,
+        "cache_read_input_token_cost": 0.0000005,
+        "input_cost_per_token_above_200k_tokens": 0.00001,
+        "output_cost_per_token_above_200k_tokens": 0.0000375,
+        "cache_creation_input_token_cost_above_200k_tokens": 0.0000125,
+        "cache_read_input_token_cost_above_200k_tokens": 0.000001,
+    }
+    cache_creation_tokens = 120_000
+
+    litellm.register_model(model_cost={model_id: model_info})
+    try:
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="anthropic/claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[],
+            usage=Usage(
+                prompt_tokens=130_000,
+                completion_tokens=0,
+                total_tokens=130_000,
+                prompt_tokens_details=PromptTokensDetailsWrapper(
+                    cache_creation_tokens=cache_creation_tokens
+                ),
+            ),
+        )
+
+        cost = completion_cost(
+            completion_response=response,
+            model="anthropic/claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            custom_pricing=True,
+            router_model_id=model_id,
+        )
+
+        non_cache_prompt_tokens = 10_000
+        expected_cost = (
+            non_cache_prompt_tokens * model_info["input_cost_per_token"]
+            + cache_creation_tokens * model_info["cache_creation_input_token_cost"]
+        )
+        unexpected_tiered_cost = (
+            non_cache_prompt_tokens
+            * model_info["input_cost_per_token_above_200k_tokens"]
+            + cache_creation_tokens
+            * model_info["cache_creation_input_token_cost_above_200k_tokens"]
+        )
+
+        assert cost == pytest.approx(expected_cost)
+        assert cost != pytest.approx(unexpected_tiered_cost)
+    finally:
+        litellm.model_cost.pop(model_id, None)
+        litellm.model_cost.pop(f"anthropic/{model_id}", None)
+
+
 def test_extract_cache_read_tokens_anthropic_top_level():
     from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
 
