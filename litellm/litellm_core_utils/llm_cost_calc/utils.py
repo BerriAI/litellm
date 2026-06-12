@@ -751,7 +751,21 @@ def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
         return prompt_tokens
 
     text_tokens: Final = float(raw_text_tokens)
-    return text_tokens + cached_tokens + cache_creation
+    audio_tokens: Final = _loose_token_count(_detail_token(details, "audio_tokens"))
+    image_tokens: Final = _loose_token_count(_detail_token(details, "image_tokens"))
+    video_tokens: Final = _loose_token_count(_detail_token(details, "video_tokens"))
+    detail_total: Final = (
+        text_tokens
+        + audio_tokens
+        + image_tokens
+        + video_tokens
+        + cached_tokens
+        + cache_creation
+    )
+    modality_cache_tokens: Final = cached_tokens + cache_creation
+    if modality_cache_tokens > 0 and detail_total > prompt_tokens:
+        return prompt_tokens
+    return max(prompt_tokens, detail_total)
 
 
 def _get_token_base_cost(
