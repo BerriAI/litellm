@@ -150,6 +150,24 @@ CASES: dict[str, dict] = {
         "thinking": {"type": "enabled"},
         "messages": _USER,
     },
+    # the EXACT >= boundaries (verifier-wave2b-alpha F4: the interior-point
+    # rows above let a >= -> > band mutation survive; these three kill it —
+    # 10000 -> high, 5000 -> medium, 2000 -> low on BOTH sides)
+    "thinking_band_high_exact_boundary": {
+        "model": MODEL,
+        "thinking": {"type": "enabled", "budget_tokens": 10000},
+        "messages": _USER,
+    },
+    "thinking_band_medium_exact_boundary": {
+        "model": MODEL,
+        "thinking": {"type": "enabled", "budget_tokens": 5000},
+        "messages": _USER,
+    },
+    "thinking_band_low_exact_boundary": {
+        "model": MODEL,
+        "thinking": {"type": "enabled", "budget_tokens": 2000},
+        "messages": _USER,
+    },
     "thinking_disabled_dropped": {
         "model": MODEL,
         "thinking": {"type": "disabled"},
