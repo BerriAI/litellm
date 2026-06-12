@@ -1860,18 +1860,23 @@ async def prepare_key_update_data(
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
-    if "budget_limits" in non_default_values and non_default_values["budget_limits"]:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
+    if "budget_limits" in non_default_values:
         raw_windows = non_default_values["budget_limits"]
-        initialized_windows = []
-        for window in raw_windows:
-            w = window if isinstance(window, dict) else window.model_dump()
-            w["reset_at"] = get_budget_reset_time(
-                budget_duration=w["budget_duration"]
-            ).isoformat()
-            initialized_windows.append(w)
-        non_default_values["budget_limits"] = json.dumps(initialized_windows)
+        if raw_windows:
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            initialized_windows = []
+            for window in raw_windows:
+                w = window if isinstance(window, dict) else window.model_dump()
+                w["reset_at"] = get_budget_reset_time(
+                    budget_duration=w["budget_duration"]
+                ).isoformat()
+                initialized_windows.append(w)
+            non_default_values["budget_limits"] = json.dumps(initialized_windows)
+        else:
+            # [] / None clears the field; prisma-client-py has no DbNull
+            # sentinel for Json? columns, so store the JSON literal null
+            non_default_values["budget_limits"] = json.dumps(None)
 
     if "object_permission" in non_default_values:
         non_default_values = await _handle_update_object_permission(
@@ -2248,14 +2253,18 @@ async def _validate_update_key_data(
     # - Anyone else (non-PROXY_ADMIN, not the owner, not a team member
     #   on a team key): must pass _check_key_admin_access (PROXY_ADMIN
     #   / key-owner / team-admin / org-admin of the key).
-    # - max_budget / spend: always require the admin check, even for the
-    #   key owner or a team member (matches the existing admin-only
-    #   budget semantics).
+    # - max_budget / spend / budget_limits: always require the admin
+    #   check, even for the key owner or a team member (matches the
+    #   existing admin-only budget semantics).  budget_limits uses
+    #   model_fields_set because an explicit null/[] clears the field
+    #   and must gate the same as setting or changing it.
     _is_budget_change = (
-        data.max_budget is not None and data.max_budget != existing_key_row.max_budget
-    ) or (
-        data.spend is not None
-        and data.spend != getattr(existing_key_row, "spend", None)
+        (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
+        or (
+            data.spend is not None
+            and data.spend != getattr(existing_key_row, "spend", None)
+        )
+        or "budget_limits" in data.model_fields_set
     )
 
     # Personal-key bypass: the caller both created the key AND still owns it
