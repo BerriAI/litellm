@@ -1545,6 +1545,7 @@ class ResponsesWebSocketStreaming:
             "response.output_item.done",
             "response.function_call_arguments.done",
             "response.reasoning_summary_text.done",
+            "response.reasoning_summary_part.done",
         }
     )
 
@@ -1617,8 +1618,9 @@ class ResponsesWebSocketStreaming:
         ``response.completed`` event before it is forwarded to the client.
 
         Walks ``response.output[*].content[*].text`` and masks every text block,
-        as well as ``response.output[*].arguments`` on function-call items. Delta
-        and ``*.done`` events are suppressed upstream in ``backend_to_client`` when
+        as well as ``response.output[*].arguments`` on function-call items and
+        ``response.output[*].summary[*].text`` on reasoning items. Delta and
+        ``*.done`` events are suppressed upstream in ``backend_to_client`` when
         output masking is active, so only the authoritative full-output view
         reaches this method; events of other types are returned unchanged.
         """
@@ -1655,6 +1657,22 @@ class ResponsesWebSocketStreaming:
                     if masked_args != arguments:
                         output_item["arguments"] = masked_args
                         modified = True
+                summary = output_item.get("summary") or []
+                if isinstance(summary, list):
+                    for summary_block in summary:
+                        if not isinstance(summary_block, dict):
+                            continue
+                        summary_text = summary_block.get("text")
+                        if isinstance(summary_text, str):
+                            masked_summary = await cb.check_pii(
+                                text=summary_text,
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=self.request_data,
+                            )
+                            if masked_summary != summary_text:
+                                summary_block["text"] = masked_summary
+                                modified = True
                 content = output_item.get("content") or []
                 if not isinstance(content, list):
                     continue

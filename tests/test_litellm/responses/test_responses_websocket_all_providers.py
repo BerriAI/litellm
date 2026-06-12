@@ -1531,6 +1531,37 @@ class TestNativeWebSocketGuardrailMasking:
         )
 
     @pytest.mark.asyncio
+    async def test_mask_response_completed_masks_reasoning_summary(self):
+        guardrail = _FakeWSGuardrail()
+        handler = _make_streaming(
+            request_data={}, output_guardrail_callbacks=[guardrail]
+        )
+
+        event = json.dumps(
+            {
+                "type": "response.completed",
+                "response": {
+                    "output": [
+                        {
+                            "type": "reasoning",
+                            "summary": [
+                                {
+                                    "type": "summary_text",
+                                    "text": "user is alice@example.com",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+        )
+        masked = json.loads(await handler._mask_response_completed(event))
+        assert (
+            masked["response"]["output"][0]["summary"][0]["text"]
+            == "user is <EMAIL_ADDRESS_1>"
+        )
+
+    @pytest.mark.asyncio
     async def test_mask_response_completed_delta_unchanged(self):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
@@ -1798,6 +1829,74 @@ class TestNativeWebSocketGuardrailMasking:
         websocket.send_text.assert_awaited_once()
         sent_payload = websocket.send_text.await_args[0][0]
         assert json.loads(sent_payload)["type"] == "response.completed"
+        assert "alice@example.com" not in sent_payload
+
+    @pytest.mark.asyncio
+    async def test_backend_to_client_suppresses_reasoning_summary_part_done(self):
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        guardrail = _FakeWSGuardrail()
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps(
+                    {
+                        "type": "response.reasoning_summary_part.done",
+                        "part": {
+                            "type": "summary_text",
+                            "text": "user is alice@example.com",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "output": [
+                                {
+                                    "type": "reasoning",
+                                    "summary": [
+                                        {
+                                            "type": "summary_text",
+                                            "text": "user is alice@example.com",
+                                        }
+                                    ],
+                                }
+                            ]
+                        },
+                    }
+                ),
+                Exception("stop"),
+            ]
+        )
+        logging_obj = MagicMock()
+        logging_obj.async_success_handler = AsyncMock()
+
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={},
+            output_guardrail_callbacks=[guardrail],
+        )
+
+        await handler.backend_to_client()
+
+        # The reasoning-summary part-done event carries the full reasoning text
+        # before response.completed arrives; it must be suppressed, and the
+        # reasoning summary in response.completed must itself be masked.
+        websocket.send_text.assert_awaited_once()
+        sent_payload = websocket.send_text.await_args[0][0]
+        forwarded = json.loads(sent_payload)
+        assert forwarded["type"] == "response.completed"
+        assert (
+            forwarded["response"]["output"][0]["summary"][0]["text"]
+            == "user is <EMAIL_ADDRESS_1>"
+        )
         assert "alice@example.com" not in sent_payload
 
 
