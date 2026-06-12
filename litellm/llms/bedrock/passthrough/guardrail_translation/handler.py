@@ -230,9 +230,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
     ) -> bytes:
         import json as _json
         import struct
+        from binascii import crc32 as esm_crc32
 
         from botocore.eventstream import EventStreamBuffer
-        from botocore.eventstream import crc32 as esm_crc32
 
         frames: list[dict] = []
         offset = 0

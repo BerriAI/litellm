@@ -745,8 +745,7 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
 def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
     import json
     import struct
-
-    from botocore.eventstream import crc32 as esm_crc32
+    from binascii import crc32 as esm_crc32
 
     payload_bytes = json.dumps(payload, separators=(",", ":")).encode()
 
