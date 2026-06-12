@@ -159,6 +159,40 @@ V1_RAISES.update(
     }
 )
 
+# Rows where v1 CRASHES with a bare ValueError BEFORE any param gate:
+# together's non-fc fork runs list.remove("response_format") on a base list
+# that already dropped the key for these model names, inside the
+# get_supported_openai_params call _check_valid_arg makes on EVERY request
+# (verifier-wave1a F2). v2 must fall back typed on every shape, plain text
+# included, so v1 raises its own error instead of v2 serving what v1 crashes
+# on.
+V1_RAISES_VALUE_ERROR = {
+    "together_ai:plain_text_on_gpt4_name": (
+        "together_ai",
+        {"model": "gpt-4", "messages": _USER},
+        "ValueError",
+    ),
+    "together_ai:plain_text_on_gpt35_16k_name": (
+        "together_ai",
+        {"model": "gpt-3.5-turbo-16k", "messages": _USER},
+        "ValueError",
+    ),
+    "together_ai:temperature_only_on_gpt4_name": (
+        "together_ai",
+        {"model": "gpt-4", "temperature": 0.2, "messages": _USER},
+        "ValueError",
+    ),
+    "together_ai:response_format_on_gpt4_name": (
+        "together_ai",
+        {
+            "model": "gpt-4",
+            "response_format": {"type": "json_object"},
+            "messages": _USER,
+        },
+        "ValueError",
+    ),
+}
+
 # Typed fallbacks where v1 SERVES the request (v1 is not invoked: the seam
 # routes these to v1 untouched). Shared raw-guard/parse shapes per provider
 # plus the provider-specific ones.
@@ -294,6 +328,20 @@ def test_v1_raise_rows_fall_back_typed(name: str) -> None:
     assert reason_fragment in result.error.summary, result.error.summary
     with pytest.raises(UnsupportedParamsError):
         run_v1_request_transform(provider, case)
+
+
+@pytest.mark.parametrize("name", sorted(V1_RAISES_VALUE_ERROR))
+def test_v1_value_error_rows_fall_back_typed(name: str) -> None:
+    """The together gpt-4-name corner: v1 crashes with a bare ValueError on
+    EVERY request for these names (not UnsupportedParamsError), asserted
+    in-process; v2 serving any of them would be a parity break."""
+    provider, case, reason_fragment = V1_RAISES_VALUE_ERROR[name]
+    result = _v2(provider, case)
+    assert result.is_error(), f"{name} unexpectedly translated: {result.ok!r}"
+    assert reason_fragment in result.error.summary, result.error.summary
+    with pytest.raises(ValueError) as excinfo:
+        run_v1_request_transform(provider, case)
+    assert type(excinfo.value) is ValueError, excinfo.value
 
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_FALLBACKS))

@@ -27,7 +27,10 @@ from typing import Literal
 
 from ...deps import TranslationDeps
 from ...ir import ChatRequest
-from ..openai_compat.params import unsupported_response_format
+from ..openai_compat.params import (
+    RESPONSE_FORMAT_UNSUPPORTED_MODELS,
+    unsupported_response_format,
+)
 
 CompatSdkProvider = Literal[
     "together_ai",
@@ -147,11 +150,20 @@ def together_ai_unsupported(request: ChatRequest, deps: TranslationDeps) -> str 
     base list unless ``supports_function_calling(model, "together_ai")`` is
     True (together_ai/chat.py); parallel_tool_calls stays supported either
     way (v1 truth, not an oversight here)."""
-    allowed = (
-        _BASE_LIST
-        if supports_together_tools(request.model, deps)
-        else _BASE_LIST - _FUNCTION_CALLING_KEYS
-    )
+    supports_tools = supports_together_tools(request.model, deps)
+    if request.model in RESPONSE_FORMAT_UNSUPPORTED_MODELS and not supports_tools:
+        # The base list already dropped response_format for this model name,
+        # so the non-fc fork's list.remove("response_format") crashes inside
+        # get_supported_openai_params -- which _check_valid_arg runs on EVERY
+        # together_ai request, plain text included (verifier-wave1a F2).
+        return (
+            f"model {request.model!r} on together_ai without the model-map "
+            "supports_function_calling flag: v1's TogetherAIConfig."
+            "get_supported_openai_params raises ValueError (list.remove on "
+            "a base list that already dropped response_format for this "
+            "model name) on every request; v1 raises its own error"
+        )
+    allowed = _BASE_LIST if supports_tools else _BASE_LIST - _FUNCTION_CALLING_KEYS
     return unsupported_against(
         request,
         provider="together_ai",

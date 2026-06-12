@@ -298,6 +298,20 @@ def _compat_sdk_rows(lines: list) -> int:
             label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
             lines.append(f"- {label}: {name} ({reason})")
         for name in sorted(
+            k for k in req.V1_RAISES_VALUE_ERROR if k.startswith(f"{provider}:")
+        ):
+            p, case, reason = req.V1_RAISES_VALUE_ERROR[name]
+            result = req._v2(p, case)
+            try:
+                corpus.run_v1_request_transform(p, case)
+                raised = False
+            except ValueError as err:
+                raised = type(err) is ValueError
+            ok = result.is_error() and reason in result.error.summary and raised
+            failures += 0 if ok else 1
+            label = "FALLBACK (v1 raises ValueError)" if ok else "DIVERGENT"
+            lines.append(f"- {label}: {name} ({reason})")
+        for name in sorted(
             k for k in req.EXPECTED_FALLBACKS if k.startswith(f"{provider}:")
         ):
             p, case, reason = req.EXPECTED_FALLBACKS[name]
