@@ -642,9 +642,11 @@ def test_registered_providers_have_differential_coverage() -> None:
     # critic-wave2b-alpha MAJOR-4: every own-module provider must carry a row
     # in pipeline.OWN_MODULE_RESPONSE_STYLES (the construction-style truth the
     # future completion() fork selects usage_style from — the compat_httpx
-    # RESPONSE_STYLES shape). Add the row in the commit that adds the module;
-    # an "openai_like" row additionally needs a wrong-arm divergence pin in
-    # its response gate (the fireworks_ai/snowflake template).
+    # RESPONSE_STYLES shape). Add the row in the commit that adds the module,
+    # WITH a wrong-arm divergence pin in its response gate ("openai_like":
+    # the fireworks_ai/snowflake wire-index template; "openai": the inverted
+    # float-created template — verifier-wave2b-final F1: this gate asserts
+    # KEY membership only, so an unpinned VALUE is enforced by nothing).
     assert set(pipeline.OWN_MODULE_RESPONSE_STYLES) == own_modules
     assert own_modules <= dedicated_gates
 

@@ -271,9 +271,16 @@ OWN_MODULE_RESPONSE_STYLES: Mapping[Provider, ResponseStyle] = MappingProxyType(
         # "openai" = cdr via the base GPT transform_response; "openai_like" =
         # ModelResponse(**json) DIRECT construction (no stop->tool_calls
         # rewrite, different pydantic dump, NO seam preset either way).
-        # Wrong-arm divergence is pinned per openai_like member in the
-        # fireworks_ai/snowflake response gates; the registration gate
-        # asserts every own-module provider has a row. The seam's AST gate
+        # Wrong-arm divergence is pinned per MEMBER in its response gate:
+        # openai_like members ride a verbatim wire index 5 the cdr arm
+        # enumerate-rewrites (the fireworks_ai/snowflake template); openai
+        # members use the INVERTED template — a float wire ``created`` the
+        # cdr arm coerces-and-serves like v1 while the direct construction
+        # raises ValidationError (cohere pins the ambient envelope id its
+        # parser-built body cannot carry instead) — verifier-wave2b-final
+        # F1 closed the eight value-unpinned "openai" rows. The
+        # registration gate asserts every own-module provider has a row.
+        # The seam's AST gate
         # (test_seam_forks_never_select_usage_style_via_response_dialect)
         # already rejects any fork that routes through response_dialect().
         "deepseek": "openai",

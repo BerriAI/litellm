@@ -31,7 +31,11 @@ from litellm.types.utils import ModelResponse
 from litellm.translation.inbound.openai_chat import parse_request
 from litellm.translation.inbound.openai_chat.response import serialize_response
 from litellm.translation.providers.cohere import parse_response
-from litellm.translation_seam import build_translation_deps, to_model_response
+from litellm.translation_seam import (
+    UsageStyle,
+    build_translation_deps,
+    to_model_response,
+)
 
 MODEL = "command-r"
 _AMBIENT_ID = "chatcmpl-cohere-diff"
@@ -348,13 +352,20 @@ def _v2_parse(raw: dict):
     return parse_response(copy.deepcopy(raw), parsed.ok)
 
 
-def _v2_model_response(raw: dict) -> dict:
+def _v2_with_style(raw: dict, style: UsageStyle) -> dict:
     response = _v2_parse(raw)
     assert response.is_ok(), response.error.summary
     body = serialize_response(response.ok, build_translation_deps(), "openai")
     return to_model_response(
-        body, ModelResponse(id=_AMBIENT_ID), usage_style="openai"
+        body, ModelResponse(id=_AMBIENT_ID), usage_style=style
     ).model_dump()
+
+
+def _v2_model_response(raw: dict) -> dict:
+    # both cohere provider names ride the cdr arm — the truth is
+    # pipeline.OWN_MODULE_RESPONSE_STYLES["cohere"]/["cohere_chat"],
+    # divergence-pinned below
+    return _v2_with_style(raw, "openai")
 
 
 def _norm(payload: dict) -> str:
@@ -405,3 +416,32 @@ def test_unvalidated_citation_values_fall_back_where_v1_serves(
     v1 = _v1_model_response(copy.deepcopy(raw))
     annotations = v1["choices"][0]["message"].get("annotations")
     assert annotations, f"{name}: v1 stopped serving the annotation; re-decide"
+
+
+def test_wrong_construction_arm_diverges_and_the_table_pins_it(
+    frozen_ambient,
+) -> None:
+    """verifier-wave2b-final F1: the "openai"-arm OWN_MODULE_RESPONSE_STYLES
+    values were enforced by NOTHING — a wrong-arm value flip survived the
+    whole suite. The wrong-arm template for a provider whose normalized
+    body the parser BUILDS (no wire index/created can ride through): the
+    cohere body deliberately carries NO id, so the correct cdr ("openai")
+    arm keeps the ambient chatcmpl id exactly like v1's fresh-ModelResponse
+    mutation, while the wrong "openai_like" arm (ModelResponse(**json))
+    IGNORES the pre-allocated envelope and mints a fresh id. Both provider
+    names pin the one module's rows."""
+    from litellm.translation.engine.pipeline import OWN_MODULE_RESPONSE_STYLES
+
+    assert OWN_MODULE_RESPONSE_STYLES["cohere"] == "openai"
+    assert OWN_MODULE_RESPONSE_STYLES["cohere_chat"] == "openai"
+    raw = _RESPONSES["text"]
+    v1 = _v1_model_response(raw)
+    correct = _v2_with_style(raw, OWN_MODULE_RESPONSE_STYLES["cohere"])
+    wrong = _v2_with_style(raw, "openai_like")
+    assert _norm(correct) == _norm(v1)
+    assert correct["id"] == _AMBIENT_ID
+    assert wrong["id"] != _AMBIENT_ID
+    assert _norm(wrong) != _norm(v1), (
+        "the construction arms stopped diverging on the envelope id — "
+        "the F1 gate lost its discriminator; re-decide before relying on it"
+    )

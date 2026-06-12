@@ -14,6 +14,7 @@ import json
 import time
 
 import httpx
+import pydantic
 import pytest
 
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -23,7 +24,11 @@ from litellm.types.utils import ModelResponse
 from litellm.translation.inbound.openai_chat import parse_request
 from litellm.translation.inbound.openai_chat.response import serialize_response
 from litellm.translation.providers.mistral import parse_response
-from litellm.translation_seam import build_translation_deps, to_model_response
+from litellm.translation_seam import (
+    UsageStyle,
+    build_translation_deps,
+    to_model_response,
+)
 
 MODEL = "mistral-large-latest"
 WIRE_MODEL = "mistral-large-2411"
@@ -250,13 +255,19 @@ def _v2_parse(raw: dict):
     return parse_response(copy.deepcopy(raw), parsed.ok)
 
 
-def _v2_model_response(raw: dict) -> dict:
+def _v2_with_style(raw: dict, style: UsageStyle) -> dict:
     response = _v2_parse(raw)
     assert response.is_ok(), response.error.summary
     body = serialize_response(response.ok, build_translation_deps(), "openai")
     return to_model_response(
-        body, ModelResponse(id=_AMBIENT_ID), usage_style="openai"
+        body, ModelResponse(id=_AMBIENT_ID), usage_style=style
     ).model_dump()
+
+
+def _v2_model_response(raw: dict) -> dict:
+    # mistral rides the cdr arm — the truth is
+    # pipeline.OWN_MODULE_RESPONSE_STYLES["mistral"], divergence-pinned below
+    return _v2_with_style(raw, "openai")
 
 
 def _norm(payload: dict) -> str:
@@ -300,3 +311,30 @@ def test_loud_shapes_error_on_both_sides(name: str, frozen_ambient) -> None:
     assert fragment in result.error.summary, result.error.summary
     with pytest.raises(Exception):
         _v1_model_response(copy.deepcopy(raw))
+
+
+def test_wrong_construction_arm_diverges_and_the_table_pins_it(
+    frozen_ambient,
+) -> None:
+    """verifier-wave2b-final F1: the "openai"-arm OWN_MODULE_RESPONSE_STYLES
+    values were enforced by NOTHING — a wrong-arm value flip on THIS row was
+    the verifier's proof (it survived the whole 3038 suite). The watsonx/
+    groq wrong-arm template INVERTED for a cdr-parser member (the v2 parser
+    already cdr-normalizes choices, so the openai_like members' index-5
+    discriminator dies before the seam): a FLOAT wire ``created`` rides the
+    normalized body; the correct cdr ("openai") arm coerces it via
+    _safe_convert_created_field and serves exactly like v1, while the wrong
+    "openai_like" arm (ModelResponse(**json)) raises ValidationError on
+    traffic v1 serves — if the arms stop diverging here, the raises assert
+    fails: re-decide before relying on the pin."""
+    from litellm.translation.engine.pipeline import OWN_MODULE_RESPONSE_STYLES
+
+    assert OWN_MODULE_RESPONSE_STYLES["mistral"] == "openai"
+    raw = copy.deepcopy(_RESPONSES["text"])
+    raw["created"] = raw["created"] + 0.5
+    v1 = _v1_model_response(raw)
+    correct = _v2_with_style(raw, OWN_MODULE_RESPONSE_STYLES["mistral"])
+    assert _norm(correct) == _norm(v1)
+    assert correct["created"] == _RESPONSES["text"]["created"]
+    with pytest.raises(pydantic.ValidationError):
+        _v2_with_style(raw, "openai_like")
