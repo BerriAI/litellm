@@ -15,7 +15,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from litellm.proxy.utils import get_custom_url, join_paths
 
@@ -388,3 +388,39 @@ class TestShouldUseSmtpSsl:
 
         monkeypatch.delenv("SMTP_USE_SSL", raising=False)
         assert _should_use_smtp_ssl(smtp_port=587) is False
+
+
+class TestCreateSmtpConnection:
+    def test_port_465_creates_smtp_ssl_with_verified_context(self, monkeypatch):
+        import ssl
+
+        from litellm.proxy.utils import _create_smtp_connection
+
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+        with patch("smtplib.SMTP_SSL") as mock_smtp_ssl, patch(
+            "smtplib.SMTP"
+        ) as mock_smtp:
+            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=465)
+
+        mock_smtp.assert_not_called()
+        assert result is mock_smtp_ssl.return_value
+        _, kwargs = mock_smtp_ssl.call_args
+        assert kwargs["host"] == "mail.example.com"
+        assert kwargs["port"] == 465
+        context = kwargs["context"]
+        assert isinstance(context, ssl.SSLContext)
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+
+    def test_port_587_creates_plain_smtp(self, monkeypatch):
+        from litellm.proxy.utils import _create_smtp_connection
+
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+        with patch("smtplib.SMTP_SSL") as mock_smtp_ssl, patch(
+            "smtplib.SMTP"
+        ) as mock_smtp:
+            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=587)
+
+        mock_smtp_ssl.assert_not_called()
+        assert result is mock_smtp.return_value
+        mock_smtp.assert_called_once_with(host="mail.example.com", port=587)
