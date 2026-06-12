@@ -1406,7 +1406,7 @@ class TestNativeWebSocketGuardrailMasking:
         )
 
     @pytest.mark.asyncio
-    async def test_mask_response_completed_delta(self):
+    async def test_mask_response_completed_delta_unchanged(self):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
             request_data={}, output_guardrail_callbacks=[guardrail]
@@ -1415,8 +1415,7 @@ class TestNativeWebSocketGuardrailMasking:
         event = json.dumps(
             {"type": "response.output_text.delta", "delta": "alice@example.com"}
         )
-        masked = json.loads(await handler._mask_response_completed(event))
-        assert masked["delta"] == "<EMAIL_ADDRESS_1>"
+        assert await handler._mask_response_completed(event) == event
 
     @pytest.mark.asyncio
     async def test_mask_response_completed_no_guardrails_unchanged(self):
