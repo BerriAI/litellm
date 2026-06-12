@@ -18,27 +18,40 @@ else:
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
 
 
-def _format_google_genai_sse_line(line: str) -> bytes:
-    """Format one Gemini SSE line as a complete event for downstream clients."""
-    if line.startswith(("data:", "event:", ":")):
-        return (line + "\n\n").encode("utf-8")
-    return (line + "\n").encode("utf-8")
+def _encode_google_genai_sse_event(event_lines: List[str]) -> bytes:
+    return ("\n".join(event_lines) + "\n\n").encode("utf-8")
 
 
 def _next_google_genai_sse_chunk(line_iter) -> bytes:
-    """Read lines until the next non-empty Gemini SSE event is available."""
+    event_lines: List[str] = []
     while True:
-        line = next(line_iter)
-        if line:
-            return _format_google_genai_sse_line(line)
+        try:
+            line = next(line_iter)
+        except StopIteration:
+            if event_lines:
+                return _encode_google_genai_sse_event(event_lines)
+            raise
+        if line == "":
+            if event_lines:
+                return _encode_google_genai_sse_event(event_lines)
+            continue
+        event_lines.append(line)
 
 
 async def _anext_google_genai_sse_chunk(line_iter) -> bytes:
-    """Async variant of _next_google_genai_sse_chunk."""
+    event_lines: List[str] = []
     while True:
-        line = await line_iter.__anext__()
-        if line:
-            return _format_google_genai_sse_line(line)
+        try:
+            line = await line_iter.__anext__()
+        except StopAsyncIteration:
+            if event_lines:
+                return _encode_google_genai_sse_event(event_lines)
+            raise
+        if line == "":
+            if event_lines:
+                return _encode_google_genai_sse_event(event_lines)
+            continue
+        event_lines.append(line)
 
 
 class BaseGoogleGenAIGenerateContentStreamingIterator:
