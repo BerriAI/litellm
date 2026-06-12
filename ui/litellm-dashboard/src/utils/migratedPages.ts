@@ -30,6 +30,11 @@ export const MIGRATED_PAGES: Record<string, string> = {
   skills: "skills",
   // Legacy alias: the old switch matched ?page=claude-code-plugins for the same panel.
   "claude-code-plugins": "skills",
+  caching: "caching",
+  "cost-tracking": "cost-tracking",
+  "transform-request": "transform-request",
+  "ui-theme": "ui-theme",
+  logs: "logs",
 };
 
 function uiBase(): string {
