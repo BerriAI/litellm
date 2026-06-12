@@ -60,6 +60,9 @@ from ..providers.google_genai import (
 from ..providers.google_genai import (
     serialize_request_vertex as google_serialize_request_vertex,
 )
+from ..providers.google_genai import (
+    unsupported_request_shapes as google_unsupported_request_shapes,
+)
 from ..providers.openai_compat import parse_response as openai_compat_parse_response
 from ..providers.openai_compat import (
     serialize_request as openai_compat_serialize_request,
@@ -128,13 +131,17 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
 _RawGuard = Callable[[Mapping[str, object]], TranslationError | None]
 
 _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
-    # Same-family providers run a raw-shape fidelity guard BEFORE parse: the
-    # inbound parse normalizes wire forms v1 forwards verbatim, so shapes it
-    # cannot round-trip losslessly fall back to v1 as typed errors.
+    # Raw-shape guards run BEFORE parse. Same-family providers use them for
+    # fidelity (the inbound parse normalizes wire forms v1 forwards
+    # verbatim); the google routes use one because the parse DROPS the
+    # message ``name`` field, whose bytes the cache-marker token bound must
+    # otherwise account for (verifier-integration blocker).
     {
         "openai_compat": openai_compat_unsupported_request_shapes,
         "azure": azure_unsupported_request_shapes,
         "azure_ai": azure_ai_unsupported_request_shapes,
+        "vertex_ai": google_unsupported_request_shapes,
+        "gemini": google_unsupported_request_shapes,
     }
 )
 

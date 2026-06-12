@@ -132,6 +132,16 @@ _WEATHER_TOOL = {
 
 # (alias, case, drop_params) quirks; every row references v1 in-process.
 QUIRKS = {
+    "message_name_without_marker": (
+        # no marker -> the name+marker guard stays out of the way, and the
+        # quirk pins that BOTH sides drop 'name' from the wire identically.
+        "vertex_ai/gemini-2.5-pro",
+        {
+            "messages": [{"role": "user", "name": "alice", "content": "hi"}],
+            "params": {"max_tokens": 64},
+        },
+        False,
+    ),
     "cache_marker_cjk_sublimit": (
         # 80 CJK chars = 240 UTF-8 bytes: under the gate's byte+margin bound,
         # so BOTH sides ignore the marker inline (v1 token-counts < 1024 and
@@ -379,6 +389,30 @@ CACHE_GATE_FALLBACKS = {
                     {
                         "type": "text",
                         "text": "🦊" * 400,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ],
+    },
+    "name_beside_marker": {
+        # the IR drops message 'name' (v1's generateContent transform
+        # ignores it on the wire), so its bytes are invisible to the
+        # cache-marker token bound while v1's token_counter charges for
+        # them (verifier-integration blocker: 100 x 1-char marked messages
+        # with 80-char names -> v1 counts 4603 >= 1024 and creates the
+        # cache); name+marker coexistence falls back via the google raw
+        # guard before parse.
+        "model": "gemini-2.5-pro",
+        "max_tokens": 64,
+        "messages": [
+            {
+                "role": "user",
+                "name": "a" * 80,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "x",
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],

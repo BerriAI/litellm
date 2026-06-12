@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: 96c2a14264
+- commit: ff5c320127
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -396,6 +396,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: quirk gemini3_default_temperature_and_level (vertex_ai/gemini-3-pro-preview)
 - IDENTICAL: quirk gemini3_studio_forwards_function_call_ids (gemini/gemini-3-pro-preview)
 - IDENTICAL: quirk image_url_format_override (vertex_ai/gemini-2.5-pro)
+- IDENTICAL: quirk message_name_without_marker (vertex_ai/gemini-2.5-pro)
 - IDENTICAL: quirk multi_system_messages_two_parts (vertex_ai/gemini-2.5-pro)
 - IDENTICAL: quirk parallel_tool_calls_never_reaches_wire (vertex_ai/gemini-2.5-pro)
 - IDENTICAL: quirk reasoning_effort_minimal_model_budget (vertex_ai/gemini-2.5-pro)
@@ -411,6 +412,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: quirk vertex_top_k_passthrough (vertex_ai/gemini-2.5-pro)
 - FALLBACK (v1 serves it): cache-marker token bound cjk_under_char_limit (v1's check_and_create_cache may create the context cache; the byte+margin bound fails closed)
 - FALLBACK (v1 serves it): cache-marker token bound emoji_under_char_limit (v1's check_and_create_cache may create the context cache; the byte+margin bound fails closed)
+- FALLBACK (v1 serves it): cache-marker token bound name_beside_marker (v1's check_and_create_cache may create the context cache; the byte+margin bound fails closed)
 - FALLBACK (v1 serves it): cache-marker token bound unmarked_image_beside_marker (v1's check_and_create_cache may create the context cache; the byte+margin bound fails closed)
 
 ## gemini: responses (snapshot == v1 transform_response == v2)

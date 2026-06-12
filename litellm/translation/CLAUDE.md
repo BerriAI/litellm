@@ -90,6 +90,10 @@ translation/
 │   │   │                #   (AI Studio refuses https media + forwards
 │   │   │                #   function-call ids on gemini-3+); auth/host/api-
 │   │   │                #   version differences are envelope, never here
+│   │   ├── guard.py     # raw guard run BEFORE parse: message `name` beside
+│   │   │                #   cache markers falls back (the IR drops `name`,
+│   │   │                #   so its bytes are invisible to the cache-marker
+│   │   │                #   token bound while v1 token-counts them)
 │   │   ├── serialize.py # cache-marker gate (conservative token bound:
 │   │   │                #   UTF-8 bytes + per-message margin < 1024 proves
 │   │   │                #   v1 skips the context-cache network call; any
@@ -312,6 +316,8 @@ bound (UTF-8 bytes + per-message margin over the whole request) reaches
 gemini's 1024-token cache minimum (context-cache create is network I/O;
 below the bound v1 provably skips the call and ignores the markers), any
 media block in a marker-bearing request (v1 token-counts images at 250),
+message `name` beside cache markers (raw guard: the IR drops `name`, so
+its bytes cannot be bounded post-parse while v1 token-counts them),
 gs:// and http:// media plus AI-Studio https media (downloads), https media
 without a recognizable extension, file/pdf parts (inbound), params outside
 the IR (n, seed, penalties, modalities, audio, web_search_options,
