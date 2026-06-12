@@ -46,7 +46,54 @@ CompatSdkProvider = Literal[
     "nscale",
     "hyperbolic",
     "volcengine",
+    # wave-1b SDK-path shims
+    "ai21_chat",
+    "dashscope",
+    "docker_model_runner",
+    "empower",
+    "friendliai",
+    "galadriel",
+    "github",
+    "inception",
+    "meta_llama",
+    "morph",
+    "v0",
+    "zai",
+    "vercel_ai_gateway",
+    # wave-1b JSON-registry providers (LlmProviders enum members only; the 7
+    # non-members ride v1's generic openai fallback arms and stay dropped)
+    "publicai",
+    "helicone",
+    "xiaomi_mimo",
+    "scaleway",
+    "synthetic",
+    "apertis",
+    "nano-gpt",
+    "poe",
+    "chutes",
+    "assemblyai",
+    "charity_engine",
+    "neosantara",
+    "tensormesh",
+    "parasail",
 ]
+
+JSON_REGISTRY_PROVIDERS: tuple[CompatSdkProvider, ...] = (
+    "publicai",
+    "helicone",
+    "xiaomi_mimo",
+    "scaleway",
+    "synthetic",
+    "apertis",
+    "nano-gpt",
+    "poe",
+    "chutes",
+    "assemblyai",
+    "charity_engine",
+    "neosantara",
+    "tensormesh",
+    "parasail",
+)
 
 _Present = Callable[[ChatRequest], bool]
 
@@ -134,6 +181,10 @@ _BASE_LIST = frozenset(
         "response_format",
     }
 )
+
+BASE_LIST = _BASE_LIST
+"""Public alias: the compat_httpx sibling family shares the base-list truth
+(and the mirror drift gates cover both)."""
 
 _FUNCTION_CALLING_KEYS = frozenset({"tools", "tool_choice", "response_format"})
 
@@ -369,6 +420,152 @@ def volcengine_unsupported(request: ChatRequest, deps: TranslationDeps) -> str |
     )
 
 
+# --- wave-1b SDK-path shims ------------------------------------------------
+
+
+def _user_never_note(provider: str) -> str:
+    return (
+        f"user on {provider}: v1's _check_valid_arg always skips user and this "
+        "config's own supported list never carries it; v1 silently drops it"
+    )
+
+
+# AI21ChatConfig's own list restricted to IR-carried keys: NO top_p (raises),
+# no parallel_tool_calls, no user, no reasoning_effort; n/seed are in v1's
+# list but outside the IR (inbound fallback, v1 serves them).
+_AI21_LIST = frozenset(
+    {
+        "max_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "stop",
+        "stream",
+        "tools",
+        "tool_choice",
+        "response_format",
+    }
+)
+
+
+def ai21_chat_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | None:
+    return unsupported_against(
+        request,
+        provider="ai21_chat",
+        allowed=_AI21_LIST,
+        notes={"user": _user_never_note("ai21_chat")},
+    )
+
+
+# InceptionChatConfig: NO top_p, no parallel_tool_calls; reasoning_effort is
+# UNCONDITIONAL in v1's static list (no capability gate), so membership here
+# both serves the gate and drives emission.
+_INCEPTION_LIST = frozenset(
+    {
+        "max_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "stop",
+        "stream",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "reasoning_effort",
+    }
+)
+
+
+def inception_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | None:
+    return unsupported_against(
+        request,
+        provider="inception",
+        allowed=_INCEPTION_LIST,
+        notes={"user": _user_never_note("inception")},
+    )
+
+
+# MorphChatConfig's list is messages/model/stream; every other OpenAI param
+# RAISES (verified in-process at HEAD).
+_MORPH_LIST = frozenset({"stream"})
+
+
+def morph_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | None:
+    return unsupported_against(
+        request,
+        provider="morph",
+        allowed=_MORPH_LIST,
+        notes={"user": _user_never_note("morph")},
+    )
+
+
+# V0ChatConfig: messages/model/stream/tools/tool_choice only.
+_V0_LIST = frozenset({"stream", "tools", "tool_choice"})
+
+
+def v0_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | None:
+    return unsupported_against(
+        request, provider="v0", allowed=_V0_LIST, notes={"user": _user_never_note("v0")}
+    )
+
+
+# ZAIChatConfig: no max_completion_tokens (RAISES — no OpenAILike rename arm,
+# the config is OpenAIGPT-based), no response_format, no parallel_tool_calls.
+# ``thinking`` IS in v1's list for supports_reasoning("zai/{m}") models and is
+# copied VERBATIM top-level into the SDK body — an unported emission, so it
+# falls back typed (v1 serves it).
+_ZAI_LIST = frozenset(
+    {"max_tokens", "temperature", "top_p", "stream", "stop", "tools", "tool_choice"}
+)
+
+
+def zai_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | None:
+    return unsupported_against(
+        request,
+        provider="zai",
+        allowed=_ZAI_LIST,
+        notes={
+            "user": _user_never_note("zai"),
+            "thinking": (
+                "thinking on zai: v1 copies the verbatim dict top-level for "
+                "supports_reasoning models (capability-gated) and raises "
+                "otherwise; that emission is unported, v1 handles it"
+            ),
+        },
+    )
+
+
+# --- wave-1b JSON-registry providers (the 14 LlmProviders enum members) -----
+
+_JSON_TOOL_KEYS = frozenset({"tools", "tool_choice", "parallel_tool_calls"})
+
+
+def supports_json_provider_tools(
+    model: str, deps: TranslationDeps, provider: str
+) -> bool:
+    return deps.supports_capability(f"{provider}/{model}", "supports_function_calling")
+
+
+def json_registry_unsupported(
+    request: ChatRequest, deps: TranslationDeps, provider: str
+) -> str | None:
+    """The dynamic ``JSONProviderConfig`` (openai_like/dynamic_config.py):
+    base GPT list minus tools/tool_choice/parallel_tool_calls unless
+    ``supports_function_calling(model, slug)`` — membership-guarded
+    ``.remove``, so together_ai's gpt-4-name ValueError corner does NOT
+    apply here; ``response_format`` stays (only the base list's own
+    gpt-4/gpt-3.5-turbo-16k name gate removes it)."""
+    allowed = (
+        _BASE_LIST
+        if supports_json_provider_tools(request.model, deps, provider)
+        else _BASE_LIST - _JSON_TOOL_KEYS
+    )
+    return unsupported_against(
+        request,
+        provider=provider,
+        allowed=allowed,
+        notes={"user": _user_note(provider)},
+    ) or unsupported_response_format(request)
+
+
 # The single source of per-provider supported-surface truth: each provider's
 # MAXIMAL allowed set (capability and per-model gates above only ever NARROW
 # it). Serialization derives user/reasoning_effort emission from membership
@@ -389,5 +586,22 @@ ALLOWED: Mapping[CompatSdkProvider, frozenset[str]] = MappingProxyType(
         "nscale": _NSCALE_LIST,
         "hyperbolic": _HYPERBOLIC_LIST,
         "volcengine": _VOLCENGINE_LIST,
+        # wave-1b SDK-path shims
+        "ai21_chat": _AI21_LIST,
+        "dashscope": _BASE_LIST,
+        "docker_model_runner": _BASE_LIST,
+        "empower": _BASE_LIST,
+        "friendliai": _BASE_LIST,
+        "galadriel": _BASE_LIST,
+        "github": _BASE_LIST,
+        "inception": _INCEPTION_LIST,
+        "meta_llama": _BASE_LIST,
+        "morph": _MORPH_LIST,
+        "v0": _V0_LIST,
+        "zai": _ZAI_LIST,
+        "vercel_ai_gateway": _BASE_LIST,
+        # wave-1b JSON-registry providers (maximal = base list; the per-model
+        # function-calling capability gate narrows it)
+        **{provider: _BASE_LIST for provider in JSON_REGISTRY_PROVIDERS},
     }
 )

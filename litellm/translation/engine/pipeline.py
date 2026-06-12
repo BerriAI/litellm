@@ -53,10 +53,11 @@ from ..providers.bedrock_invoke import parse_response as bedrock_invoke_parse_re
 from ..providers.bedrock_invoke import (
     serialize_request as bedrock_invoke_serialize_request,
 )
+from ..providers.compat_httpx import GUARDS as compat_httpx_guards
+from ..providers.compat_httpx import PARSERS as compat_httpx_parsers
+from ..providers.compat_httpx import SERIALIZERS as compat_httpx_serializers
+from ..providers.compat_sdk import GUARDS as compat_sdk_guards
 from ..providers.compat_sdk import SERIALIZERS as compat_sdk_serializers
-from ..providers.compat_sdk import (
-    unsupported_request_shapes as compat_sdk_unsupported_request_shapes,
-)
 from ..providers.google_genai import parse_response as google_parse_response
 from ..providers.google_genai import (
     serialize_request_studio as google_serialize_request_studio,
@@ -110,6 +111,9 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         # TABLE, never per provider) is the registration convention every
         # wave-1b/2 family follows.
         **compat_sdk_serializers,
+        # compat_httpx family (wave-1b): the dedicated-elif shims; same
+        # splice convention, second family variant (no seam model preset).
+        **compat_httpx_serializers,
     }
 )
 
@@ -134,6 +138,11 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
             provider: openai_compat_parse_response
             for provider in compat_sdk_serializers
         },
+        # compat_httpx family: the openai parser with NO seam preset (bare
+        # wire model, the xai R4 rule) except the compactifai/amazon-nova/
+        # lemonade request-model prefixes, which are parser scope (the
+        # family's PARSERS table carries the per-provider truth).
+        **compat_httpx_parsers,
     }
 )
 
@@ -155,6 +164,10 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # compat_sdk family: SDK path, default openai wrapper arm (the
         # per-provider stream replays pin that no dedicated branch fires)
         **{provider: _OPENAI_DIALECT for provider in compat_sdk_serializers},
+        # compat_httpx family: httpx path, same normalized wire-body ride
+        # (the chunk-fold dialect is "xai" — the generic httpx dict path —
+        # selected by the stream gates, not this outbound-body table)
+        **{provider: _OPENAI_DIALECT for provider in compat_httpx_serializers},
     }
 )
 
@@ -173,10 +186,11 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         "vertex_ai": google_unsupported_request_shapes,
         "gemini": google_unsupported_request_shapes,
         "xai": xai_unsupported_request_shapes,
-        **{
-            provider: compat_sdk_unsupported_request_shapes
-            for provider in compat_sdk_serializers
-        },
+        # the family GUARDS tables are complete (per-provider overrides for
+        # the cache_control-preserving and content-list-flattening configs,
+        # the shared guard for everyone else)
+        **compat_sdk_guards,
+        **compat_httpx_guards,
     }
 )
 

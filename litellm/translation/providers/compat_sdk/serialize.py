@@ -59,6 +59,9 @@ class CompatProfile:
     unsupported: _GateFn
     rename_max_completion_tokens: bool = False
     drop_text_response_format: bool = False
+    drop_non_json_schema_response_format: bool = False
+    """meta_llama: v1's map POPS response_format unless type == json_schema
+    (LlamaAPIConfig.map_openai_params) — json_object is silently dropped."""
 
 
 def serialize_with_profile(
@@ -80,6 +83,13 @@ def _with_deltas(body: Body, request: ChatRequest, profile: CompatProfile) -> Bo
         "type": "text"
     }:
         body = {k: v for k, v in body.items() if k != "response_format"}
+    if profile.drop_non_json_schema_response_format:
+        response_format = body.get("response_format")
+        if (
+            isinstance(response_format, dict)
+            and response_format.get("type") != "json_schema"
+        ):
+            body = {k: v for k, v in body.items() if k != "response_format"}
     emittable = p.ALLOWED[profile.provider]
     extras: dict[str, PlainJson] = {}
     user = request.user.default_value(None) if "user" in emittable else None
@@ -100,6 +110,33 @@ def _base_list_gate(provider: str) -> _GateFn:
         return p.base_list_unsupported(request, deps, provider)
 
     return gate
+
+
+def _json_registry_gate(provider: str) -> _GateFn:
+    def gate(request: ChatRequest, deps: TranslationDeps) -> str | None:
+        return p.json_registry_unsupported(request, deps, provider)
+
+    return gate
+
+
+# providers.json ``param_mappings`` carrying max_completion_tokens ->
+# max_tokens at HEAD (the mapping arm runs FIRST in JSONProviderConfig.
+# map_openai_params, before the supported-list copy loop); the drift gate
+# re-derives this set from providers.json in the request differential.
+_JSON_RENAME = frozenset(
+    {
+        "publicai",
+        "xiaomi_mimo",
+        "synthetic",
+        "apertis",
+        "nano-gpt",
+        "poe",
+        "chutes",
+        "charity_engine",
+        "neosantara",
+        "tensormesh",
+    }
+)
 
 
 _PROFILE_ROWS: tuple[CompatProfile, ...] = (
@@ -147,6 +184,76 @@ _PROFILE_ROWS: tuple[CompatProfile, ...] = (
         provider="volcengine",
         unsupported=p.volcengine_unsupported,
         rename_max_completion_tokens=True,
+    ),
+    # wave-1b SDK-path shims. mct flags re-verified in-process at HEAD:
+    # rename = the OpenAILike super arm (ai21_chat/empower/friendliai/
+    # galadriel/github/inception) or docker_model_runner's explicit map arm;
+    # verbatim = plain OpenAIGPT copy (dashscope/meta_llama/
+    # vercel_ai_gateway); morph/v0/zai raise (mct outside their lists, so the
+    # OpenAILike rename arm is dead behind the gate — the nscale/hyperbolic
+    # trap again).
+    CompatProfile(
+        provider="ai21_chat",
+        unsupported=p.ai21_chat_unsupported,
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(provider="dashscope", unsupported=_base_list_gate("dashscope")),
+    CompatProfile(
+        provider="docker_model_runner",
+        unsupported=_base_list_gate("docker_model_runner"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="empower",
+        unsupported=_base_list_gate("empower"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="friendliai",
+        unsupported=_base_list_gate("friendliai"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="galadriel",
+        unsupported=_base_list_gate("galadriel"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="github",
+        unsupported=_base_list_gate("github"),
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="inception",
+        unsupported=p.inception_unsupported,
+        rename_max_completion_tokens=True,
+    ),
+    CompatProfile(
+        provider="meta_llama",
+        unsupported=_base_list_gate("meta_llama"),
+        drop_non_json_schema_response_format=True,
+    ),
+    CompatProfile(provider="morph", unsupported=p.morph_unsupported),
+    CompatProfile(provider="v0", unsupported=p.v0_unsupported),
+    CompatProfile(provider="zai", unsupported=p.zai_unsupported),
+    CompatProfile(
+        provider="vercel_ai_gateway",
+        unsupported=_base_list_gate("vercel_ai_gateway"),
+        # The dedicated main.py elif is DEAD CODE (the compat list matches at
+        # the big SDK elif first); the map's always-injected ``extra_body`` is
+        # empty unless the non-IR ``providerOptions`` rides (inbound fallback)
+        # and the SDK spreads the empty dict to nothing on the wire.
+    ),
+    # wave-1b JSON-registry rows: one parameterized gate (the dynamic
+    # JSONProviderConfig's function-calling capability fork) + the
+    # param_mappings mct→max_tokens rename where providers.json carries it.
+    *(
+        CompatProfile(
+            provider=provider,
+            unsupported=_json_registry_gate(provider),
+            rename_max_completion_tokens=provider in _JSON_RENAME,
+        )
+        for provider in p.JSON_REGISTRY_PROVIDERS
     ),
 )
 

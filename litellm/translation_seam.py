@@ -67,7 +67,7 @@ def build_translation_deps(
     )
 
 
-UsageStyle = str  # "anthropic" | "bedrock_converse" | "openai" (v1 transform)
+UsageStyle = str  # "anthropic" | "bedrock_converse" | "openai" | "openai_like"
 
 
 def to_model_response(
@@ -91,6 +91,15 @@ def to_model_response(
 
     if usage_style == "openai":
         return _to_model_response_openai(body, model_response)
+    if usage_style == "openai_like":
+        # Mirror OpenAILikeChatConfig._transform_response (and the
+        # compactifai override, same construction): the response is built
+        # DIRECTLY as ModelResponse(**response_json) — no cdr, so the wire
+        # finish_reason rides verbatim into Choices' live map_finish_reason
+        # (no stop->tool_calls rewrite) and the message/choice pydantic dump
+        # differs from the cdr-built one. v1 ignores the pre-allocated
+        # model_response on this path; so does this arm.
+        return ModelResponse(**cast(Dict[str, Any], body))
 
     response = model_response if model_response is not None else ModelResponse()
     choices = body.get("choices")
