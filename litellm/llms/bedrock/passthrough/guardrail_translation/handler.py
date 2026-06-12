@@ -22,6 +22,19 @@ def _is_converse_endpoint(endpoint: str) -> bool:
     return bool(parts) and parts[-1] in _CONVERSE_ACTIONS
 
 
+def _generic_passthrough_handler() -> BaseTranslation:
+    """
+    Fallback for non-Converse Bedrock routes (e.g. invoke). The generic
+    handler scans the full request/response payload so blocking guardrails
+    still run, matching how other passthrough providers are guarded.
+    """
+    from litellm.llms.pass_through.guardrail_translation.handler import (
+        PassThroughEndpointHandler,
+    )
+
+    return PassThroughEndpointHandler()
+
+
 def _extract_converse_texts(
     body: dict,
     skip_system: bool,
@@ -226,14 +239,14 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         endpoint = data.get("endpoint", "")
         body = data.get("data")
 
-        if not _is_converse_endpoint(endpoint) or not isinstance(body, dict):
-            verbose_proxy_logger.debug(
-                "BedrockPassthroughGuardrailHandler: skipping non-converse endpoint %s",
-                endpoint,
+        if not _is_converse_endpoint(endpoint):
+            return await _generic_passthrough_handler().process_input_messages(
+                data=data,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
             )
-            return data
 
-        if not isinstance(body.get("messages"), list):
+        if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
             return data
 
         skip_system = effective_skip_system_message_for_guardrail(guardrail_to_apply)
@@ -270,6 +283,16 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[dict] = None,
     ) -> Any:
+        endpoint = (request_data or {}).get("endpoint", "")
+        if endpoint and not _is_converse_endpoint(endpoint):
+            return await _generic_passthrough_handler().process_output_response(
+                response=response,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+            )
+
         if not isinstance(response, dict):
             return response
 

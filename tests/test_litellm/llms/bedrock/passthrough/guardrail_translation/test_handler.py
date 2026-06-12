@@ -274,14 +274,38 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         assert tool_result["content"][0]["text"] == "[REDACTED]"
 
     @pytest.mark.asyncio
-    async def test_non_converse_endpoint_skips_apply_guardrail(self):
+    async def test_non_converse_endpoint_scans_full_payload(self):
+        """Invoke routes must not bypass guardrails: the full request payload is
+        scanned so blocking guardrails still see user-controlled text."""
         handler = BedrockPassthroughGuardrailHandler()
-        data = _converse_data(endpoint="model/anthropic.claude-3-sonnet/invoke")
+        data = {
+            "endpoint": "model/anthropic.claude-3-sonnet/invoke",
+            "custom_llm_provider": "bedrock",
+            "model": "anthropic.claude-3-sonnet",
+            "data": {"messages": [{"role": "user", "content": "blocked invoke text"}]},
+        }
         guardrail = _make_guardrail({"texts": []})
 
         await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        guardrail.apply_guardrail.assert_not_called()
+        guardrail.apply_guardrail.assert_called_once()
+        sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
+        assert "blocked invoke text" in sent_texts[0]
+
+    @pytest.mark.asyncio
+    async def test_non_converse_endpoint_blocking_propagates(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = {
+            "endpoint": "model/anthropic.claude-3-sonnet/invoke-with-response-stream",
+            "custom_llm_provider": "bedrock",
+            "data": {"prompt": "blocked"},
+        }
+        guardrail = MagicMock()
+        guardrail.guardrail_name = "block-guard"
+        guardrail.apply_guardrail = AsyncMock(side_effect=HTTPException(status_code=400, detail="Blocked"))
+
+        with pytest.raises(HTTPException):
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
     @pytest.mark.asyncio
     async def test_missing_messages_field_skips(self):
@@ -365,6 +389,24 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
 
         assert result == {"stopReason": "end_turn"}
         guardrail.apply_guardrail.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_converse_response_scanned_via_generic_handler(self):
+        """Invoke responses are not Converse-shaped; they must still be scanned
+        through the generic passthrough handler rather than skipped."""
+        handler = BedrockPassthroughGuardrailHandler()
+        response = {"completion": "blocked model output"}
+        guardrail = _make_guardrail({"texts": []})
+
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data={"endpoint": "model/anthropic.claude-3-sonnet/invoke"},
+        )
+
+        guardrail.apply_guardrail.assert_called_once()
+        sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
+        assert "blocked model output" in sent_texts[0]
 
 
 def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
