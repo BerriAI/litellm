@@ -5604,15 +5604,14 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                 self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, keys)
 
     def test_proxy_callback_settings_attributes_applied_without_kwarg(self):
-        """Regression for the proxy path: the OpenTelemetry logger is usually
-        built without the attributes kwarg, while the proxy stores the filter
-        under litellm.callback_settings['otel']['attributes']. The logger must
-        resolve it from there, otherwise metrics ship at full cardinality (the
-        bug the live proxy surfaced; unit construction with the kwarg hid it)."""
+        """Regression for the proxy path: the OpenTelemetry logger is constructed
+        before the proxy populates litellm.callback_settings['otel']['attributes'],
+        and without the attributes kwarg, so the filter must be resolved at record
+        time rather than at __init__. Otherwise metrics ship at full cardinality
+        (the bug the live proxy surfaced; constructing with the kwarg, or with
+        callback_settings already set, hid it)."""
         previous = litellm.callback_settings
-        litellm.callback_settings = {
-            "otel": {"attributes": {"exclude_list": list(self.HIGH_CARDINALITY_KEYS)}}
-        }
+        litellm.callback_settings = {}  # not yet populated when the logger is built
         try:
             metric_reader = InMemoryMetricReader()
             meter_provider = MeterProvider(metric_readers=[metric_reader])
@@ -5626,6 +5625,12 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                 meter_provider=meter_provider,
             )
             otel.tracer = tracer_provider.get_tracer(__name__)
+            # The proxy sets this only after the logger already exists.
+            litellm.callback_settings = {
+                "otel": {
+                    "attributes": {"exclude_list": list(self.HIGH_CARDINALITY_KEYS)}
+                }
+            }
             kwargs, response_obj = self._load_fixtures()
             start = datetime.utcnow()
             otel._handle_success(

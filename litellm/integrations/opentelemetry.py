@@ -318,25 +318,18 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             config.attributes = _build_metric_attribute_filter(
                 metric_attributes_override
             )
-        elif config.attributes is None and callback_name in (None, "otel"):
-            # The proxy frequently builds this logger without forwarding the
-            # callback_settings.otel.attributes kwarg, so read it from the global
-            # where the proxy stores that exact block.
-            otel_settings = (litellm.callback_settings or {}).get("otel") or {}
-            proxy_attributes = (
-                otel_settings.get("attributes")
-                if isinstance(otel_settings, dict)
-                else None
-            )
-            if proxy_attributes is not None:
-                config.attributes = _build_metric_attribute_filter(proxy_attributes)
 
         self.config = config
-        (
-            self._metric_attr_include,
-            self._metric_attr_exclude,
-        ) = _resolve_metric_attribute_filter(config.attributes)
         self.callback_name = callback_name
+        # Resolved on first metric record, not here: the proxy populates
+        # callback_settings.otel.attributes after this logger is constructed, so
+        # reading it now would miss it. An explicit config is validated eagerly so
+        # a bad config still fails at startup.
+        self._metric_attr_include: Optional[FrozenSet[str]] = None
+        self._metric_attr_exclude: Optional[FrozenSet[str]] = None
+        self._metric_attr_filter_resolved = False
+        if config.attributes is not None:
+            self._ensure_metric_attribute_filter()
         self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
         self.OTEL_HEADERS = self.config.headers
@@ -1435,7 +1428,31 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             return None
         return safe_dumps(filtered)
 
+    def _ensure_metric_attribute_filter(self) -> None:
+        """Resolve the include/exclude filter once, falling back to the proxy's
+        callback_settings.otel.attributes when no explicit config was passed."""
+        if self._metric_attr_filter_resolved:
+            return
+        attributes = self.config.attributes
+        if attributes is None and self.callback_name in (None, "otel"):
+            otel_settings = (litellm.callback_settings or {}).get("otel") or {}
+            raw = (
+                otel_settings.get("attributes")
+                if isinstance(otel_settings, dict)
+                else None
+            )
+            if raw is not None:
+                attributes = _build_metric_attribute_filter(raw)
+                self.config.attributes = attributes
+        (
+            self._metric_attr_include,
+            self._metric_attr_exclude,
+        ) = _resolve_metric_attribute_filter(attributes)
+        self._metric_attr_filter_resolved = True
+
     def _filter_metric_attributes(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._metric_attr_filter_resolved:
+            self._ensure_metric_attribute_filter()
         if self._metric_attr_include is not None:
             return {k: v for k, v in attrs.items() if k in self._metric_attr_include}
         if self._metric_attr_exclude is not None:
