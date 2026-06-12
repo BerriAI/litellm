@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: cf24fabe50
+- commit: 96c2a14264
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -89,6 +89,8 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: system_and_sampling
 - IDENTICAL: temperature_int_stays_int
 - IDENTICAL: text
+- IDENTICAL: tool_call_compact_arguments_roundtrip
+- IDENTICAL: tool_call_odd_spacing_and_blank_arguments_roundtrip
 - IDENTICAL: tool_call_roundtrip
 - IDENTICAL: tool_choice_none
 - IDENTICAL: tool_choice_required
@@ -109,17 +111,20 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): single_text_content_list (single-text content list)
 - FALLBACK (v1 serves it): stop_string_form (string-form stop)
 - FALLBACK (v1 serves it): stream_options_unsupported (stream_options)
-- FALLBACK (v1 serves it): tool_call_compact_arguments (non-canonical JSON spacing)
 - FALLBACK (v1 serves it): top_k_not_openai (top_k)
 - FALLBACK (v1 serves it): user_param_model_list_gate (open_ai_chat_completion_models)
 
 ## openai_compat: responses (v1 convert_to_model_response_object vs v2)
 
 - IDENTICAL: cached_and_reasoning_usage_details
+- IDENTICAL: compat_finish_reason_mapped
+- IDENTICAL: compat_finish_reason_unmapped
 - IDENTICAL: reasoning_content_key
 - IDENTICAL: text
 - IDENTICAL: think_tag_extraction
 - IDENTICAL: tool_calls_rewrites_stop
+- IDENTICAL: text (pre-set model_response.model='someprovider/pre-call-model'; the compat provider/wire-model re-prefix arm)
+- IDENTICAL: text (pre-set model_response.model='no-slash-model'; the compat provider/wire-model re-prefix arm)
 
 ## openai_compat: streams (v1 CustomStreamWrapper over SDK chunks vs v2 fold)
 
@@ -155,15 +160,18 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): explicit_stream_false (explicit stream: false)
 - FALLBACK (v1 serves it): gpt5_model (AzureOpenAIGPT5Config)
 - FALLBACK (v1 serves it): gpt5_series_prefix (AzureOpenAIGPT5Config)
+- FALLBACK (v1 serves it): o_series_empty_base_model_falls_to_deployment (AzureOpenAIO1Config)
 - FALLBACK (v1 serves it): o_series_substring_deployment (AzureOpenAIO1Config)
 - FALLBACK (v1 serves it): o_series_via_base_model (AzureOpenAIO1Config)
 - FALLBACK (v1 serves it): reasoning_effort_plain_azure (reasoning_effort)
 - FALLBACK (v1 serves it): response_format_gpt35 (json-tool strategy)
 - FALLBACK (v1 serves it): response_format_gpt_3_5_normalized (json-tool strategy)
 - FALLBACK (v1 serves it): response_format_pre_2024_08_api (response_format needs api_version)
+- FALLBACK (v1 serves it): response_format_with_unwired_api_version (not wired)
 - FALLBACK (v1 serves it): shared_guard_string_stop (string-form stop)
 - FALLBACK (v1 serves it): tool_choice_pre_2023_12_api (tool_choice needs api_version)
 - FALLBACK (v1 serves it): tool_choice_required_2024_05_api (tool_choice='required' is unsupported)
+- FALLBACK (v1 serves it): tool_choice_with_unwired_api_version (not wired)
 - FALLBACK (v1 serves it): user_param (user param)
 
 ## azure: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON)
@@ -384,6 +392,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 
 ## google quirk corpus (v1 in-process reference)
 
+- IDENTICAL: quirk cache_marker_cjk_sublimit (vertex_ai/gemini-2.5-pro)
 - IDENTICAL: quirk gemini3_default_temperature_and_level (vertex_ai/gemini-3-pro-preview)
 - IDENTICAL: quirk gemini3_studio_forwards_function_call_ids (gemini/gemini-3-pro-preview)
 - IDENTICAL: quirk image_url_format_override (vertex_ai/gemini-2.5-pro)
@@ -400,6 +409,9 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: quirk tool_without_parameters (vertex_ai/gemini-2.5-pro)
 - IDENTICAL: quirk vertex_schema_prompt_for_unsupported_capability (vertex_ai/gemini-pro-latest)
 - IDENTICAL: quirk vertex_top_k_passthrough (vertex_ai/gemini-2.5-pro)
+- FALLBACK (v1 serves it): cache-marker token bound cjk_under_char_limit (v1's check_and_create_cache may create the context cache; the byte+margin bound fails closed)
+- FALLBACK (v1 serves it): cache-marker token bound emoji_under_char_limit (v1's check_and_create_cache may create the context cache; the byte+margin bound fails closed)
+- FALLBACK (v1 serves it): cache-marker token bound unmarked_image_beside_marker (v1's check_and_create_cache may create the context cache; the byte+margin bound fails closed)
 
 ## gemini: responses (snapshot == v1 transform_response == v2)
 

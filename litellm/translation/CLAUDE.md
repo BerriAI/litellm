@@ -282,8 +282,12 @@ fail-closed everywhere else, with non-streaming flag-gated seams live in
 openai/azure seam forks are integrator scope and NOT wired; the google
 forks live in `litellm/translation_seam_google.py` and
 `litellm/translation_seam_google_send.py` and route via v1's own
-`get_vertex_ai_model_route`; their raw body carries EVERY caller-set OpenAI
-param so unknown ones fall back typed).
+`get_vertex_ai_model_route`). ALL forks share one `_raw_openai_body`:
+every caller-set OpenAI param rides into the parse so unknown ones fall
+back typed, never silently dropped; all forks gate through
+`dispatch.route`, and the anthropic/google sends share the engine's
+injected-HttpPort skeleton (bedrock stays separate: SigV4 signs after
+the body is final).
 Deliberate bedrock fallback surfaces (each names the v1 path): non-Claude
 bedrock models, native structured outputs (outputConfig), adaptive-effort
 output_config/beta, response_format+stream (fake_stream), response_format
