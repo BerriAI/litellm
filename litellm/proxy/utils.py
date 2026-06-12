@@ -6311,8 +6311,18 @@ def create_model_info_response(
 
     # Surface context-window limits for OpenAI-compatible discovery clients.
     # Only emitted when known, so wildcard routes and limitless backends stay clean.
+    # Limits are best-effort enrichment, so a single malformed deployment degrades
+    # to the base response rather than 500-ing the whole listing.
     if llm_router is not None:
-        model_group_info = llm_router.get_model_group_info(model_id)
+        try:
+            model_group_info = llm_router.get_model_group_info(model_id)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "create_model_info_response: get_model_group_info failed for %s: %s",
+                model_id,
+                e,
+            )
+            model_group_info = None
         if model_group_info is not None:
             if model_group_info.max_input_tokens is not None:
                 model_info["max_input_tokens"] = int(model_group_info.max_input_tokens)

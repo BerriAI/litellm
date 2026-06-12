@@ -529,6 +529,21 @@ def test_create_model_info_response_omits_limits_when_group_unknown():
     assert "max_output_tokens" not in response
 
 
+def test_create_model_info_response_degrades_when_group_info_raises():
+    # A malformed deployment must not turn the listing into a 500; the entry
+    # falls back to the base fields without limits.
+    router = MagicMock()
+    router.get_model_group_info = MagicMock(side_effect=ValueError("bad deployment"))
+
+    response = create_model_info_response(
+        model_id="broken", provider="openai", llm_router=router
+    )
+
+    assert response["id"] == "broken"
+    assert "max_input_tokens" not in response
+    assert "max_output_tokens" not in response
+
+
 def test_create_model_info_response_no_router_keeps_base_fields():
     response = create_model_info_response(
         model_id="some-model", provider="openai", llm_router=None
