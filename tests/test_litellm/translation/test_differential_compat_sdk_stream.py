@@ -27,7 +27,7 @@ from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.translation.dispatch import Provider
 from litellm.translation.engine import pipeline
 
-from ._compat_sdk_corpus import SDK_PROVIDERS
+from ._compat_sdk_corpus import PROVIDERS
 from .test_differential_openai_stream import MODEL, STREAMS, USAGE_STREAM, _v2_chunks
 
 _STREAM_ROWS = ("text", "tools", "empty_keepalive_swallowed")
@@ -61,11 +61,10 @@ def _norm(chunks: list) -> str:
 
 
 def _rows():
-    # SDK-path members only: cometapi's v1 decode is the httpx line seam
+    # Every family member is SDK-path; cometapi's httpx line-seam gates
+    # live with its compat_httpx row
     # (its own chunk handler), pinned in test_differential_cometapi_stream.py.
-    return sorted(
-        (provider, name) for provider in SDK_PROVIDERS for name in _STREAM_ROWS
-    )
+    return sorted((provider, name) for provider in PROVIDERS for name in _STREAM_ROWS)
 
 
 @pytest.mark.parametrize("provider,name", _rows())
@@ -122,7 +121,7 @@ def test_perplexity_wire_citations_survive_like_v1(frozen_ambient) -> None:
     assert v2[2]["citations"] == ["https://a.example"]
 
 
-@pytest.mark.parametrize("provider", SDK_PROVIDERS)
+@pytest.mark.parametrize("provider", PROVIDERS)
 def test_usage_tail_seam_contract(provider: str, frozen_ambient) -> None:
     """Same contract the openai stream differential pins: byte-identical
     prefix; v1's tail is the wrapper-synthesized usage chunk, v2's tail is

@@ -1,6 +1,6 @@
 """Differential parity for the cometapi response path (httpx, NO prefix).
 
-cometapi is the compat_sdk family's httpx-path member (main.py:2547, BEFORE
+cometapi is a compat_httpx family row (main.py:2547 dedicated elif, BEFORE
 the big SDK elif despite compat-list membership): ``transform_response`` is
 LIVE and is the inherited base one — ``convert_to_model_response_object``
 over a fresh ``ModelResponse`` with ``model=None``, so the response model is

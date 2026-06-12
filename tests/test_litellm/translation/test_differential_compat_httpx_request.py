@@ -134,6 +134,16 @@ for _p in PROVIDERS:
             "user",
         )
 
+# cometapi's top_k extra_body crossing is wire-proven (verifier-wave2a §5:
+# get_optional_params packs it, CometAPIConfig.transform_request merges it);
+# the other nine members inherit the same default reason arm but have no
+# pinned row (their wire merge is unverified — do not add rows claiming it).
+EXPECTED_FALLBACKS["cometapi:top_k_extra_body"] = (
+    "cometapi",
+    {"model": _m("cometapi"), "top_k": 3, "messages": _USER},
+    "extra_body",
+)
+
 EXPECTED_FALLBACKS.update(
     {
         "heroku:content_list_flatten": (
@@ -273,6 +283,9 @@ _SAMPLE_MODELS = {
     "minimax": ("MiniMax-M2", "gpt-4"),
     "gradient_ai": ("llama3.3-70b-instruct",),
     "ovhcloud": ("Meta-Llama-3_1-70B-Instruct", "gpt-4"),
+    # cometapi has no model-map rows at HEAD; fixed names cover the base
+    # list, the gpt-4 rf name gate, and a non-openai name
+    "cometapi": ("gpt-4o-mini", "gpt-4", "claude-sonnet-4-5"),
 }
 
 _MIRROR_PROVIDERS = tuple(p for p in PROVIDERS if p != "lemonade")

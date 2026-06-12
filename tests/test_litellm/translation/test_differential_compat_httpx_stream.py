@@ -2,7 +2,8 @@
 
 v1 side: raw ``data:`` lines through each config's
 ``get_model_response_iterator`` — the BASE
-``OpenAIChatCompletionStreamingHandler`` for all nine providers (the
+``OpenAIChatCompletionStreamingHandler`` for every BASE_HANDLER_PROVIDERS
+member (the
 canaries below pin that: bedrock_mantle's override returns exactly that
 class and ovhcloud's custom handler is dead code) — into
 ``CustomStreamWrapper(custom_llm_provider=p)``. v2 side: ``fold_lines``
@@ -30,7 +31,7 @@ from litellm.translation.providers.compat_httpx.stream import parse_line
 from litellm.translation_seam import to_model_response_stream
 
 from ._compat_httpx_corpus import (
-    PROVIDERS,
+    BASE_HANDLER_PROVIDERS,
     STREAM_MODEL,
     provider_config,
     replay_v1_sse_lines,
@@ -127,7 +128,12 @@ def _norm(chunks: list) -> str:
 
 
 def _rows():
-    return sorted((provider, name) for provider in PROVIDERS for name in STREAMS)
+    # cometapi is deliberately absent: its v1 decode is its OWN strict
+    # handler and its v2 parser the LINE_PARSERS["cometapi"] policy row —
+    # both pinned by test_differential_cometapi_stream.py.
+    return sorted(
+        (provider, name) for provider in BASE_HANDLER_PROVIDERS for name in STREAMS
+    )
 
 
 @pytest.mark.parametrize("provider,name", _rows())
@@ -136,7 +142,7 @@ def test_v2_stream_matches_v1(provider: str, name: str, frozen_ambient) -> None:
     assert _norm(_v2_chunks(events)) == _norm(replay_v1_sse_lines(provider, events))
 
 
-@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("provider", BASE_HANDLER_PROVIDERS)
 def test_usage_tail_seam_contract(provider: str, frozen_ambient) -> None:
     v1 = replay_v1_sse_lines(
         provider, USAGE_STREAM, stream_options={"include_usage": True}
@@ -149,7 +155,7 @@ def test_usage_tail_seam_contract(provider: str, frozen_ambient) -> None:
         assert v1[-1]["usage"][key] == v2[-1]["usage"][key]
 
 
-@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("provider", BASE_HANDLER_PROVIDERS)
 def test_iterator_is_the_base_openai_handler(provider: str) -> None:
     """The family's one-dialect claim: every config streams through the
     base OpenAIChatCompletionStreamingHandler (bedrock_mantle's override

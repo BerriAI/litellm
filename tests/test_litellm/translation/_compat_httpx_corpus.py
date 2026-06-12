@@ -14,7 +14,8 @@ The v1 invokers mirror each provider's dedicated ``completion()`` elif into
   with a FRESH ``ModelResponse()`` (no model preset on this path — xai R4).
 - streams: SSE ``data:`` lines through the config's
   ``get_model_response_iterator`` (the base
-  ``OpenAIChatCompletionStreamingHandler`` for all nine) +
+  ``OpenAIChatCompletionStreamingHandler`` for every member except
+  cometapi's own strict handler — see BASE_HANDLER_PROVIDERS) +
   ``CustomStreamWrapper(custom_llm_provider=p)``.
 
 May RAISE UnsupportedParamsError — that IS the pinned v1 behavior for the
@@ -128,10 +129,25 @@ SPECS: Mapping[str, HttpxSpec] = MappingProxyType(
             mct="rename",  # via the get_optional_params OpenAILike else-arm
             prefix="lemonade",
         ),
+        # wave-2a's httpx member, a family row since the sibling merge
+        # (critic-wave1b reconciliation; main.py:2547 elif).
+        "cometapi": HttpxSpec(
+            model="gpt-4o-mini",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            mct="verbatim",  # map is super() over the base list
+        ),
     }
 )
 
 PROVIDERS = tuple(sorted(SPECS))
+# cometapi streams through its OWN CometAPIChatCompletionStreamingHandler
+# (strict envelope, copy-both reasoning) — NOT the base handler the family
+# stream gates replay; its line-seam gates are
+# test_differential_cometapi_stream.py and its v2 parser is the family's
+# LINE_PARSERS["cometapi"] policy row.
+BASE_HANDLER_PROVIDERS = tuple(p for p in PROVIDERS if p != "cometapi")
 
 WEATHER_TOOL = {
     "type": "function",

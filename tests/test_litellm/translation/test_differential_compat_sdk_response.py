@@ -25,7 +25,7 @@ from litellm.translation.inbound.openai_chat.response import serialize_response
 from litellm.translation.providers.openai_compat.response import parse_response
 from litellm.translation_seam import build_translation_deps, to_model_response
 
-from ._compat_sdk_corpus import HTTPX_PROVIDERS, SDK_PROVIDERS, SPECS
+from ._compat_sdk_corpus import PROVIDERS, SPECS
 from .test_differential_openai_response import _RESPONSES
 
 _RESPONSE_ROWS = (
@@ -66,12 +66,11 @@ def _norm(payload: dict) -> str:
 
 
 def _rows():
-    # SDK-path members only: the preset/re-prefix arm is the SDK seam's.
-    # httpx members (cometapi) are pinned NO-prefix in their own gate file
-    # (test_differential_cometapi_response.py, the xai R4 shape).
-    return sorted(
-        (provider, name) for provider in SDK_PROVIDERS for name in _RESPONSE_ROWS
-    )
+    # Every family member is SDK-path (the preset/re-prefix arm is the SDK
+    # seam's); httpx members live in compat_httpx with their own gates —
+    # cometapi's NO-prefix pins are in test_differential_cometapi_response.py
+    # (the xai R4 shape).
+    return sorted((provider, name) for provider in PROVIDERS for name in _RESPONSE_ROWS)
 
 
 @pytest.mark.parametrize("provider,name", _rows())
@@ -87,7 +86,7 @@ def test_preset_reprefix_matches_v1(provider: str, name: str, frozen_ambient) ->
     assert v2["model"] == f"{provider}/{wire_model}"
 
 
-@pytest.mark.parametrize("provider", SDK_PROVIDERS)
+@pytest.mark.parametrize("provider", PROVIDERS)
 def test_preset_survives_when_wire_model_missing(provider: str, frozen_ambient) -> None:
     """cdr's elif arm needs a non-None wire model; without one the preset
     {provider}/{request model} survives verbatim on both sides."""
@@ -97,13 +96,6 @@ def test_preset_survives_when_wire_model_missing(provider: str, frozen_ambient) 
     v2 = _v2_model_response(provider, raw, preset)
     assert _norm(v2) == _norm(v1)
     assert v2["model"] == preset
-
-
-def test_httpx_members_are_exactly_cometapi() -> None:
-    """The family's httpx subset is deliberate and small; growing it must
-    re-derive the response/stream gate shape (no preset, line-seam streams)
-    instead of silently inheriting the SDK rows above."""
-    assert HTTPX_PROVIDERS == ("cometapi",)
 
 
 _PERPLEXITY_CITATIONS_RESPONSE = {

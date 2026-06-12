@@ -75,14 +75,13 @@ CompatSdkProvider = Literal[
     "tensormesh",
     "parasail",
     # wave-2a: profile rows + named gates (researcher-4 Part 1, entries 1-5).
-    # cometapi is the family's first httpx-path member: same request profile,
-    # but NO seam model preset (bare wire model, the xai R4 pin) and its own
-    # reasoning-rename stream parser (cometapi_stream.py).
+    # cometapi (wave-2a's httpx-path member) lives in compat_httpx since the
+    # sibling merge: its dedicated completion() elif is that family's routing
+    # fact (critic-wave1b reconciliation).
     "perplexity",
     "sambanova",
     "deepinfra",
     "moonshot",
-    "cometapi",
 ]
 
 JSON_REGISTRY_PROVIDERS: tuple[CompatSdkProvider, ...] = (
@@ -652,20 +651,6 @@ def moonshot_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | N
     ) or unsupported_response_format(request)
 
 
-def cometapi_unsupported(request: ChatRequest, deps: TranslationDeps) -> str | None:
-    """CometAPIConfig's map is super() over the plain base list (its
-    extra_body stub is always empty and transform_request pops it — a no-op,
-    verified at HEAD), so the gate is the base-list gate."""
-    return unsupported_against(
-        request,
-        provider="cometapi",
-        allowed=BASE_LIST,
-        notes={
-            "user": user_note("cometapi"),
-        },
-    ) or unsupported_response_format(request)
-
-
 # The single source of per-provider supported-surface truth: each provider's
 # MAXIMAL allowed set (capability and per-model gates above only ever NARROW
 # it). Serialization derives user/reasoning_effort emission from membership
@@ -708,6 +693,5 @@ ALLOWED: Mapping[CompatSdkProvider, frozenset[str]] = MappingProxyType(
         "sambanova": _SAMBANOVA_LIST,
         "deepinfra": _DEEPINFRA_LIST,
         "moonshot": BASE_LIST,
-        "cometapi": BASE_LIST,
     }
 )

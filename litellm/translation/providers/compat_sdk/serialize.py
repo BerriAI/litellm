@@ -349,12 +349,6 @@ _PROFILE_ROWS: tuple[CompatProfile, ...] = (
         flatten_text_content_lists=True,
         rewrite=_moonshot_rewrite,
     ),
-    # httpx-path member: the request profile is the plain base list; the
-    # response parser is the family's shared openai parser but the seam must
-    # NOT preset a model (bare wire model, the xai R4 pin) and the stream
-    # rides cometapi_stream.py (the reasoning-rename dialect), not the SDK
-    # wrapper default arm.
-    CompatProfile(provider="cometapi", unsupported=p.cometapi_unsupported),
 )
 
 PROFILES: Mapping[p.CompatSdkProvider, CompatProfile] = MappingProxyType(

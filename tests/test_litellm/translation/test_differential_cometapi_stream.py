@@ -32,9 +32,11 @@ from litellm.llms.cometapi.chat.transformation import (
 
 from litellm.translation.engine.stream import fold_events, fold_lines
 from litellm.translation.inbound.openai_chat.stream import initial_state
-from litellm.translation.providers.compat_sdk.cometapi_stream import (
-    parse_event,
-    parse_line,
+from litellm.translation.providers.compat_httpx.stream import (
+    cometapi_parse_event as parse_event,
+)
+from litellm.translation.providers.compat_httpx.stream import (
+    cometapi_parse_line as parse_line,
 )
 from litellm.translation_seam import to_model_response_stream
 

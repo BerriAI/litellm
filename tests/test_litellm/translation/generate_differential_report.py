@@ -323,8 +323,8 @@ def _compat_sdk_rows(lines: list) -> int:
     lines += [
         "",
         "## compat_sdk family: responses (v1 convert_to_model_response_object"
-        " with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm;"
-        " SDK-path members only — cometapi's no-prefix rows are below)",
+        " with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix"
+        " arm; cometapi is a compat_httpx row — its no-prefix rows are below)",
         "",
     ]
     for provider, name in resp._rows():
@@ -374,7 +374,7 @@ def _compat_sdk_rows(lines: list) -> int:
         + "perplexity wire-carried citations (body value survives the seam's"
         " citations preset; None preset where the wire carried none)"
     )
-    for provider in corpus.SDK_PROVIDERS:
+    for provider in corpus.PROVIDERS:
         v1 = stream._v1_chunks(
             provider, stream.USAGE_STREAM, stream_options={"include_usage": True}
         )

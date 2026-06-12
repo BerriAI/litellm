@@ -1,16 +1,18 @@
 """Serializers for the httpx-path openai-compat shim family (wave 1b).
 
 Every provider here goes through ``base_llm_http_handler`` with its config's
-``transform_request`` LIVE — but none of the nine overrides it beyond the
+``transform_request`` LIVE — but none of the ten overrides it beyond the
 two raw-guard concerns (heroku's content-list flatten, minimax's preserved
-cache_control), so the body is ``openai_compat.assemble_body`` after the
-provider's gates plus the one mechanical delta:
+cache_control; cometapi's extra_body stub is a verified no-op), so the body
+is ``openai_compat.assemble_body`` after the provider's gates plus the one
+mechanical delta:
 
 - ``rename_max_completion_tokens``: the OpenAILike super arm
   (bedrock_mantle / amazon_nova / datarobot / lemonade — lemonade via the
   get_optional_params OpenAILike else-arm today, see params.py). heroku /
-  minimax / compactifai / ovhcloud are OpenAIGPT-based copies (verbatim);
-  gradient_ai's own map never renames (verbatim, mct in its list).
+  minimax / compactifai / ovhcloud / cometapi are OpenAIGPT-based copies
+  (verbatim); gradient_ai's own map never renames (verbatim, mct in its
+  list).
 
 ``reasoning_effort`` emission is derived from ``params.ALLOWED`` exactly
 like compat_sdk (amazon_nova unconditional; bedrock_mantle
@@ -111,6 +113,7 @@ _PROFILE_ROWS: tuple[HttpxProfile, ...] = (
         rename_max_completion_tokens=True,
         response_model_prefix="lemonade",
     ),
+    HttpxProfile(provider="cometapi", unsupported=p.cometapi_unsupported),
 )
 
 PROFILES: Mapping[p.CompatHttpxProvider, HttpxProfile] = MappingProxyType(

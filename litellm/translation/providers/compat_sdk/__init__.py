@@ -1,7 +1,5 @@
 from ..openai_compat.response import parse_response
 from .checks import BASE_LIST, base_list_unsupported, unsupported_against
-from .cometapi_stream import parse_event as cometapi_stream_parse_event
-from .cometapi_stream import parse_line as cometapi_stream_parse_line
 from .guard import GUARDS, unsupported_request_shapes
 from .json_registry import JSON_RENAME, json_registry_unsupported
 from .params import ALLOWED, JSON_REGISTRY_PROVIDERS, CompatSdkProvider
@@ -18,8 +16,6 @@ __all__ = (
     "CompatProfile",
     "CompatSdkProvider",
     "base_list_unsupported",
-    "cometapi_stream_parse_event",
-    "cometapi_stream_parse_line",
     "json_registry_unsupported",
     "parse_response",
     "unsupported_against",

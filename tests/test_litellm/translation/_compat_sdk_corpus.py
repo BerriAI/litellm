@@ -38,11 +38,11 @@ class CompatSpec(NamedTuple):
     serves only stream/tools/tool_choice; wave-2a: perplexity raises on
     stop). Both sibling waves added a ``stop`` flag with identical
     semantics ("v1 serves stop", default True) — merged to the ONE field
-    below. ``specific_tool_choice`` (deepinfra raises on every tool_choice
-    outside {auto, none}) and ``path`` are wave-2a's: "httpx" members
-    (cometapi) share the request profile but NOT the SDK preset/re-prefix
-    response rows nor the wrapper-default stream rows; their gates live in
-    dedicated test files (the xai shape)."""
+    below. ``specific_tool_choice`` is wave-2a's (deepinfra raises on every
+    tool_choice outside {auto, none}). The wave-2a ``path`` field DIED at
+    the sibling merge: every member here is SDK-path; httpx members are
+    compat_httpx family rows with their own corpus
+    (_compat_httpx_corpus.py)."""
 
     model: str
     tools: bool
@@ -55,7 +55,6 @@ class CompatSpec(NamedTuple):
     stop: bool = True
     max_tokens: bool = True
     specific_tool_choice: bool = True
-    path: Literal["sdk", "httpx"] = "sdk"
 
 
 SPECS: Mapping[str, CompatSpec] = MappingProxyType(
@@ -434,21 +433,10 @@ SPECS: Mapping[str, CompatSpec] = MappingProxyType(
             user=False,
             mct="rename",
         ),
-        "cometapi": CompatSpec(
-            model="gpt-4o-mini",
-            tools=True,
-            response_format=True,
-            parallel_tool_calls=True,
-            user=False,
-            mct="verbatim",  # map is super() over the base list
-            path="httpx",  # main.py:2547 elif; NO model preset, line-seam streams
-        ),
     }
 )
 
 PROVIDERS = tuple(sorted(SPECS))
-SDK_PROVIDERS = tuple(p for p in PROVIDERS if SPECS[p].path == "sdk")
-HTTPX_PROVIDERS = tuple(p for p in PROVIDERS if SPECS[p].path == "httpx")
 
 WEATHER_TOOL = {
     "type": "function",

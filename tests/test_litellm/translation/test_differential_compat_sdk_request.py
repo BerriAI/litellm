@@ -556,7 +556,7 @@ EXPECTED_FALLBACKS.update(
 # the wave-1a providers too, so their generic "silently drops it" top_k
 # reason (verifier-wave1a F6) is accurate only for the transform_request
 # output, not the wire; left untouched here (their pinned text).
-for _p in ("perplexity", "sambanova", "deepinfra", "moonshot", "cometapi"):
+for _p in ("perplexity", "sambanova", "deepinfra", "moonshot"):
     EXPECTED_FALLBACKS[f"{_p}:top_k_extra_body"] = (
         _p,
         {"model": _m(_p), "top_k": 3, "messages": _USER},
@@ -781,9 +781,6 @@ _SAMPLE_MODELS = {
     "neosantara": ("nusantara-base", "gpt-4"),
     "tensormesh": ("tm-llama-3.1-8b", "gpt-4"),
     "parasail": ("parasail-llama-33-70b", "gpt-4"),
-    # cometapi has no model-map rows at HEAD; fixed names cover the base
-    # list, the gpt-4 rf name gate, and a non-openai name
-    "cometapi": ("gpt-4o-mini", "gpt-4", "claude-sonnet-4-5"),
 }
 
 

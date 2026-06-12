@@ -103,7 +103,8 @@ Provider = Literal[
     # wave-2a: compat_sdk profile rows + named gates. perplexity/sambanova/
     # deepinfra/moonshot are SDK-path (seam preset + re-prefix applies);
     # cometapi is httpx-path (NO model preset, bare wire model — the xai R4
-    # pin) with its own reasoning-rename stream parser.
+    # pin) and is a compat_httpx family row since the sibling merge, with
+    # its own strict-envelope/copy-both stream policy row (LINE_PARSERS).
     "perplexity",
     "sambanova",
     "deepinfra",

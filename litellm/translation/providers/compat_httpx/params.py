@@ -1,10 +1,13 @@
 """Per-provider parameter gates for the httpx-path openai-compat shims.
 
-These nine providers have dedicated ``completion()`` elifs (heroku 2229,
-bedrock_mantle 2364, minimax 2587, amazon_nova 3176, compactifai 3249,
-datarobot 3355, gradient_ai 4421, lemonade 4469, ovhcloud 4498 at HEAD) into
-``base_llm_http_handler`` — the xai routing shape, NOT the SDK preset/
-re-prefix shape. The v1 param gate is the same RAISE-unless-drop_params
+These ten providers have dedicated ``completion()`` elifs (heroku 2229,
+bedrock_mantle 2364, cometapi 2547, minimax 2587, amazon_nova 3176,
+compactifai 3249, datarobot 3355, gradient_ai 4421, lemonade 4469, ovhcloud
+4498 at HEAD) into ``base_llm_http_handler`` — the xai routing shape, NOT
+the SDK preset/re-prefix shape. cometapi moved here from compat_sdk at the
+sibling merge (critic-wave1b reconciliation: the dedicated elif IS this
+family's routing fact; the CompatSpec ``path`` mode switch died with the
+move). The v1 param gate is the same RAISE-unless-drop_params
 ``_check_valid_arg`` chain the compat_sdk family mirrors, so the generic
 checker is shared from there.
 
@@ -44,6 +47,10 @@ CompatHttpxProvider = Literal[
     "gradient_ai",
     "ovhcloud",
     "lemonade",
+    # wave-2a's httpx member, family row since the sibling merge: plain base
+    # list (CometAPIConfig's map is super() over it; the extra_body stub is a
+    # verified no-op), mct verbatim, bare wire model, own stream policy row.
+    "cometapi",
 ]
 
 # BedrockMantleChatConfig: OpenAILike base list + reasoning_effort iff
@@ -163,6 +170,7 @@ def _base_gate(provider: str) -> _GateFn:
 
 
 heroku_unsupported = _base_gate("heroku")
+cometapi_unsupported = _base_gate("cometapi")
 compactifai_unsupported = _base_gate("compactifai")
 datarobot_unsupported = _base_gate("datarobot")
 ovhcloud_unsupported = _base_gate("ovhcloud")
@@ -179,5 +187,6 @@ ALLOWED: Mapping[CompatHttpxProvider, frozenset[str]] = MappingProxyType(
         "gradient_ai": _GRADIENT_AI_LIST,
         "ovhcloud": BASE_LIST,
         "lemonade": BASE_LIST,
+        "cometapi": BASE_LIST,
     }
 )

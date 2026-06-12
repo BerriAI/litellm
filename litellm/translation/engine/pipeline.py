@@ -133,9 +133,8 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # compat_sdk family: the live v1 normalizer is the same
         # convert_to_model_response_object the openai parser mirrors; the
         # {provider}/{wire_model} re-prefix is the seam's preset arm
-        # (_to_model_response_openai), not parser scope — EXCEPT cometapi
-        # (httpx member): same parser, but the fork must NOT preset a model
-        # (bare wire model; CLAUDE.md fork obligations).
+        # (_to_model_response_openai), not parser scope. All members are
+        # SDK-path (cometapi moved to compat_httpx at the sibling merge).
         **{
             provider: openai_compat_parse_response
             for provider in compat_sdk_serializers
@@ -165,13 +164,13 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         "xai": "openai",  # httpx path, same normalized wire-body ride
         # compat_sdk family: SDK path, default openai wrapper arm (the
         # per-provider stream replays pin that no dedicated branch fires).
-        # cometapi's RESPONSE dialect is legitimately "openai" too, but its
-        # streams are httpx line-seam (compat_sdk.cometapi_stream + the
-        # "xai" ChunkDialect), never the SDK wrapper arm.
         **{provider: _OPENAI_DIALECT for provider in compat_sdk_serializers},
         # compat_httpx family: httpx path, same normalized wire-body ride
         # (the chunk-fold dialect is "xai" — the generic httpx dict path —
-        # selected by the stream gates, not this outbound-body table)
+        # and the per-provider line parser is the family's LINE_PARSERS
+        # table: cometapi's strict-envelope policy row, the shared factory
+        # policy for the rest — selected by the stream gates/future
+        # streaming seam, not this outbound-body table)
         **{provider: _OPENAI_DIALECT for provider in compat_httpx_serializers},
     }
 )

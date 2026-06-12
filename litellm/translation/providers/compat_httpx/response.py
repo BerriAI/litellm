@@ -4,12 +4,17 @@ On the httpx path the response starts from a FRESH ``ModelResponse``
 (model=None) — the xai R4 rule; the seam must NOT preset
 ``{provider}/{model}`` for this family. The nine configs then split by HOW
 v1 materializes the response (pinned in-process at HEAD; the family's
-``RESPONSE_STYLES`` table is the truth the seam fork must read):
+``RESPONSE_STYLES`` table is the truth the seam fork must read; the
+construction-arm gate in the request differential makes the
+``response_dialect()`` shortcut a test failure — verifier-wave1b F3):
 
-- ``"openai"`` (cdr style): heroku / minimax / ovhcloud inherit the base
-  GPT ``transform_response`` -> ``convert_to_model_response_object`` — the
-  same live normalizer the openai parser mirrors (stop->tool_calls rewrite,
-  cdr-built choices). Parser: ``openai_compat.parse_response`` verbatim.
+- ``"openai"`` (cdr style): heroku / minimax / ovhcloud / cometapi inherit
+  the base GPT ``transform_response`` -> ``convert_to_model_response_object``
+  — the same live normalizer the openai parser mirrors (stop->tool_calls
+  rewrite, cdr-built choices). Parser: ``openai_compat.parse_response``
+  verbatim. cometapi's no-prefix pins live in
+  test_differential_cometapi_response.py (researcher-4 §5: cdr via the base
+  transform_response).
 - ``"openai_like"`` (direct style): bedrock_mantle / datarobot /
   gradient_ai (OpenAILikeChatConfig._transform_response), compactifai (its
   own override, same construction), amazon_nova / lemonade (OpenAILike via
@@ -49,7 +54,7 @@ ResponseParser = Callable[[PlainJson, ChatRequest], _ParseResult]
 ResponseStyle = Literal["openai", "openai_like"]
 
 _CDR_STYLE: frozenset[CompatHttpxProvider] = frozenset(
-    {"heroku", "minimax", "ovhcloud"}
+    {"heroku", "minimax", "ovhcloud", "cometapi"}
 )
 
 RESPONSE_STYLES: Mapping[CompatHttpxProvider, ResponseStyle] = MappingProxyType(

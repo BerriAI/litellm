@@ -202,10 +202,9 @@ translation/
 │   │   │                #   canary-pinned. aiml is dropped the same way
 │   │   │                #   (its config class is unregistered at HEAD).
 │   │   │                #   Wave 2a: perplexity, sambanova, deepinfra,
-│   │   │                #   moonshot (SDK) — cometapi landed here as the
-│   │   │                #   family's first HTTPX-path member (dedicated
-│   │   │                #   elif main.py:2547) and moved to compat_httpx
-│   │   │                #   at the sibling merge (that family IS the
+│   │   │                #   moonshot — all SDK-path (cometapi, wave-2a's
+│   │   │                #   httpx member, moved to compat_httpx at the
+│   │   │                #   sibling merge: that family IS the
 │   │   │                #   dedicated-elif shape; critic-wave1b
 │   │   │                #   reconciliation).
 │   │   │                #   All ride v1's big openai elif into the SDK, so
@@ -263,16 +262,6 @@ translation/
 │   │   │                #   SERIALIZERS its derived serializer table —
 │   │   │                #   pipeline splices them whole, one line per
 │   │   │                #   TABLE
-│   │   ├── cometapi_stream.py # cometapi's httpx line-seam chunk parser =
-│   │   │                #   openai_compat.httpx_chunk.make_parse_event
-│   │   │                #   composed with the cometapi policy: strict
-│   │   │                #   envelope (missing id/created/model/choices and
-│   │   │                #   error-key chunks are LOUD, matching v1's
-│   │   │                #   chunk_parser raises) + reasoning="copy_both"
-│   │   │                #   (the conditional delta.reasoning ->
-│   │   │                #   reasoning_content copy that keeps BOTH keys).
-│   │   │                #   Folds use the "xai" chunk dialect (the shared
-│   │   │                #   httpx-wrapper dialect).
 │   │   └── guard.py     # explicit stream:false (the SDK serializes the
 │   │   │                #   key; absent-vs-false is lost in the IR — and
 │   │   │                #   the httpx path keeps it on the wire, so the
@@ -284,14 +273,16 @@ translation/
 │   │   │                #   cache_control on the wire; docker_model_runner/
 │   │   │                #   publicai flatten content lists) — pipeline
 │   │   │                #   splices it whole
-│   ├── compat_httpx/    # the wave-1b httpx-path shim family (dedicated
+│   ├── compat_httpx/    # the httpx-path shim family (dedicated
 │   │   │                #   completion() elifs, transforms LIVE, NO seam
 │   │   │                #   model preset — the xai routing shape): heroku,
 │   │   │                #   bedrock_mantle, minimax, compactifai,
 │   │   │                #   amazon_nova, datarobot, gradient_ai, ovhcloud,
 │   │   │                #   lemonade (param config unregistered at HEAD;
 │   │   │                #   the elif threads LemonadeChatConfig explicitly
-│   │   │                #   — facts canary)
+│   │   │                #   — facts canary), and cometapi (wave-2a's httpx
+│   │   │                #   member, moved here at the sibling merge — the
+│   │   │                #   dedicated elif IS this family's routing fact)
 │   │   ├── params.py    # per-provider allowed sets over the shared
 │   │   │                #   compat_sdk/checks.py checker (gradient_ai's
 │   │   │                #   own map RAISES even on
@@ -305,27 +296,35 @@ translation/
 │   │   │                #   name fallback) + heroku content-list flatten
 │   │   │                #   and minimax cache_control arms; complete GUARDS
 │   │   ├── response.py  # TWO v1 construction styles as family DATA
-│   │   │                #   (RESPONSE_STYLES, the seam fork must read it):
-│   │   │                #   "openai" = cdr (heroku/minimax/ovhcloud);
+│   │   │                #   (RESPONSE_STYLES, the seam fork must read it;
+│   │   │                #   the construction-arm gate makes the
+│   │   │                #   response_dialect() shortcut fail tests):
+│   │   │                #   "openai" = cdr (heroku/minimax/ovhcloud/
+│   │   │                #   cometapi);
 │   │   │                #   "openai_like" = ModelResponse(**json) direct —
 │   │   │                #   NO stop->tool_calls rewrite, different pydantic
 │   │   │                #   dump — with the {prefix}/{REQUEST model}
 │   │   │                #   overwrite for compactifai / amazon-nova (the
 │   │   │                #   literal hyphen) / lemonade; the seam's
 │   │   │                #   to_model_response grew the "openai_like" arm
-│   │   └── stream.py    # one family dialect: SSE lines through the BASE
-│   │                    #   OpenAIChatCompletionStreamingHandler rebuild
-│   │                    #   (reasoning rename, no extras, usage only on
-│   │                    #   the choices:[] tail) — the xai parser shape
-│   │                    #   MINUS the usage folds (deliberate sibling
-│   │                    #   duplication so wave-2a never merges against
-│   │                    #   shared stream edits); folds with the "xai"
-│   │                    #   ChunkDialect (the generic httpx dict path);
-│   │                    #   ovhcloud's custom handler is dead code in v1
-│   │                    #   (canary); provider error chunks are a LOUD v2
-│   │                    #   boundary error where v1's base handler
-│   │                    #   silently swallows them (deliberate fail-closed
-│   │                    #   divergence on a failure path)
+│   │   └── stream.py    # BOTH policies over openai_compat.httpx_chunk.
+│   │                    #   make_parse_event (the B1 factory lift — no
+│   │                    #   copies): the family policy (reasoning rename,
+│   │                    #   no extras, usage only on the choices:[] tail —
+│   │                    #   the xai policy minus the usage fold; the BASE
+│   │                    #   OpenAIChatCompletionStreamingHandler rebuild)
+│   │                    #   and cometapi's strict-envelope/copy-both
+│   │                    #   policy; LINE_PARSERS is the per-provider table
+│   │                    #   the streaming seam must select from; folds
+│   │                    #   with the "xai" ChunkDialect (the generic httpx
+│   │                    #   dict path); ovhcloud's custom handler is dead
+│   │                    #   code in v1 (canary); provider error chunks are
+│   │                    #   a LOUD v2 boundary error where v1's BASE
+│   │                    #   handler silently swallows them (deliberate
+│   │                    #   fail-closed divergence on a failure path,
+│   │                    #   two-sided-pinned + a named report row; v1's
+│   │                    #   cometapi handler RAISES instead — its policy
+│   │                    #   row mirrors that raise)
 │   └── xai/             # Grok over openai_compat (httpx path: NO model
 │       │                #   prefix anywhere, transform_response is LIVE):
 │       ├── guard.py     # web_search_options (v1's Responses-bridge reroute
@@ -685,13 +684,13 @@ models) and >1 -> int 1 clamp, deepinfra temperature-0 -> 0.0001 on
 mistralai/Mistral-7B-Instruct-v0.1, deepinfra tool_choice auto/none
 silently dropped, and the text-only content-list flatten with moonshot's
 request-wide multimodal skip — each pinned by IDENTICAL differential
-rows. cometapi fork obligations (it is httpx-path; when the integrator
-wires it): the fork must NOT preset a model (fresh ModelResponse, bare
-wire model — pinned by the no-prefix rows, the xai R4 shape), must route
-streams through compat_sdk.cometapi_stream with the "xai" chunk dialect
-at the SSE line seam (NOT the SDK wrapper arm the rest of the family
-uses), and inherits the synthesized-final-usage contract from the
-openai/xai ports.
+rows. cometapi fork obligations (a compat_httpx family row since the
+sibling merge; when the integrator wires it): the fork must NOT preset a
+model (fresh ModelResponse, bare wire model — pinned by the no-prefix
+rows, the xai R4 shape), must route streams through
+compat_httpx.LINE_PARSERS["cometapi"] with the "xai" chunk dialect at the
+SSE line seam (NOT the SDK wrapper arm), and inherits the
+synthesized-final-usage contract from the openai/xai ports.
 Streaming-seam obligations carried from wave 2a (verifier-wave2a W1/W2 —
 no impact while streaming stays on v1, pinned by
 `test_reasoning_stream_seam_obligation_canary`): the SDK family's openai
