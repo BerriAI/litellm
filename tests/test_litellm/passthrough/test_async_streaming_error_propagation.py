@@ -52,43 +52,69 @@ def _make_mock_logging_obj():
 
 
 @pytest.mark.asyncio
-async def test_async_passthrough_wrapper_429_raises_before_iteration():
-    """429 from upstream should be raised before the wrapper is constructed."""
+async def test_async_streaming_429_raises():
+    """429 from upstream should raise HTTPStatusError, not yield error bytes."""
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+    
     error_body = json.dumps(
         {"error": {"code": "429", "message": "Rate limit exceeded."}}
     ).encode()
     mock_response = _make_mock_response(429, error_body)
-
+    
+    async def response_coro():
+        return mock_response
+    
+    chunks = []
     with pytest.raises(httpx.HTTPStatusError) as exc_info:
-        mock_response.raise_for_status()
-
+        async for chunk in AsyncPassthroughStreamingResponse(
+            response=response_coro(),
+            litellm_logging_obj=_make_mock_logging_obj(),
+            provider_config=MagicMock(),
+        ):
+            chunks.append(chunk)
+    
     assert exc_info.value.response.status_code == 429
+    assert len(chunks) == 0
 
 
 @pytest.mark.asyncio
-async def test_async_passthrough_wrapper_500_raises_before_iteration():
-    """500 from upstream should be raised before the wrapper is constructed."""
+async def test_async_streaming_500_raises():
+    """500 from upstream should also raise, not yield error bytes."""
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+    
     error_body = json.dumps(
         {"error": {"code": "500", "message": "Internal server error"}}
     ).encode()
     mock_response = _make_mock_response(500, error_body)
-
+    
+    async def response_coro():
+        return mock_response
+    
     with pytest.raises(httpx.HTTPStatusError) as exc_info:
-        mock_response.raise_for_status()
-
+        async for _ in AsyncPassthroughStreamingResponse(
+            response=response_coro(),
+            litellm_logging_obj=_make_mock_logging_obj(),
+            provider_config=MagicMock(),
+        ):
+            pass
+    
     assert exc_info.value.response.status_code == 500
 
 
 @pytest.mark.asyncio
 async def test_async_passthrough_wrapper_200_yields_chunks():
     """Successful 200 streaming responses should continue to work normally."""
-    from litellm.passthrough.main import _AsyncPassthroughStreamingResponse
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 
     sse_data = b'data: {"type":"response.created"}\n\ndata: [DONE]\n\n'
     mock_response = _make_mock_response(200, sse_data)
     mock_logging_obj = _make_mock_logging_obj()
-    async_stream = _AsyncPassthroughStreamingResponse(
-        response=mock_response,
+
+    async def response_coro():
+        return mock_response
+
+    async_stream = AsyncPassthroughStreamingResponse(
+        response=response_coro(),
         litellm_logging_obj=mock_logging_obj,
         provider_config=MagicMock(),
     )
@@ -102,32 +128,3 @@ async def test_async_passthrough_wrapper_200_yields_chunks():
     assert len(chunks) == 1
     assert b"response.created" in chunks[0]
     mock_logging_obj.async_flush_passthrough_collected_chunks.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_async_passthrough_wrapper_closes_response_on_iteration_error():
-    """Wrapper should close the upstream response if iteration raises."""
-    from litellm.passthrough.main import _AsyncPassthroughStreamingResponse
-
-    mock_response = MagicMock(spec=httpx.Response)
-    mock_response.status_code = 200
-    mock_response.headers = httpx.Headers({"content-type": "text/event-stream"})
-    mock_response.aclose = AsyncMock()
-
-    async def _failing_aiter_bytes():
-        raise RuntimeError("stream failed")
-        yield b""
-
-    mock_response.aiter_bytes = _failing_aiter_bytes
-
-    async_stream = _AsyncPassthroughStreamingResponse(
-        response=mock_response,
-        litellm_logging_obj=_make_mock_logging_obj(),
-        provider_config=MagicMock(),
-    )
-
-    with pytest.raises(RuntimeError, match="stream failed"):
-        async for chunk in async_stream:
-            _ = chunk
-
-    mock_response.aclose.assert_awaited_once()

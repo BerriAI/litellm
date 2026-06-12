@@ -35,11 +35,14 @@ class _ImmediateExecutor:
 
 
 @pytest.mark.asyncio
-async def test_async_streaming_flushes_on_normal_completion():
-    from litellm.passthrough.main import _async_streaming
+async def test_asyncpassthroughstreamingresponse_flushes_on_normal_completion():
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 
     chunks = [b"chunk-1", b"chunk-2", b"chunk-3"]
     mock_response = _make_streaming_response(chunks)
+    mock_response.headers = httpx.Headers(
+        {"content-type": "application/octet-stream", "x-request-id": "req-123"}
+    )
 
     async def response_coro():
         return mock_response
@@ -48,14 +51,19 @@ async def test_async_streaming_flushes_on_normal_completion():
     provider_config = MagicMock()
 
     received = []
-    async for chunk in _async_streaming(
+    received_response = AsyncPassthroughStreamingResponse(
         response=response_coro(),
         litellm_logging_obj=mock_logging_obj,
         provider_config=provider_config,
-    ):
+    )
+
+    async for chunk in received_response:
         received.append(chunk)
 
     assert received == chunks
+    
+    assert received_response.headers["content-type"] == "application/octet-stream"
+    assert received_response.headers["x-request-id"] == "req-123"
 
     await asyncio.sleep(0)
 
@@ -68,8 +76,8 @@ async def test_async_streaming_flushes_on_normal_completion():
 
 
 @pytest.mark.asyncio
-async def test_async_streaming_flushes_on_client_disconnect():
-    from litellm.passthrough.main import _async_streaming
+async def test_asyncpassthroughstreamingresponse_flushes_on_client_disconnect():
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 
     chunks = [
         b'{"chunk": 1, "outputTokens": 10}',
@@ -77,6 +85,9 @@ async def test_async_streaming_flushes_on_client_disconnect():
         b'{"chunk": 3, "outputTokens": 8}',
     ]
     mock_response = _make_streaming_response(chunks)
+    mock_response.headers = httpx.Headers(
+        {"content-type": "application/octet-stream", "x-request-id": "req-123"}
+    )
 
     async def response_coro():
         return mock_response
@@ -84,7 +95,7 @@ async def test_async_streaming_flushes_on_client_disconnect():
     mock_logging_obj = _make_logging_obj()
     provider_config = MagicMock()
 
-    gen = _async_streaming(
+    gen = AsyncPassthroughStreamingResponse(
         response=response_coro(),
         litellm_logging_obj=mock_logging_obj,
         provider_config=provider_config,
@@ -105,11 +116,14 @@ async def test_async_streaming_flushes_on_client_disconnect():
 
 
 @pytest.mark.asyncio
-async def test_async_streaming_does_not_flush_on_4xx():
-    from litellm.passthrough.main import _async_streaming
+async def test_asyncpassthroughstreamingresponse_does_not_flush_on_4xx():
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 
     err_response = MagicMock(spec=httpx.Response)
     err_response.status_code = 429
+    err_response.headers = httpx.Headers(
+        {"content-type": "application/octet-stream"}
+    )
 
     def _raise():
         raise httpx.HTTPStatusError(
@@ -129,7 +143,7 @@ async def test_async_streaming_does_not_flush_on_4xx():
     mock_logging_obj = _make_logging_obj()
 
     with pytest.raises(httpx.HTTPStatusError):
-        async for _ in _async_streaming(
+        async for _ in AsyncPassthroughStreamingResponse(
             response=response_coro(),
             litellm_logging_obj=mock_logging_obj,
             provider_config=MagicMock(),
@@ -140,8 +154,8 @@ async def test_async_streaming_does_not_flush_on_4xx():
 
 
 @pytest.mark.asyncio
-async def test_async_streaming_flushes_on_upstream_exception_with_partial_data():
-    from litellm.passthrough.main import _async_streaming
+async def test_asyncpassthroughstreamingresponse_flushes_on_upstream_exception_with_partial_data():
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 
     partial_chunks = [b"partial-chunk-1", b"partial-chunk-2"]
 
@@ -149,6 +163,9 @@ async def test_async_streaming_flushes_on_upstream_exception_with_partial_data()
     mock_response.status_code = 200
     mock_response.raise_for_status = MagicMock(return_value=None)
     mock_response.aclose = AsyncMock()
+    mock_response.headers = httpx.Headers(
+        {"content-type": "application/octet-stream", "x-request-id": "req-123"}
+    )
 
     async def _aiter_bytes_then_raise():
         for c in partial_chunks:
@@ -165,7 +182,7 @@ async def test_async_streaming_flushes_on_upstream_exception_with_partial_data()
 
     received = []
     with pytest.raises(httpx.ReadError):
-        async for chunk in _async_streaming(
+        async for chunk in AsyncPassthroughStreamingResponse(
             response=response_coro(),
             litellm_logging_obj=mock_logging_obj,
             provider_config=provider_config,
@@ -183,12 +200,16 @@ async def test_async_streaming_flushes_on_upstream_exception_with_partial_data()
     assert call_kwargs["raw_bytes"] == partial_chunks
 
 
-def test_sync_streaming_flushes_on_normal_completion():
-    from litellm.passthrough.main import _sync_streaming
+def test_passthroughstreamingresponse_flushes_on_normal_completion():
+    from litellm.passthrough.main import PassthroughStreamingResponse
 
     chunks = [b"a", b"b", b"c"]
 
     mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = httpx.Headers(
+        {"content-type": "application/octet-stream", "x-request-id": "req-123"}
+    )
 
     def _iter_bytes():
         yield from chunks
@@ -199,25 +220,33 @@ def test_sync_streaming_flushes_on_normal_completion():
     mock_logging_obj.flush_passthrough_collected_chunks = MagicMock()
     provider_config = MagicMock()
 
+    received_responce = PassthroughStreamingResponse(
+        response=mock_response,
+        litellm_logging_obj=mock_logging_obj,
+        provider_config=provider_config,
+    )
+
     with patch("litellm.utils.executor", _ImmediateExecutor()):
-        received = list(
-            _sync_streaming(
-                response=mock_response,
-                litellm_logging_obj=mock_logging_obj,
-                provider_config=provider_config,
-            )
-        )
+        received = list(received_responce)
 
     assert received == chunks
+
+    assert received_responce.headers["content-type"] == "application/octet-stream"
+    assert received_responce.headers["x-request-id"] == "req-123"
+
     mock_logging_obj.flush_passthrough_collected_chunks.assert_called_once()
 
 
-def test_sync_streaming_flushes_on_early_close():
-    from litellm.passthrough.main import _sync_streaming
+def test_passthroughstreamingresponse_flushes_on_early_close():
+    from litellm.passthrough.main import PassthroughStreamingResponse
 
     chunks = [b"first", b"second", b"third"]
 
     mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = httpx.Headers(
+        {"content-type": "application/octet-stream", "x-request-id": "req-123"}
+    )
 
     def _iter_bytes():
         yield from chunks
@@ -229,7 +258,7 @@ def test_sync_streaming_flushes_on_early_close():
     provider_config = MagicMock()
 
     with patch("litellm.utils.executor", _ImmediateExecutor()):
-        gen = _sync_streaming(
+        gen = PassthroughStreamingResponse(
             response=mock_response,
             litellm_logging_obj=mock_logging_obj,
             provider_config=provider_config,
