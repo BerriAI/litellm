@@ -74,6 +74,7 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _resolve_region(params: dict) -> str:
         region = params.get("aws_region_name")
         if region:
+            BaseAWSLLM._validate_aws_region_name(region)
             return region
         base = params.get("api_base") or get_secret_str("BEDROCK_MANTLE_API_BASE")
         if base:

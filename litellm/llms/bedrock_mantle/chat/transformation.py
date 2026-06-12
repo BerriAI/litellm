@@ -12,6 +12,7 @@ from typing import Iterator, AsyncIterator, Any, List, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -46,6 +47,7 @@ class BedrockMantleChatConfig(OpenAILikeChatConfig):
             or get_secret_str("AWS_REGION")
             or BEDROCK_MANTLE_DEFAULT_REGION
         )
+        BaseAWSLLM._validate_aws_region_name(region)
         api_base = (
             api_base
             or get_secret_str("BEDROCK_MANTLE_API_BASE")

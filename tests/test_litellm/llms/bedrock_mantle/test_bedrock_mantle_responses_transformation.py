@@ -104,6 +104,19 @@ class TestBedrockMantleResponsesURL:
         )
         assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
 
+    def test_url_rejects_malicious_aws_region_name(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(ValueError):
+            cfg.get_complete_url(
+                api_base=None,
+                litellm_params={
+                    "aws_region_name": "us-east-1.api.aws.attacker.example/"
+                },
+            )
+
     def test_url_region_default_us_east_1(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
