@@ -261,6 +261,109 @@ def _xai_rows(lines: list) -> int:
     return failures
 
 
+def _compat_sdk_rows(lines: list) -> int:
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import _compat_sdk_corpus as corpus
+    from . import test_differential_compat_sdk_request as req
+    from . import test_differential_compat_sdk_response as resp
+    from . import test_differential_compat_sdk_stream as stream
+
+    failures = 0
+    for provider in corpus.PROVIDERS:
+        lines += [
+            "",
+            f"## {provider}: request bodies (v1 get_optional_params('{provider}')"
+            " + transform_request vs v2 compat_sdk)",
+            "",
+        ]
+        for name in sorted(corpus.corpus_for(provider)):
+            case = corpus.corpus_for(provider)[name]
+            result = req._v2(provider, case)
+            same = result.is_ok() and req._norm(result.ok) == req._norm(
+                corpus.run_v1_request_transform(provider, case)
+            )
+            failures += 0 if same else 1
+            lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+        for name in sorted(k for k in req.V1_RAISES if k.startswith(f"{provider}:")):
+            p, case, reason = req.V1_RAISES[name]
+            result = req._v2(p, case)
+            try:
+                corpus.run_v1_request_transform(p, case)
+                raised = False
+            except UnsupportedParamsError:
+                raised = True
+            ok = result.is_error() and reason in result.error.summary and raised
+            failures += 0 if ok else 1
+            label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+            lines.append(f"- {label}: {name} ({reason})")
+        for name in sorted(
+            k for k in req.EXPECTED_FALLBACKS if k.startswith(f"{provider}:")
+        ):
+            p, case, reason = req.EXPECTED_FALLBACKS[name]
+            result = req._v2(p, case)
+            ok = result.is_error() and reason in result.error.summary
+            failures += 0 if ok else 1
+            label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+            lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## compat_sdk family: responses (v1 convert_to_model_response_object"
+        " with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm)",
+        "",
+    ]
+    for provider, name in resp._rows():
+        raw = resp._RESPONSES[name]
+        preset = f"{provider}/{corpus.SPECS[provider]['model']}"
+        same = resp._norm(resp._v2_model_response(provider, raw, preset)) == resp._norm(
+            resp._v1_model_response(raw, preset)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} {name}")
+    lines += [
+        "",
+        "## compat_sdk family: streams (v1 CustomStreamWrapper(provider) over"
+        " SDK chunks vs v2 openai dialect)",
+        "",
+    ]
+    for provider, name in stream._rows():
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(provider, events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} {name}")
+    for provider in corpus.PROVIDERS:
+        v1 = stream._v1_chunks(
+            provider, stream.USAGE_STREAM, stream_options={"include_usage": True}
+        )
+        v2 = stream._v2_chunks(stream.USAGE_STREAM)
+        tail_ok = (
+            len(v1) == len(v2)
+            and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+            and v2[-1]["choices"] == []
+            and all(
+                v1[-1]["usage"][k] == v2[-1]["usage"][k]
+                for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+            )
+        )
+        failures += 0 if tail_ok else 1
+        lines.append(
+            ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+            + f"{provider} usage tail (v2 passes the wire choices=[] usage"
+            " chunk through; the streaming seam owns v1's synthesized final"
+            " chunk)"
+        )
+    lines += [
+        "",
+        "- DROPPED FROM WAVE 1A: baseten (streams ride the dedicated legacy"
+        " handle_baseten_chunk wrapper branch, not the openai dialect;"
+        " unregistered, typed v1 fallback; canary"
+        " test_baseten_drop_canary pins the evidence)",
+    ]
+    return failures
+
+
 def _azure_rows(lines: list) -> int:
     import os
 
@@ -732,7 +835,7 @@ def main() -> None:
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the wave-1a compat_sdk family)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -746,6 +849,7 @@ def main() -> None:
     failures = _anthropic_rows(lines)
     failures += _openai_rows(lines)
     failures += _xai_rows(lines)
+    failures += _compat_sdk_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

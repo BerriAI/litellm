@@ -1,4 +1,4 @@
-# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai)
+# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the wave-1a compat_sdk family)
 
 v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
 explained FALLBACK that v1 serves) for a provider's flag to turn on.
@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: ae4643ba8a
+- commit: b64b732772
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -205,6 +205,394 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: tools_typeless_continuation
 - SEAM CONTRACT: usage_tail_include_usage (v1's chunk_parser injects a dummy choice so the wrapper swallows the tail and synthesizes the final usage chunk; v2 passes the wire choices=[] chunk through with the FOLDED usage for the streaming seam to synthesize from)
 - IDENTICAL: usage_withheld_on_content_chunks
+
+## cerebras: request bodies (v1 get_optional_params('cerebras') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- IDENTICAL: user_param
+- FALLBACK (v1 raises UnsupportedParamsError): cerebras:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): cerebras:reasoning_effort_non_reasoning_model (reasoning_effort on non-reasoning cerebras model)
+- FALLBACK (v1 serves it): cerebras:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): cerebras:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): cerebras:message_name_field (message name field)
+- FALLBACK (v1 serves it): cerebras:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): cerebras:string_form_stop (string-form stop)
+
+## featherless_ai: request bodies (v1 get_optional_params('featherless_ai') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): featherless_ai:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): featherless_ai:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): featherless_ai:response_format (response_format)
+- FALLBACK (v1 raises UnsupportedParamsError): featherless_ai:tools (tools)
+- FALLBACK (v1 serves it): featherless_ai:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): featherless_ai:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): featherless_ai:message_name_field (message name field)
+- FALLBACK (v1 serves it): featherless_ai:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): featherless_ai:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): featherless_ai:user_model_list_gate (user)
+
+## hyperbolic: request bodies (v1 get_optional_params('hyperbolic') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- IDENTICAL: user_param
+- FALLBACK (v1 raises UnsupportedParamsError): hyperbolic:max_completion_tokens (max_completion_tokens)
+- FALLBACK (v1 raises UnsupportedParamsError): hyperbolic:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): hyperbolic:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): hyperbolic:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): hyperbolic:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): hyperbolic:message_name_field (message name field)
+- FALLBACK (v1 serves it): hyperbolic:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): hyperbolic:string_form_stop (string-form stop)
+
+## lambda_ai: request bodies (v1 get_optional_params('lambda_ai') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): lambda_ai:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): lambda_ai:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): lambda_ai:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): lambda_ai:message_name_field (message name field)
+- FALLBACK (v1 serves it): lambda_ai:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): lambda_ai:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): lambda_ai:user_model_list_gate (user)
+
+## llamafile: request bodies (v1 get_optional_params('llamafile') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): llamafile:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): llamafile:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): llamafile:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): llamafile:message_name_field (message name field)
+- FALLBACK (v1 serves it): llamafile:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): llamafile:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): llamafile:user_model_list_gate (user)
+
+## lm_studio: request bodies (v1 get_optional_params('lm_studio') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): lm_studio:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): lm_studio:response_format_on_gpt4_name (outside v1's supported set)
+- FALLBACK (v1 serves it): lm_studio:bare_schema_response_format (response_format)
+- FALLBACK (v1 serves it): lm_studio:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): lm_studio:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): lm_studio:message_name_field (message name field)
+- FALLBACK (v1 serves it): lm_studio:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): lm_studio:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): lm_studio:user_model_list_gate (user)
+
+## nebius: request bodies (v1 get_optional_params('nebius') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): nebius:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): nebius:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): nebius:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): nebius:message_name_field (message name field)
+- FALLBACK (v1 serves it): nebius:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): nebius:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): nebius:user_model_list_gate (user)
+
+## novita: request bodies (v1 get_optional_params('novita') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): novita:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): novita:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): novita:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): novita:message_name_field (message name field)
+- FALLBACK (v1 serves it): novita:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): novita:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): novita:user_model_list_gate (user)
+
+## nscale: request bodies (v1 get_optional_params('nscale') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): nscale:max_completion_tokens (max_completion_tokens)
+- FALLBACK (v1 raises UnsupportedParamsError): nscale:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): nscale:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): nscale:tools (tools)
+- FALLBACK (v1 serves it): nscale:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): nscale:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): nscale:message_name_field (message name field)
+- FALLBACK (v1 serves it): nscale:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): nscale:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): nscale:user_model_list_gate (user)
+
+## nvidia_nim: request bodies (v1 get_optional_params('nvidia_nim') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): nvidia_nim:max_completion_tokens_on_gemma (max_completion_tokens)
+- FALLBACK (v1 raises UnsupportedParamsError): nvidia_nim:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): nvidia_nim:stop_on_nemotron_instruct (stop)
+- FALLBACK (v1 raises UnsupportedParamsError): nvidia_nim:temperature_on_nemotron_reward (temperature)
+- FALLBACK (v1 raises UnsupportedParamsError): nvidia_nim:tools_on_gemma (tools)
+- FALLBACK (v1 serves it): nvidia_nim:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): nvidia_nim:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): nvidia_nim:message_name_field (message name field)
+- FALLBACK (v1 serves it): nvidia_nim:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): nvidia_nim:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): nvidia_nim:user_model_list_gate (user)
+
+## together_ai: request bodies (v1 get_optional_params('together_ai') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): together_ai:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): together_ai:response_format_on_non_fc_model (response_format)
+- FALLBACK (v1 raises UnsupportedParamsError): together_ai:tools_on_non_fc_model (tools)
+- FALLBACK (v1 serves it): together_ai:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): together_ai:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): together_ai:message_name_field (message name field)
+- FALLBACK (v1 serves it): together_ai:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): together_ai:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): together_ai:user_model_list_gate (user)
+
+## volcengine: request bodies (v1 get_optional_params('volcengine') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): volcengine:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): volcengine:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): volcengine:response_format (response_format)
+- FALLBACK (v1 serves it): volcengine:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): volcengine:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): volcengine:message_name_field (message name field)
+- FALLBACK (v1 serves it): volcengine:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): volcengine:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): volcengine:thinking_extra_body_packing (extra_body)
+- FALLBACK (v1 serves it): volcengine:user_model_list_gate (user)
+
+## wandb: request bodies (v1 get_optional_params('wandb') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): wandb:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): wandb:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): wandb:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): wandb:message_name_field (message name field)
+- FALLBACK (v1 serves it): wandb:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): wandb:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): wandb:user_model_list_gate (user)
+
+## compat_sdk family: responses (v1 convert_to_model_response_object with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm)
+
+- IDENTICAL: cerebras cached_and_reasoning_usage_details
+- IDENTICAL: cerebras text
+- IDENTICAL: cerebras tool_calls_rewrites_stop
+- IDENTICAL: featherless_ai cached_and_reasoning_usage_details
+- IDENTICAL: featherless_ai text
+- IDENTICAL: featherless_ai tool_calls_rewrites_stop
+- IDENTICAL: hyperbolic cached_and_reasoning_usage_details
+- IDENTICAL: hyperbolic text
+- IDENTICAL: hyperbolic tool_calls_rewrites_stop
+- IDENTICAL: lambda_ai cached_and_reasoning_usage_details
+- IDENTICAL: lambda_ai text
+- IDENTICAL: lambda_ai tool_calls_rewrites_stop
+- IDENTICAL: llamafile cached_and_reasoning_usage_details
+- IDENTICAL: llamafile text
+- IDENTICAL: llamafile tool_calls_rewrites_stop
+- IDENTICAL: lm_studio cached_and_reasoning_usage_details
+- IDENTICAL: lm_studio text
+- IDENTICAL: lm_studio tool_calls_rewrites_stop
+- IDENTICAL: nebius cached_and_reasoning_usage_details
+- IDENTICAL: nebius text
+- IDENTICAL: nebius tool_calls_rewrites_stop
+- IDENTICAL: novita cached_and_reasoning_usage_details
+- IDENTICAL: novita text
+- IDENTICAL: novita tool_calls_rewrites_stop
+- IDENTICAL: nscale cached_and_reasoning_usage_details
+- IDENTICAL: nscale text
+- IDENTICAL: nscale tool_calls_rewrites_stop
+- IDENTICAL: nvidia_nim cached_and_reasoning_usage_details
+- IDENTICAL: nvidia_nim text
+- IDENTICAL: nvidia_nim tool_calls_rewrites_stop
+- IDENTICAL: together_ai cached_and_reasoning_usage_details
+- IDENTICAL: together_ai text
+- IDENTICAL: together_ai tool_calls_rewrites_stop
+- IDENTICAL: volcengine cached_and_reasoning_usage_details
+- IDENTICAL: volcengine text
+- IDENTICAL: volcengine tool_calls_rewrites_stop
+- IDENTICAL: wandb cached_and_reasoning_usage_details
+- IDENTICAL: wandb text
+- IDENTICAL: wandb tool_calls_rewrites_stop
+
+## compat_sdk family: streams (v1 CustomStreamWrapper(provider) over SDK chunks vs v2 openai dialect)
+
+- IDENTICAL: cerebras empty_keepalive_swallowed
+- IDENTICAL: cerebras text
+- IDENTICAL: cerebras tools
+- IDENTICAL: featherless_ai empty_keepalive_swallowed
+- IDENTICAL: featherless_ai text
+- IDENTICAL: featherless_ai tools
+- IDENTICAL: hyperbolic empty_keepalive_swallowed
+- IDENTICAL: hyperbolic text
+- IDENTICAL: hyperbolic tools
+- IDENTICAL: lambda_ai empty_keepalive_swallowed
+- IDENTICAL: lambda_ai text
+- IDENTICAL: lambda_ai tools
+- IDENTICAL: llamafile empty_keepalive_swallowed
+- IDENTICAL: llamafile text
+- IDENTICAL: llamafile tools
+- IDENTICAL: lm_studio empty_keepalive_swallowed
+- IDENTICAL: lm_studio text
+- IDENTICAL: lm_studio tools
+- IDENTICAL: nebius empty_keepalive_swallowed
+- IDENTICAL: nebius text
+- IDENTICAL: nebius tools
+- IDENTICAL: novita empty_keepalive_swallowed
+- IDENTICAL: novita text
+- IDENTICAL: novita tools
+- IDENTICAL: nscale empty_keepalive_swallowed
+- IDENTICAL: nscale text
+- IDENTICAL: nscale tools
+- IDENTICAL: nvidia_nim empty_keepalive_swallowed
+- IDENTICAL: nvidia_nim text
+- IDENTICAL: nvidia_nim tools
+- IDENTICAL: together_ai empty_keepalive_swallowed
+- IDENTICAL: together_ai text
+- IDENTICAL: together_ai tools
+- IDENTICAL: volcengine empty_keepalive_swallowed
+- IDENTICAL: volcengine text
+- IDENTICAL: volcengine tools
+- IDENTICAL: wandb empty_keepalive_swallowed
+- IDENTICAL: wandb text
+- IDENTICAL: wandb tools
+- SEAM CONTRACT: cerebras usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: featherless_ai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: hyperbolic usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: lambda_ai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: llamafile usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: lm_studio usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: nebius usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: novita usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: nscale usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: nvidia_nim usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: together_ai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: volcengine usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: wandb usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+
+- DROPPED FROM WAVE 1A: baseten (streams ride the dedicated legacy handle_baseten_chunk wrapper branch, not the openai dialect; unregistered, typed v1 fallback; canary test_baseten_drop_canary pins the evidence)
 
 ## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)
 
