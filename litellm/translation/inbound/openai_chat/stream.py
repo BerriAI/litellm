@@ -39,11 +39,20 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal
 
+from expression.collections import Block
 from typing_extensions import assert_never
 
+from ...errors import BoundaryError, TranslationError
 from ...ir import Body, CompositeChunk, PlainJson, StreamEvent
 
-ChunkDialect = Literal["anthropic", "bedrock_converse", "openai", "azure", "gemini"]
+BlockDialect = Literal["anthropic", "bedrock_converse"]
+"""Dialects whose provider parsers emit per-block delta events
+(text/thinking/signature/tool deltas). The wire dialects (openai, azure)
+fold ``wire_chunk`` events and gemini folds composite ``chunk`` events;
+their parsers can never produce a per-block delta, and the step surfaces a
+loud error (never a fabricated placeholder body) if one ever arrives."""
+
+ChunkDialect = Literal[BlockDialect, "openai", "azure", "gemini"]
 
 
 @dataclass(frozen=True)
@@ -64,7 +73,20 @@ def initial_state(model: str = "", dialect: ChunkDialect = "anthropic") -> Strea
     return StreamState(model=model, sent_role=False, tool_index=-1, dialect=dialect)
 
 
-_StepResult = tuple[StreamState, tuple[Body, ...]]
+_StepResult = tuple[StreamState, tuple[Body, ...]] | TranslationError
+
+
+def _dialect_mismatch(dialect: ChunkDialect, event_tag: str) -> TranslationError:
+    return TranslationError.of_boundary(
+        BoundaryError.of(
+            Block.of_seq(
+                [
+                    f"{dialect}-dialect stream received a {event_tag} event its"
+                    " parser can never emit; dialect/parser registration mismatch"
+                ]
+            )
+        )
+    )
 
 
 def step(state: StreamState, event: StreamEvent) -> _StepResult:
@@ -75,20 +97,8 @@ def step(state: StreamState, event: StreamEvent) -> _StepResult:
             return _emit(state, {"content": event.text_delta.text})
         case "tool_use_start" | "tool_args_delta":
             return _tool_event_step(state, event)
-        case "thinking_delta":
-            return _emit(
-                state,
-                _thinking_delta_body(
-                    state.dialect, event.thinking_delta.thinking, signature=None
-                ),
-            )
-        case "signature_delta":
-            return _emit(
-                state,
-                _thinking_delta_body(
-                    state.dialect, "", signature=event.signature_delta.signature
-                ),
-            )
+        case "thinking_delta" | "signature_delta":
+            return _thinking_event_step(state, event)
         case "finish":
             return state, (_finish_chunk(state, event.finish.finish),)
         case "stop":
@@ -98,6 +108,35 @@ def step(state: StreamState, event: StreamEvent) -> _StepResult:
         case "chunk":
             return _gemini_chunk_step(state, event.chunk)
     assert_never(event.tag)
+
+
+def _thinking_event_step(state: StreamState, event: StreamEvent) -> _StepResult:
+    block_dialect = _as_block_dialect(state.dialect, event.tag)
+    if isinstance(block_dialect, TranslationError):
+        return block_dialect
+    if event.tag == "thinking_delta":
+        body = _thinking_delta_body(
+            block_dialect, event.thinking_delta.thinking, signature=None
+        )
+    else:
+        body = _thinking_delta_body(
+            block_dialect, "", signature=event.signature_delta.signature
+        )
+    return _emit(state, body)
+
+
+def _as_block_dialect(
+    dialect: ChunkDialect, event_tag: str
+) -> BlockDialect | TranslationError:
+    match dialect:
+        case "anthropic" | "bedrock_converse":
+            return dialect
+        case "openai" | "azure" | "gemini":
+            # wire/composite dialects fold whole chunks; a per-block delta
+            # here is a wiring bug and must be loud, never a fabricated
+            # anthropic-shaped placeholder (critic-google M5 / critic-azure M3).
+            return _dialect_mismatch(dialect, event_tag)
+    assert_never(dialect)
 
 
 def _tool_event_step(state: StreamState, event: StreamEvent) -> _StepResult:
@@ -158,8 +197,10 @@ _OPENAI_WIRE_KEYS = frozenset({"id", "model", "system_fingerprint", "choices", "
 
 
 def _step_openai(state: StreamState, chunk: PlainJson) -> _StepResult:
-    if state.dialect not in ("openai", "azure") or not isinstance(chunk, dict):
-        return state, ()  # cross-family parsers never emit wire chunks
+    if state.dialect not in ("openai", "azure"):
+        return _dialect_mismatch(state.dialect, "wire_chunk")
+    if not isinstance(chunk, dict):
+        return state, ()  # the parser only emits dict wire chunks
     chunk_id = chunk.get("id")
     pinned = state.stream_id or (
         chunk_id if isinstance(chunk_id, str) and chunk_id.strip() else None
@@ -283,6 +324,8 @@ def _gemini_chunk_step(state: StreamState, chunk: CompositeChunk) -> _StepResult
     stream end, the finish chunk v1's wrapper synthesizes (the finish-bearing
     wire event is the last one, so emitting both here yields v1's order).
     Usage is withheld exactly like v1 without ``stream_options``."""
+    if state.dialect != "gemini":
+        return _dialect_mismatch(state.dialect, "chunk")
     text = chunk.text.default_value(None)
     reasoning = chunk.reasoning.default_value(None)
     has_payload = text is not None or reasoning is not None or len(chunk.tool_calls) > 0
@@ -338,11 +381,12 @@ def _gemini_chunk_step(state: StreamState, chunk: CompositeChunk) -> _StepResult
         }
         bodies = (*bodies, final)
     return (
-        StreamState(
-            model=state.model,
+        # replace() so fields outside this step's concern (stream_id, future
+        # additions) are never silently reset (critic-google M5)
+        replace(
+            state,
             sent_role=sent_role,
             tool_index=tool_index,
-            dialect=state.dialect,
             seen_tool_calls=seen,
         ),
         bodies,
@@ -350,18 +394,10 @@ def _gemini_chunk_step(state: StreamState, chunk: CompositeChunk) -> _StepResult
 
 
 def _thinking_delta_body(
-    dialect: ChunkDialect, thinking: str, signature: str | None
+    dialect: BlockDialect, thinking: str, signature: str | None
 ) -> dict[str, PlainJson]:
     match dialect:
-        case "gemini":
-            # Unreachable: the gemini dialect rides composite chunk events,
-            # never per-block thinking deltas; the anthropic shape is a
-            # harmless placeholder that keeps the match exhaustive.
-            return {"content": "", "reasoning_content": thinking}
-        case "anthropic" | "openai" | "azure":
-            # openai/azure-dialect streams never produce thinking deltas (the
-            # provider parser emits wire_chunk events only); the arm exists
-            # for exhaustiveness and mirrors the anthropic shape.
+        case "anthropic":
             block: PlainJson = {
                 "type": "thinking",
                 "thinking": thinking,

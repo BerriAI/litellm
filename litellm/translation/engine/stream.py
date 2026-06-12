@@ -40,7 +40,10 @@ def _fold(
             case Result(tag="ok", ok=event):
                 if event is None:
                     continue
-                state, emitted = step(state, event)
+                stepped = step(state, event)
+                if isinstance(stepped, TranslationError):
+                    return Error(stepped)
+                state, emitted = stepped
                 chunks.extend(emitted)  # nosemgrep: translation-no-mutation
             case Result(error=err):
                 return Error(err)
@@ -75,7 +78,11 @@ async def chunk_stream(
             case Result(tag="ok", ok=event):
                 if event is None:
                     continue
-                state, emitted = step(state, event)
+                stepped = step(state, event)
+                if isinstance(stepped, TranslationError):
+                    yield Error(stepped)
+                    return
+                state, emitted = stepped
                 for chunk in emitted:
                     yield Ok(chunk)
             case Result(error=err):
