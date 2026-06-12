@@ -17,6 +17,7 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "AKIADIFFTESTKEY00000")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "diff-test-secret")
 os.environ.setdefault("AWS_REGION_NAME", "us-east-1")
+os.environ.setdefault("GEMINI_API_KEY", "char-gemini-test-key")
 
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo  # noqa: E402
 from litellm.utils import get_max_tokens, token_counter  # noqa: E402
@@ -75,4 +76,22 @@ def frozen_ambient(monkeypatch):
     monkeypatch.setattr(fastuuid, "uuid4", fake_uuid4)
     monkeypatch.setattr(litellm._uuid, "uuid4", fake_uuid4)
     monkeypatch.setattr(time, "time", lambda: 1718064000.0)
+    yield
+
+
+@pytest.fixture()
+def vertex_token_stub(monkeypatch):
+    """Stub the vertex credential fetch at its narrowest point
+    (``VertexBase.get_access_token``), mirroring the characterization corpus:
+    everything downstream runs real v1 code with this fixed token/project."""
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    monkeypatch.setattr(
+        VertexBase,
+        "get_access_token",
+        lambda self, credentials, project_id: (
+            "char-vertex-token",
+            project_id or "char-test-project",
+        ),
+    )
     yield

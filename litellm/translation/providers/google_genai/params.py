@@ -216,18 +216,17 @@ _TEMPERATURE_KEYS = (
 def sampling_entries(
     request: ChatRequest, deps: TranslationDeps, target: GoogleTarget
 ) -> dict[str, PlainJson] | TranslationError:
+    """top_k rides for BOTH targets: it is not an OpenAI param, so v1's
+    get_optional_params forwards it as a provider kwarg even on AI Studio
+    (verified in-process; the drift list's supported-params delta only gates
+    OpenAI-named params)."""
+    del deps, target
     params = request.params
     entries: dict[str, PlainJson] = {}
     for attr, key in _TEMPERATURE_KEYS:
         value = getattr(params, attr).default_value(None)
         if value is None:
             continue
-        if attr == "top_k" and target == "gemini":
-            if deps.drop_params:
-                continue
-            return TranslationError.of_unsupported(
-                "top_k on google ai studio; v1 raises UnsupportedParamsError without drop_params"
-            )
         entries = {**entries, key: value}
     max_tokens = params.max_tokens.default_value(None)
     if max_tokens is not None:

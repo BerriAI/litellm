@@ -214,11 +214,8 @@ def _json_schema_entries(
         return Ok(({**entries, "response_schema": built}, None))
     # v1 response_schema_prompt consults litellm.custom_prompt_dict; the seam
     # only routes here when that ambient dict is empty, so the default prompt
-    # applies (str(dict) formatting included).
-    prompt = """Use this JSON schema:
-    ```json
-    {}
-    ```""".format(built)
+    # applies (str(dict) formatting AND the trailing spaces included).
+    prompt = "Use this JSON schema: \n    ```json \n    {}\n    ```".format(built)
     return Ok((entries, prompt))
 
 
