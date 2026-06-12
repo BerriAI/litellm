@@ -162,7 +162,9 @@ def _to_model_response_openai(
                     message=message,
                     logprobs=choice.get("logprobs"),
                     enhancements=choice.get("enhancements"),
-                    provider_specific_fields=choice.get("provider_specific_fields"),
+                    provider_specific_fields=cast(
+                        Any, choice.get("provider_specific_fields")
+                    ),
                 )
             )
     response.choices = cast(Any, rebuilt)
