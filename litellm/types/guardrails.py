@@ -357,6 +357,15 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
         default=None,
         description="Path to a JSON file containing ad-hoc recognizers for Presidio",
     )
+    unmask_streamed_tool_calls: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Only used with output_parse_pii on Anthropic native streaming. When True, "
+            "masked PII placeholders inside streamed tool-call arguments "
+            "(input_json_delta) are also restored. Off by default so streamed tool "
+            "executions never receive restored PII unless explicitly allowed."
+        ),
+    )
     mock_redacted_text: Optional[dict] = Field(
         default=None, description="Mock redacted text for testing"
     )
