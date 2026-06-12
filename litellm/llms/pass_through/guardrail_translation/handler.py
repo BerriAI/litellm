@@ -279,6 +279,18 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         )
 
     @staticmethod
+    def _resolve_event_stream_de_anonymizer(provider: Optional[str]):
+        handler_cls = _get_provider_handlers().get(provider or "")
+        return getattr(handler_cls, "de_anonymize_event_stream", None)
+
+    @staticmethod
+    def supports_event_stream_de_anonymization(provider: Optional[str]) -> bool:
+        return (
+            LlmPassthroughRouteHandler._resolve_event_stream_de_anonymizer(provider)
+            is not None
+        )
+
+    @staticmethod
     async def de_anonymize_event_stream(
         body_bytes: bytes,
         proxy_logging_obj: "ProxyLogging",
@@ -286,8 +298,9 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         data: dict,
     ) -> bytes:
         provider = data.get("custom_llm_provider")
-        handler_cls = _get_provider_handlers().get(provider or "")
-        de_anonymize = getattr(handler_cls, "de_anonymize_event_stream", None)
+        de_anonymize = LlmPassthroughRouteHandler._resolve_event_stream_de_anonymizer(
+            provider
+        )
         if de_anonymize is None:
             verbose_proxy_logger.debug(
                 "LlmPassthroughRouteHandler: no event-stream handler for provider=%s, "

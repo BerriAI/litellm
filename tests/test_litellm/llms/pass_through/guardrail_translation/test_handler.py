@@ -187,3 +187,25 @@ class TestDeAnonymizeEventStream:
         )
 
         assert result is body
+
+
+class TestSupportsEventStreamDeAnonymization:
+    def test_bedrock_is_supported(self):
+        assert (
+            LlmPassthroughRouteHandler.supports_event_stream_de_anonymization("bedrock")
+            is True
+        )
+
+    def test_unknown_provider_is_not_supported(self):
+        assert (
+            LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
+                "anthropic"
+            )
+            is False
+        )
+
+    def test_missing_provider_is_not_supported(self):
+        assert (
+            LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(None)
+            is False
+        )

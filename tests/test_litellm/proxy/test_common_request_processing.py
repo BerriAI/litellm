@@ -2644,3 +2644,105 @@ class TestEventStreamAllmPassthroughRoute:
         assert result.headers.get("x-litellm-model-id") == "bedrock/claude"
         # content-length from custom_headers is filtered; Starlette sets the correct value from body
         assert result.headers.get("content-length") != "99"
+
+
+class TestAllmPassthroughStreamingProviderGate:
+    """
+    Regression: the streaming-buffer gate for allm_passthrough_route must only
+    fire for providers that have an event-stream guardrail handler (Bedrock).
+
+    A non-Bedrock streaming passthrough response must keep streaming even when a
+    post-call guardrail is registered globally, instead of being silently
+    buffered into a non-streaming Response. Bedrock must still be buffered so the
+    converse-stream de-anonymization handler can rewrite frames.
+    """
+
+    def _build_processing_obj(self, custom_llm_provider: str) -> ProxyBaseLLMRequestProcessing:
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-123"
+        logging_obj.cost_breakdown = None
+        data = {
+            "custom_llm_provider": custom_llm_provider,
+            "litellm_logging_obj": logging_obj,
+        }
+        return ProxyBaseLLMRequestProcessing(data=data)
+
+    async def _run(self, processing_obj, monkeypatch, chunks):
+        import litellm.proxy.common_request_processing as crp
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        async def streaming_response():
+            for chunk in chunks:
+                yield chunk
+
+        async def fake_route_request(**kwargs):
+            async def _llm_call():
+                return streaming_response()
+
+            return _llm_call()
+
+        monkeypatch.setattr(crp, "route_request", fake_route_request)
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock()
+
+        return await processing_obj.base_process_llm_request(
+            request=MagicMock(spec=Request, headers={}),
+            fastapi_response=Response(),
+            user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+            route_type="allm_passthrough_route",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=None,
+            llm_router=None,
+            skip_pre_call_logic=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_bedrock_stream_is_not_buffered(self, monkeypatch):
+        processing_obj = self._build_processing_obj("anthropic")
+        chunks = [b"chunk-1", b"chunk-2"]
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails",
+            return_value=False,
+        ), patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails_for_passthrough",
+            return_value=True,
+        ):
+            result = await self._run(processing_obj, monkeypatch, chunks)
+
+        assert isinstance(result, StreamingResponse)
+        streamed = [chunk async for chunk in result.body_iterator]
+        assert streamed == chunks
+
+    @pytest.mark.asyncio
+    async def test_bedrock_stream_is_buffered_through_handler(self, monkeypatch):
+        processing_obj = self._build_processing_obj("bedrock")
+        chunks = [b"raw-1", b"raw-2"]
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails",
+            return_value=False,
+        ), patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails_for_passthrough",
+            return_value=True,
+        ), patch(
+            "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
+            "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
+            new=AsyncMock(return_value=b"modified-body"),
+        ) as mock_handler:
+            result = await self._run(processing_obj, monkeypatch, chunks)
+
+        assert isinstance(result, Response)
+        assert not isinstance(result, StreamingResponse)
+        assert result.body == b"modified-body"
+        mock_handler.assert_awaited_once()

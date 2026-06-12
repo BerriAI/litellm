@@ -1338,7 +1338,10 @@ class ProxyBaseLLMRequestProcessing:
                         else:
                             generator = response
 
-                        if self._has_post_call_guardrails_for_passthrough():
+                        if (
+                            self._has_post_call_guardrails_for_passthrough()
+                            and self._passthrough_provider_has_stream_guardrail_handler()
+                        ):
                             body_bytes = b"".join(
                                 [chunk async for chunk in generator]  # type: ignore[union-attr]
                             )
@@ -1764,6 +1767,22 @@ class ProxyBaseLLMRequestProcessing:
             if cb._event_hook_is_event_type(GuardrailEventHooks.post_call):
                 return True
         return False
+
+    def _passthrough_provider_has_stream_guardrail_handler(self) -> bool:
+        """
+        True when the resolved passthrough provider has an event-stream guardrail
+        handler that can rewrite buffered frames. Only such providers may have
+        their stream buffered for post-call guardrails; every other provider must
+        keep streaming so the response is not silently turned into a non-streaming
+        body when an unrelated post-call guardrail is registered.
+        """
+        from litellm.llms.pass_through.guardrail_translation.handler import (
+            LlmPassthroughRouteHandler,
+        )
+
+        return LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
+            self.data.get("custom_llm_provider")
+        )
 
     async def _handle_non_streaming_allm_passthrough_route(
         self,
