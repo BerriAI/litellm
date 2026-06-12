@@ -52,6 +52,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "vertex_ai"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def _add_context_management_beta_headers(
         self, beta_set: set, context_management: dict
     ) -> None:

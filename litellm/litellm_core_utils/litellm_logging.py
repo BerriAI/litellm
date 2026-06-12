@@ -37,6 +37,10 @@ from litellm import (
     turn_off_message_logging,
 )
 from litellm._logging import _is_debugging_on, _redact_string, verbose_logger
+from litellm.exceptions import (
+    validate_rate_limit_category,
+    validate_rate_limit_type,
+)
 from litellm._uuid import uuid
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
@@ -154,6 +158,7 @@ from ..integrations.litellm_agent import LiteLLMAgentModelResolver
 from ..integrations.literal_ai import LiteralAILogger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
+from ..integrations.newrelic import NewRelicLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
 from ..integrations.posthog import PostHogLogger
@@ -3528,6 +3533,14 @@ class Logging(LiteLLMLoggingBaseClass):
         elif isinstance(result, ModelResponse):
             return result
 
+        if isinstance(
+            result,
+            (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
+        ):
+            result = result.response
+        if isinstance(result, ResponsesAPIResponse):
+            return self._translate_responses_api_response_to_model_response(result)
+
         httpx_response = self.model_call_details.get("httpx_response", None)
         if httpx_response and isinstance(httpx_response, httpx.Response):
             result = litellm.AnthropicConfig().transform_response(
@@ -3559,6 +3572,55 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=None,
             )
         return result
+
+    def _translate_responses_api_response_to_model_response(
+        self, result: ResponsesAPIResponse
+    ) -> ModelResponse:
+        """
+        Convert a Responses API response into a ModelResponse for spend_logs.
+
+        The proxy UI parses spend_log rows expecting chat-completion shape
+        (response.choices[0].message); a raw ResponsesAPIResponse dump (output[...])
+        would render as empty in the Logs tab. Translation also yields full
+        choices/message detail downstream consumers can rely on.
+        """
+        from litellm.completion_extras.litellm_responses_transformation.transformation import (
+            LiteLLMResponsesTransformationHandler,
+        )
+
+        try:
+            return LiteLLMResponsesTransformationHandler().transform_response(
+                model=self.model,
+                raw_response=result,
+                model_response=litellm.ModelResponse(),
+                logging_obj=self,
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding=litellm.encoding,
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                "Responses API -> ModelResponse translation failed for "
+                "anthropic_messages logging (%s); falling back to minimal "
+                "usage-only ModelResponse to keep the spend_logs row.",
+                str(e),
+            )
+            model_response = litellm.ModelResponse()
+            model_response.model = self.model
+            usage = getattr(result, "usage", None)
+            if usage is not None and ResponseAPILoggingUtils._is_response_api_usage(
+                usage
+            ):
+                setattr(
+                    model_response,
+                    "usage",
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        usage
+                    ),
+                )
+            return model_response
 
     def _handle_non_streaming_google_genai_generate_content_response_logging(
         self, result: Any
@@ -4114,6 +4176,17 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             focus_logger = FocusLogger()
             _in_memory_loggers.append(focus_logger)
             return focus_logger  # type: ignore
+        elif logging_integration == "mavvrik":
+            from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import (
+                MavvrikFocusLogger,
+            )
+
+            for callback in _in_memory_loggers:
+                if type(callback) is MavvrikFocusLogger:
+                    return callback  # type: ignore
+            mavvrik_focus_logger = MavvrikFocusLogger()
+            _in_memory_loggers.append(mavvrik_focus_logger)
+            return mavvrik_focus_logger  # type: ignore
         elif logging_integration == "vantage":
             from litellm.integrations.vantage.vantage_logger import VantageLogger
 
@@ -4409,6 +4482,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             gitlab_logger = GitLabPromptManager(gitlab_config=gitlab_config)
             _in_memory_loggers.append(gitlab_logger)
             return gitlab_logger  # type: ignore
+        elif logging_integration == "newrelic":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, NewRelicLogger):
+                    return callback  # type: ignore
+            newrelic_logger = NewRelicLogger()
+            _in_memory_loggers.append(newrelic_logger)
+            return newrelic_logger  # type: ignore
         return None
     except Exception as e:
         verbose_logger.exception(
@@ -4709,6 +4789,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "smtp_email":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SMTPEmailLogger):
+                    return callback
+        elif logging_integration == "newrelic":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, NewRelicLogger):
                     return callback
         return None
 
@@ -5312,12 +5396,27 @@ class StandardLoggingPayloadSetup:
             else str(original_exception)
         )
 
+        # Duck-typed read so bare-Exception subclasses like
+        # `litellm.BudgetExceededError` can participate without joining the
+        # RateLimitError hierarchy (which would break `except BudgetExceededError`).
+        # Validated against the enum value sets so a third-party exception that
+        # happens to declare a `.category` or `.rate_limit_type` string attribute
+        # can't leak garbage into the payload or Prometheus label cardinality.
+        rate_limit_category = validate_rate_limit_category(
+            getattr(original_exception, "category", None)
+        )
+        rate_limit_type = validate_rate_limit_type(
+            getattr(original_exception, "rate_limit_type", None)
+        )
+
         return StandardLoggingPayloadErrorInformation(
             error_code=error_status,
             error_class=error_class,
             llm_provider=_llm_provider_in_exception,
             traceback=traceback_info,
             error_message=error_message if original_exception else "",
+            error_rate_limit_category=rate_limit_category,
+            error_rate_limit_type=rate_limit_type,
         )
 
     @staticmethod

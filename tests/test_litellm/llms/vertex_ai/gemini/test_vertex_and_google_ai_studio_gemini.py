@@ -1459,6 +1459,26 @@ def test_vertex_ai_process_candidates_with_grounding_metadata():
     assert len(result[0]) == 1
 
 
+def test_set_stream_metadata_mirrors_non_streaming_safety_field_names():
+    safety_ratings = [
+        [{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}]
+    ]
+
+    model_response = ModelResponse()
+    VertexGeminiConfig._set_stream_metadata_on_response(
+        model_response=model_response,
+        grounding_metadata=[],
+        url_context_metadata=[],
+        safety_ratings=safety_ratings,
+        citation_metadata=[],
+    )
+
+    assert getattr(model_response, "vertex_ai_safety_ratings") == safety_ratings
+    assert getattr(model_response, "vertex_ai_safety_results") == safety_ratings
+    assert model_response._hidden_params["vertex_ai_safety_ratings"] == safety_ratings
+    assert model_response._hidden_params["vertex_ai_safety_results"] == safety_ratings
+
+
 def test_vertex_ai_tool_call_id_format():
     """
     Test that tool call IDs have the correct format and length.

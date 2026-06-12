@@ -11,17 +11,19 @@ vi.mock("./use_multi_cost_estimate", () => ({
   useMultiCostEstimate: vi.fn(() => ({
     debouncedFetchForEntry: vi.fn(),
     removeEntry: vi.fn(),
-    getMultiModelResult: vi.fn((entries: ModelEntry[]): MultiModelResult => ({
-      entries: entries.map((e) => ({ entry: e, result: null, loading: false, error: null })),
-      totals: {
-        cost_per_request: 0,
-        daily_cost: null,
-        monthly_cost: null,
-        margin_per_request: 0,
-        daily_margin: null,
-        monthly_margin: null,
-      },
-    })),
+    getMultiModelResult: vi.fn(
+      (entries: ModelEntry[]): MultiModelResult => ({
+        entries: entries.map((e) => ({ entry: e, result: null, loading: false, error: null })),
+        totals: {
+          cost_per_request: 0,
+          daily_cost: null,
+          monthly_cost: null,
+          margin_per_request: 0,
+          daily_margin: null,
+          monthly_margin: null,
+        },
+      }),
+    ),
   })),
 }));
 
@@ -31,9 +33,7 @@ vi.mock("./multi_export_utils", () => ({
 }));
 
 vi.mock("@/utils/dataUtils", () => ({
-  formatNumberWithCommas: vi.fn((v: number, d: number = 0) =>
-    Number.isFinite(v) ? v.toFixed(d) : "-"
-  ),
+  formatNumberWithCommas: vi.fn((v: number, d: number = 0) => (Number.isFinite(v) ? v.toFixed(d) : "-")),
 }));
 
 const DEFAULT_PROPS = {

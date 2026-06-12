@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Literal, Optional, Tuple, TypedDict, cast
+from typing import Any, Literal, Optional, Tuple, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -40,6 +40,26 @@ def _get_token_detail_value(details: object, key: str) -> Optional[int]:
     else:
         value = getattr(details, key, None)
     return value if isinstance(value, int) else None
+
+
+def _get_web_search_requests(server_tool_use: Any) -> Optional[int]:
+    """
+    Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
+    that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
+    or any other object supporting attribute access.
+
+    Returns ``None`` when the value cannot be resolved — callers can
+    distinguish "absent" from "zero" using ``is None``.
+
+    See https://github.com/BerriAI/litellm/issues/26153 — ``stream_chunk_builder``
+    historically left this as a plain ``dict``, which broke direct attribute
+    access in cost calculation.
+    """
+    if server_tool_use is None:
+        return None
+    if isinstance(server_tool_use, dict):
+        return server_tool_use.get("web_search_requests")
+    return getattr(server_tool_use, "web_search_requests", None)
 
 
 def _is_above_128k(tokens: float) -> bool:
@@ -927,6 +947,43 @@ def calculate_image_response_cost_from_usage(
         custom_llm_provider=custom_llm_provider,
     )
     return prompt_cost + completion_cost
+
+
+def calculate_image_response_web_search_cost(
+    image_response: ImageResponse,
+    custom_llm_provider: str,
+    model_info: ModelInfo,
+) -> float:
+    """
+    Cost of Google Search grounding performed during image generation.
+
+    The grounding request count is carried on the image usage object by the
+    provider transformers; it is billed with the same per-request accounting
+    used for chat completions.
+    """
+    usage = image_response.usage
+    if usage is None:
+        return 0.0
+
+    web_search_requests = getattr(usage, "web_search_requests", None)
+    if not web_search_requests:
+        return 0.0
+
+    from litellm.llms import get_cost_for_web_search_request
+
+    synthetic_usage = Usage(
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            web_search_requests=web_search_requests
+        )
+    )
+    return (
+        get_cost_for_web_search_request(
+            custom_llm_provider=custom_llm_provider,
+            usage=synthetic_usage,
+            model_info=model_info,
+        )
+        or 0.0
+    )
 
 
 class CostCalculatorUtils:

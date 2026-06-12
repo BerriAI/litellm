@@ -22,9 +22,7 @@ test.describe("Navbar identity scoping", () => {
     await expect(accountButton).toHaveAttribute("aria-label", /Internal User/, { timeout: 5_000 });
     await expect(accountButton).toHaveAttribute(
       "aria-label",
-      new RegExp(
-        `signed in as (${escapeRegExp(E2E_INTERNAL_USER_EMAIL)}|${escapeRegExp(E2E_INTERNAL_USER_ID)})`,
-      ),
+      new RegExp(`signed in as (${escapeRegExp(E2E_INTERNAL_USER_EMAIL)}|${escapeRegExp(E2E_INTERNAL_USER_ID)})`),
       { timeout: 5_000 },
     );
 

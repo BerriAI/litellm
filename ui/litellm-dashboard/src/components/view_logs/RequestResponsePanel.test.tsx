@@ -180,10 +180,10 @@ describe("RequestResponsePanel", () => {
 
     expect(mockFormattedResponse).toHaveBeenCalled();
     expect(mockGetRawRequest).toHaveBeenCalled();
-    
+
     const formattedResponseCallCount = mockFormattedResponse.mock.calls.length;
     expect(formattedResponseCallCount).toBeGreaterThanOrEqual(1);
-    
+
     const responseData = mockFormattedResponse.mock.results[0].value;
     expect(responseData).toEqual({ responseData: "this should appear in response" });
     expect(responseData).not.toEqual({ requestData: "this should not appear in response" });
@@ -248,7 +248,9 @@ describe("RequestResponsePanel", () => {
   it("should show error code in response header when hasError is true", () => {
     const errorInfo = { error_message: "Rate limit exceeded", error_class: "RateLimitError", error_code: 429 };
     const mockGetRawRequest = vi.fn().mockReturnValue({ messages: [] });
-    const mockFormattedResponse = vi.fn().mockReturnValue({ error: { message: "Rate limit exceeded", type: "RateLimitError", code: 429, param: null } });
+    const mockFormattedResponse = vi
+      .fn()
+      .mockReturnValue({ error: { message: "Rate limit exceeded", type: "RateLimitError", code: 429, param: null } });
     render(
       <RequestResponsePanel
         row={{ original: baseLogEntry }}

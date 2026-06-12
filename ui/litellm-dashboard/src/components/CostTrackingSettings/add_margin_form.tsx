@@ -53,7 +53,9 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
           size="large"
           optionFilterProp="children"
           filterOption={(input, option) =>
-            String(option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+            String(option?.label ?? "")
+              .toLowerCase()
+              .includes(input.toLowerCase())
           }
         >
           <AntdSelect.Option key="global" value="global" label="Global (All Providers)">
@@ -95,11 +97,7 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
         }
         rules={[{ required: true, message: "Please select a margin type" }]}
       >
-        <Radio.Group
-          value={marginType}
-          onChange={(e) => onMarginTypeChange(e.target.value)}
-          className="w-full"
-        >
+        <Radio.Group value={marginType} onChange={(e) => onMarginTypeChange(e.target.value)} className="w-full">
           <Radio value="percentage">Percentage-based</Radio>
           <Radio value="fixed">Fixed Amount</Radio>
         </Radio.Group>
@@ -182,11 +180,11 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
       )}
 
       <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
-        <Button 
+        <Button
           variant="primary"
-          onClick={onAddProvider} 
+          onClick={onAddProvider}
           disabled={
-            !selectedProvider || 
+            !selectedProvider ||
             (marginType === "percentage" && !percentageValue) ||
             (marginType === "fixed" && !fixedAmountValue)
           }
@@ -199,4 +197,3 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
 };
 
 export default AddMarginForm;
-

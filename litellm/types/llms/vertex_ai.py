@@ -232,6 +232,7 @@ class VoiceConfig(TypedDict):
 
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    languageCode: str
 
 
 class GenerationConfig(TypedDict, total=False):
@@ -757,3 +758,12 @@ class VertexPartnerProvider(str, Enum):
     llama = "llama"
     ai21 = "ai21"
     claude = "claude"
+
+
+VERTEX_AI_PROVIDER_METADATA_FIELDS = (
+    "vertex_ai_grounding_metadata",
+    "vertex_ai_url_context_metadata",
+    "vertex_ai_safety_ratings",
+    "vertex_ai_safety_results",
+    "vertex_ai_citation_metadata",
+)

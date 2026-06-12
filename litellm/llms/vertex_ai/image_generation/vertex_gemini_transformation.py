@@ -7,6 +7,10 @@ import litellm
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
+from litellm.llms.gemini.common_utils import (
+    get_gemini_image_web_search_requests,
+    map_gemini_image_tools_params,
+)
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
@@ -52,6 +56,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "aspect_ratio",
             "imageSize",
             "image_size",
+            "tools",
+            "web_search_options",
         ]
 
     def map_openai_params(
@@ -77,9 +83,10 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["aspectRatio"] = v
                     elif k in ("imageSize", "image_size"):
                         mapped_params["imageSize"] = v
-                    else:
+                    elif k not in ("tools", "web_search_options"):
                         mapped_params[k] = v
 
+        mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
         return mapped_params
 
     def _map_size_to_aspect_ratio(self, size: str) -> str:
@@ -247,6 +254,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "generationConfig": generation_config,
         }
 
+        if tools := optional_params.get("tools"):
+            request_body["tools"] = tools
+        if tool_config := optional_params.get("toolConfig"):
+            request_body["toolConfig"] = tool_config
+
         return request_body
 
     def _transform_image_usage(self, usage: dict) -> ImageUsage:
@@ -323,5 +335,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         if usage_metadata := response_data.get("usageMetadata", None):
             model_response.usage = self._transform_image_usage(usage_metadata)
+
+        web_search_requests = get_gemini_image_web_search_requests(response_data)
+        if web_search_requests and model_response.usage is not None:
+            setattr(model_response.usage, "web_search_requests", web_search_requests)
 
         return model_response

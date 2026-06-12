@@ -697,6 +697,33 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,error_message",
+    [
+        ("healthy", ""),
+        ("unhealthy", "Galileo authentication failed"),
+    ],
+)
+async def test_health_services_endpoint_galileo(status, error_message):
+    with patch("litellm.integrations.galileo.GalileoObserve") as MockGalileoObserve:
+        mock_instance = MagicMock()
+        mock_instance.async_health_check = AsyncMock(
+            return_value={"status": status, "error_message": error_message}
+        )
+        MockGalileoObserve.return_value = mock_instance
+
+        result = await health_services_endpoint(service="galileo")
+
+        if status == "healthy":
+            assert result["status"] == "healthy"
+            assert result["message"] == "Galileo is healthy"
+        else:
+            assert result["status"] == "unhealthy"
+            assert result["message"] == error_message
+        mock_instance.async_health_check.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_health_services_endpoint_datadog_llm_observability():
     """
     Verify that 'datadog_llm_observability' is accepted as a valid service
@@ -727,6 +754,85 @@ async def test_health_services_endpoint_rejects_unknown_service():
 
     with pytest.raises(ProxyException):
         await health_services_endpoint(service="totally_unknown_service_xyz")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [
+        None,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+    ],
+)
+async def test_health_services_endpoint_newrelic_blocks_non_admin(role):
+    """
+    /health/services?service=newrelic emits a real LiteLLMConnectionTest event
+    to the configured New Relic account. Only proxy admins (full or view-only)
+    should be able to trigger it; every other caller must be rejected before
+    the external event is recorded.
+    """
+    from litellm.proxy._types import ProxyException
+
+    user_api_key_dict = UserAPIKeyAuth(
+        token="non-admin-token",
+        user_id="non-admin-user",
+        user_role=role,
+    )
+
+    with patch(
+        "litellm.integrations.newrelic.newrelic.NewRelicLogger"
+    ) as MockNewRelicLogger:
+        mock_instance = MagicMock()
+        mock_instance.async_health_check = AsyncMock(
+            return_value={"status": "healthy", "error_message": ""}
+        )
+        MockNewRelicLogger.return_value = mock_instance
+
+        with pytest.raises(ProxyException) as exc_info:
+            await health_services_endpoint(
+                user_api_key_dict=user_api_key_dict,
+                service="newrelic",
+            )
+
+        assert str(exc_info.value.code) == "403"
+        mock_instance.async_health_check.assert_not_awaited()
+        MockNewRelicLogger.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "admin_role",
+    [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+)
+async def test_health_services_endpoint_newrelic_allows_proxy_admin(admin_role):
+    """
+    Proxy admins (full and view-only) can trigger the New Relic test event.
+    """
+    user_api_key_dict = UserAPIKeyAuth(
+        token="admin-token",
+        user_id="admin-user",
+        user_role=admin_role,
+    )
+
+    with patch(
+        "litellm.integrations.newrelic.newrelic.NewRelicLogger"
+    ) as MockNewRelicLogger:
+        mock_instance = MagicMock()
+        mock_instance.async_health_check = AsyncMock(
+            return_value={"status": "healthy", "error_message": ""}
+        )
+        MockNewRelicLogger.return_value = mock_instance
+
+        result = await health_services_endpoint(
+            user_api_key_dict=user_api_key_dict,
+            service="newrelic",
+        )
+
+        assert result["status"] == "healthy"
+        mock_instance.async_health_check.assert_awaited_once()
 
 
 @pytest.fixture(scope="function")

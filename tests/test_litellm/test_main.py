@@ -849,12 +849,13 @@ def test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict(
 
 
 @pytest.mark.parametrize(
-    "model, model_info, expected_model_param",
+    "model, model_info, expected_model_param, expected_base_model_param",
     [
-        ("gemini/gemini-3.1-pro", None, "gemini-3.1-pro"),
+        ("gemini/gemini-3.1-pro", None, "gemini-3.1-pro", None),
         (
             "gemini/gemini-3.1-pro",
             {"base_model": "gemini-3.1-pro-preview"},
+            "gemini-3.1-pro",
             "gemini-3.1-pro-preview",
         ),
     ],
@@ -863,7 +864,13 @@ def test_completion_optional_params_base_model(
     model: str,
     model_info: dict | None,
     expected_model_param: str,
+    expected_base_model_param: str | None,
 ):
+    """``model_info.base_model`` must reach ``get_optional_params`` as ``base_model``
+    (an additive capability hint), without overwriting ``model`` with the label.
+
+    Regression for #29618: overwriting ``model`` with a friendly ``base_model``
+    label made Bedrock drop ``tools``/``tool_choice`` under ``drop_params``."""
     with patch("litellm.main.get_optional_params") as mock_get_optional_params:
         mock_get_optional_params.return_value = MagicMock()
 
@@ -881,10 +888,9 @@ def test_completion_optional_params_base_model(
         litellm.completion(**kwargs)
 
         assert mock_get_optional_params.called is True
-        get_optional_params_model_param = mock_get_optional_params.call_args.kwargs[
-            "model"
-        ]
-        assert get_optional_params_model_param == expected_model_param
+        call_kwargs = mock_get_optional_params.call_args.kwargs
+        assert call_kwargs["model"] == expected_model_param
+        assert call_kwargs["base_model"] == expected_base_model_param
 
 
 @patch("litellm.completion_extras.responses_api_bridge.completion")

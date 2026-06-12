@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import NotificationsManager from "../../../molecules/notifications_manager";
-import { TokenUsage } from "../../../playground/chat_ui/ResponseMetrics";
+import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import { Message } from "./types";
 import { convertToDotPrompt, extractVariables } from "../utils";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "../../../networking";

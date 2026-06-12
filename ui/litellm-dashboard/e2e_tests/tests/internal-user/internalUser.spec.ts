@@ -22,9 +22,9 @@ test.describe("Internal User", () => {
     const teamSelect = page.locator(".ant-select", { hasText: "Search or select a team" });
     await teamSelect.click();
     await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
-    await expect(
-      page.locator(".ant-select-dropdown:visible").getByText(E2E_TEAM_CRUD_ALIAS).first(),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".ant-select-dropdown:visible").getByText(E2E_TEAM_CRUD_ALIAS).first()).toBeVisible({
+      timeout: 5_000,
+    });
   });
 
   test("Team info page omits the Settings tab for non-admin members", async ({ page }) => {
@@ -44,9 +44,9 @@ test.describe("Internal User", () => {
 
     // Anchor on the user's own seeded key so the absence check below cannot
     // pass vacuously against an empty table.
-    await expect(
-      page.locator("table tbody").getByText(E2E_INTERNAL_USER_KEY_ALIAS).first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("table tbody").getByText(E2E_INTERNAL_USER_KEY_ALIAS).first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     // The litellm-dashboard team is the proxy's internal bookkeeping team —
     // its keys must never leak into an internal user's Virtual Keys table.
