@@ -26,6 +26,10 @@ export const MIGRATED_E2E_PAGES: Record<string, string> = {
   "tag-management": "tag-management",
   "vector-stores": "vector-stores",
   memory: "memory",
+  "admin-panel": "admin-panel",
+  "logging-and-alerts": "logging-and-alerts",
+  "model-hub-table": "model-hub-table",
+  new_usage: "usage",
 };
 
 export const MIGRATED_E2E_SEGMENTS: string[] = [...new Set(Object.values(MIGRATED_E2E_PAGES))];

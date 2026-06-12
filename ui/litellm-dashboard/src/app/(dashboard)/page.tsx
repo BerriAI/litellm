@@ -1,29 +1,23 @@
 "use client";
 
 import ModelsAndEndpointsView from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
-import AdminPanel from "@/components/AdminPanel";
 import AgentsPanel from "@/components/agents";
 import CacheDashboard from "@/components/cache_dashboard";
 import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
 import GuardrailsPanel from "@/components/guardrails";
 import PoliciesPanel from "@/components/policies";
 import { Team } from "@/components/key_team_helpers/key_list";
-import ModelHubTable from "@/components/AIHub/ModelHubTable";
 import { Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components/networking";
-import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
 import OldTeams from "@/components/OldTeams";
 import { fetchUserModels, CreateKeyPrefillData } from "@/components/organisms/create_key_button";
 import Organizations, { fetchOrganizations } from "@/components/organizations";
 import PassThroughSettings from "@/components/pass_through_settings";
 import PromptsPanel from "@/components/prompts";
-import PublicModelHub from "@/components/public_model_hub";
-import Settings from "@/components/settings";
 import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
 import TransformRequestPanel from "@/components/transform_request";
 import UIThemeSettings from "@/components/ui_theme_settings";
@@ -40,7 +34,6 @@ import {
   normalizeUrlForCompare,
   storeReturnUrl,
 } from "@/utils/returnUrlUtils";
-import { isAdminRole } from "@/utils/roles";
 import { MIGRATED_PAGES, migratedHref } from "@/utils/migratedPages";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -53,7 +46,6 @@ function CreateKeyPageContent() {
   const [keys, setKeys] = useState<null | any[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [userModels, setUserModels] = useState<string[]>([]);
-  const proxySettings = useProxySettings(accessToken);
 
   const router = useRouter();
   const searchParams = useSearchParams()!;
@@ -373,10 +365,6 @@ function CreateKeyPageContent() {
               userRole={userRole}
               premiumUser={premiumUser}
             />
-          ) : page == "admin-panel" ? (
-            <AdminPanel proxySettings={proxySettings} />
-          ) : page == "logging-and-alerts" ? (
-            <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
           ) : page == "guardrails" ? (
             <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
           ) : page == "policies" ? (
@@ -393,17 +381,6 @@ function CreateKeyPageContent() {
             <UIThemeSettings userID={userID} userRole={userRole} accessToken={accessToken} />
           ) : page == "cost-tracking" ? (
             <CostTrackingSettings userID={userID} userRole={userRole} accessToken={accessToken} />
-          ) : page == "model-hub-table" ? (
-            isAdminRole(userRole) ? (
-              <ModelHubTable
-                accessToken={accessToken}
-                publicPage={false}
-                premiumUser={premiumUser}
-                userRole={userRole}
-              />
-            ) : (
-              <PublicModelHub accessToken={accessToken} isEmbedded={true} />
-            )
           ) : page == "caching" ? (
             <CacheDashboard
               userID={userID}
@@ -432,8 +409,6 @@ function CreateKeyPageContent() {
             <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
           ) : page == "tool-policies" ? (
             <ToolPoliciesView accessToken={accessToken} userRole={userRole} />
-          ) : page == "new_usage" ? (
-            <NewUsagePage teams={(teams as Team[]) ?? []} organizations={(organizations as Organization[]) ?? []} />
           ) : (
             <Usage
               userID={userID}
