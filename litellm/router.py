@@ -6014,6 +6014,8 @@ class Router:
                     **kwargs,
                 )
             elif call_type == "allm_passthrough_route":
+                if client:
+                    kwargs["client"] = client
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     passthrough_on_no_deployment=True,
