@@ -18980,6 +18980,7 @@
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
+        "supports_assistant_prefill": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true
@@ -30272,6 +30273,7 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
+        "supports_assistant_prefill": false,
         "supports_function_calling": true,
         "supports_output_config": true
     },
@@ -30280,6 +30282,7 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
+        "supports_assistant_prefill": false,
         "supports_function_calling": true,
         "supports_output_config": true
     },
