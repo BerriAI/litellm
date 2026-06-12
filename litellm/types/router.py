@@ -178,6 +178,7 @@ class CredentialLiteLLMParams(BaseModel):
     aws_secret_access_key: Optional[str] = None
     aws_region_name: Optional[str] = None
     aws_bedrock_runtime_endpoint: Optional[str] = None
+    aws_bedrock_project_id: Optional[str] = None
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str] = None
 
@@ -364,6 +365,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     aws_access_key_id: Optional[str]
     aws_secret_access_key: Optional[str]
     aws_region_name: Optional[str]
+    aws_bedrock_project_id: Optional[str]
     ## AWS S3 VECTORS ##
     vector_bucket_name: Optional[str]
     index_name: Optional[str]
