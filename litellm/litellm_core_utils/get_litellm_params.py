@@ -36,6 +36,12 @@ _OPTIONAL_KWARGS_KEYS = frozenset(
         "tpm",
         "rpm",
         "use_xai_oauth",
+        # Internal agentic-loop bookkeeping. Carried through litellm_params (not
+        # the provider request body) so the loop bound and cycle-break guards
+        # survive into the provider hook on follow-up web-search calls.
+        "_agentic_loop_depth",
+        "max_agentic_loops",
+        "_agentic_loop_fingerprints",
     }
 )
 

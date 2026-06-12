@@ -74,6 +74,51 @@ class TestGetLitellmParamsKwargsExtraction:
             assert result[key] == f"val_{key}"
 
 
+class TestGetLitellmParamsAgenticLoopBookkeeping:
+    """The agentic-loop bound and cycle-break guards read their depth/fingerprint
+    state from litellm_params on every follow-up call. If get_litellm_params drops
+    these keys, the guard resets to depth=0 with an empty fingerprint list each
+    hop, so an authenticated user could drive unbounded web-search follow-ups past
+    max_agentic_loops. This is a regression test for that leak.
+    """
+
+    def test_agentic_loop_keys_preserved_into_litellm_params(self):
+        result = get_litellm_params(
+            **{
+                "_agentic_loop_depth": 2,
+                "max_agentic_loops": 5,
+                "_agentic_loop_fingerprints": ["fp-1", "fp-2"],
+            }
+        )
+        assert result["_agentic_loop_depth"] == 2
+        assert result["max_agentic_loops"] == 5
+        assert result["_agentic_loop_fingerprints"] == ["fp-1", "fp-2"]
+
+    def test_agentic_loop_keys_absent_when_not_provided(self):
+        result = get_litellm_params(api_key="test-key")
+        assert "_agentic_loop_depth" not in result
+        assert "max_agentic_loops" not in result
+        assert "_agentic_loop_fingerprints" not in result
+
+    def test_loop_settings_round_trip_through_litellm_params(self):
+        """The values preserved by get_litellm_params must be what the guard reads."""
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        litellm_params = get_litellm_params(
+            **{
+                "_agentic_loop_depth": 3,
+                "max_agentic_loops": 4,
+                "_agentic_loop_fingerprints": ["fp-1", "fp-2", "fp-3"],
+            }
+        )
+        depth, max_loops, fingerprints = BaseLLMHTTPHandler._get_agentic_loop_settings(
+            kwargs=litellm_params
+        )
+        assert depth == 3
+        assert max_loops == 4
+        assert fingerprints == ["fp-1", "fp-2", "fp-3"]
+
+
 class TestGetLitellmParamsBaseModel:
     """Verify base_model resolution precedence."""
 

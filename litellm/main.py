@@ -1640,6 +1640,15 @@ def completion(  # type: ignore # noqa: PLR0915
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
             aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
+            **{
+                k: kwargs[k]
+                for k in (
+                    "_agentic_loop_depth",
+                    "max_agentic_loops",
+                    "_agentic_loop_fingerprints",
+                )
+                if k in kwargs
+            },
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
