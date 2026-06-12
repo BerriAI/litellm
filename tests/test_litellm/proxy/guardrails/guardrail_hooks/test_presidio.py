@@ -2440,6 +2440,54 @@ async def test_output_parse_pii_streaming_responses_completed_event_unmasked(
 
 
 @pytest.mark.asyncio
+async def test_output_parse_pii_streaming_mixed_chunks_flushes_buffered(
+    mock_user_api_key,
+):
+    """
+    Regression test: when output_parse_pii=True and a stream mixes buffered
+    ModelResponseStream chunks with a /v1/responses event, the buffered chat
+    chunks must still be forwarded (in order) instead of being dropped at the
+    saw_non_chat_chunk early return.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    class FakeResponsesEvent:
+        def __init__(self, event_type: str):
+            self.type = event_type
+
+    model_chunk = ModelResponseStream(
+        id="chatcmpl-mixed-unmask-1",
+        choices=[],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+    )
+    response_completed = FakeResponsesEvent("response.completed")
+
+    async def mock_stream():
+        yield model_chunk
+        yield response_completed
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={
+            "metadata": {
+                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
+            }
+        },
+    ):
+        collected.append(chunk)
+
+    assert collected == [model_chunk, response_completed]
+
+
+@pytest.mark.asyncio
 async def test_anonymize_text_uses_correct_positions_no_parse_pii():
     """
     Regression test for anonymizer offset bug (fixes #24160).

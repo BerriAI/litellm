@@ -1310,7 +1310,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         try:
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
-                    remaining_chunks.append(chunk)
+                    if saw_non_chat_chunk:
+                        yield chunk
+                    else:
+                        remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
                     if pii_tokens:
                         yield self._unmask_sse_bytes_chunk(chunk, pii_tokens)  # type: ignore[misc]
@@ -1319,6 +1322,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     continue
                 else:
                     # /v1/responses events: unmask response.completed text in-place.
+                    # A mixed stream can't be reassembled, so flush buffered chat
+                    # chunks in order before passthrough instead of dropping them.
+                    if remaining_chunks and not saw_non_chat_chunk:
+                        for buffered_chunk in remaining_chunks:
+                            yield buffered_chunk
+                        remaining_chunks = []
                     chunk_type = getattr(chunk, "type", None)
                     if chunk_type == "response.completed" and pii_tokens:
                         self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
