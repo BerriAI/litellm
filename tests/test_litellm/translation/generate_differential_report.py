@@ -489,6 +489,35 @@ def _compat_httpx_rows(lines: list) -> int:
         )
     lines += [
         "",
+        "## compat_httpx family: non-string wire model (v1's OpenAILike"
+        " construction raises pydantic ValidationError BEFORE the prefix"
+        " overwrite; v2's family parser fails closed so the typed fallback"
+        " reproduces the raise — verifier-longtail F2)",
+        "",
+    ]
+    from pydantic import ValidationError
+
+    for provider in sorted(
+        p for p in corpus.PROVIDERS if corpus.SPECS[p].prefix is not None
+    ):
+        try:
+            corpus.run_v1_response_transform(
+                provider, resp._NON_STRING_MODEL_BODY, corpus.SPECS[provider].model
+            )
+            raised = False
+        except ValidationError:
+            raised = True
+        result = resp._v2_parse_result(provider, resp._NON_STRING_MODEL_BODY)
+        ok = (
+            raised
+            and result.is_error()
+            and "non-string wire model" in result.error.summary
+        )
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises ValidationError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {provider} non_string_wire_model")
+    lines += [
+        "",
         "## compat_httpx family: streams (v1 base"
         " OpenAIChatCompletionStreamingHandler + CustomStreamWrapper(provider)"
         " over SSE lines vs v2 family parser with the xai chunk dialect)",

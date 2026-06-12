@@ -90,6 +90,28 @@ def _verbatim_wire(
                 )
             )
         )
+    wire_model = raw.get("model")
+    if wire_model is not None and not isinstance(wire_model, str):
+        # v1's OpenAILike construction is ModelResponse(**response_json)
+        # BEFORE any model overwrite, so a non-string wire model raises
+        # pydantic ValidationError there — while the prefix rewrite below
+        # would hide the bad value from the constructor and SERVE
+        # (verifier-longtail F2: compactifai/amazon_nova/lemonade). Fail
+        # closed so the typed v1 fallback reproduces v1's raise; model:
+        # None is constructible in v1 and stays served.
+        return Error(
+            TranslationError.of_boundary(
+                BoundaryError.of(
+                    Block.of_seq(
+                        [
+                            "non-string wire model "
+                            f"({type(wire_model).__name__}): v1's OpenAILike "
+                            "construction raises ValidationError on it"
+                        ]
+                    )
+                )
+            )
+        )
     body: dict[str, PlainJson] = dict(raw)
     if prefix is not None:
         model = f"{prefix}/{request.model}"

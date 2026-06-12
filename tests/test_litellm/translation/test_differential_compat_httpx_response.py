@@ -21,6 +21,7 @@ import copy
 import json
 from typing import cast
 
+import pydantic
 import pytest
 
 from litellm.types.utils import ModelResponse
@@ -124,6 +125,75 @@ def test_usage_null_tokens_zeroed_on_both_sides(provider: str, frozen_ambient) -
     v2 = _v2_model_response(provider, _NULL_USAGE_BODY)
     assert _norm(v2) == _norm(v1)
     assert v2["usage"]["completion_tokens"] == 0
+
+
+def _v2_parse_result(provider: str, raw: dict):
+    parsed = parse_request(_request_for(provider))
+    assert parsed.is_ok(), parsed.error.summary
+    return PARSERS[provider](copy.deepcopy(raw), parsed.ok)
+
+
+_NON_STRING_MODEL_BODY = {
+    "id": "resp-badmodel",
+    "object": "chat.completion",
+    "created": 1718000000,
+    "model": 7,
+    "choices": [
+        {
+            "index": 0,
+            "finish_reason": "stop",
+            "logprobs": None,
+            "message": {"role": "assistant", "content": "hello"},
+        }
+    ],
+    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+}
+
+_PREFIXING_MEMBERS = sorted(p for p in PROVIDERS if SPECS[p].prefix is not None)
+
+
+@pytest.mark.parametrize("provider", _PREFIXING_MEMBERS)
+def test_non_string_wire_model_falls_back_where_v1_raises(
+    provider: str, frozen_ambient
+) -> None:
+    """verifier-longtail F2: v1's OpenAILike construction is
+    ModelResponse(**response_json) BEFORE the model overwrite, so a
+    non-string wire model RAISES pydantic ValidationError — while v2's
+    prefix rewrite used to hide the bad value from the constructor and
+    SERVE. The family parser now fails closed, so the typed v1 fallback
+    reproduces v1's raise; the fork-wirer must keep this arm ahead of any
+    compat_httpx completion() fork (the CLAUDE.md obligation)."""
+    with pytest.raises(pydantic.ValidationError):
+        run_v1_response_transform(
+            provider, _NON_STRING_MODEL_BODY, SPECS[provider].model
+        )
+    result = _v2_parse_result(provider, _NON_STRING_MODEL_BODY)
+    assert result.is_error(), provider
+    assert "non-string wire model" in result.error.summary, result.error.summary
+
+
+def test_non_string_wire_model_family_arm_canary(frozen_ambient) -> None:
+    """The arm is family-wide and exactly as wide as v1's raise: a
+    NON-prefix openai_like member (datarobot) raises the same
+    ValidationError in v1 (its construction sees the bad value directly),
+    so the typed fallback reproduces v1 there too — and ``model: None``,
+    which v1 constructs and serves, stays SERVED byte-for-byte through the
+    prefix rewrite. If v1's OpenAILike ever constructs AFTER the model
+    overwrite, re-decide this arm."""
+    with pytest.raises(pydantic.ValidationError):
+        run_v1_response_transform(
+            "datarobot", _NON_STRING_MODEL_BODY, SPECS["datarobot"].model
+        )
+    result = _v2_parse_result("datarobot", _NON_STRING_MODEL_BODY)
+    assert result.is_error()
+    assert "non-string wire model" in result.error.summary
+    null_model_body = {**_NON_STRING_MODEL_BODY, "model": None}
+    v1 = run_v1_response_transform(
+        "compactifai", null_model_body, SPECS["compactifai"].model
+    ).model_dump()
+    v2 = _v2_model_response("compactifai", null_model_body)
+    assert _norm(v2) == _norm(v1)
+    assert v2["model"] == f"compactifai/{SPECS['compactifai'].model}"
 
 
 _STOP_WITH_TOOL_CALLS_BODY = {

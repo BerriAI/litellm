@@ -658,9 +658,16 @@ scope); when they land these are HARD OBLIGATIONS: NO model preset (fresh
 ModelResponse — the xai R4 rule; the compat_sdk preset arm must never fire
 for this family), to_model_response MUST select the style from
 compat_httpx.response.RESPONSE_STYLES ("openai" = cdr for heroku/minimax/
-ovhcloud; "openai_like" = ModelResponse(**json) for the other six — the
-seam arm added for this family), and streams fold with the "xai"
-ChunkDialect over compat_httpx.parse_line.
+ovhcloud/cometapi; "openai_like" = ModelResponse(**json) for the other six
+— the seam arm added for this family), streams fold with the "xai"
+ChunkDialect over compat_httpx.parse_line, and the family parser's
+fail-closed non-string wire `model` arm must stay ahead of the fork
+(verifier-longtail F2): v1's OpenAILike construction raises pydantic
+ValidationError BEFORE the prefix overwrite, so on
+compactifai/amazon_nova/lemonade a wired fork that bypassed the parser's
+arm would SERVE what v1 raises on — keep the typed fallback (pinned by
+the family's ValidationError differential rows and the datarobot canary;
+`model: None` stays served, v1 constructs it).
 Deliberate wave-2a fallback surfaces (each names the v1 path): every
 supported-list raise (perplexity stop/tools/tool_choice/parallel and
 reasoning_effort on non-reasoning models; sambanova tools/tool_choice/
