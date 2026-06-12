@@ -16,12 +16,16 @@ the bottom pins the evidence so the drop reason stays true at HEAD.
 import copy
 import json
 import time
+from typing import get_args
 
 import pytest
 from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+from litellm.translation.dispatch import Provider
+from litellm.translation.engine import pipeline
 
 from ._compat_sdk_corpus import PROVIDERS
 from .test_differential_openai_stream import MODEL, STREAMS, USAGE_STREAM, _v2_chunks
@@ -85,10 +89,20 @@ def test_baseten_drop_canary(frozen_ambient) -> None:
     dedicated legacy decoder (``handle_baseten_chunk``,
     streaming_handler.py:1246-1248) instead of the default openai arm, so
     its v1 stream behavior is not the openai dialect and cannot be honestly
-    registered. If this canary fails, the legacy branch is gone at HEAD —
+    registered. If the DRIFT half fails, the legacy branch is gone at HEAD —
     re-evaluate porting baseten (request/response sides are trivial:
-    own list, mct rename, user supported)."""
+    own list, mct rename, user supported). The REGISTRATION half makes the
+    steady state loud (critic-wave1a M2 / verifier F3): registering baseten
+    anywhere requires deliberately deleting these negative asserts, which
+    forces the registrar past the evidence above."""
+    # drift half: the legacy branch still exists and still diverges
     assert hasattr(CustomStreamWrapper, "handle_baseten_chunk")
     v1_baseten = _v1_chunks("baseten", STREAMS["text"])
     v1_openai = _v1_chunks("custom_openai", STREAMS["text"])
     assert _norm(v1_baseten) != _norm(v1_openai)
+    # registration half: naive registration fails HERE, corpus row or not
+    assert "baseten" not in get_args(Provider)
+    assert "baseten" not in pipeline._SERIALIZERS
+    assert "baseten" not in pipeline._RESPONSE_PARSERS
+    assert "baseten" not in pipeline._RESPONSE_DIALECTS
+    assert "baseten" not in pipeline._RAW_GUARDS

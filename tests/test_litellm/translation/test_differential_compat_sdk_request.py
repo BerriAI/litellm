@@ -13,6 +13,7 @@ the v1 configs at HEAD, over every model-map row where the provider has any.
 
 import copy
 import json
+from typing import get_args
 
 import pytest
 
@@ -20,6 +21,9 @@ import litellm
 from litellm.exceptions import UnsupportedParamsError
 
 from litellm.translation import translate_chat_request
+from litellm.translation.dispatch import Provider
+from litellm.translation.engine import pipeline
+from litellm.translation.providers import compat_sdk
 from litellm.translation.providers.compat_sdk import params as csp
 
 from ._compat_sdk_corpus import (
@@ -242,6 +246,36 @@ def _request_rows():
     return sorted(
         (provider, name) for provider in PROVIDERS for name in corpus_for(provider)
     )
+
+
+def test_registered_providers_have_differential_coverage() -> None:
+    """Green-but-untested registration is impossible (verifier-wave1a F3):
+    every dispatch Literal member is registered in every pipeline table,
+    the compat_sdk family registry equals the corpus SPECS exactly, and a
+    provider outside the family must be in the dedicated-gates set below.
+    Add a provider to that set ONLY in the commit that adds its
+    differential corpus, naming the gate files."""
+    providers = set(get_args(Provider))
+    assert providers == set(pipeline._SERIALIZERS)
+    assert providers == set(pipeline._RESPONSE_PARSERS)
+    assert providers == set(pipeline._RESPONSE_DIALECTS)
+    assert set(pipeline._RAW_GUARDS) <= providers
+    assert set(compat_sdk.PROFILES) == set(SPECS)
+    assert set(compat_sdk.ALLOWED) == set(SPECS)
+    dedicated_gates = {
+        "anthropic",  # test_differential_anthropic_{request,response,stream}
+        "bedrock_converse",  # test_differential_bedrock_*
+        "bedrock_invoke",  # test_differential_bedrock_*
+        "openai_compat",  # test_differential_openai_*
+        "vertex_ai",  # test_differential_google_*
+        "gemini",  # test_differential_google_*
+        "vertex_anthropic",  # test_differential_google_*
+        "azure",  # test_differential_azure_*
+        "azure_ai",  # test_differential_azure_ai_request + azure stream/response
+        "azure_ai_anthropic",  # test_differential_azure_ai_request (Claude route)
+        "xai",  # test_differential_xai_*
+    }
+    assert providers == dedicated_gates | set(SPECS)
 
 
 @pytest.mark.parametrize("provider,name", _request_rows())
