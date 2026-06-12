@@ -21,8 +21,18 @@ from ...errors import TranslationError
 _Raw = Mapping[str, object]
 
 
-def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
-    reason = _params_reason(raw) or _tools_reason(raw) or _messages_reason(raw)
+def unsupported_request_shapes(
+    raw: _Raw, *, name_fallback_user_only: bool = False
+) -> TranslationError | None:
+    """``name_fallback_user_only``: providers whose v1 transform STRIPS the
+    message ``name`` from non-user roles (xai ``strip_name_from_messages``)
+    only need the fallback for user messages, where v1 forwards it verbatim;
+    the IR's name-drop IS v1's behavior on the other roles."""
+    reason = (
+        _params_reason(raw)
+        or _tools_reason(raw)
+        or _messages_reason(raw, name_fallback_user_only)
+    )
     if reason is None:
         return None
     return TranslationError.of_unsupported(f"{reason}; v1 forwards the original shape")
@@ -71,7 +81,7 @@ def _tools_reason(raw: _Raw) -> str | None:
     return None
 
 
-def _messages_reason(raw: _Raw) -> str | None:
+def _messages_reason(raw: _Raw, name_fallback_user_only: bool = False) -> str | None:
     messages = _as_seq(raw.get("messages"))
     if messages is None:
         return None
@@ -84,7 +94,9 @@ def _messages_reason(raw: _Raw) -> str | None:
             # keep scanning so the guard stays locally conservative too
             continue
         role = entry.get("role")
-        if entry.get("name") is not None:
+        if entry.get("name") is not None and (
+            not name_fallback_user_only or role == "user"
+        ):
             return "message name field (not carried by the IR)"
         reason = _message_reason(entry, role, seen_non_system)
         if reason is not None:
