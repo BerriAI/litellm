@@ -136,7 +136,9 @@ async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None
 
 
 async def _check_request_disconnection(
-    request: Request, llm_api_call_task: "asyncio.Task[Any]"
+    request: Request,
+    llm_api_call_task: "asyncio.Task[Any]",
+    client_disconnect_triggered: Optional[list[bool]] = None,
 ) -> None:
     # only run this function for 10 mins -> if these don't get cancelled -> we don't want the server to have many while loops
     start_time = time.time()
@@ -144,6 +146,8 @@ async def _check_request_disconnection(
         await asyncio.sleep(1)
         try:
             if await request.is_disconnected():
+                if client_disconnect_triggered is not None:
+                    client_disconnect_triggered[0] = True
                 llm_api_call_task.cancel()
                 return
         except Exception:
@@ -1295,8 +1299,11 @@ class ProxyBaseLLMRequestProcessing:
         llm_call_task = asyncio.create_task(llm_call)
         tasks.append(llm_call_task)
 
+        client_disconnect_triggered = [False]
         disconnect_task = asyncio.create_task(
-            _check_request_disconnection(request, llm_call_task)
+            _check_request_disconnection(
+                request, llm_call_task, client_disconnect_triggered
+            )
         )
 
         # wait for call to end
@@ -1307,10 +1314,12 @@ class ProxyBaseLLMRequestProcessing:
         try:
             responses = await llm_responses
         except asyncio.CancelledError:
-            raise HTTPException(
-                status_code=499,
-                detail="Client disconnected the request",
-            )
+            if client_disconnect_triggered[0]:
+                raise HTTPException(
+                    status_code=499,
+                    detail="Client disconnected the request",
+                )
+            raise
         finally:
             await _cancel_pending_gather_tasks(tasks)
             disconnect_task.cancel()
