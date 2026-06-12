@@ -655,11 +655,12 @@ async def anthropic_proxy_route(
     except ProxyException as e:
         if auth_header is None and e.code == "401":
             e.message = (
-                "No Anthropic credentials found on the proxy. Set the ANTHROPIC_API_KEY "
-                "environment variable (or ANTHROPIC_AUTH_TOKEN for OAuth) on the proxy, "
-                "or configure Anthropic pass-through credentials. The incoming request "
-                "headers were forwarded to Anthropic as-is and the request failed with "
-                f"error: {e.message}"
+                "No Anthropic credentials found on the proxy, so the incoming "
+                "request headers were forwarded to Anthropic as-is and were "
+                "rejected. Either set the ANTHROPIC_API_KEY environment variable "
+                "(or ANTHROPIC_AUTH_TOKEN for OAuth) on the proxy, configure "
+                "Anthropic pass-through credentials, or send a valid Anthropic "
+                f"credential in the request headers. Original error: {e.message}"
             )
         raise e
 
