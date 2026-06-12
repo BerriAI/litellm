@@ -181,6 +181,59 @@ def test_missing_wire_model_prefixes_the_empty_string(frozen_ambient) -> None:
     assert _norm(v2) == _norm(v1)
 
 
+_MALFORMED_CONTENT_LIST = {
+    # (body, the exception v1's rewrite crashes with)
+    "non_string_text_item": (
+        {
+            **_RESPONSES["content_list_text"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content_list": [{"type": "text", "text": 42}],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        TypeError,  # str + int concat in v1's text accumulation
+    ),
+    "non_list_content_list": (
+        {
+            **_RESPONSES["content_list_text"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content_list": "oops"},
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        AttributeError,  # v1 iterates the string; str has no .get
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_MALFORMED_CONTENT_LIST))
+def test_malformed_content_list_is_loud_where_v1_crashes(
+    name: str, frozen_ambient
+) -> None:
+    """verifier-wave2b-alpha F5: the old isinstance filters quietly SERVED
+    content "" for these shapes (the 42 silently gone) where v1's rewrite
+    crashes with an unhandled TypeError/AttributeError. Fail-closed now:
+    the typed error mirrors v1's raise, two-sided."""
+    body, v1_error = _MALFORMED_CONTENT_LIST[name]
+    with pytest.raises(v1_error):
+        _v1_model_response(body)
+    parsed = parse_request(copy.deepcopy(_REQUEST))
+    assert parsed.is_ok()
+    result = parse_response(copy.deepcopy(body), parsed.ok)
+    assert result.is_error(), f"{name} unexpectedly served"
+    assert "content_list" in result.error.summary, result.error.summary
+    assert "never serve what v1 raises on" in result.error.summary
+
+
 def test_non_string_wire_model_falls_back_where_v1_raises(frozen_ambient) -> None:
     """v1's ModelResponse(**json) raises pydantic ValidationError BEFORE the
     prefix overwrite; the direct parser's F2 arm fails closed."""
