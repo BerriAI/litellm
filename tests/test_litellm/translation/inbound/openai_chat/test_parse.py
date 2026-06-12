@@ -23,7 +23,11 @@ UNSUPPORTED_CASES = [
     ("unknown top-level field", _req(seed=42), ["seed"]),
     ("several unknown fields", _req(logit_bias={}, n=2), ["logit_bias", "n"]),
     ("web_search_options", _req(web_search_options={}), ["web_search_options"]),
-    ("stream_options", _req(stream_options={"include_usage": True}), ["stream_options"]),
+    (
+        "stream_options",
+        _req(stream_options={"include_usage": True}),
+        ["stream_options"],
+    ),
     (
         "unknown role",
         _req(messages=[{"role": "developer", "content": "x"}]),
@@ -137,7 +141,11 @@ UNSUPPORTED_CASES = [
 BOUNDARY_CASES = [
     ("missing model and messages", {}, ["model", "messages"]),
     ("non-object message", _req(messages=[123]), ["messages"]),
-    ("content wrong type", _req(messages=[{"role": "user", "content": 123}]), ["content"]),
+    (
+        "content wrong type",
+        _req(messages=[{"role": "user", "content": 123}]),
+        ["content"],
+    ),
     (
         "text part missing text",
         _req(messages=[{"role": "user", "content": [{"type": "text"}]}]),

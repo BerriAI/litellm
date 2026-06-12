@@ -1,0 +1,23 @@
+{
+  "extra_body": {},
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Describe this image.",
+          "type": "text"
+        },
+        {
+          "image_url": {
+            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+          },
+          "type": "image_url"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "gpt-4.1",
+  "stream": false
+}

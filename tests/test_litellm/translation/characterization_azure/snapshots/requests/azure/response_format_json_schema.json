@@ -1,0 +1,31 @@
+{
+  "extra_body": {},
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "model": "gpt-4.1",
+  "response_format": {
+    "json_schema": {
+      "name": "capital",
+      "schema": {
+        "additionalProperties": false,
+        "properties": {
+          "capital": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "capital"
+        ],
+        "type": "object"
+      },
+      "strict": true
+    },
+    "type": "json_schema"
+  },
+  "stream": false
+}

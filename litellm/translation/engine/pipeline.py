@@ -29,6 +29,20 @@ from ..inbound.openai_chat.response import ResponseDialect, serialize_response
 from ..ir import Body, ChatRequest, ChatResponse, PlainJson
 from ..providers.anthropic import serialize_request
 from ..providers.anthropic.response import parse_response
+from ..providers.azure import parse_response as azure_parse_response
+from ..providers.azure import serialize_request as azure_serialize_request
+from ..providers.azure import (
+    unsupported_request_shapes as azure_unsupported_request_shapes,
+)
+from ..providers.azure_ai import claude_parse_response as azure_ai_claude_parse_response
+from ..providers.azure_ai import (
+    claude_serialize_request as azure_ai_claude_serialize_request,
+)
+from ..providers.azure_ai import parse_response as azure_ai_parse_response
+from ..providers.azure_ai import serialize_request as azure_ai_serialize_request
+from ..providers.azure_ai import (
+    unsupported_request_shapes as azure_ai_unsupported_request_shapes,
+)
 from ..providers.bedrock_converse import (
     parse_response as bedrock_converse_parse_response,
 )
@@ -75,6 +89,9 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "vertex_ai": google_serialize_request_vertex,
         "gemini": google_serialize_request_studio,
         "vertex_anthropic": vertex_anthropic_serialize_request,
+        "azure": azure_serialize_request,
+        "azure_ai": azure_ai_serialize_request,
+        "azure_ai_anthropic": azure_ai_claude_serialize_request,
     }
 )
 
@@ -87,6 +104,9 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         "vertex_ai": google_parse_response,
         "gemini": google_parse_response,
         "vertex_anthropic": vertex_anthropic_parse_response,
+        "azure": azure_parse_response,
+        "azure_ai": azure_ai_parse_response,
+        "azure_ai_anthropic": azure_ai_claude_parse_response,
     }
 )
 
@@ -99,6 +119,9 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         "vertex_ai": "gemini",
         "gemini": "gemini",
         "vertex_anthropic": "anthropic",  # vertex claude delegates to the anthropic transform
+        "azure": "openai",  # same normalizer (convert_to_model_response_object)
+        "azure_ai": "openai",
+        "azure_ai_anthropic": "anthropic",  # genuine anthropic wire format
     }
 )
 
@@ -110,6 +133,8 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
     # cannot round-trip losslessly fall back to v1 as typed errors.
     {
         "openai_compat": openai_compat_unsupported_request_shapes,
+        "azure": azure_unsupported_request_shapes,
+        "azure_ai": azure_ai_unsupported_request_shapes,
     }
 )
 

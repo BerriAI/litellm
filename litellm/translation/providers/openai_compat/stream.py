@@ -107,7 +107,17 @@ def _string_or_none(value: PlainJson) -> PlainJson:
 def _normalize_choice(choice: PlainJson) -> PlainJson | TranslationError:
     if not isinstance(choice, dict):
         return _boundary("stream choice is not an object")
-    extra_keys = set(choice.keys()) - {"index", "delta", "logprobs", "finish_reason"}
+    extra_keys = set(choice.keys()) - {
+        "index",
+        "delta",
+        "logprobs",
+        "finish_reason",
+        # azure's content-filter annotation: v1's wrapper keeps it on content
+        # chunks via the StreamingChoices(**choice_json) rebuild (the same,
+        # provider-agnostic code path), so it rides the normalized choice and
+        # the fold decides emission (kept on content, dropped on finish).
+        "content_filter_results",
+    }
     if extra_keys:
         return TranslationError.of_unsupported(
             f"stream choice keys {sorted(extra_keys)!r}; unreachable for v2-sent requests"
@@ -131,12 +141,18 @@ def _normalize_choice(choice: PlainJson) -> PlainJson | TranslationError:
             "finish chunk with a non-empty delta; v1's wrapper interleaves it"
         )
     index = choice.get("index")
-    return {
+    normalized: dict[str, PlainJson] = {
         "index": index if isinstance(index, int) else 0,
         "delta": normalized_delta,
         "logprobs": None,
         "finish_reason": finish,
     }
+    if "content_filter_results" in choice:
+        normalized = {
+            **normalized,
+            "content_filter_results": choice["content_filter_results"],
+        }
+    return normalized
 
 
 def _normalize_delta(

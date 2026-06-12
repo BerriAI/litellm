@@ -134,6 +134,182 @@ def _openai_rows(lines: list) -> int:
     return failures
 
 
+def _azure_rows(lines: list) -> int:
+    import os
+
+    from litellm.translation import translate_chat_request
+
+    from . import _azure_corpus as corpus
+    from . import test_differential_azure_request as req
+    from . import test_differential_azure_response as resp
+    from . import test_differential_azure_stream as stream
+    from .conftest import build_real_deps
+
+    os.environ.pop("AZURE_API_VERSION", None)  # the corpus seam's default chain
+    failures = 0
+    lines += [
+        "",
+        "## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)",
+        "",
+    ]
+    for name in sorted(req.CORPUS):
+        request, api_version, base_model = req._row(name)
+        result = req._v2_body(request, api_version, base_model)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req._v1_body(request, api_version, base_model)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.EXPECTED_FALLBACKS):
+        case, api_version, base_model, reason = req.EXPECTED_FALLBACKS[name]
+        result = req._v2_body(case, api_version, base_model)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## azure: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON)",
+        "",
+    ]
+    for case_id in sorted(req.CHAR_CASES):
+        case = req.CHAR_CASES[case_id]
+        if "azure" in case["skip"]:
+            lines.append(f"- SKIPPED (corpus): {case_id} ({case['skip']['azure']})")
+            continue
+        snapshot_path = corpus.SNAPSHOTS_DIR / "requests" / "azure" / f"{case_id}.json"
+        v1_same = (
+            corpus.canonical_json(corpus.run_v1_request_transform(case))
+            == snapshot_path.read_text()
+        )
+        raw = {
+            "model": corpus.MODEL,
+            "messages": [dict(m) for m in case["messages"]],
+            **dict(case["params"]),
+        }
+        result = translate_chat_request(
+            raw, "azure", build_real_deps(api_version=req.DEFAULT_API_VERSION)
+        )
+        if case_id in req.CHAR_EXPECTED_FALLBACKS:
+            ok = result.is_error() and v1_same
+            failures += 0 if ok else 1
+            label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+            lines.append(
+                f"- {label}: {case_id} ({req.CHAR_EXPECTED_FALLBACKS[case_id]})"
+            )
+            continue
+        expected = corpus.v2_comparable(corpus.load_json(snapshot_path))
+        v2_same = result.is_ok() and corpus.canonical_json(
+            result.ok
+        ) == corpus.canonical_json(expected)
+        same = v1_same and v2_same
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {case_id}")
+    lines += [
+        "",
+        "## azure: responses (v1 convert_to_model_response_object with azure.py's args vs v2)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        same = resp._norm(resp._v2_model_response(resp._RESPONSES[name])) == resp._norm(
+            resp._v1_model_response(resp._RESPONSES[name])
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for fixture_id in resp._FIXTURES:
+        raw = corpus.load_json(
+            corpus.FIXTURES_DIR / "responses" / "azure" / f"{fixture_id}.json"
+        )
+        snapshot = (
+            corpus.SNAPSHOTS_DIR / "responses" / "azure" / f"{fixture_id}.json"
+        ).read_text()
+        same = (
+            corpus.canonical_json(corpus.run_v1_response_transform(raw)) == snapshot
+            and corpus.canonical_json(resp._v2_model_response(raw)) == snapshot
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: corpus {fixture_id}")
+    same = resp._norm(
+        resp._v2_azure_ai_model_response(resp._AZURE_AI_RESPONSE)
+    ) == resp._norm(resp._v1_azure_ai_model_response(resp._AZURE_AI_RESPONSE))
+    failures += 0 if same else 1
+    lines.append(
+        f"- {'IDENTICAL' if same else 'DIVERGENT'}: azure_ai model rename (v1 preset + convert re-prefix)"
+    )
+    lines += [
+        "",
+        "## azure: streams (v1 CustomStreamWrapper('azure') over SDK chunks vs v2 azure dialect)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        same = stream._norm(stream._v2_chunks(stream.STREAMS[name])) == stream._norm(
+            corpus.replay_azure_sdk_chunks(stream.STREAMS[name])
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for fixture_id in stream._FIXTURES:
+        events = corpus.load_json(
+            corpus.FIXTURES_DIR / "streams" / "azure" / f"{fixture_id}.json"
+        )
+        expected = corpus.canonical_json(
+            corpus.stream_snapshot_chunks(
+                corpus.SNAPSHOTS_DIR / "streams" / "azure" / f"{fixture_id}.json"
+            )
+        )
+        same = (
+            corpus.canonical_json(corpus.replay_azure_sdk_chunks(events)) == expected
+            and corpus.canonical_json(stream._v2_chunks(events)) == expected
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: corpus {fixture_id}")
+    return failures
+
+
+def _azure_ai_rows(lines: list) -> int:
+    from . import test_differential_azure_ai_request as req
+
+    failures = 0
+    lines += [
+        "",
+        "## azure_ai: request bodies (v1 AzureAIStudioConfig chain vs v2)",
+        "",
+    ]
+    for name in sorted(req.FOUNDRY_CORPUS):
+        result = req._v2_body(req.FOUNDRY_CORPUS[name], "azure_ai")
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req._v1_foundry_body(req.FOUNDRY_CORPUS[name])
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.FOUNDRY_EXPECTED_FALLBACKS):
+        case, reason = req.FOUNDRY_EXPECTED_FALLBACKS[name]
+        result = req._v2_body(case, "azure_ai")
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## azure_ai_anthropic: request bodies (v1 AzureAnthropicConfig chain vs v2, no model spoof)",
+        "",
+    ]
+    for name in sorted(req.CLAUDE_CORPUS):
+        result = req._v2_body(req.CLAUDE_CORPUS[name], "azure_ai_anthropic")
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req._v1_claude_body(req.CLAUDE_CORPUS[name])
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.CLAUDE_EXPECTED_FALLBACKS):
+        case, reason = req.CLAUDE_EXPECTED_FALLBACKS[name]
+        result = req._v2_body(case, "azure_ai_anthropic")
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    return failures
+
+
 def _bedrock_request_rows(lines: list) -> int:
     from litellm.translation import translate_chat_request
 
@@ -418,7 +594,7 @@ def main() -> None:
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -431,6 +607,8 @@ def main() -> None:
     ]
     failures = _anthropic_rows(lines)
     failures += _openai_rows(lines)
+    failures += _azure_rows(lines)
+    failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)
     failures += _bedrock_response_rows(lines)
     failures += _bedrock_stream_rows(lines)

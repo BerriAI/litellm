@@ -1,0 +1,101 @@
+[
+  {
+    "choices": [
+      {
+        "content_filter_results": {},
+        "delta": {
+          "audio": null,
+          "content": null,
+          "function_call": null,
+          "refusal": null,
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "function": {
+                "arguments": "",
+                "name": "get_weather"
+              },
+              "id": "call_charweather0001",
+              "index": 0,
+              "type": "function"
+            }
+          ]
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-CharAzStreamTool0001",
+    "model": "gpt-4.1-2025-04-14",
+    "moderation": null,
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "service_tier": null,
+    "system_fingerprint": "fp_char_0001"
+  },
+  {
+    "choices": [
+      {
+        "content_filter_results": {},
+        "delta": {
+          "audio": null,
+          "content": null,
+          "function_call": null,
+          "provider_specific_fields": null,
+          "refusal": null,
+          "role": null,
+          "tool_calls": [
+            {
+              "function": {
+                "arguments": "{\"city\": \"Paris\"}",
+                "name": null
+              },
+              "id": null,
+              "index": 0,
+              "type": "function"
+            }
+          ]
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-CharAzStreamTool0001",
+    "model": "gpt-4.1-2025-04-14",
+    "moderation": null,
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "service_tier": null,
+    "system_fingerprint": "fp_char_0001"
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": null,
+          "function_call": null,
+          "role": null,
+          "tool_calls": null
+        },
+        "finish_reason": "tool_calls",
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "created": 1718064000,
+    "id": "chatcmpl-CharAzStreamTool0001",
+    "model": "gpt-4.1-2025-04-14",
+    "moderation": null,
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "service_tier": null,
+    "system_fingerprint": "fp_char_0001"
+  }
+]
