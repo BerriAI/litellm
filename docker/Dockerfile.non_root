@@ -105,6 +105,10 @@ COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/docker /app/docker
 COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
+# enterprise/ is imported by source path at runtime (proxy_cli puts the
+# working directory on sys.path; litellm/proxy/hooks resolves
+# enterprise.enterprise_hooks from it)
+COPY --from=builder /app/enterprise /app/enterprise
 COPY --from=builder /app/.cache /app/.cache
 COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
 COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
