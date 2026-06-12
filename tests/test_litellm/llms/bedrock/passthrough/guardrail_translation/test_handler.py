@@ -433,7 +433,7 @@ class TestDeAnonymizeConverseStream:
         async def mock_hook(data, user_api_key_dict, response):
             return de_anon_response
 
-        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
             proxy_logging_obj=self._make_proxy_logging(mock_hook),
             user_api_key_dict=MagicMock(),
@@ -476,7 +476,7 @@ class TestDeAnonymizeConverseStream:
             assert response["output"]["message"]["content"][0]["text"] == "<PERSON_1> called."
             return de_anon_response
 
-        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
             proxy_logging_obj=self._make_proxy_logging(mock_hook),
             user_api_key_dict=MagicMock(),
@@ -513,7 +513,7 @@ class TestDeAnonymizeConverseStream:
         async def mock_hook(data, user_api_key_dict, response):
             return de_anon_response
 
-        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
             proxy_logging_obj=self._make_proxy_logging(mock_hook),
             user_api_key_dict=MagicMock(),
@@ -533,7 +533,7 @@ class TestDeAnonymizeConverseStream:
 
         hook_spy = AsyncMock()
 
-        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
             proxy_logging_obj=self._make_proxy_logging(hook_spy),
             user_api_key_dict=MagicMock(),
@@ -569,7 +569,7 @@ class TestDeAnonymizeConverseStream:
         async def mock_hook(data, user_api_key_dict, response):
             return de_anon_response
 
-        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
             proxy_logging_obj=self._make_proxy_logging(mock_hook),
             user_api_key_dict=MagicMock(),
@@ -608,7 +608,7 @@ class TestDeAnonymizeConverseStream:
         async def mock_hook(data, user_api_key_dict, response):
             return de_anon_response
 
-        result = await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
             proxy_logging_obj=self._make_proxy_logging(mock_hook),
             user_api_key_dict=MagicMock(),

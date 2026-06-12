@@ -137,3 +137,53 @@ class TestLlmPassthroughRouteHandlerOutput:
 
         guardrail.apply_guardrail.assert_not_called()
         assert result is response
+
+
+class TestDeAnonymizeEventStream:
+    @pytest.mark.asyncio
+    async def test_bedrock_provider_dispatches_to_handler(self):
+        body = b"original-stream-bytes"
+        expected = b"de-anonymized-bytes"
+        proxy_logging_obj = MagicMock()
+        user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
+            "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
+            new=AsyncMock(return_value=expected),
+        ) as mock_handler:
+            result = await LlmPassthroughRouteHandler.de_anonymize_event_stream(
+                body_bytes=body,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                data={"custom_llm_provider": "bedrock"},
+            )
+
+        mock_handler.assert_awaited_once()
+        assert result == expected
+
+    @pytest.mark.asyncio
+    async def test_unknown_provider_returns_original_bytes(self):
+        body = b"original-stream-bytes"
+
+        result = await LlmPassthroughRouteHandler.de_anonymize_event_stream(
+            body_bytes=body,
+            proxy_logging_obj=MagicMock(),
+            user_api_key_dict=MagicMock(),
+            data={"custom_llm_provider": "anthropic"},
+        )
+
+        assert result is body
+
+    @pytest.mark.asyncio
+    async def test_missing_provider_returns_original_bytes(self):
+        body = b"original-stream-bytes"
+
+        result = await LlmPassthroughRouteHandler.de_anonymize_event_stream(
+            body_bytes=body,
+            proxy_logging_obj=MagicMock(),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        assert result is body

@@ -2581,7 +2581,7 @@ class TestEventStreamAllmPassthroughRoute:
         user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
 
         with patch(
-            "litellm.llms.bedrock.passthrough.guardrail_translation.handler.BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream",
+            "litellm.llms.bedrock.passthrough.guardrail_translation.handler.BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
             new=AsyncMock(return_value=expected_bytes),
         ) as mock_handler:
             processing_obj = ProxyBaseLLMRequestProcessing(data={"custom_llm_provider": "bedrock"})

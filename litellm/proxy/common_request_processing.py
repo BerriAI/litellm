@@ -1822,11 +1822,15 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             response=parsed,
         )
-        content = (
-            _json.dumps(processed).encode()
-            if isinstance(processed, dict)
-            else body_bytes
-        )
+        if isinstance(processed, dict):
+            content = _json.dumps(processed).encode()
+        else:
+            verbose_proxy_logger.debug(
+                "allm_passthrough_route: post_call_success_hook returned %s, "
+                "leaving JSON response unmodified",
+                type(processed).__name__,
+            )
+            content = body_bytes
         return Response(
             content=content,
             status_code=response_status,
@@ -1840,13 +1844,11 @@ class ProxyBaseLLMRequestProcessing:
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
     ) -> bytes:
-        if self.data.get("custom_llm_provider") != "bedrock":
-            return body_bytes
-        from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
-            BedrockPassthroughGuardrailHandler,
+        from litellm.llms.pass_through.guardrail_translation.handler import (
+            LlmPassthroughRouteHandler,
         )
 
-        return await BedrockPassthroughGuardrailHandler.de_anonymize_converse_stream(
+        return await LlmPassthroughRouteHandler.de_anonymize_event_stream(
             body_bytes=body_bytes,
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_dict=user_api_key_dict,

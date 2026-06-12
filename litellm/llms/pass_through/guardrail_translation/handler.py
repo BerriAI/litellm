@@ -16,6 +16,8 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
 
 
 class PassThroughEndpointHandler(BaseTranslation):
@@ -274,4 +276,28 @@ class LlmPassthroughRouteHandler(BaseTranslation):
             litellm_logging_obj=litellm_logging_obj,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
+        )
+
+    @staticmethod
+    async def de_anonymize_event_stream(
+        body_bytes: bytes,
+        proxy_logging_obj: "ProxyLogging",
+        user_api_key_dict: "UserAPIKeyAuth",
+        data: dict,
+    ) -> bytes:
+        provider = data.get("custom_llm_provider")
+        handler_cls = _get_provider_handlers().get(provider or "")
+        de_anonymize = getattr(handler_cls, "de_anonymize_event_stream", None)
+        if de_anonymize is None:
+            verbose_proxy_logger.debug(
+                "LlmPassthroughRouteHandler: no event-stream handler for provider=%s, "
+                "leaving stream unmodified",
+                provider,
+            )
+            return body_bytes
+        return await de_anonymize(
+            body_bytes=body_bytes,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            data=data,
         )

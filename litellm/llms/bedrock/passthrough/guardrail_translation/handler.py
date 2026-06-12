@@ -79,7 +79,7 @@ def _write_back_texts(
 
 class BedrockPassthroughGuardrailHandler(BaseTranslation):
     @staticmethod
-    async def de_anonymize_converse_stream(  # noqa: PLR0915
+    async def de_anonymize_event_stream(  # noqa: PLR0915
         body_bytes: bytes,
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
@@ -153,6 +153,11 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         )
 
         if not isinstance(processed, dict):
+            verbose_proxy_logger.debug(
+                "BedrockPassthroughGuardrailHandler: post_call_success_hook returned %s, "
+                "leaving event stream unmodified",
+                type(processed).__name__,
+            )
             return body_bytes
 
         try:
