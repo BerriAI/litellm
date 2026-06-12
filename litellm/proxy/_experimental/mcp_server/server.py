@@ -270,6 +270,7 @@ if MCP_AVAILABLE:
         global_mcp_tool_registry,
     )
     from litellm.proxy._experimental.mcp_server.utils import (
+        MCP_TOOL_PREFIX_SEPARATOR,
         is_tool_name_prefixed,
         normalize_server_name,
         split_server_prefix_from_name,
@@ -2486,7 +2487,7 @@ if MCP_AVAILABLE:
             )
 
         name_is_prefixed = False
-        if requested_server is not None:
+        if requested_server is not None and MCP_TOOL_PREFIX_SEPARATOR in name:
             all_registry_prefixes: Set[str] = set()
             for registry_server in global_mcp_server_manager.get_registry().values():
                 for known_prefix in iter_known_server_prefixes(registry_server):
