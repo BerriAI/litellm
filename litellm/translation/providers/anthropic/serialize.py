@@ -16,7 +16,7 @@ import copy
 import json
 from collections.abc import Mapping
 
-from expression import Error, Ok, Option, Result
+from expression import Option
 from expression.collections import Block
 from typing_extensions import assert_never
 
@@ -31,6 +31,7 @@ from ...ir import (
     ToolChoice,
     has_tool_blocks,
 )
+from ...result import Error, Ok, Result
 from . import params as p
 from .messages import serialize_messages
 from .tools import (
@@ -53,19 +54,19 @@ def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _Serialize
             )
         )
     match p.map_thinking(request, deps):
-        case Result(tag="ok", ok=(thinking_json, output_config)):
+        case Ok(ok=(thinking_json, output_config)):
             pass
-        case Result(error=err):
+        case Error(error=err):
             return Error(err)
     match _response_format_fields(request, deps):
-        case Result(tag="ok", ok=(rf_tool, rf_tool_choice, output_format, json_mode)):
+        case Ok(ok=(rf_tool, rf_tool_choice, output_format, json_mode)):
             pass
-        case Result(error=rf_err):
+        case Error(error=rf_err):
             return Error(rf_err)
     match _sampling_fields(request, deps):
-        case Result(tag="ok", ok=sampling):
+        case Ok(ok=sampling):
             pass
-        case Result(error=sampling_err):
+        case Error(error=sampling_err):
             return Error(sampling_err)
 
     name_forward, _ = request_name_maps(request.tools)
@@ -115,11 +116,11 @@ def _sampling_fields(
             case _:
                 continue
         match p.gate_sampling_param(request.model, param, value, deps):
-            case Result(tag="ok", ok=Option(tag="some", some=kept)):
+            case Ok(ok=Option(tag="some", some=kept)):
                 gathered = {**gathered, param: kept}
-            case Result(tag="ok", ok=_):
+            case Ok(ok=_):
                 continue
-            case Result(error=err):
+            case Error(error=err):
                 return Error(err)
     return Ok(gathered)
 

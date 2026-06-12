@@ -13,7 +13,7 @@ mirrors that, exactly like the anthropic ``json_mode`` marker).
 
 from __future__ import annotations
 
-from expression import Error, Ok, Option, Result
+from expression import Option
 from expression.collections import Block
 from typing_extensions import assert_never
 
@@ -28,6 +28,7 @@ from ...ir import (
     ToolDef,
     has_tool_blocks,
 )
+from ...result import Error, Ok, Result
 from ..anthropic import params as anthropic_params
 from . import params as p
 from .messages import serialize_messages
@@ -46,14 +47,14 @@ def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _Serialize
     if gate is not None:
         return Error(gate)
     match p.map_thinking(request, deps):
-        case Result(tag="ok", ok=thinking_json):
+        case Ok(ok=thinking_json):
             pass
-        case Result(error=err):
+        case Error(error=err):
             return Error(err)
     match _response_format_tool(request, deps):
-        case Result(tag="ok", ok=(rf_tool, rf_choice)):
+        case Ok(ok=(rf_tool, rf_choice)):
             pass
-        case Result(error=rf_err):
+        case Error(error=rf_err):
             return Error(rf_err)
     tools = (
         Block.of_seq([*request.tools, rf_tool])
@@ -89,19 +90,19 @@ def _assemble(
     rf_choice: dict[str, PlainJson] | None,
 ) -> _SerializeResult:
     match _tool_choice_json(request, deps, thinking_json, rf_choice):
-        case Result(tag="ok", ok=tool_choice):
+        case Ok(ok=tool_choice):
             pass
-        case Result(error=choice_err):
+        case Error(error=choice_err):
             return Error(choice_err)
     match _inference_config(request, deps, thinking_json):
-        case Result(tag="ok", ok=inference_config):
+        case Ok(ok=inference_config):
             pass
-        case Result(error=inference_err):
+        case Error(error=inference_err):
             return Error(inference_err)
     match _additional_fields(request, deps, thinking_json):
-        case Result(tag="ok", ok=additional):
+        case Ok(ok=additional):
             pass
-        case Result(error=additional_err):
+        case Error(error=additional_err):
             return Error(additional_err)
     messages = serialize_messages(request.messages)
     if isinstance(messages, TranslationError):
@@ -127,7 +128,7 @@ def _with_tool_config(
     tool_blocks = serialize_tools(tools, request.model)
     if isinstance(tool_blocks, TranslationError):
         return Error(tool_blocks)
-    tool_config: dict[str, PlainJson] = {
+    tool_config: PlainJson = {
         "tools": tool_blocks,
         **({"toolChoice": tool_choice} if tool_choice is not None else {}),
     }
@@ -157,11 +158,11 @@ def _inference_config(
             case _:
                 continue
         match anthropic_params.gate_sampling_param(request.model, param, value, deps):
-            case Result(tag="ok", ok=Option(tag="some", some=kept)):
+            case Ok(ok=Option(tag="some", some=kept)):
                 config = {**config, key: kept}
-            case Result(tag="ok", ok=_):
+            case Ok(ok=_):
                 continue
-            case Result(error=err):
+            case Error(error=err):
                 return Error(err)
     return Ok(config)
 
@@ -175,11 +176,11 @@ def _additional_fields(
             match anthropic_params.gate_sampling_param(
                 request.model, "top_k", top_k, deps
             ):
-                case Result(tag="ok", ok=Option(tag="some", some=kept)):
+                case Ok(ok=Option(tag="some", some=kept)):
                     top_k_field = {"top_k": kept}
-                case Result(tag="ok", ok=_):
+                case Ok(ok=_):
                     top_k_field = {}
-                case Result(error=err):
+                case Error(error=err):
                     return Error(err)
         case _:
             top_k_field = {}
@@ -287,7 +288,8 @@ def _tool_choice_json(
         and ("any" in choice_json or "tool" in choice_json)
     ):
         # v1 downgrades forced tool use to auto when reasoning is enabled.
-        return Ok({"auto": {}})
+        auto: dict[str, PlainJson] = {"auto": {}}
+        return Ok(auto)
     return Ok(choice_json)
 
 

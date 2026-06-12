@@ -18,12 +18,12 @@ import json
 from collections.abc import Mapping
 from typing import TypeVar
 
-from expression import Error, Ok, Result
 from expression.collections import Block
 from pydantic import BaseModel, ValidationError
 
 from .errors import BoundaryError, TranslationError
 from .ir import PlainJson
+from .result import Error, Ok, Result
 
 _TModel = TypeVar("_TModel", bound=BaseModel)
 

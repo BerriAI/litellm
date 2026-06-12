@@ -14,7 +14,7 @@ import json
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from expression import Error, Nothing, Ok, Option, Result, Some
+from expression import Nothing, Option, Some
 from expression.collections import Block
 
 from ...errors import BoundaryError, TranslationError
@@ -32,6 +32,7 @@ from ...ir import (
     Thinking,
     ToolUse,
 )
+from ...result import Error, Ok, Result
 from . import params as p
 from .tools import request_name_maps
 

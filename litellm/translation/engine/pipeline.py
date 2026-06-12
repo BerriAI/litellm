@@ -19,8 +19,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from expression import Error, Ok, Result
-
 from ..deps import TranslationDeps
 from ..dispatch import Provider
 from ..errors import TranslateResult, TranslationError
@@ -39,6 +37,7 @@ from ..providers.bedrock_invoke import parse_response as bedrock_invoke_parse_re
 from ..providers.bedrock_invoke import (
     serialize_request as bedrock_invoke_serialize_request,
 )
+from ..result import Error, Ok, Result
 from .http import Endpoint, ExecuteError, HttpPort, ProviderHttpError
 
 _Serializer = Callable[[ChatRequest, TranslationDeps], Result[Body, TranslationError]]
@@ -128,9 +127,9 @@ def prepare_chat_request(
             )
         )
     match parse_request(raw):
-        case Result(tag="ok", ok=request):
+        case Ok(ok=request):
             pass
-        case Result(error=parse_err):
+        case Error(error=parse_err):
             return Error(parse_err)
     return serializer(request, deps).map(
         lambda body: PreparedRequest(request=request, body=body)
@@ -186,11 +185,11 @@ async def send_prepared(
             )
         )
     match parser(response.body, prepared.request):
-        case Result(tag="ok", ok=chat_response):
+        case Ok(ok=chat_response):
             return Ok(
                 serialize_response(chat_response, deps, response_dialect(provider))
             )
-        case Result(error=response_err):
+        case Error(error=response_err):
             return Error(ExecuteError.of_translation(response_err))
 
 
@@ -202,7 +201,7 @@ async def execute_chat_request(
     endpoint: Endpoint,
 ) -> Result[Body, ExecuteError]:
     match prepare_chat_request(raw, provider, deps):
-        case Result(tag="ok", ok=prepared):
+        case Ok(ok=prepared):
             return await send_prepared(prepared, provider, deps, http, endpoint)
-        case Result(error=err):
+        case Error(error=err):
             return Error(ExecuteError.of_translation(err))

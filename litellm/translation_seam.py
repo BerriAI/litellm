@@ -30,6 +30,7 @@ from litellm.types.utils import (
 
 from litellm.translation import TranslationDeps
 from litellm.translation.ir import Body
+from litellm.translation.result import Error
 
 
 def enabled_providers() -> FrozenSet[str]:
@@ -265,7 +266,7 @@ def try_completion_v2(
     )
     deps = build_translation_deps(request_drop_params=request_drop_params)
     prepared_result = prepare_chat_request(raw_body, "anthropic", deps)
-    if prepared_result.is_error():
+    if isinstance(prepared_result, Error):
         litellm.verbose_logger.debug(
             "translation v2 fallback to v1: %s", prepared_result.error.summary
         )
@@ -344,7 +345,7 @@ def try_completion_v2_bedrock(
     raw_body = _raw_openai_body(model, messages, optional_param_args, body_params)
     deps = build_translation_deps(request_drop_params=request_drop_params)
     prepared_result = prepare_chat_request(raw_body, provider_key, deps)  # type: ignore[arg-type]
-    if prepared_result.is_error():
+    if isinstance(prepared_result, Error):
         litellm.verbose_logger.debug(
             "translation v2 fallback to v1: %s", prepared_result.error.summary
         )
@@ -485,7 +486,7 @@ async def _send_v2_bedrock(
     result = translate_chat_response(
         payload, prepared.request, provider_key, deps  # type: ignore[arg-type]
     )
-    if result.is_error():
+    if isinstance(result, Error):
         raise BedrockError(status_code=500, message=result.error.summary)
     return to_model_response(
         result.ok, model_response, usage_style=response_dialect(provider_key)  # type: ignore[arg-type]
@@ -570,7 +571,7 @@ async def _send_v2(
         },
     )
     result = await send_prepared(prepared, "anthropic", deps, HttpxJsonPort(), endpoint)
-    if result.is_error():
+    if isinstance(result, Error):
         error = result.error
         if error.tag == "provider_http":
             logging_obj.post_call(

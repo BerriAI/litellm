@@ -11,13 +11,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from expression import Error, Ok, Option, Result
+from expression import Option
 
 from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS, DEFAULT_MAX_TOKENS
 
 from ...deps import TranslationDeps
 from ...errors import TranslationError
 from ...ir import ChatRequest, FinishReason, PlainJson
+from ...result import Error, Ok, Result
 from ..anthropic import params as anthropic_params
 
 # v1 map_finish_reason rows reachable from converse stopReason values;

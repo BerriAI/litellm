@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from expression import Error, Nothing, Ok, Option, Result, Some
+from expression import Nothing, Option, Some
 from expression.collections import Block
 
 from ...errors import BoundaryError, TranslationError
@@ -28,6 +28,7 @@ from ...ir import (
     Thinking,
     ToolUse,
 )
+from ...result import Error, Ok, Result
 from .params import FINISH_MAP
 from .tools import reverse_name_map
 

@@ -16,11 +16,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from expression import Error, Ok, Result
-
 from ...deps import TranslationDeps
 from ...errors import TranslationError
 from ...ir import Body, ChatRequest
+from ...result import Error, Ok, Result
 from ..anthropic import params as anthropic_params
 from ..anthropic import serialize_request as anthropic_serialize_request
 from ..bedrock_converse.params import is_anthropic_base

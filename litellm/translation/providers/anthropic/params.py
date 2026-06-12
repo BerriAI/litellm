@@ -15,7 +15,7 @@ import re
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from expression import Error, Nothing, Ok, Option, Result, Some
+from expression import Nothing, Option, Some
 from expression.collections import Block
 from typing_extensions import assert_never
 
@@ -40,6 +40,7 @@ from ...ir import (
     Sampling,
     ThinkingParam,
 )
+from ...result import Error, Ok, Result
 
 EFFORT_BUDGETS: Mapping[str, int] = MappingProxyType(
     {
@@ -245,7 +246,11 @@ def _effort_outcome(
     if effort == "none":
         return Ok((None, None))
     if not is_adaptive_thinking_model(model, deps):
-        return Ok(({"type": "enabled", "budget_tokens": EFFORT_BUDGETS[effort]}, None))
+        enabled: PlainJson = {
+            "type": "enabled",
+            "budget_tokens": EFFORT_BUDGETS[effort],
+        }
+        return Ok((enabled, None))
     if effort == "xhigh" and not deps.supports_capability(
         model, "supports_xhigh_reasoning_effort"
     ):
@@ -265,10 +270,11 @@ def _effort_outcome(
             )
         )
     output_config: PlainJson = {"effort": _EFFORT_TO_OUTPUT_CONFIG[effort]}
+    adaptive: PlainJson = {"type": "adaptive"}
     if deps.drop_params_global and not model_supports_effort_param(model, deps):
         # v1 _apply_output_config drops output_config under the global flag.
-        return Ok(({"type": "adaptive"}, None))
-    return Ok(({"type": "adaptive"}, output_config))
+        return Ok((adaptive, None))
+    return Ok((adaptive, output_config))
 
 
 def thinking_signaled(request: ChatRequest) -> bool:

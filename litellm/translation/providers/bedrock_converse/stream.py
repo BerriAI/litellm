@@ -11,7 +11,6 @@ reasoning deltas, guardrail traces) are loud error values.
 
 from __future__ import annotations
 
-from expression import Error, Ok, Result
 from expression.collections import Block
 
 from ...errors import BoundaryError, TranslationError
@@ -26,6 +25,7 @@ from ...ir import (
     ToolArgsDelta,
     ToolUseStart,
 )
+from ...result import Error, Ok, Result
 from .params import FINISH_MAP
 
 _EventResult = Result[StreamEvent | None, TranslationError]

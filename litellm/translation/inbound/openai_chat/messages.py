@@ -21,7 +21,7 @@ import json
 from collections.abc import Iterable, Sequence
 from itertools import chain, groupby
 
-from expression import Error, Nothing, Ok, Option, Result, Some
+from expression import Nothing, Option, Some
 from expression.collections import Block
 
 from ...errors import BoundaryError, TranslationError
@@ -44,6 +44,7 @@ from ...ir import (
     ToolUse,
     UrlSource,
 )
+from ...result import Error, Ok, Result
 from .schema import (
     AssistantMessageIn,
     CacheControlIn,

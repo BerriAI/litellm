@@ -15,12 +15,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Iterable
 from typing import TypeVar
 
-from expression import Error, Ok, Result
 from expression.collections import Block
 
 from ..errors import TranslationError
 from ..inbound.openai_chat.stream import StreamState, initial_state, step
 from ..ir import Body, PlainJson, StreamEvent
+from ..result import Error, Ok, Result
 
 ParseLine = Callable[[str], Result[StreamEvent | None, TranslationError]]
 ParseEvent = Callable[[PlainJson], Result[StreamEvent | None, TranslationError]]
@@ -37,12 +37,12 @@ def _fold(
     chunks: list[Body] = []
     for item in items:
         match parse(item):
-            case Result(tag="ok", ok=event):
+            case Ok(ok=event):
                 if event is None:
                     continue
                 state, emitted = step(state, event)
                 chunks.extend(emitted)  # nosemgrep: translation-no-mutation
-            case Result(error=err):
+            case Error(error=err):
                 return Error(err)
     return Ok(Block.of_seq(chunks))
 
@@ -72,12 +72,12 @@ async def chunk_stream(
     state = start if start is not None else initial_state()
     async for line in lines:
         match parse_line(line):
-            case Result(tag="ok", ok=event):
+            case Ok(ok=event):
                 if event is None:
                     continue
                 state, emitted = step(state, event)
                 for chunk in emitted:
                     yield Ok(chunk)
-            case Result(error=err):
+            case Error(error=err):
                 yield Error(err)
                 return

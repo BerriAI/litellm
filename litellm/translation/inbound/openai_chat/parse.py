@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TypeVar
 
-from expression import Error, Nothing, Ok, Option, Result, Some
+from expression import Nothing, Option, Some
 from expression.collections import Block
 
 from ... import boundary
@@ -28,6 +28,7 @@ from ...ir import (
     ToolChoice,
     ToolDef,
 )
+from ...result import Error, Ok, Result
 from .messages import cache_of, convert_messages
 from .schema import (
     ChatRequestIn,
@@ -45,9 +46,9 @@ _T = TypeVar("_T")
 def parse_request(raw: Mapping[str, object]) -> ParseResult:
     present = {key: value for key, value in raw.items() if value is not None}
     match boundary.parse(ChatRequestIn, present):
-        case Result(tag="ok", ok=wire):
+        case Ok(ok=wire):
             return _to_ir(wire)
-        case Result(error=err):
+        case Error(error=err):
             return Error(err)
 
 
@@ -65,24 +66,24 @@ def _to_ir(wire: ChatRequestIn) -> ParseResult:
             )
         )
     match convert_messages(wire.messages):
-        case Result(tag="ok", ok=(systems, messages)):
+        case Ok(ok=(systems, messages)):
             pass
-        case Result(error=err):
+        case Error(error=err):
             return Error(err)
     match _parse_tools(wire.tools):
-        case Result(tag="ok", ok=tools):
+        case Ok(ok=tools):
             pass
-        case Result(error=tools_err):
+        case Error(error=tools_err):
             return Error(tools_err)
     match _parse_response_format(wire.response_format):
-        case Result(tag="ok", ok=response_format):
+        case Ok(ok=response_format):
             pass
-        case Result(error=rf_err):
+        case Error(error=rf_err):
             return Error(rf_err)
     match _parse_thinking(wire.thinking):
-        case Result(tag="ok", ok=thinking):
+        case Ok(ok=thinking):
             pass
-        case Result(error=thinking_err):
+        case Error(error=thinking_err):
             return Error(thinking_err)
     return Ok(
         ChatRequest(
@@ -114,9 +115,9 @@ def _parse_tools(
     defs: list[ToolDef] = []
     for tool in tools:
         match _parse_tool(tool):
-            case Result(tag="ok", ok=tool_def):
+            case Ok(ok=tool_def):
                 defs.append(tool_def)  # nosemgrep: translation-no-mutation
-            case Result(error=err):
+            case Error(error=err):
                 return Error(err)
     return Ok(Block.of_seq(defs))
 
@@ -141,7 +142,7 @@ def _parse_tool(tool: ToolIn) -> Result[ToolDef, TranslationError]:
         outer_cache if outer_cache.is_some() else cache_of(tool.function.cache_control)
     )
     match _parse_tool_parameters(tool.function.parameters):
-        case Result(tag="ok", ok=parameters):
+        case Ok(ok=parameters):
             return Ok(
                 ToolDef(
                     name=tool.function.name,
@@ -150,7 +151,7 @@ def _parse_tool(tool: ToolIn) -> Result[ToolDef, TranslationError]:
                     cache=cache,
                 )
             )
-        case Result(error=err):
+        case Error(error=err):
             return Error(err)
 
 
@@ -160,9 +161,9 @@ def _parse_tool_parameters(
     if parameters is None:
         return Ok(Nothing)
     match boundary.as_plain_json(parameters):
-        case Result(tag="ok", ok=copied):
+        case Ok(ok=copied):
             pass
-        case Result(error=reason):
+        case Error(error=reason):
             return Error(TranslationError.of_unsupported(f"tool parameters: {reason}"))
     if not isinstance(copied, dict):
         return Error(
@@ -213,7 +214,7 @@ def _parse_response_format(
             )
         )
     match boundary.as_plain_json(value.json_schema.json_schema):
-        case Result(tag="ok", ok=copied):
+        case Ok(ok=copied):
             if not isinstance(copied, dict):
                 return Error(
                     TranslationError.of_unsupported(
@@ -227,7 +228,7 @@ def _parse_response_format(
                     )
                 )
             )
-        case Result(error=reason):
+        case Error(error=reason):
             return Error(
                 TranslationError.of_unsupported(f"response_format schema: {reason}")
             )

@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
-from expression import Error, Ok, Result
 from expression.collections import Block
 
 from ...errors import BoundaryError, TranslationError
@@ -29,6 +28,7 @@ from ...ir import (
     ToolArgsDelta,
     ToolUseStart,
 )
+from ...result import Error, Ok, Result
 from .response import FINISH_MAP, parse_usage
 from .tools import request_name_maps
 

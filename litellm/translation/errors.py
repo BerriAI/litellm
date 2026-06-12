@@ -12,11 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from expression import Result, case, tag, tagged_union
+from expression import case, tag, tagged_union
 from expression.collections import Block
 from typing_extensions import assert_never
 
 from .ir import Body, ChatRequest
+from .result import Result
 
 
 @dataclass(frozen=True)
