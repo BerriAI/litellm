@@ -18,7 +18,10 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from litellm.exceptions import Timeout as LitellmTimeout
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    MaskedHTTPStatusError,
+    _get_httpx_client,
+)
 
 _HTTPBIN_DELAY_S = 10
 _PER_REQUEST_TIMEOUT_S = 5.0
@@ -40,5 +43,7 @@ def test_post_delay_exceeds_per_request_timeout_raises():
                 data=json.dumps({"model": "claude", "messages": []}),
                 timeout=_PER_REQUEST_TIMEOUT_S,
             )
+    except MaskedHTTPStatusError as e:
+        pytest.skip(f"httpbin.org unavailable: {e}")
     finally:
         handler.close()
