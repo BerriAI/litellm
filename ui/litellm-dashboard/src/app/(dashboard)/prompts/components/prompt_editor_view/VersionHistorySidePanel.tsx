@@ -1,6 +1,6 @@
 import { Drawer, List, Skeleton, Tag, Typography } from "antd";
 import React, { useEffect, useState } from "react";
-import { getPromptVersions, PromptSpec } from "../../networking";
+import { getPromptVersions, PromptSpec } from "@/components/networking";
 
 const { Text } = Typography;
 

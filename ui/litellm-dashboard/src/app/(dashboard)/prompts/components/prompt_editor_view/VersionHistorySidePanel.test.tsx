@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import VersionHistorySidePanel from "./VersionHistorySidePanel";
-import { getPromptVersions } from "../../networking";
-import type { PromptSpec } from "../../networking";
+import { getPromptVersions } from "@/components/networking";
+import type { PromptSpec } from "@/components/networking";
 
 // Mock the networking function
-vi.mock("../../networking", () => ({
+vi.mock("@/components/networking", () => ({
   getPromptVersions: vi.fn(),
 }));
 
