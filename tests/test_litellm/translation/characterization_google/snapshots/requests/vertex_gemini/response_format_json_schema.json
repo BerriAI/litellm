@@ -1,0 +1,28 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "What is the capital of France?"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "max_output_tokens": 256,
+    "response_json_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "capital": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "capital"
+      ],
+      "type": "object"
+    },
+    "response_mime_type": "application/json"
+  }
+}

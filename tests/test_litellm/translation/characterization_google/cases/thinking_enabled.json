@@ -1,0 +1,20 @@
+{
+  "id": "thinking_enabled",
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 2048,
+    "thinking": {
+      "budget_tokens": 1024,
+      "type": "enabled"
+    }
+  },
+  "skip": {
+    "azure": "v1 get_optional_params raises UnsupportedParamsError for `thinking` on gpt-4.1 (non-reasoning openai-family model)",
+    "openai": "v1 get_optional_params raises UnsupportedParamsError for `thinking` on gpt-4.1 (non-reasoning openai-family model)"
+  }
+}

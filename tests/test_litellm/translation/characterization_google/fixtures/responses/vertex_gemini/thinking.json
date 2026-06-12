@@ -1,0 +1,32 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "text": "The user asks about France. The capital is Paris.",
+            "thought": true,
+            "thoughtSignature": "c2lnLWNoYXItdmVydGV4LWdlbWluaQ=="
+          },
+          {"text": "The capital of France is Paris."}
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 1290,
+    "candidatesTokenCount": 8,
+    "totalTokenCount": 1450,
+    "thoughtsTokenCount": 152,
+    "cachedContentTokenCount": 1024,
+    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1290}],
+    "cacheTokensDetails": [{"modality": "TEXT", "tokenCount": 1024}],
+    "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 8}],
+    "trafficType": "ON_DEMAND"
+  },
+  "modelVersion": "gemini-2.5-pro",
+  "createTime": "2025-05-24T00:00:00.000000Z",
+  "responseId": "char-vertex-gemini-think-0001"
+}

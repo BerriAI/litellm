@@ -153,8 +153,12 @@ def _image_block(part: ImagePartIn) -> ContentBlock | TranslationError:
     fmt = part.image_url.format if isinstance(part.image_url, ImageUrlIn) else None
     cache = cache_of(part.cache_control)
     if url.startswith("https://"):
+        fmt_option = Some(fmt) if fmt is not None else Nothing
         return ContentBlock.of_image(
-            Image(source=ImageSource.of_url(UrlSource(url=url)), cache=cache)
+            Image(
+                source=ImageSource.of_url(UrlSource(url=url, format=fmt_option)),
+                cache=cache,
+            )
         )
     if url.startswith("http://"):
         return TranslationError.of_unsupported(
@@ -317,6 +321,11 @@ def _tool_use(call: ToolCallIn) -> ContentBlock | TranslationError:
             name=function.name,
             arguments=arguments,
             cache=cache_of(call.cache_control),
+            arguments_raw=(
+                Some(function.arguments)
+                if isinstance(function.arguments, str)
+                else Nothing
+            ),
         )
     )
 

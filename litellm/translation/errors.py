@@ -12,10 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from typing_extensions import assert_never
-
 from expression import Result, case, tag, tagged_union
 from expression.collections import Block
+from typing_extensions import assert_never
 
 from .ir import Body, ChatRequest
 
@@ -32,7 +31,7 @@ class BoundaryError:
     failures: Block[str]
 
     @staticmethod
-    def of(failures: Block[str]) -> "BoundaryError":
+    def of(failures: Block[str]) -> BoundaryError:
         summary = "; ".join(failures) if len(failures) > 0 else "invalid request"
         return BoundaryError(summary=summary, failures=failures)
 
@@ -45,11 +44,11 @@ class TranslationError:
     unsupported: str = case()
 
     @staticmethod
-    def of_boundary(value: BoundaryError) -> "TranslationError":
+    def of_boundary(value: BoundaryError) -> TranslationError:
         return TranslationError(boundary=value)
 
     @staticmethod
-    def of_unsupported(reason: str) -> "TranslationError":
+    def of_unsupported(reason: str) -> TranslationError:
         return TranslationError(unsupported=reason)
 
     @property

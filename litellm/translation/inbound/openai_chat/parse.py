@@ -147,6 +147,7 @@ def _parse_tool(tool: ToolIn) -> Result[ToolDef, TranslationError]:
                     description=_option(tool.function.description),
                     parameters=parameters,
                     cache=cache,
+                    strict=_option(tool.function.strict),
                 )
             )
         case Result(error=err):
@@ -222,7 +223,12 @@ def _parse_response_format(
             return Ok(
                 Some(
                     ResponseFormat.of_json_schema(
-                        JsonSchemaSpec(schema=JsonBlob(value=copied))
+                        JsonSchemaSpec(
+                            schema=JsonBlob(value=copied),
+                            name=_option(value.json_schema.name),
+                            description=_option(value.json_schema.description),
+                            strict=_option(value.json_schema.strict),
+                        )
                     )
                 )
             )
@@ -270,6 +276,7 @@ def _parse_params(wire: ChatRequestIn) -> InferenceParams:
         top_p=_option(wire.top_p),
         top_k=_option(wire.top_k),
         stop=_parse_stop(wire.stop),
+        max_completion_tokens=_option(wire.max_completion_tokens),
     )
 
 

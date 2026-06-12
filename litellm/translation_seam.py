@@ -67,7 +67,7 @@ def build_translation_deps(
     )
 
 
-UsageStyle = str  # "anthropic" | "bedrock_converse" (mirrors the v1 transform)
+UsageStyle = str  # "anthropic" | "bedrock_converse" | "openai" (v1 transform)
 
 
 def to_model_response(
@@ -81,11 +81,16 @@ def to_model_response(
     pre-allocated response's first choice, stamp created/model, setattr a
     real ``Usage`` built with that transform's exact kwarg set — extra-field
     serialization only dumps explicitly set fields). The envelope (chatcmpl
-    id, created timestamp) stays litellm-ambient.
+    id, created timestamp) stays litellm-ambient, except on the ``openai``
+    style where v1's ``convert_to_model_response_object`` keeps the wire
+    id/created/system_fingerprint and setattrs unknown top-level keys.
     """
     import time
 
     from litellm.types.utils import Message
+
+    if usage_style == "openai":
+        return _to_model_response_openai(body, model_response)
 
     response = model_response if model_response is not None else ModelResponse()
     choices = body.get("choices")
@@ -109,6 +114,86 @@ def to_model_response(
     model = body.get("model")
     if isinstance(model, str):
         response.model = model
+    return response
+
+
+_OPENAI_BODY_ENVELOPE_FIELDS = (
+    "object",
+    "choices",
+    "usage",
+    "id",
+    "created",
+    "model",
+    "system_fingerprint",
+)
+
+
+def _to_model_response_openai(
+    body: Body, model_response: Optional[ModelResponse]
+) -> ModelResponse:
+    """Mirror ``convert_to_model_response_object``'s completion-branch
+    assembly over the normalized body the openai_compat parser built: choices
+    are REBUILT (v1 replaces the list with ``Choices(...)`` carrying the
+    exact kwarg set), usage is the verbatim ``Usage(**raw_usage)``
+    passthrough, the wire id/created/system_fingerprint survive, and unknown
+    top-level keys are setattr'd."""
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        _safe_convert_created_field,
+    )
+    from litellm.types.utils import Choices, Message
+
+    response = model_response if model_response is not None else ModelResponse()
+    raw_choices = body.get("choices")
+    rebuilt = []
+    if isinstance(raw_choices, list):
+        for idx, choice in enumerate(raw_choices):
+            if not isinstance(choice, dict):
+                continue
+            message_payload = choice.get("message")
+            message = (
+                Message(**cast(Dict[str, Any], message_payload))
+                if isinstance(message_payload, dict)
+                else Message()
+            )
+            rebuilt.append(
+                Choices(
+                    finish_reason=choice.get("finish_reason"),
+                    index=idx,
+                    message=message,
+                    logprobs=choice.get("logprobs"),
+                    enhancements=choice.get("enhancements"),
+                    provider_specific_fields=cast(
+                        Optional[Dict[str, Any]],
+                        choice.get("provider_specific_fields"),
+                    ),
+                )
+            )
+    response.choices = cast(Any, rebuilt)
+    usage_payload = body.get("usage")
+    if isinstance(usage_payload, dict):
+        setattr(response, "usage", Usage(**cast(Dict[str, Any], usage_payload)))
+    if "created" in body:
+        response.created = _safe_convert_created_field(cast(Any, body["created"]))
+    body_id = body.get("id")
+    if isinstance(body_id, str) and body_id:
+        response.id = body_id
+    if "system_fingerprint" in body:
+        response.system_fingerprint = cast(Any, body["system_fingerprint"])
+    if "model" in body:
+        wire_model = body["model"]
+        if response.model is None:
+            response.model = cast(Any, wire_model)
+        elif "/" in response.model and wire_model is not None:
+            # v1's openai handler pre-sets model_response.model to
+            # "{custom_llm_provider}/{model}" for every non-"openai" compat
+            # consumer (llms/openai/openai.py), and the completion branch then
+            # rewrites it to "{provider}/{wire model}"
+            # (convert_dict_to_response.py:699-711). Mirror it verbatim.
+            compat_provider = response.model.split("/")[0]
+            response.model = f"{compat_provider}/{wire_model}"
+    for key, value in body.items():
+        if key not in _OPENAI_BODY_ENVELOPE_FIELDS:
+            setattr(response, key, value)
     return response
 
 
@@ -176,18 +261,28 @@ def _build_usage(payload: dict) -> Usage:
 
 def to_model_response_stream(body: Body, stream_id: str):
     """Adapt one v2 chunk body onto ModelResponseStream; the stream id is
-    minted once per stream by the caller (v1 reuses one id for every chunk).
-    system_fingerprint/citations are set explicitly because v1's wrapper
-    always sets them and extra-field serialization only dumps set fields."""
+    minted once per stream by the caller (v1 reuses one id for every chunk)
+    unless the body pinned the wire id (openai dialect, mirroring v1's
+    ``set_model_id``). system_fingerprint/citations are set explicitly
+    because v1's wrapper always sets them and extra-field serialization only
+    dumps set fields; a body-carried ``usage`` becomes the verbatim
+    ``Usage(**dict)`` passthrough (v1 streaming_handler.py:1511-1516)."""
     from litellm.types.utils import ModelResponseStream
 
+    payload = dict(body)
+    body_id = payload.pop("id", None)
+    usage_payload = payload.pop("usage", None)
     chunk = ModelResponseStream(
-        id=stream_id, system_fingerprint=None, **cast(Dict[str, Any], body)
+        id=body_id if isinstance(body_id, str) and body_id else stream_id,
+        **cast(Dict[str, Any], {"system_fingerprint": None, **payload}),
     )
+    if isinstance(usage_payload, dict):
+        setattr(chunk, "usage", Usage(**cast(Dict[str, Any], usage_payload)))
     choices = body.get("choices")
-    first = choices[0] if isinstance(choices, list) and choices else {}
+    first = choices[0] if isinstance(choices, list) and choices else None
     if isinstance(first, dict) and first.get("finish_reason") is None:
-        # v1 sets citations only on content chunks, never the finish chunk.
+        # v1 sets citations only on content chunks, never the finish chunk
+        # nor the choices=[] usage chunk.
         setattr(chunk, "citations", None)
     return chunk
 
@@ -492,20 +587,16 @@ async def _send_v2_bedrock(
     )
 
 
-_BODY_FIELDS = (
-    "temperature",
-    "top_p",
-    "max_tokens",
-    "max_completion_tokens",
-    "stop",
-    "stream",
-    "tools",
-    "tool_choice",
-    "parallel_tool_calls",
-    "response_format",
-    "user",
-    "reasoning_effort",
-    "thinking",
+# completion() locals that are routing/transport, not body payload.
+_NON_BODY_ARGS = frozenset(
+    {
+        "model",
+        "messages",
+        "custom_llm_provider",
+        "api_version",
+        "max_retries",
+        "stream_options",
+    }
 )
 
 
@@ -513,13 +604,16 @@ def _raw_openai_body(
     model: str, messages: list, optional_param_args: dict, non_default_params: dict
 ) -> dict:
     """Rebuild the caller's OpenAI-shape body from completion()'s pre-mapping
-    locals. Provider-specific extras (non_default_params, e.g. top_k) ride
-    along verbatim: anything v2 does not account for becomes a typed
-    unsupported error and falls back to v1 -- the fail-closed allowlist."""
+    locals. EVERY caller-set OpenAI param rides into the parse (the google
+    branch's fixed semantics, unified across all seam forks): anything v2
+    does not account for (n, seed, penalties, modalities, ...) becomes a
+    typed boundary error and falls back to v1 instead of being silently
+    dropped by a whitelist. Provider-specific extras (non_default_params,
+    e.g. top_k) ride along verbatim."""
     named = {
-        key: optional_param_args.get(key)
-        for key in _BODY_FIELDS
-        if optional_param_args.get(key) is not None
+        key: value
+        for key, value in optional_param_args.items()
+        if key not in _NON_BODY_ARGS and value is not None
     }
     return {"model": model, "messages": messages, **named, **non_default_params}
 

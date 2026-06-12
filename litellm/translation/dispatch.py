@@ -26,7 +26,11 @@ Provider = Literal[
     "bedrock_invoke",
     "vertex_ai",
     "azure",
+    "azure_ai",
+    "azure_ai_anthropic",
     "openai_compat",
+    "gemini",
+    "vertex_anthropic",
 ]
 
 _SAME_FAMILY: frozenset[tuple[InboundSchema, Provider]] = frozenset(
@@ -34,6 +38,7 @@ _SAME_FAMILY: frozenset[tuple[InboundSchema, Provider]] = frozenset(
         ("anthropic_messages", "anthropic"),
         ("anthropic_messages", "bedrock_invoke"),
         ("anthropic_messages", "vertex_ai"),
+        ("anthropic_messages", "vertex_anthropic"),
         ("openai_chat", "openai_compat"),
     }
 )

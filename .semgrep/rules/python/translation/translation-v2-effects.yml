@@ -1,0 +1,173 @@
+# litellm/translation v2 effects boundary, encoded as deterministic checks
+# (06-quality-team.md, "algebraic effects for I/O and side effects"). Scoped
+# to the translation package; the rest of the codebase is unaffected.
+#
+# The translation core is pure: every ambient input (clock, ids, env, fs,
+# network, randomness) must arrive as a value through deps.TranslationDeps or
+# the injected engine.http.HttpPort. The two boundary modules that DEFINE
+# those ports are whitelisted by path; they declare the window, they do not
+# get to reach through it either today (both are pure), but a future port
+# default would live there and nowhere else.
+
+rules:
+  - id: translation-no-ambient-clock
+    message: >
+      ambient effect: reading the clock (time.*, datetime.now/utcnow/today)
+      inside litellm/translation. Inject the timestamp via TranslationDeps
+      (tenets: algebraic effects for I/O).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - litellm/translation
+      exclude:
+        # boundary modules: the only place a port/default may live
+        - litellm/translation/deps.py
+        - litellm/translation/engine/http.py
+    pattern-either:
+      - pattern: time.time(...)
+      - pattern: time.time_ns(...)
+      - pattern: time.monotonic(...)
+      - pattern: time.monotonic_ns(...)
+      - pattern: time.perf_counter(...)
+      - pattern: time.perf_counter_ns(...)
+      - pattern: time.sleep(...)
+      - pattern: datetime.datetime.now(...)
+      - pattern: datetime.datetime.utcnow(...)
+      - pattern: datetime.datetime.today(...)
+      - pattern: datetime.date.today(...)
+      - pattern: datetime.now(...)
+      - pattern: datetime.utcnow(...)
+      - pattern: datetime.today(...)
+      - pattern: date.today(...)
+    metadata:
+      category: correctness
+      tags: [python, translation-v2, algebraic-effects]
+      confidence: HIGH
+
+  - id: translation-no-ambient-ids-or-randomness
+    message: >
+      ambient effect: generating ids or randomness (uuid.*, fastuuid,
+      random.*, secrets.*, os.urandom) inside litellm/translation. Inject the
+      generator via TranslationDeps (tenets: algebraic effects for I/O).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - litellm/translation
+      exclude:
+        - litellm/translation/deps.py
+        - litellm/translation/engine/http.py
+    pattern-either:
+      - pattern: uuid.uuid1(...)
+      - pattern: uuid.uuid3(...)
+      - pattern: uuid.uuid4(...)
+      - pattern: uuid.uuid5(...)
+      - pattern: import fastuuid
+      - pattern: from fastuuid import $X
+      - pattern: import random
+      - pattern: from random import $X
+      - pattern: import secrets
+      - pattern: from secrets import $X
+      - pattern: os.urandom(...)
+    metadata:
+      category: correctness
+      tags: [python, translation-v2, algebraic-effects]
+      confidence: HIGH
+
+  - id: translation-no-ambient-env
+    message: >
+      ambient effect: reading process environment (os.environ, os.getenv)
+      inside litellm/translation. Env-derived flags enter as values on
+      TranslationDeps, built once at the dispatch seam (tenets: algebraic
+      effects for I/O; dependency injection, no global singletons).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - litellm/translation
+      exclude:
+        - litellm/translation/deps.py
+        - litellm/translation/engine/http.py
+    pattern-either:
+      - pattern: os.environ
+      - pattern: os.environb
+      - pattern: os.getenv(...)
+      - pattern: os.putenv(...)
+      - pattern: os.unsetenv(...)
+    metadata:
+      category: correctness
+      tags: [python, translation-v2, algebraic-effects]
+      confidence: HIGH
+
+  - id: translation-no-ambient-filesystem
+    message: >
+      ambient effect: touching the filesystem (open(), io.open(), pathlib
+      read/write) inside litellm/translation. The package translates values;
+      file content must arrive pre-read via TranslationDeps (tenets:
+      algebraic effects for I/O).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - litellm/translation
+      exclude:
+        - litellm/translation/deps.py
+        - litellm/translation/engine/http.py
+    pattern-either:
+      - pattern: open(...)
+      - pattern: io.open(...)
+      - pattern: $P.read_text(...)
+      - pattern: $P.write_text(...)
+      - pattern: $P.read_bytes(...)
+      - pattern: $P.write_bytes(...)
+      - pattern: $P.open(...)
+      - pattern: os.remove(...)
+      - pattern: os.unlink(...)
+      - pattern: os.makedirs(...)
+      - pattern: os.mkdir(...)
+      - pattern: shutil.$F(...)
+      - pattern: tempfile.$F(...)
+    metadata:
+      category: correctness
+      tags: [python, translation-v2, algebraic-effects]
+      confidence: HIGH
+
+  - id: translation-no-ambient-network
+    message: >
+      ambient effect: a network client (requests/httpx/aiohttp/urllib/socket)
+      inside litellm/translation. The ONLY I/O surface is the injected
+      engine.http.HttpPort; the seam owns clients (tenets: algebraic effects
+      for I/O; dependency injection).
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - litellm/translation
+      exclude:
+        - litellm/translation/deps.py
+        - litellm/translation/engine/http.py
+    pattern-either:
+      - pattern: import requests
+      - pattern: from requests import $X
+      - pattern: from requests.$M import $X
+      - pattern: import httpx
+      - pattern: from httpx import $X
+      - pattern: from httpx.$M import $X
+      - pattern: import aiohttp
+      - pattern: from aiohttp import $X
+      - pattern: from aiohttp.$M import $X
+      # urllib.parse is pure string manipulation and stays allowed; the
+      # client is urllib.request (semgrep's `import urllib.request` pattern
+      # also matches the from-import forms, and a bare `import urllib`
+      # pattern would match every submodule import including parse).
+      - pattern: import urllib.request
+      - pattern: from urllib import request
+      # call-site catch for the bare-`import urllib` evasion
+      - pattern: urllib.request.$F(...)
+      - pattern: import socket
+      - pattern: from socket import $X
+    metadata:
+      category: correctness
+      tags: [python, translation-v2, algebraic-effects]
+      confidence: HIGH

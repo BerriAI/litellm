@@ -18,18 +18,41 @@ the mapped finish reason. The model field comes from ``message_start`` when
 the provider streams one (anthropic) and from the request otherwise
 (converse); v1's wrapper stamps its own model either way, so the seam wraps
 each body in ``ModelResponseStream`` (ambient id/created).
+
+The ``openai`` dialect folds ``wire_chunk`` events instead: the provider
+parser already normalized each chunk to the SDK-dump shape, and this fold
+owns only what v1's wrapper adds statefully (first emitted chunk carries
+``role: assistant``, later roles are stripped, empty deltas are swallowed,
+the wire stream id is pinned to the first non-empty one, and the trailing
+``choices: []`` usage chunk passes through for the seam's include_usage
+contract). The ``azure`` dialect is the openai fold plus the wrapper's azure
+branch (streaming_handler.py:1448-1454): the model is re-read from every
+chunk that carries one, choice-level ``content_filter_results`` survives on
+content chunks (the ``StreamingChoices(**choice_json)`` rebuild) but not on
+the finish flush (default-choice ``Delta(content=None)``), and the
+empty-choices ``prompt_filter_results`` chunk is swallowed exactly like
+v1's empty-delta handling.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
+from expression.collections import Block
 from typing_extensions import assert_never
 
-from ...ir import Body, PlainJson, StreamEvent
+from ...errors import BoundaryError, TranslationError
+from ...ir import Body, CompositeChunk, PlainJson, StreamEvent
 
-ChunkDialect = Literal["anthropic", "bedrock_converse"]
+BlockDialect = Literal["anthropic", "bedrock_converse"]
+"""Dialects whose provider parsers emit per-block delta events
+(text/thinking/signature/tool deltas). The wire dialects (openai, azure)
+fold ``wire_chunk`` events and gemini folds composite ``chunk`` events;
+their parsers can never produce a per-block delta, and the step surfaces a
+loud error (never a fabricated placeholder body) if one ever arrives."""
+
+ChunkDialect = Literal[BlockDialect, "openai", "azure", "gemini"]
 
 
 @dataclass(frozen=True)
@@ -38,106 +61,340 @@ class StreamState:
     sent_role: bool
     tool_index: int
     dialect: ChunkDialect
+    stream_id: str | None = None
+    """openai dialect only: the first non-empty wire chunk id, stamped on
+    every emitted chunk exactly like v1's ``set_model_id``."""
+    seen_tool_calls: bool = False
+    """gemini: tool calls and finishReason arrive in separate wire chunks, so
+    a later ``stop`` rewrites to ``tool_calls`` (v1 ``has_seen_tool_calls``)."""
 
 
 def initial_state(model: str = "", dialect: ChunkDialect = "anthropic") -> StreamState:
     return StreamState(model=model, sent_role=False, tool_index=-1, dialect=dialect)
 
 
-_StepResult = tuple[StreamState, tuple[Body, ...]]
+_StepResult = tuple[StreamState, tuple[Body, ...]] | TranslationError
+
+
+def _dialect_mismatch(dialect: ChunkDialect, event_tag: str) -> TranslationError:
+    return TranslationError.of_boundary(
+        BoundaryError.of(
+            Block.of_seq(
+                [
+                    f"{dialect}-dialect stream received a {event_tag} event its"
+                    " parser can never emit; dialect/parser registration mismatch"
+                ]
+            )
+        )
+    )
 
 
 def step(state: StreamState, event: StreamEvent) -> _StepResult:
     match event.tag:
         case "start":
-            return (
-                StreamState(
-                    model=state.model or event.start.model,
-                    sent_role=state.sent_role,
-                    tool_index=state.tool_index,
-                    dialect=state.dialect,
-                ),
-                (),
-            )
+            return replace(state, model=state.model or event.start.model), ()
         case "text_delta":
             return _emit(state, {"content": event.text_delta.text})
-        case "tool_use_start":
-            started = StreamState(
-                model=state.model,
-                sent_role=state.sent_role,
-                tool_index=state.tool_index + 1,
-                dialect=state.dialect,
-            )
-            return _emit(
-                started,
-                {
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": event.tool_use_start.id,
-                            "type": "function",
-                            "function": {
-                                "name": event.tool_use_start.name,
-                                "arguments": "",
-                            },
-                            "index": started.tool_index,
-                        }
-                    ],
-                },
-            )
-        case "tool_args_delta":
-            return _emit(
-                state,
-                {
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": None,
-                            "type": "function",
-                            "function": {
-                                "name": None,
-                                "arguments": event.tool_args_delta.partial_json,
-                            },
-                            "index": max(state.tool_index, 0),
-                        }
-                    ],
-                },
-            )
-        case "thinking_delta":
-            return _emit(
-                state,
-                _thinking_delta_body(
-                    state.dialect, event.thinking_delta.thinking, signature=None
-                ),
-            )
-        case "signature_delta":
-            return _emit(
-                state,
-                _thinking_delta_body(
-                    state.dialect, "", signature=event.signature_delta.signature
-                ),
-            )
+        case "tool_use_start" | "tool_args_delta":
+            return _tool_event_step(state, event)
+        case "thinking_delta" | "signature_delta":
+            return _thinking_event_step(state, event)
         case "finish":
-            chunk: Body = {
-                "model": state.model,
-                "object": "chat.completion.chunk",
-                **_top_level_fields(state.dialect),
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {},
-                        "finish_reason": event.finish.finish,
-                    }
-                ],
-            }
-            return state, (chunk,)
+            return state, (_finish_chunk(state, event.finish.finish),)
         case "stop":
             return state, ()
+        case "wire_chunk":
+            return _step_openai(state, event.wire_chunk.value)
+        case "chunk":
+            return _gemini_chunk_step(state, event.chunk)
     assert_never(event.tag)
 
 
+def _thinking_event_step(state: StreamState, event: StreamEvent) -> _StepResult:
+    block_dialect = _as_block_dialect(state.dialect, event.tag)
+    if isinstance(block_dialect, TranslationError):
+        return block_dialect
+    if event.tag == "thinking_delta":
+        body = _thinking_delta_body(
+            block_dialect, event.thinking_delta.thinking, signature=None
+        )
+    else:
+        body = _thinking_delta_body(
+            block_dialect, "", signature=event.signature_delta.signature
+        )
+    return _emit(state, body)
+
+
+def _as_block_dialect(
+    dialect: ChunkDialect, event_tag: str
+) -> BlockDialect | TranslationError:
+    match dialect:
+        case "anthropic" | "bedrock_converse":
+            return dialect
+        case "openai" | "azure" | "gemini":
+            # wire/composite dialects fold whole chunks; a per-block delta
+            # here is a wiring bug and must be loud, never a fabricated
+            # anthropic-shaped placeholder (critic-google M5 / critic-azure M3).
+            return _dialect_mismatch(dialect, event_tag)
+    assert_never(dialect)
+
+
+def _tool_event_step(state: StreamState, event: StreamEvent) -> _StepResult:
+    if event.tag == "tool_use_start":
+        started = replace(state, tool_index=state.tool_index + 1)
+        return _emit(
+            started,
+            {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": event.tool_use_start.id,
+                        "type": "function",
+                        "function": {
+                            "name": event.tool_use_start.name,
+                            "arguments": "",
+                        },
+                        "index": started.tool_index,
+                    }
+                ],
+            },
+        )
+    return _emit(
+        state,
+        {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": None,
+                    "type": "function",
+                    "function": {
+                        "name": None,
+                        "arguments": event.tool_args_delta.partial_json,
+                    },
+                    "index": max(state.tool_index, 0),
+                }
+            ],
+        },
+    )
+
+
+def _finish_chunk(state: StreamState, finish: str) -> Body:
+    return {
+        "model": state.model,
+        "object": "chat.completion.chunk",
+        **_top_level_fields(state.dialect),
+        "choices": [
+            {
+                "index": 0,
+                "delta": {},
+                "finish_reason": finish,
+            }
+        ],
+    }
+
+
+_OPENAI_WIRE_KEYS = frozenset({"id", "model", "system_fingerprint", "choices", "usage"})
+
+
+def _step_openai(state: StreamState, chunk: PlainJson) -> _StepResult:
+    if state.dialect not in ("openai", "azure"):
+        return _dialect_mismatch(state.dialect, "wire_chunk")
+    if not isinstance(chunk, dict):
+        return state, ()  # the parser only emits dict wire chunks
+    chunk_id = chunk.get("id")
+    pinned = state.stream_id or (
+        chunk_id if isinstance(chunk_id, str) and chunk_id.strip() else None
+    )
+    chunk_model = chunk.get("model")
+    model = (
+        chunk_model
+        if state.dialect == "azure" and isinstance(chunk_model, str)
+        else state.model
+    )
+    next_state = replace(state, stream_id=pinned, model=model)
+    base: Body = {
+        "id": pinned,
+        "model": model,
+        "object": "chat.completion.chunk",
+        "system_fingerprint": chunk.get("system_fingerprint"),
+    }
+    # non-envelope wire keys (e.g. service_tier): v1 setattrs them onto every
+    # content/finish chunk via preserve_upstream_non_openai_attributes
+    extras: Body = {
+        key: value for key, value in chunk.items() if key not in _OPENAI_WIRE_KEYS
+    }
+    usage = chunk.get("usage")
+    choices = chunk.get("choices")
+    if not isinstance(choices, list) or len(choices) == 0:
+        # The trailing choices=[] usage chunk passes through verbatim: v1's
+        # wrapper consumes it into its own synthesized final usage chunk
+        # (stream_chunk_builder), which is envelope, not decode; the seam
+        # owns reproducing that when stream_options.include_usage was sent.
+        if isinstance(usage, dict):
+            return next_state, ({**base, "choices": [], "usage": usage},)
+        return next_state, ()
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        return next_state, ()
+    raw_delta = choice.get("delta")
+    delta = raw_delta if isinstance(raw_delta, dict) else {}
+    index = choice.get("index")
+    finish = choice.get("finish_reason")
+    usage_field: dict[str, PlainJson] = (
+        {"usage": usage} if isinstance(usage, dict) else {}
+    )
+    if isinstance(finish, str):
+        # v1's flush: an empty delta plus the mapped finish reason (identity
+        # for the admitted openai values), index from the default choice.
+        body: Body = {
+            **base,
+            **extras,
+            **usage_field,
+            "choices": [
+                {
+                    "index": index if isinstance(index, int) else 0,
+                    "delta": {"content": None},
+                    "finish_reason": finish,
+                }
+            ],
+        }
+        return next_state, (body,)
+    if not _openai_chunk_non_empty(state, delta):
+        return next_state, ()  # v1 swallows empty deltas (chunks-for-usage only)
+    emitted_delta: dict[str, PlainJson]
+    if state.sent_role:
+        # v1's strip_role_from_delta rebuilds the Delta from a model_dump,
+        # which surfaces provider_specific_fields: None on stripped chunks.
+        emitted_delta = {
+            **{key: value for key, value in delta.items() if key != "role"},
+            "provider_specific_fields": None,
+        }
+    else:
+        emitted_delta = {**delta, "role": "assistant"}
+    body = {
+        **base,
+        **extras,
+        **usage_field,
+        "choices": [
+            {
+                "index": index if isinstance(index, int) else 0,
+                "delta": emitted_delta,
+                "logprobs": None,
+                "finish_reason": None,
+                # azure's choice-level filter annotation survives on content
+                # chunks (v1 rebuilds StreamingChoices from the wire choice);
+                # the finish flush above uses the default choice and drops it.
+                **_content_filter_field(choice),
+            }
+        ],
+    }
+    return replace(next_state, sent_role=True), (body,)
+
+
+def _content_filter_field(choice: dict[str, PlainJson]) -> dict[str, PlainJson]:
+    if "content_filter_results" in choice:
+        return {"content_filter_results": choice["content_filter_results"]}
+    return {}
+
+
+def _openai_chunk_non_empty(state: StreamState, delta: dict[str, PlainJson]) -> bool:
+    """v1 ``is_chunk_non_empty`` for the openai branch: content text, tool
+    deltas, or the first chunk's role (refusal-only deltas are swallowed,
+    exactly like v1)."""
+    content = delta.get("content")
+    if isinstance(content, str) and len(content) > 0:
+        return True
+    tool_calls = delta.get("tool_calls")
+    if isinstance(tool_calls, list) and len(tool_calls) > 0:
+        return True
+    return not state.sent_role and delta.get("role") is not None
+
+
+_GEMINI_METADATA_FIELDS: tuple[str, ...] = (
+    "vertex_ai_grounding_metadata",
+    "vertex_ai_url_context_metadata",
+    "vertex_ai_safety_ratings",
+    "vertex_ai_safety_results",
+    "vertex_ai_citation_metadata",
+)
+
+
+def _gemini_chunk_step(state: StreamState, chunk: CompositeChunk) -> _StepResult:
+    """One composite gemini wire event -> at most one content chunk plus, at
+    stream end, the finish chunk v1's wrapper synthesizes (the finish-bearing
+    wire event is the last one, so emitting both here yields v1's order).
+    Usage is withheld exactly like v1 without ``stream_options``."""
+    if state.dialect != "gemini":
+        return _dialect_mismatch(state.dialect, "chunk")
+    text = chunk.text.default_value(None)
+    reasoning = chunk.reasoning.default_value(None)
+    has_payload = text is not None or reasoning is not None or len(chunk.tool_calls) > 0
+    tool_index = state.tool_index
+    bodies: tuple[Body, ...] = ()
+    sent_role = state.sent_role
+    if has_payload:
+        entries: list[PlainJson] = []
+        for call in chunk.tool_calls:
+            tool_index = tool_index + 1
+            entry: dict[str, PlainJson] = {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": call.arguments_json},
+                "index": tool_index,
+            }
+            entries = [*entries, entry]
+        signatures: list[PlainJson] = list(chunk.signatures)
+        delta: dict[str, PlainJson] = {
+            "role": None if sent_role else "assistant",
+            "content": text,
+            "reasoning_content": reasoning,
+            "tool_calls": entries or None,
+            "provider_specific_fields": (
+                {"thought_signatures": signatures} if signatures else None
+            ),
+        }
+        body: Body = {
+            "id": chunk.id,
+            "model": state.model,
+            "object": "chat.completion.chunk",
+            **{field: [] for field in _GEMINI_METADATA_FIELDS},
+            "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+        }
+        bodies = (body,)
+        sent_role = True
+    seen = state.seen_tool_calls or len(chunk.tool_calls) > 0
+    finish = chunk.finish.default_value(None)
+    if finish is not None:
+        final: Body = {
+            "id": chunk.id,
+            "model": state.model,
+            "object": "chat.completion.chunk",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": (
+                        "tool_calls" if seen and finish == "stop" else finish
+                    ),
+                }
+            ],
+        }
+        bodies = (*bodies, final)
+    return (
+        # replace() so fields outside this step's concern (stream_id, future
+        # additions) are never silently reset (critic-google M5)
+        replace(
+            state,
+            sent_role=sent_role,
+            tool_index=tool_index,
+            seen_tool_calls=seen,
+        ),
+        bodies,
+    )
+
+
 def _thinking_delta_body(
-    dialect: ChunkDialect, thinking: str, signature: str | None
+    dialect: BlockDialect, thinking: str, signature: str | None
 ) -> dict[str, PlainJson]:
     match dialect:
         case "anthropic":
@@ -197,10 +454,4 @@ def _emit(state: StreamState, delta: dict[str, PlainJson]) -> _StepResult:
             }
         ],
     }
-    next_state = StreamState(
-        model=state.model,
-        sent_role=True,
-        tool_index=state.tool_index,
-        dialect=state.dialect,
-    )
-    return next_state, (body,)
+    return replace(state, sent_role=True), (body,)

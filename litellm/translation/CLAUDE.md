@@ -31,10 +31,15 @@ translation/
 │       ├── messages.py  # wire messages -> IR messages (hot path)
 │       ├── parse.py     # top-level parse + semantic checks
 │       ├── response.py  # IR ChatResponse -> chat-completion body; carries a
-│       │                #   ResponseDialect (anthropic | bedrock_converse)
-│       │                #   because v1's outbound shapes are per-provider
+│       │                #   ResponseDialect (anthropic | bedrock_converse |
+│       │                #   gemini) because v1's outbound shapes are
+│       │                #   per-provider
 │       └── stream.py    # IR stream events -> chunk bodies (pure fold); same
-│                        #   dialect idea via ChunkDialect on StreamState
+│                        #   dialect idea via ChunkDialect on StreamState;
+│                        #   the gemini dialect consumes composite chunk
+│                        #   events (cumulative tool index + the
+│                        #   seen-tool-calls stop->tool_calls rewrite ride
+│                        #   StreamState)
 ├── providers/      # one subpackage per wire format. Pure, no I/O
 │   ├── anthropic/
 │   │   ├── serialize.py # body assembly in v1 transform_request order
@@ -55,13 +60,92 @@ translation/
 │   │   ├── response.py  # converse JSON -> IR (properties-unwrap json rewrite)
 │   │   └── stream.py    # PARSED converse events -> IR events (pinned at the
 │   │                    #   parsed-event seam; AWS framing is botocore's)
-│   └── bedrock_invoke/  # anthropic serializer + envelope deltas ONLY:
-│       ├── serialize.py # pop model/stream, inject anthropic_version, spoof
-│       │                #   model for response_format (v1's json-tool forcing)
-│       ├── response.py  # re-export of anthropic parse_response (invoke
-│       │                #   response body IS anthropic wire format)
-│       └── stream.py    # re-export of anthropic parse_event (invoke stream
-│                        #   = anthropic events over AWS framing)
+│   ├── bedrock_invoke/  # anthropic serializer + envelope deltas ONLY:
+│   │   ├── serialize.py # pop model/stream, inject anthropic_version, spoof
+│   │   │                #   model for response_format (v1's json-tool forcing;
+│   │   │                #   RESPONSE_FORMAT_SPOOF_MODEL is shared with vertex)
+│   │   ├── response.py  # re-export of anthropic parse_response (invoke
+│   │   │                #   response body IS anthropic wire format)
+│   │   └── stream.py    # re-export of anthropic parse_event (invoke stream
+│   │                    #   = anthropic events over AWS framing)
+│   ├── openai_compat/   # the same-family hub serializer (GPT first consumer)
+│   │   ├── guard.py     # raw-shape fidelity guard run BEFORE parse: shapes
+│   │   │                #   the IR cannot round-trip losslessly (string stop,
+│   │   │                #   message name, image detail, max-tokens key
+│   │   │                #   split) fall back to v1 as typed errors; tool
+│   │   │                #   argument strings ride ToolUse.arguments_raw
+│   │   │                #   verbatim, so spacing never falls back
+│   │   ├── serialize.py # v1's five-touch passthrough body assembly
+│   │   ├── messages.py  # IR -> openai wire messages (inverse of inbound)
+│   │   ├── params.py    # o-series/gpt-5 family gates (fail closed until
+│   │   │                #   their param families are ported), user gate
+│   │   ├── response.py  # mirrors convert_to_model_response_object (the LIVE
+│   │   │                #   normalizer; transform_response is dead on the SDK
+│   │   │                #   path); rides the outbound body on ChatResponse.wire
+│   │   └── stream.py    # SSE chunk -> wire_chunk events normalized to the
+│   │                    #   SDK-dump shape; the openai chunk dialect folds them
+│   ├── google_genai/    # ONE generateContent family for BOTH google routes:
+│   │   │                #   providers "vertex_ai" and "gemini" are the same
+│   │   │                #   serializer parameterized by the drift list
+│   │   │                #   (AI Studio refuses https media + forwards
+│   │   │                #   function-call ids on gemini-3+); auth/host/api-
+│   │   │                #   version differences are envelope, never here
+│   │   ├── guard.py     # raw guard run BEFORE parse: message `name` beside
+│   │   │                #   cache markers falls back (the IR drops `name`,
+│   │   │                #   so its bytes are invisible to the cache-marker
+│   │   │                #   token bound while v1 token-counts them)
+│   │   ├── serialize.py # cache-marker gate (conservative token bound:
+│   │   │                #   UTF-8 bytes + per-message margin < 1024 proves
+│   │   │                #   v1 skips the context-cache network call; any
+│   │   │                #   media beside markers fails closed), 3-way
+│   │   │                #   structured-
+│   │   │                #   output fork (responseJsonSchema regex vs
+│   │   │                #   responseSchema+propertyOrdering capability vs
+│   │   │                #   schema-as-user-message), generationConfig with
+│   │   │                #   v1's exact snake/camel key mix
+│   │   ├── messages.py  # contents/system_instruction; tool-result runs flush
+│   │   │                #   as their own user turns; signature-bearing
+│   │   │                #   thinking -> thoughtSignature parts
+│   │   ├── tools.py     # function_declarations + toolConfig (no name munging)
+│   │   ├── schema.py    # pure ports of v1's _build_vertex_schema pipeline
+│   │   │                #   ($ref/$defs fail closed)
+│   │   ├── params.py    # thinkingConfig budget/level fork, finish map,
+│   │   │                #   gemini-3 default temperature
+│   │   ├── response.py  # candidates/functionCall/thought parts -> IR;
+│   │   │                #   usageMetadata modality math (cached/thoughts)
+│   │   └── stream.py    # parsed GenerateContentResponse events -> the
+│   │                    #   composite `chunk` StreamEvent (complete tool args
+│   │                    #   per chunk; mid-stream error objects are loud)
+│   ├── vertex_anthropic/ # anthropic serializer + envelope deltas ONLY
+│   │   │                #   (the bedrock_invoke pattern): pop model/stream/
+│   │   │                #   json_mode (the anthropic handler pops json_mode
+│   │   │                #   BEFORE transform on this path), inject
+│   │   │                #   anthropic_version: vertex-2023-10-16, shared
+│   │   │                #   json-tool model spoof; betas never emitted for
+│   │   │                #   the v2 surface (vertex suppresses them)
+│   │   ├── serialize.py
+│   │   ├── response.py  # anthropic parse + request-model restore
+│   │   └── stream.py    # re-export of anthropic parse_event
+│   ├── azure/           # openai_compat + azure gates ONLY:
+│   │   ├── guard.py     # openai guard + cache_control (azure never strips
+│   │   │                #   it) + explicit stream:false (key reaches the wire)
+│   │   ├── params.py    # api-version gates (tool_choice, response_format
+│   │   │                #   json-tool strategy), o/gpt-5 detection on
+│   │   │                #   base_model-or-model (deps.api_version/base_model)
+│   │   ├── serialize.py # azure gates then the openai_compat body verbatim
+│   │   ├── response.py  # re-export of openai parse_response (same live
+│   │   │                #   normalizer; json_mode requests fail closed)
+│   │   └── stream.py    # openai parser + per-chunk model re-attach and the
+│   │                    #   SDK service_tier default; "azure" chunk dialect
+│   └── azure_ai/        # the Foundry override set + the Claude route:
+│       ├── guard.py     # azure guard + the text-only content-list flatten
+│       ├── serialize.py # azure_ai gates (grok, model-map tool_choice) then
+│       │                #   the openai_compat body
+│       ├── response.py  # openai parser + the azure_ai/{model} rename
+│       ├── stream.py    # re-export of the azure parser ("azure" dialect)
+│       └── claude.py    # anthropic serializer/parsers re-exported; NO
+│                        #   response-format model spoof (v1 maps with the
+│                        #   real model); billing-header blocks fail closed
 └── engine/
     ├── pipeline.py # prepare (pure, drives the fallback decision) -> send;
     │               #   per-provider serializer/parser/dialect tables; the
@@ -165,7 +249,15 @@ snapshot byte-for-byte (canonical JSON), plus a quirk corpus (4.5 cache ttl,
 parallel tool config, bedrock name normalization, thinking clamp, tool_choice
 gates) referenced against v1 in-process. Streams compare v2's fold against
 the REAL decoders inside `CustomStreamWrapper`, pinned at the parsed-event
-seam (AWS event-stream framing is botocore plumbing). Those corpora are the
+seam (AWS event-stream framing is botocore plumbing; gemini's SSE line
+splitting and accumulated-json fallback are likewise transport in front of
+`ModelResponseIterator.chunk_parser`). The google gates
+(`test_differential_google_{request,response,stream}.py` over
+`characterization_google/`, vendored verbatim from
+mateo/translation-characterization-providers) are two-sided the same way,
+with the vertex token fetch stubbed at `VertexBase.get_access_token` and a
+quirk corpus pinning the 3-way structured-output fork and the
+vertex-vs-AI-Studio drift list. Those corpora are the
 covered surface: a provider's flag turns on only for shapes pinned there.
 Notable transform-seam facts the corpora pin: v1's anthropic output includes
 `json_mode: true` for response_format requests, and converse's
@@ -178,22 +270,83 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to three providers out — `anthropic`, `bedrock_converse`,
-`bedrock_invoke` — request, response, and stream translation,
-differential-green (anthropic: 46-shape corpus + responses + stream replays;
-bedrock: the characterization corpus per route + quirk corpus), fail-closed
-everywhere else, with non-streaming flag-gated seams live in `completion()`.
+OpenAI-chat-in to ten providers out — `anthropic`, `bedrock_converse`,
+`bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini route), `gemini`
+(AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
+`azure_ai_anthropic` — request, response, and stream translation,
+differential-green (anthropic: 46-shape corpus + responses + stream
+replays; bedrock and google: the characterization corpus per route + quirk
+corpora; openai: 17-shape request corpus + 17 typed-fallback rows +
+response and SDK-chunk stream replays; azure: 19-shape request corpus + the
+vendored characterization corpus second gate + content-filter
+response/stream rows with the azure dialect's per-chunk model re-read;
+azure_ai: the Foundry override-set and no-spoof Claude-route corpora),
+fail-closed everywhere else, with non-streaming flag-gated seams live in
+`completion()` for the anthropic, bedrock, and google routes (the
+openai/azure seam forks are integrator scope and NOT wired; the google
+forks live in `litellm/translation_seam_google.py` and
+`litellm/translation_seam_google_send.py` and route via v1's own
+`get_vertex_ai_model_route`). ALL forks share one `_raw_openai_body`:
+every caller-set OpenAI param rides into the parse so unknown ones fall
+back typed, never silently dropped; all forks gate through
+`dispatch.route`, and the anthropic/google sends share the engine's
+injected-HttpPort skeleton (bedrock stays separate: SigV4 signs after
+the body is final).
 Deliberate bedrock fallback surfaces (each names the v1 path): non-Claude
 bedrock models, native structured outputs (outputConfig), adaptive-effort
 output_config/beta, response_format+stream (fake_stream), response_format
 with thinking on invoke (the model spoof crossing), tool history without
 tools (modify_params dummy tool), empty user text on converse
 (string-vs-list ambiguity), provisioned `model_id`, `guardrailConfig`, and
-`<thinking>`-tagged text in converse responses. Not yet here, each its own
-follow-up: streaming seams live; the other inbound schemas
-(`anthropic_messages`, `google_genai`, `responses`, `completions`); the other
-providers (vertex, azure, `openai_compat`); the same-family fast path
-(waits on the opaque-body relay). To add a provider: write
+`<thinking>`-tagged text in converse responses. Deliberate openai fallback
+surfaces: o-series and gpt-5 model families (their param-rewrite configs are
+unported), every raw shape the IR cannot round-trip byte-identically (the
+guard's list: string stop, both max-tokens keys, message `name`, image
+`detail`/`format`, consecutive same-role turns, single-text content lists,
+empty tools/stop lists, null/non-function tool_calls — tool ARGUMENT
+strings themselves ride verbatim via ToolUse.arguments_raw, so real
+compact-spaced replayed histories are served), the `user` param
+(model-list gated in v1),
+`response_format` on gpt-4/gpt-3.5-turbo-16k, `stream_options`, file blocks
+(v1 downloads http pdf file_ids in-transform), and `http://` image URLs. On
+streams, the trailing `choices: []` usage chunk passes through verbatim and
+the wrapper's synthesized final usage chunk stays a seam/envelope concern.
+Deliberate google fallback surfaces: cache markers whose conservative token
+bound (UTF-8 bytes + per-message margin over the whole request) reaches
+gemini's 1024-token cache minimum (context-cache create is network I/O;
+below the bound v1 provably skips the call and ignores the markers), any
+media block in a marker-bearing request (v1 token-counts images at 250),
+message `name` beside cache markers (raw guard: the IR drops `name`, so
+its bytes cannot be bounded post-parse while v1 token-counts them),
+gs:// and http:// media plus AI-Studio https media (downloads), https media
+without a recognizable extension, file/pdf parts (inbound), params outside
+the IR (n, seed, penalties, modalities, audio, web_search_options,
+service_tier, labels — inbound boundary fallback), hosted tools,
+reasoning_effort xhigh/max (v1 raises), gemini-3 thinking budgets (read
+`litellm.enable_gemini_default_thinking_level_low`), gemini-3
+reasoning_effort+thinking (v1's conflict check raises), models without
+`supports_system_messages` carrying system prompts, multi-candidate /
+flagged / promptFeedback-blocked responses, inline media outputs, and
+data:-URI tool results (functionResponse.parts). The vertex_anthropic
+fallbacks mirror bedrock_invoke (spoof crossing, output_config/format)
+plus beta-emitting shapes. Ambient globals force v1 at the seam:
+`vertex_ai_safety_settings`, `custom_prompt_dict`, `modify_params`.
+Deliberate azure fallback surfaces (each names the v1 path): cache_control
+anywhere (azure forwards it verbatim), explicit `stream: false`, the
+api-version gates (tool_choice pre-2023-12, `required` on 2024-05,
+response_format pre-2024-08 or on gpt-3.5/gpt-35 — v1's synthetic json-tool
+strategy and its json_mode response conversion are unported, so json_mode
+requests never reach v2), o-series/gpt-5 on `base_model or model`, and for
+azure_ai: text-only content lists (v1 flattens them), model-map-gated
+tool_choice, grok models, and `x-anthropic-billing-header` system blocks on
+the Claude route. None of the azure family fast-paths; the api-version
+URL/query, deployment SDK client, api-key-vs-AD-token auth and the
+`.../anthropic/v1/messages` rewrite are envelope (seam scope, unwired here).
+Not yet here, each its own follow-up: streaming seams live; the other
+inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
+`completions`); the same-family fast path (waits on the opaque-body
+relay). To add a provider: write
 `providers/<name>/`, register it in `engine/pipeline._SERIALIZERS` /
-`_RESPONSE_PARSERS` / `_RESPONSE_DIALECTS`, add a differential corpus, keep
-the flag off until differential-green.
+`_RESPONSE_PARSERS` / `_RESPONSE_DIALECTS` (plus `_RAW_GUARDS` when the
+inbound schema is the provider's own family), add a differential corpus,
+keep the flag off until differential-green.

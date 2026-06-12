@@ -17,6 +17,7 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "AKIADIFFTESTKEY00000")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "diff-test-secret")
 os.environ.setdefault("AWS_REGION_NAME", "us-east-1")
+os.environ.setdefault("GEMINI_API_KEY", "char-gemini-test-key")
 
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo  # noqa: E402
 from litellm.utils import get_max_tokens, token_counter  # noqa: E402
@@ -35,6 +36,8 @@ def build_real_deps(
     drop_params: bool = False,
     drop_params_global: bool = False,
     modify_params: bool = False,
+    api_version: Optional[str] = None,
+    base_model: Optional[str] = None,
 ) -> TranslationDeps:
     return TranslationDeps(
         max_tokens_for_model=_max_tokens_for_model,
@@ -46,6 +49,8 @@ def build_real_deps(
         drop_params=drop_params,
         drop_params_global=drop_params_global,
         modify_params=modify_params,
+        api_version=api_version,
+        base_model=base_model,
     )
 
 
@@ -75,4 +80,28 @@ def frozen_ambient(monkeypatch):
     monkeypatch.setattr(fastuuid, "uuid4", fake_uuid4)
     monkeypatch.setattr(litellm._uuid, "uuid4", fake_uuid4)
     monkeypatch.setattr(time, "time", lambda: 1718064000.0)
+    yield
+
+
+@pytest.fixture()
+def vertex_token_stub(monkeypatch):
+    """Stub the vertex credential fetch at its narrowest point
+    (``VertexBase.get_access_token``), mirroring the characterization corpus:
+    everything downstream runs real v1 code with this fixed token/project."""
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    monkeypatch.setattr(
+        VertexBase,
+        "get_access_token",
+        lambda self, credentials, project_id: (
+            "char-vertex-token",
+            project_id or "char-test-project",
+        ),
+    )
+
+    async def _fake_token_async(self, credentials, project_id):
+        return ("char-vertex-token", project_id or "char-test-project")
+
+    # the v2 send coroutine resolves credentials through the async variant
+    monkeypatch.setattr(VertexBase, "get_access_token_async", _fake_token_async)
     yield

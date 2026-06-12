@@ -1,0 +1,23 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [{"text": "The capital of France is Paris."}]
+      },
+      "finishReason": "STOP",
+      "avgLogprobs": -0.0125
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 8,
+    "candidatesTokenCount": 8,
+    "totalTokenCount": 16,
+    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 8}],
+    "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 8}],
+    "trafficType": "ON_DEMAND"
+  },
+  "modelVersion": "gemini-2.5-pro",
+  "createTime": "2025-05-24T00:00:00.000000Z",
+  "responseId": "char-vertex-gemini-text-0001"
+}

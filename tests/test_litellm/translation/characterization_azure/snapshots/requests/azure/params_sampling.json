@@ -1,0 +1,19 @@
+{
+  "extra_body": {},
+  "max_tokens": 128,
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "model": "gpt-4.1",
+  "stop": [
+    "\n\n",
+    "END"
+  ],
+  "stream": false,
+  "temperature": 0.2,
+  "top_p": 0.9,
+  "user": "char-user-1234"
+}

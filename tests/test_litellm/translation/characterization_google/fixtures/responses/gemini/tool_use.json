@@ -1,0 +1,48 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "functionCall": {
+              "name": "get_weather",
+              "args": {
+                "city": "Paris"
+              }
+            }
+          },
+          {
+            "functionCall": {
+              "name": "get_time",
+              "args": {
+                "tz": "Europe/Paris"
+              }
+            }
+          }
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 74,
+    "candidatesTokenCount": 22,
+    "totalTokenCount": 96,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 74
+      }
+    ],
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 22
+      }
+    ]
+  },
+  "modelVersion": "gemini-2.5-flash",
+  "createTime": "2025-05-24T00:00:00.000000Z",
+  "responseId": "char-gemini-tool-0001"
+}

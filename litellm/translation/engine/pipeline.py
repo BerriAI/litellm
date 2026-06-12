@@ -29,6 +29,20 @@ from ..inbound.openai_chat.response import ResponseDialect, serialize_response
 from ..ir import Body, ChatRequest, ChatResponse, PlainJson
 from ..providers.anthropic import serialize_request
 from ..providers.anthropic.response import parse_response
+from ..providers.azure import parse_response as azure_parse_response
+from ..providers.azure import serialize_request as azure_serialize_request
+from ..providers.azure import (
+    unsupported_request_shapes as azure_unsupported_request_shapes,
+)
+from ..providers.azure_ai import claude_parse_response as azure_ai_claude_parse_response
+from ..providers.azure_ai import (
+    claude_serialize_request as azure_ai_claude_serialize_request,
+)
+from ..providers.azure_ai import parse_response as azure_ai_parse_response
+from ..providers.azure_ai import serialize_request as azure_ai_serialize_request
+from ..providers.azure_ai import (
+    unsupported_request_shapes as azure_ai_unsupported_request_shapes,
+)
 from ..providers.bedrock_converse import (
     parse_response as bedrock_converse_parse_response,
 )
@@ -38,6 +52,29 @@ from ..providers.bedrock_converse import (
 from ..providers.bedrock_invoke import parse_response as bedrock_invoke_parse_response
 from ..providers.bedrock_invoke import (
     serialize_request as bedrock_invoke_serialize_request,
+)
+from ..providers.google_genai import parse_response as google_parse_response
+from ..providers.google_genai import (
+    serialize_request_studio as google_serialize_request_studio,
+)
+from ..providers.google_genai import (
+    serialize_request_vertex as google_serialize_request_vertex,
+)
+from ..providers.google_genai import (
+    unsupported_request_shapes as google_unsupported_request_shapes,
+)
+from ..providers.openai_compat import parse_response as openai_compat_parse_response
+from ..providers.openai_compat import (
+    serialize_request as openai_compat_serialize_request,
+)
+from ..providers.openai_compat import (
+    unsupported_request_shapes as openai_compat_unsupported_request_shapes,
+)
+from ..providers.vertex_anthropic import (
+    parse_response as vertex_anthropic_parse_response,
+)
+from ..providers.vertex_anthropic import (
+    serialize_request as vertex_anthropic_serialize_request,
 )
 from .http import Endpoint, ExecuteError, HttpPort, ProviderHttpError
 
@@ -51,6 +88,13 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "anthropic": serialize_request,
         "bedrock_converse": bedrock_converse_serialize_request,
         "bedrock_invoke": bedrock_invoke_serialize_request,
+        "openai_compat": openai_compat_serialize_request,
+        "vertex_ai": google_serialize_request_vertex,
+        "gemini": google_serialize_request_studio,
+        "vertex_anthropic": vertex_anthropic_serialize_request,
+        "azure": azure_serialize_request,
+        "azure_ai": azure_ai_serialize_request,
+        "azure_ai_anthropic": azure_ai_claude_serialize_request,
     }
 )
 
@@ -59,6 +103,13 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         "anthropic": parse_response,
         "bedrock_converse": bedrock_converse_parse_response,
         "bedrock_invoke": bedrock_invoke_parse_response,
+        "openai_compat": openai_compat_parse_response,
+        "vertex_ai": google_parse_response,
+        "gemini": google_parse_response,
+        "vertex_anthropic": vertex_anthropic_parse_response,
+        "azure": azure_parse_response,
+        "azure_ai": azure_ai_parse_response,
+        "azure_ai_anthropic": azure_ai_claude_parse_response,
     }
 )
 
@@ -67,8 +118,39 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         "anthropic": "anthropic",
         "bedrock_converse": "bedrock_converse",
         "bedrock_invoke": "anthropic",  # invoke delegates to the anthropic transform
+        "openai_compat": "openai",  # same-family: the wire-derived body
+        "vertex_ai": "gemini",
+        "gemini": "gemini",
+        "vertex_anthropic": "anthropic",  # vertex claude delegates to the anthropic transform
+        "azure": "openai",  # same normalizer (convert_to_model_response_object)
+        "azure_ai": "openai",
+        "azure_ai_anthropic": "anthropic",  # genuine anthropic wire format
     }
 )
+
+_RawGuard = Callable[[Mapping[str, object]], TranslationError | None]
+
+_RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
+    # Raw-shape guards run BEFORE parse. Same-family providers use them for
+    # fidelity (the inbound parse normalizes wire forms v1 forwards
+    # verbatim); the google routes use one because the parse DROPS the
+    # message ``name`` field, whose bytes the cache-marker token bound must
+    # otherwise account for (verifier-integration blocker).
+    {
+        "openai_compat": openai_compat_unsupported_request_shapes,
+        "azure": azure_unsupported_request_shapes,
+        "azure_ai": azure_ai_unsupported_request_shapes,
+        "vertex_ai": google_unsupported_request_shapes,
+        "gemini": google_unsupported_request_shapes,
+    }
+)
+
+
+def _raw_guard_error(
+    raw: Mapping[str, object], provider: Provider
+) -> TranslationError | None:
+    guard = _RAW_GUARDS.get(provider)
+    return guard(raw) if guard is not None else None
 
 
 def response_dialect(provider: Provider) -> ResponseDialect:
@@ -85,6 +167,9 @@ def translate_chat_request(
                 f"provider {provider!r} has no v2 chat serializer yet"
             )
         )
+    guard_error = _raw_guard_error(raw, provider)
+    if guard_error is not None:
+        return Error(guard_error)
     return parse_request(raw).bind(lambda request: serializer(request, deps))
 
 
@@ -102,9 +187,18 @@ def translate_chat_response(
             )
         )
     dialect = response_dialect(provider)
-    return parser(raw_response, request).map(
-        lambda response: serialize_response(response, deps, dialect)
+    return parser(raw_response, request).bind(
+        lambda response: _serialized_body(response, deps, dialect)
     )
+
+
+def _serialized_body(
+    response: ChatResponse, deps: TranslationDeps, dialect: ResponseDialect
+) -> TranslateResult:
+    body = serialize_response(response, deps, dialect)
+    if isinstance(body, TranslationError):
+        return Error(body)
+    return Ok(body)
 
 
 @dataclass(frozen=True)
@@ -127,6 +221,9 @@ def prepare_chat_request(
                 f"provider {provider!r} is not fully ported to v2 yet"
             )
         )
+    guard_error = _raw_guard_error(raw, provider)
+    if guard_error is not None:
+        return Error(guard_error)
     match parse_request(raw):
         case Result(tag="ok", ok=request):
             pass
@@ -187,9 +284,10 @@ async def send_prepared(
         )
     match parser(response.body, prepared.request):
         case Result(tag="ok", ok=chat_response):
-            return Ok(
-                serialize_response(chat_response, deps, response_dialect(provider))
-            )
+            body = serialize_response(chat_response, deps, response_dialect(provider))
+            if isinstance(body, TranslationError):
+                return Error(ExecuteError.of_translation(body))
+            return Ok(body)
         case Result(error=response_err):
             return Error(ExecuteError.of_translation(response_err))
 

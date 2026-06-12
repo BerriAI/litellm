@@ -1,0 +1,21 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "What is the capital of France?"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "max_output_tokens": 128,
+    "stop_sequences": [
+      "\n\n",
+      "END"
+    ],
+    "temperature": 0.2,
+    "top_p": 0.9
+  }
+}

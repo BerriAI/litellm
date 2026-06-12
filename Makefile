@@ -167,6 +167,8 @@ lint-translation: install-test-deps
 	uv tool run --from 'pyright==1.1.406' pyright --project litellm/translation
 	uv tool run --from 'semgrep==1.157.0' semgrep scan --config .semgrep/rules litellm/translation --error -q
 	$(UV_RUN) lint-imports
+	$(UV_RUN) python scripts/check_translation_file_sizes.py
+	$(UV_RUN) python scripts/check_translation_claude_md.py
 	LITELLM_LOCAL_MODEL_COST_MAP=True $(UV_RUN) pytest tests/test_litellm/translation --tb=short -q
 
 test-unit-root: install-test-deps

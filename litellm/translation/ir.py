@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, fields
 from typing import Literal, TypeVar, Union
 
-from expression import Option, case, tag, tagged_union
+from expression import Nothing, Option, case, tag, tagged_union
 from expression.collections import Block, Map
 
 Json = Union[None, bool, int, float, str, "Block[Json]", "Map[str, Json]"]
@@ -30,6 +30,12 @@ Body = dict[str, PlainJson]
 
 Sampling = int | float
 """A numeric parameter kept as the caller sent it (int stays int on the wire)."""
+
+THOUGHT_SIGNATURE_SEPARATOR = "__thought__"
+"""v1's public in-band encoding for gemini thought signatures riding tool-call
+ids (``call_<uuid>__thought__<sig>``; canonical declaration:
+litellm_core_utils/prompt_templates/factory.py). The package cannot import the
+v1 stack, so this is the ONE in-package mirror; the seam imports v1's."""
 
 
 @dataclass(frozen=True)
@@ -98,6 +104,9 @@ class Base64Source:
 @dataclass(frozen=True)
 class UrlSource:
     url: str
+    format: Option[str] = Nothing
+    """Caller-supplied media type override; the anthropic family ignores it
+    for URL sources (so does v1) but gemini uses it for ``file_data`` mime."""
 
 
 @tagged_union(frozen=True)
@@ -134,6 +143,12 @@ class ToolUse:
     name: str
     arguments: JsonBlob
     cache: Option[CacheControl]
+    arguments_raw: Option[str] = Nothing
+    """The verbatim wire argument string when the block came from an
+    openai-format tool_call (replayed histories): same-family serializers
+    re-emit these bytes so real compact-spaced (or blank) arguments
+    round-trip byte-faithfully instead of falling back over re-dump
+    spacing. Cross-family serializers use the parsed ``arguments``."""
 
 
 @tagged_union(frozen=True)
@@ -242,6 +257,9 @@ class ToolDef:
     description: Option[str]
     parameters: Option[JsonBlob]
     cache: Option[CacheControl]
+    strict: Option[bool] = Nothing
+    """OpenAI structured-outputs flag; passthrough providers re-emit it,
+    anthropic-family serializers ignore it (v1 drops it there too)."""
 
 
 @tagged_union(frozen=True)
@@ -273,6 +291,12 @@ class ToolChoice:
 @dataclass(frozen=True)
 class JsonSchemaSpec:
     schema: JsonBlob
+    name: Option[str] = Nothing
+    description: Option[str] = Nothing
+    strict: Option[bool] = Nothing
+    """``name``/``description``/``strict`` ride beside the schema on the
+    OpenAI wire; passthrough providers re-emit them, anthropic-family
+    serializers read only ``schema`` (v1 parity on both sides)."""
 
 
 @tagged_union(frozen=True)
@@ -332,6 +356,11 @@ class InferenceParams:
     top_p: Option[Sampling]
     top_k: Option[Sampling]
     stop: Block[str]
+    max_completion_tokens: Option[int] = Nothing
+    """The caller's verbatim ``max_completion_tokens`` when that key was sent.
+    ``max_tokens`` above stays the collapsed value every non-passthrough
+    provider reads; OpenAI-passthrough serializers re-emit the original key
+    (the raw guard rejects requests carrying both keys)."""
 
 
 @dataclass(frozen=True)
@@ -377,6 +406,21 @@ class CacheCreationDetails:
 
 
 @dataclass(frozen=True)
+class ModalityTokens:
+    """Per-modality token breakdown (gemini ``usageMetadata`` details).
+
+    Values are post-processing in v1's ``_calculate_usage`` terms: prompt text
+    tokens already have cached tokens subtracted, completion text tokens are
+    computed from the candidate total minus the other modalities.
+    """
+
+    text: Option[int]
+    audio: Option[int]
+    image: Option[int]
+    video: Option[int]
+
+
+@dataclass(frozen=True)
 class ResponseUsage:
     """Provider-reported token counts, provider-neutral.
 
@@ -391,6 +435,14 @@ class ResponseUsage:
     cache_read_input_tokens: int
     cache_creation: Option[CacheCreationDetails]
     total_tokens: Option[int]
+    reasoning_tokens: Option[int] = Nothing
+    """Wire-reported reasoning tokens (gemini ``thoughtsTokenCount``);
+    ``Nothing`` for providers whose dialect estimates them (anthropic)."""
+    prompt_modalities: Option[ModalityTokens] = Nothing
+    completion_modalities: Option[ModalityTokens] = Nothing
+    cache_read_reported: bool = True
+    """False when the wire omitted ``cachedContentTokenCount`` entirely (the
+    gemini dialect then emits null cached-token fields instead of 0)."""
 
 
 @dataclass(frozen=True)
@@ -403,6 +455,13 @@ class ChatResponse:
     synthesized_json_content: bool
     """True when the provider rewrote a forced json_tool_call into plain
     content (v1 then emits a bare message: no provider fields, no thinking)."""
+    wire: Option[JsonBlob] = Nothing
+    """The normalized outbound chat-completion body, set by providers whose
+    outbound dialect is wire-derived (openai_compat: v1's
+    convert_to_model_response_object is a near-passthrough, so byte parity
+    needs the wire fields the semantic IR does not model: system_fingerprint,
+    refusal, verbatim usage details). The provider's parse_response builds it;
+    the ``openai`` response dialect emits it unchanged."""
 
 
 # --------------------------------------------------------------------------
@@ -458,6 +517,34 @@ class StreamFinish:
     output_tokens: int
 
 
+@dataclass(frozen=True)
+class StreamToolCall:
+    """A COMPLETE tool call inside one stream chunk (gemini never streams
+    partial arguments). An empty ``id`` (or one starting with the
+    thought-signature separator) means the wire had no native id and the seam
+    mints v1's ambient ``call_<uuid>`` prefix."""
+
+    id: str
+    name: str
+    arguments_json: str
+
+
+@dataclass(frozen=True)
+class CompositeChunk:
+    """One gemini ``GenerateContentResponse`` stream event: text, thinking,
+    complete tool calls, the finish reason, and usage can all ride together,
+    so the wire event maps onto one composite IR event (and back onto exactly
+    one outbound chunk, matching v1's ``ModelResponseIterator``)."""
+
+    id: str
+    text: Option[str]
+    reasoning: Option[str]
+    signatures: Block[str]
+    tool_calls: Block[StreamToolCall]
+    finish: Option[FinishReason]
+    usage: Option[ResponseUsage]
+
+
 @tagged_union(frozen=True)
 class StreamEvent:
     tag: Literal[
@@ -469,6 +556,8 @@ class StreamEvent:
         "signature_delta",
         "finish",
         "stop",
+        "wire_chunk",
+        "chunk",
     ] = tag()
 
     start: StreamStart = case()
@@ -479,6 +568,12 @@ class StreamEvent:
     signature_delta: SignatureDelta = case()
     finish: StreamFinish = case()
     stop: Unit = case()
+    wire_chunk: JsonBlob = case()
+    """A same-family provider chunk carried verbatim (openai_compat): the
+    outbound chunk IS the inbound family, so a semantic re-encode would lose
+    wire bytes (refusal, system_fingerprint, logprobs). The openai chunk
+    dialect folds these; cross-family parsers never emit them."""
+    chunk: CompositeChunk = case()
 
     @staticmethod
     def of_start(value: StreamStart) -> StreamEvent:
@@ -512,6 +607,14 @@ class StreamEvent:
     def of_stop() -> StreamEvent:
         return _stream_stop(UNIT)
 
+    @staticmethod
+    def of_wire_chunk(value: JsonBlob) -> StreamEvent:
+        return _stream_wire_chunk(value)
+
+    @staticmethod
+    def of_chunk(value: CompositeChunk) -> StreamEvent:
+        return _stream_chunk(value)
+
 
 _stream_start = _case_maker(StreamEvent, "start")
 _stream_text_delta = _case_maker(StreamEvent, "text_delta")
@@ -521,3 +624,5 @@ _stream_thinking_delta = _case_maker(StreamEvent, "thinking_delta")
 _stream_signature_delta = _case_maker(StreamEvent, "signature_delta")
 _stream_finish = _case_maker(StreamEvent, "finish")
 _stream_stop = _case_maker(StreamEvent, "stop")
+_stream_wire_chunk = _case_maker(StreamEvent, "wire_chunk")
+_stream_chunk = _case_maker(StreamEvent, "chunk")
