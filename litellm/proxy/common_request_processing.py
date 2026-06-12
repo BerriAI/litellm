@@ -1368,62 +1368,19 @@ class ProxyBaseLLMRequestProcessing:
                             headers=custom_headers,
                         )
                     else:
-                        response_status = response.status_code  # type: ignore[union-attr]
-                        content_type = response.headers.get("content-type", "")  # type: ignore[union-attr]
-                        if (
-                            self._has_post_call_guardrails()
-                            and response_status < 300
-                            and "application/json" in content_type
-                        ):
-                            body_bytes = await response.aread()  # type: ignore[union-attr]
-                            import json as _json
-
-                            parsed_response = _json.loads(body_bytes)
-                            parsed_response = (
-                                await proxy_logging_obj.post_call_success_hook(
-                                    data=self.data,
-                                    user_api_key_dict=user_api_key_dict,
-                                    response=parsed_response,
-                                )
+                        _early = (
+                            await self._handle_non_streaming_allm_passthrough_route(
+                                response=response,
+                                proxy_logging_obj=proxy_logging_obj,
+                                user_api_key_dict=user_api_key_dict,
+                                custom_headers=custom_headers,
                             )
-                            response_headers = {
-                                k: v
-                                for k, v in custom_headers.items()
-                                if k.lower() != "content-length"
-                            }
-                            return Response(
-                                content=_json.dumps(parsed_response).encode(),
-                                status_code=response_status,
-                                headers=response_headers,
-                                media_type="application/json",
-                            )
-                        elif (
-                            self._has_post_call_guardrails()
-                            and response_status < 300
-                            and "vnd.amazon.eventstream" in content_type
-                        ):
-                            body_bytes = await response.aread()  # type: ignore[union-attr]
-                            modified_bytes = (
-                                await self._handle_event_stream_allm_passthrough_route(
-                                    body_bytes=body_bytes,
-                                    proxy_logging_obj=proxy_logging_obj,
-                                    user_api_key_dict=user_api_key_dict,
-                                )
-                            )
-                            response_headers = {
-                                k: v
-                                for k, v in custom_headers.items()
-                                if k.lower() != "content-length"
-                            }
-                            return Response(
-                                content=modified_bytes,
-                                status_code=response_status,
-                                headers=response_headers,
-                                media_type=content_type,
-                            )
+                        )
+                        if _early is not None:
+                            return _early
                         return StreamingResponse(
                             content=response.aiter_bytes(),  # type: ignore[union-attr]
-                            status_code=response_status,
+                            status_code=response.status_code,  # type: ignore[union-attr]
                             headers=custom_headers,
                         )
                 elif route_type == "anthropic_messages":
