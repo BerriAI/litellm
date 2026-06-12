@@ -1,11 +1,14 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse, getMcpOAuthMode } from "./types";
-import { listMCPTools, callMCPTool } from "../networking";
+import { listMCPTools, callMCPTool, getMCPOAuthUserCredentialStatus } from "../networking";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
-import { sanitizeMcpAliasForHeader } from "@/utils/mcpHeaderUtils";
+import { sanitizeMcpAliasForHeader, buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import { useToolsOAuthFlow } from "@/hooks/useToolsOAuthFlow";
+import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
+import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
+import { setSecureItem } from "@/utils/secureStorage";
 
 import { Card, Title, Text } from "@tremor/react";
 import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined, LockOutlined } from "@ant-design/icons";
@@ -31,11 +34,14 @@ const MCPToolsViewer = ({
   const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
   const [showHeaderInput, setShowHeaderInput] = useState(false);
 
-  // Only PKCE passthrough uses a browser-held session token (sessionStorage,
-  // cleared on tab/browser close) and a user-facing auth gate. OBO uses the
-  // backend-stored per-user token and M2M uses the backend's own service token,
-  // so neither needs a gate — they list tools with just the LiteLLM key.
-  const isPassthrough = getMcpOAuthMode({ auth_type, oauth2_flow, delegate_auth_to_upstream }) === "passthrough";
+  // PKCE passthrough holds a browser-side session token (sessionStorage) and
+  // gates tool listing behind it. OBO uses a backend-stored per-user token that
+  // the user must establish once via an interactive login; we gate on whether
+  // that DB credential exists. M2M uses the backend's own service token and
+  // needs no gate.
+  const oauthMode = getMcpOAuthMode({ auth_type, oauth2_flow, delegate_auth_to_upstream });
+  const isPassthrough = oauthMode === "passthrough";
+  const isObo = oauthMode === "obo";
   const [oauthToken, setOauthToken] = useState<string | null>(() =>
     isPassthrough && isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null,
   );
@@ -61,6 +67,31 @@ const MCPToolsViewer = ({
     onSuccess: setOauthToken,
   });
 
+  // OBO servers list tools using a per-user token the backend stores in the DB;
+  // check whether the current user has a valid one so we can prompt them to
+  // authorize when they don't (otherwise the backend silently returns no tools).
+  const {
+    data: oboCredStatus,
+    isLoading: isLoadingOboCred,
+    isError: isOboCredError,
+    refetch: refetchOboCred,
+  } = useQuery({
+    queryKey: ["mcpOauthUserCredStatus", serverId, userID],
+    queryFn: () => getMCPOAuthUserCredentialStatus(accessToken ?? "", serverId),
+    enabled: !!accessToken && isObo,
+    staleTime: 30000,
+  });
+
+  // A stored credential is sufficient: the backend proactively refreshes an
+  // expired or near-expiry token from the stored refresh_token on the next list
+  // call, so the user only needs to authorize when no credential row exists. If
+  // the status check itself fails we can't confirm a credential, so surface the
+  // Authorize gate rather than a silent empty tool list; re-authorizing only
+  // overwrites the user's own row, so it is safe when a credential did exist.
+  const hasOboCred = !!oboCredStatus?.has_credential;
+  const oboNeedsAuth = isObo && !isLoadingOboCred && (isOboCredError || (!!oboCredStatus && !hasOboCred));
+  const oboStatusLoading = isObo && isLoadingOboCred;
+
   // Check if this server has extra headers configured
   const hasExtraHeaders = extraHeaders && extraHeaders.length > 0;
 
@@ -75,16 +106,7 @@ const MCPToolsViewer = ({
     // When no alias is available, fall back to x-mcp-auth (legacy but still supported).
     // Passthrough only: OBO/M2M tokens are attached server-side, not from the browser.
     if (isPassthrough && oauthToken) {
-      if (serverAlias) {
-        const safeAlias = sanitizeMcpAliasForHeader(serverAlias);
-        if (safeAlias) {
-          customHeaders[`x-mcp-${safeAlias}-authorization`] = `Bearer ${oauthToken}`;
-        } else {
-          customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
-        }
-      } else {
-        customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
-      }
+      Object.assign(customHeaders, buildMcpPassthroughAuthHeader(serverAlias, oauthToken));
     }
 
     // Add passthrough headers with server-specific prefix
@@ -135,8 +157,9 @@ const MCPToolsViewer = ({
       }
       return result;
     },
-    // For OAuth servers, block the query until a session token is available
-    enabled: !!accessToken && (!isPassthrough || oauthToken !== null),
+    // Passthrough blocks until a browser session token exists; OBO blocks until
+    // the user has a valid DB credential (else the backend returns no tools).
+    enabled: !!accessToken && (isPassthrough ? oauthToken !== null : isObo ? hasOboCred : true),
     staleTime: 30000, // Consider data fresh for 30 seconds
     retry: (failureCount, error: any) => {
       // Don't retry on 401 — token is invalid, user must re-authenticate
@@ -144,6 +167,33 @@ const MCPToolsViewer = ({
       return failureCount < 2;
     },
   });
+
+  // OBO authorize: same redirect+exchange flow as the admin "Authorize & Fetch"
+  // and the chat "Connect" button, but persists the token to the per-user DB.
+  const onOboAuthSuccess = useCallback(() => {
+    refetchOboCred();
+    refetchTools();
+  }, [refetchOboCred, refetchTools]);
+
+  const {
+    startOAuthFlow: startDbOAuthFlow,
+    status: dbOAuthStatus,
+    error: dbOAuthError,
+  } = useUserMcpOAuthFlow({
+    accessToken: accessToken ?? "",
+    serverId,
+    serverAlias,
+    onSuccess: onOboAuthSuccess,
+  });
+
+  // Stash which server started the redirect so the MCP Servers page can reopen
+  // this Tools tab on return and let the flow resume to persist the credential.
+  const startOboAuthorize = useCallback(() => {
+    try {
+      setSecureItem(TOOLS_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId }));
+    } catch (_) {}
+    startDbOAuthFlow();
+  }, [serverId, startDbOAuthFlow]);
 
   // If the tools query fails with 401, the cached OAuth token is invalid —
   // clear it so the auth gate is shown again and the user can re-authenticate.
@@ -186,6 +236,13 @@ const MCPToolsViewer = ({
   });
 
   const toolsData = mcpToolsResponse?.tools || [];
+
+  // An auth gate replaces the tool list when the user must authenticate first:
+  // passthrough needs a browser token, OBO needs a stored DB credential.
+  const authGateActive = (isPassthrough && !oauthToken) || oboNeedsAuth;
+  // Treat OBO credential-status loading as "tools loading" so the empty state
+  // doesn't flash before we know whether the user needs to authorize.
+  const toolsAreaLoading = isLoadingTools || oboStatusLoading;
 
   // Filter tools based on search term
   const filteredTools = toolsData.filter((tool: MCPTool) => {
@@ -287,7 +344,7 @@ const MCPToolsViewer = ({
                   )}
                 </Text>
 
-                {/* OAuth Auth Gate — shown when token is absent for OAuth servers */}
+                {/* Passthrough auth gate — browser session token absent */}
                 {isPassthrough && !oauthToken && (
                   <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                     <LockOutlined className="text-2xl text-gray-400 mb-2" />
@@ -306,8 +363,31 @@ const MCPToolsViewer = ({
                   </div>
                 )}
 
+                {/* OBO auth gate — only when no credential row exists for this user.
+                    An existing-but-expired token is refreshed server-side on the
+                    list call, so the gate never appears for a stored credential. */}
+                {oboNeedsAuth && (
+                  <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
+                    <LockOutlined className="text-2xl text-gray-400 mb-2" />
+                    <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Authenticate with the upstream provider to view available tools
+                    </p>
+                    <AntdButton
+                      size="small"
+                      type="primary"
+                      loading={dbOAuthStatus === "authorizing" || dbOAuthStatus === "exchanging"}
+                      onClick={startOboAuthorize}
+                      disabled={!accessToken}
+                    >
+                      Authorize
+                    </AntdButton>
+                    {dbOAuthError && <p className="text-xs text-red-500 mt-2">{dbOAuthError}</p>}
+                  </div>
+                )}
+
                 {/* Search Bar — only shown when tools are loaded */}
-                {!isPassthrough || oauthToken ? (
+                {!authGateActive ? (
                   <>
                     {toolsData.length > 0 && (
                       <div className="mb-3">
@@ -324,7 +404,7 @@ const MCPToolsViewer = ({
                     )}
 
                     {/* Loading State */}
-                    {isLoadingTools && (
+                    {toolsAreaLoading && (
                       <div className="flex flex-col items-center justify-center py-8 bg-white border border-gray-200 rounded-lg">
                         <div className="relative mb-3">
                           <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-200"></div>
@@ -335,7 +415,7 @@ const MCPToolsViewer = ({
                     )}
 
                     {/* Error State */}
-                    {(mcpToolsResponse?.error || mcpToolsError) && !isLoadingTools && !toolsData.length && (
+                    {(mcpToolsResponse?.error || mcpToolsError) && !toolsAreaLoading && !toolsData.length && (
                       <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
                         <p className="font-medium">
                           Error: {mcpToolsResponse?.message || (mcpToolsError as Error)?.message}
@@ -344,7 +424,7 @@ const MCPToolsViewer = ({
                     )}
 
                     {/* No Tools State */}
-                    {!isLoadingTools &&
+                    {!toolsAreaLoading &&
                       !mcpToolsResponse?.error &&
                       !mcpToolsError &&
                       (!toolsData || toolsData.length === 0) && (
@@ -370,7 +450,7 @@ const MCPToolsViewer = ({
                       )}
 
                     {/* Tools List */}
-                    {!isLoadingTools && !mcpToolsResponse?.error && toolsData.length > 0 && (
+                    {!toolsAreaLoading && !mcpToolsResponse?.error && toolsData.length > 0 && (
                       <>
                         {filteredTools.length === 0 ? (
                           <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">

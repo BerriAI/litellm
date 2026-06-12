@@ -47,6 +47,7 @@ from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
+    _mcp_gateway_server_name,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
@@ -323,10 +324,14 @@ if MCP_AVAILABLE:
             notification_options=notification_options,
             experimental_capabilities=experimental_capabilities or {},
         )
+        updates: Dict[str, Any] = {}
         merged = _mcp_gateway_initialize_instructions.get()
         if merged is not None:
-            return opts.model_copy(update={"instructions": merged})
-        return opts
+            updates["instructions"] = merged
+        scoped_server_name = _mcp_gateway_server_name.get()
+        if scoped_server_name is not None:
+            updates["server_name"] = scoped_server_name
+        return opts.model_copy(update=updates) if updates else opts
 
     ########################################################
     ############ Initialize the MCP Server #################
@@ -1544,6 +1549,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_servers: Optional[List[str]],
         client_ip: Optional[str],
+        scoped_server_endpoint: bool = False,
     ) -> AsyncIterator[None]:
         allowed = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
@@ -1565,11 +1571,22 @@ if MCP_AVAILABLE:
                 return_exceptions=True,
             )
         merged = _merge_gateway_initialize_instructions(allowed_mcp_servers=allowed)
-        tok = _mcp_gateway_initialize_instructions.set(merged)
+        scoped_server_name = None
+        if scoped_server_endpoint and len(allowed) == 1:
+            scoped_server = allowed[0]
+            scoped_server_name = (
+                scoped_server.alias
+                or scoped_server.server_name
+                or scoped_server.name
+                or scoped_server.server_id
+            )
+        instructions_token = _mcp_gateway_initialize_instructions.set(merged)
+        server_name_token = _mcp_gateway_server_name.set(scoped_server_name)
         try:
             yield
         finally:
-            _mcp_gateway_initialize_instructions.reset(tok)
+            _mcp_gateway_initialize_instructions.reset(instructions_token)
+            _mcp_gateway_server_name.reset(server_name_token)
 
     async def _get_tools_from_mcp_servers(  # noqa: PLR0915
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -3620,6 +3637,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+            scoped_server_endpoint = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
             _client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
@@ -3896,6 +3914,7 @@ if MCP_AVAILABLE:
                     user_api_key_auth,
                     mcp_servers,
                     _client_ip,
+                    scoped_server_endpoint=scoped_server_endpoint,
                 ):
                     await target_manager.handle_request(scope, receive, local_send)
                     if use_stateful and session_id and scope.get("method") == "DELETE":
@@ -3980,6 +3999,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+            scoped_server_endpoint = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
             _sse_client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
@@ -4052,6 +4072,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth,
                 mcp_servers,
                 _sse_client_ip,
+                scoped_server_endpoint=scoped_server_endpoint,
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
         except MCPUpstreamAuthError as e:

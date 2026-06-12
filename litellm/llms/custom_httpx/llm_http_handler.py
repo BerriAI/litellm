@@ -2319,6 +2319,31 @@ class BaseLLMHTTPHandler:
         # but never included in the outbound provider payload.
         request_context["litellm_params"] = dict(litellm_params)
 
+        is_stream_request = bool(stream)
+        if is_stream_request and fake_stream is True:
+            stream, data = self._prepare_fake_stream_request(
+                stream=stream,
+                data=data,
+                fake_stream=fake_stream,
+            )
+
+        # Sign after the body is final (post-transform/normalize/extra_body and post
+        # fake-stream prep) so signed bytes match what we send. No-op for providers
+        # that inherit the default sign_request.
+        headers, signed_body = responses_api_provider_config.sign_request(
+            headers=headers,
+            optional_params=dict(litellm_params),
+            request_data=data,
+            api_base=api_base,
+            api_key=litellm_params.api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+        body_kwargs: Dict[str, Any] = (
+            {"data": signed_body} if signed_body is not None else {"json": data}
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2331,22 +2356,14 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            if stream:
-                # For streaming, use stream=True in the request
-                if fake_stream is True:
-                    stream, data = self._prepare_fake_stream_request(
-                        stream=stream,
-                        data=data,
-                        fake_stream=fake_stream,
-                    )
-
+            if is_stream_request:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
+                    **body_kwargs,
                 )
                 if fake_stream is True:
                     return MockResponsesAPIStreamingIterator(
@@ -2371,13 +2388,12 @@ class BaseLLMHTTPHandler:
                     call_type=CallTypes.responses.value,
                 )
             else:
-                # For non-streaming requests
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
+                    **body_kwargs,
                 )
         except Exception as e:
             raise self._handle_error(
@@ -2465,6 +2481,28 @@ class BaseLLMHTTPHandler:
         # but never included in the outbound provider payload.
         request_context["litellm_params"] = dict(litellm_params)
 
+        is_stream_request = bool(stream)
+        if is_stream_request and fake_stream is True:
+            stream, data = self._prepare_fake_stream_request(
+                stream=stream,
+                data=data,
+                fake_stream=fake_stream,
+            )
+
+        headers, signed_body = responses_api_provider_config.sign_request(
+            headers=headers,
+            optional_params=dict(litellm_params),
+            request_data=data,
+            api_base=api_base,
+            api_key=litellm_params.api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+        body_kwargs: Dict[str, Any] = (
+            {"data": signed_body} if signed_body is not None else {"json": data}
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2477,22 +2515,14 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            if stream:
-                # For streaming, we need to use stream=True in the request
-                if fake_stream is True:
-                    stream, data = self._prepare_fake_stream_request(
-                        stream=stream,
-                        data=data,
-                        fake_stream=fake_stream,
-                    )
-
+            if is_stream_request:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
+                    **body_kwargs,
                 )
 
                 if fake_stream is True:
@@ -2519,13 +2549,12 @@ class BaseLLMHTTPHandler:
                     call_type=CallTypes.responses.value,
                 )
             else:
-                # For non-streaming, proceed as before
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
+                    **body_kwargs,
                 )
 
         except Exception as e:
@@ -4254,6 +4283,18 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
+        headers, signed_body = responses_api_provider_config.sign_request(
+            headers=headers,
+            optional_params=dict(litellm_params),
+            request_data=data,
+            api_base=url,
+            api_key=litellm_params.api_key,
+            model=model,
+        )
+        body_kwargs: Dict[str, Any] = (
+            {"data": signed_body} if signed_body is not None else {"json": data}
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -4267,7 +4308,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.post(
-                url=url, headers=headers, json=data, timeout=timeout
+                url=url, headers=headers, timeout=timeout, **body_kwargs
             )
 
         except Exception as e:
@@ -4337,6 +4378,18 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
+        headers, signed_body = responses_api_provider_config.sign_request(
+            headers=headers,
+            optional_params=dict(litellm_params),
+            request_data=data,
+            api_base=url,
+            api_key=litellm_params.api_key,
+            model=model,
+        )
+        body_kwargs: Dict[str, Any] = (
+            {"data": signed_body} if signed_body is not None else {"json": data}
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -4350,7 +4403,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.post(
-                url=url, headers=headers, json=data, timeout=timeout
+                url=url, headers=headers, timeout=timeout, **body_kwargs
             )
 
         except Exception as e:

@@ -531,11 +531,17 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # Check if this is a managed file (base64 encoded unified file ID)
             from litellm.proxy.openai_files_endpoints.common_utils import (
                 _is_base64_encoded_unified_file_id,
+                get_models_from_unified_file_id,
             )
 
             # Managed files require bypassing the HTTP endpoint (which runs access-check hooks)
             # and calling the managed files hook directly with the user's credentials.
             is_managed_file = _is_base64_encoded_unified_file_id(file_id)
+            target_model_names = (
+                get_models_from_unified_file_id(is_managed_file)
+                if is_managed_file
+                else []
+            )
             if is_managed_file and user_api_key_dict is not None:
                 file_content = await self._fetch_managed_file_content(
                     file_id=file_id,
@@ -616,8 +622,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         models: Iterable[str],
     ) -> None:
-        """Reject the batch if the caller is not authorized for every
-        ``body.model`` named inside the JSONL.
+        """Reject the batch if the caller is not authorized for the upload target.
+
+        For managed files, ``target_model_names`` (from the unified file id) is
+        the proxy alias the file was uploaded for and is used directly for auth.
+        For legacy/non-managed files, falls back to ``body.model`` values in the JSONL.
 
         Reuses standard auth helpers so the same model access rules the proxy
         enforces on `/chat/completions` apply here.
@@ -666,12 +675,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         llm_model_list = llm_router.model_list if llm_router is not None else None
         for model in models:
-            # body.model may be the provider id after replace_model_in_jsonl; map to proxy model_name for auth.
             model_to_check = model
-            if llm_router is not None:
-                proxy_model_name = llm_router.resolve_model_name_from_model_id(model)
-                if proxy_model_name is not None:
-                    model_to_check = proxy_model_name
             try:
                 if team_object is not None:
                     try:

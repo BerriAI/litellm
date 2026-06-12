@@ -44,15 +44,19 @@ def _build_db_connection_url_params(
     pool_timeout: Optional[Union[int, float]],
     connect_timeout: Optional[Union[int, float]] = None,
     socket_timeout: Optional[Union[int, float]] = None,
+    disable_prepared_statements: bool = False,
     extra_params: Optional[dict] = None,
 ) -> dict:
     """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
 
     `connect_timeout` / `socket_timeout` map to the Prisma URL params of the same
     name (https://www.prisma.io/docs/orm/overview/databases/postgresql) and are
-    omitted when None so Prisma's defaults apply. `extra_params` is an
-    untyped passthrough — keys it provides win over the named arguments above,
-    so it can be used to override any default we set here.
+    omitted when None so Prisma's defaults apply. `disable_prepared_statements`
+    sets `pgbouncer=true`, which makes Prisma stop using server-side prepared
+    statements (pgbouncer transaction-pool compatible; also sidesteps the
+    "cached plan must not change result type" error during rolling migrations).
+    `extra_params` is an untyped passthrough — keys it provides win over the
+    named arguments above, so it can be used to override any default we set here.
     """
     params: dict = {
         "connection_limit": connection_limit,
@@ -63,6 +67,8 @@ def _build_db_connection_url_params(
         params["connect_timeout"] = connect_timeout
     if socket_timeout is not None:
         params["socket_timeout"] = socket_timeout
+    if disable_prepared_statements:
+        params["pgbouncer"] = "true"
     if extra_params:
         params.update(extra_params)
     return params
@@ -555,6 +561,7 @@ class ProxyInitializationHelpers:
 
 
 @click.command()
+@click.argument("cli_args", nargs=-1)
 @click.option(
     "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
 )
@@ -808,6 +815,7 @@ class ProxyInitializationHelpers:
     help="Enable uvicorn hot reload (dev only). Also reloads when the --config YAML file changes. Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
 )
 def run_server(  # noqa: PLR0915
+    cli_args,
     host,
     port,
     api_base,
@@ -854,6 +862,20 @@ def run_server(  # noqa: PLR0915
     use_v2_migration_resolver: bool,
     reload: bool,
 ):
+    if cli_args:
+        if cli_args == ("xai-oauth", "login"):
+            from litellm.llms.xai.oauth import XAIOAuthAuthenticator
+
+            authenticator = XAIOAuthAuthenticator()
+            auth_data = authenticator.login()
+            click.echo(
+                f"xAI OAuth login successful. Credentials saved to {authenticator.auth_file}."
+            )
+            if auth_data.get("expires_at"):
+                click.echo(f"Access token expires at {auth_data['expires_at']}.")
+            return
+        raise click.UsageError(f"Unknown command: {' '.join(cli_args)}")
+
     if setup:
         from litellm.setup_wizard import run_setup_wizard
 
@@ -947,6 +969,7 @@ def run_server(  # noqa: PLR0915
         db_connection_timeout: Optional[Union[int, float]] = 60
         db_connect_timeout: Optional[Union[int, float]] = None
         db_socket_timeout: Optional[Union[int, float]] = None
+        db_disable_prepared_statements: bool = False
         db_extra_connection_params: Optional[dict] = None
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
@@ -1067,6 +1090,17 @@ def run_server(  # noqa: PLR0915
                 )
             db_connect_timeout = general_settings.get("database_connect_timeout")
             db_socket_timeout = general_settings.get("database_socket_timeout")
+            _disable_prepared_statements = general_settings.get(
+                "database_disable_prepared_statements", False
+            )
+            if isinstance(_disable_prepared_statements, str):
+                from litellm.secret_managers.main import str_to_bool
+
+                db_disable_prepared_statements = (
+                    str_to_bool(_disable_prepared_statements) is True
+                )
+            else:
+                db_disable_prepared_statements = bool(_disable_prepared_statements)
             db_extra_connection_params = general_settings.get(
                 "database_extra_connection_params"
             )
@@ -1114,6 +1148,7 @@ def run_server(  # noqa: PLR0915
                     pool_timeout=db_connection_timeout,
                     connect_timeout=db_connect_timeout,
                     socket_timeout=db_socket_timeout,
+                    disable_prepared_statements=db_disable_prepared_statements,
                     extra_params=db_extra_connection_params,
                 )
                 if os.getenv("DATABASE_URL", None) is not None:

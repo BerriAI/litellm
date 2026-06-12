@@ -14,8 +14,12 @@ from litellm.proxy._types import (
     SpecialHeaders,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import (
+    AgentsRepository,
+    MCPServerRepository,
+)
 
 
 def _parse_mcp_server_names_from_path(
@@ -1445,7 +1449,7 @@ class MCPRequestHandler:
                 return None
 
             if object_permission_id is None:
-                agent_row = await prisma_client.db.litellm_agentstable.find_unique(
+                agent_row = await AgentsRepository(prisma_client).table.find_unique(
                     where={"agent_id": agent_id},
                 )
                 object_permission_id = (
@@ -1600,7 +1604,7 @@ class MCPRequestHandler:
         server_ids: Set[str] = set()
         if access_groups and prisma_client is not None:
             try:
-                mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
+                mcp_servers = await MCPServerRepository(prisma_client).table.find_many(
                     where={"mcp_access_groups": {"hasSome": access_groups}}
                 )
                 for server in mcp_servers:

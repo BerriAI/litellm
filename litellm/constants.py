@@ -398,6 +398,9 @@ REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(
 REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(
     os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60)
 )
+REDIS_CIRCUIT_BREAKER_ENABLED = (
+    os.getenv("REDIS_CIRCUIT_BREAKER_ENABLED", "true").lower() == "true"
+)
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
@@ -831,6 +834,7 @@ openai_compatible_providers: List = [
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
+    "parasail",  # Parasail - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
@@ -1157,6 +1161,7 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5",
     "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
@@ -1491,6 +1496,10 @@ SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(
 )
 SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = float(
     os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
+)
+SPEND_LOG_PARTITION_INTERVAL = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
+SPEND_LOG_PARTITION_PRECREATE_AHEAD = int(
+    os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7)
 )
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))

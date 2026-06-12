@@ -32,8 +32,10 @@ _OPTIONAL_KWARGS_KEYS = frozenset(
         "aws_sts_endpoint",
         "aws_external_id",
         "aws_bedrock_runtime_endpoint",
+        "aws_bedrock_project_id",
         "tpm",
         "rpm",
+        "use_xai_oauth",
     }
 )
 
