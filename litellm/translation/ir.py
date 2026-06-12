@@ -418,10 +418,12 @@ class ChatResponse:
     """True when the provider rewrote a forced json_tool_call into plain
     content (v1 then emits a bare message: no provider fields, no thinking)."""
     wire: Option[JsonBlob] = Nothing
-    """The raw provider response body, set by providers whose outbound dialect
-    is wire-derived (openai_compat: v1's convert_to_model_response_object is a
-    near-passthrough, so byte parity needs the wire fields the semantic IR
-    does not model — system_fingerprint, refusal, verbatim usage details)."""
+    """The normalized outbound chat-completion body, set by providers whose
+    outbound dialect is wire-derived (openai_compat: v1's
+    convert_to_model_response_object is a near-passthrough, so byte parity
+    needs the wire fields the semantic IR does not model: system_fingerprint,
+    refusal, verbatim usage details). The provider's parse_response builds it;
+    the ``openai`` response dialect emits it unchanged."""
 
 
 # --------------------------------------------------------------------------

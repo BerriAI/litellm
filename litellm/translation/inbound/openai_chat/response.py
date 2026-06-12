@@ -13,7 +13,11 @@ v1's per-provider ``transform_response`` builds, so the serializer carries a
   optional keys are OMITTED when unset (v1 builds the message dict
   conditionally), ``provider_specific_fields`` mirrors the raw
   ``reasoningContentBlocks``, and usage uses the wire ``totalTokens`` with no
-  ephemeral detail.
+  ephemeral detail;
+- ``openai``: the outbound body IS the inbound family, so the provider's
+  ``parse_response`` builds the normalized chat-completion body (mirroring
+  ``convert_to_model_response_object``) and rides it on ``ChatResponse.wire``;
+  this serializer emits it unchanged.
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ from expression.collections import Block
 from ...deps import TranslationDeps
 from ...ir import Body, ChatResponse, ContentBlock, PlainJson, ResponseUsage
 
-ResponseDialect = Literal["anthropic", "bedrock_converse"]
+ResponseDialect = Literal["anthropic", "bedrock_converse", "openai"]
 
 
 def serialize_response(
@@ -35,6 +39,12 @@ def serialize_response(
     deps: TranslationDeps,
     dialect: ResponseDialect = "anthropic",
 ) -> Body:
+    if dialect == "openai":
+        match response.wire:
+            case Option(tag="some", some=blob) if isinstance(blob.value, dict):
+                return blob.value
+            case _:
+                pass  # no wire body: fall through to the anthropic assembly
     text = "".join(block.text.text for block in response.content if block.tag == "text")
     thinking_blocks = _thinking_blocks(response.content)
     reasoning: str | None = None

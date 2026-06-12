@@ -67,7 +67,7 @@ def build_translation_deps(
     )
 
 
-UsageStyle = str  # "anthropic" | "bedrock_converse" (mirrors the v1 transform)
+UsageStyle = str  # "anthropic" | "bedrock_converse" | "openai" (v1 transform)
 
 
 def to_model_response(
@@ -81,11 +81,16 @@ def to_model_response(
     pre-allocated response's first choice, stamp created/model, setattr a
     real ``Usage`` built with that transform's exact kwarg set — extra-field
     serialization only dumps explicitly set fields). The envelope (chatcmpl
-    id, created timestamp) stays litellm-ambient.
+    id, created timestamp) stays litellm-ambient, except on the ``openai``
+    style where v1's ``convert_to_model_response_object`` keeps the wire
+    id/created/system_fingerprint and setattrs unknown top-level keys.
     """
     import time
 
     from litellm.types.utils import Message
+
+    if usage_style == "openai":
+        return _to_model_response_openai(body, model_response)
 
     response = model_response if model_response is not None else ModelResponse()
     choices = body.get("choices")
@@ -109,6 +114,74 @@ def to_model_response(
     model = body.get("model")
     if isinstance(model, str):
         response.model = model
+    return response
+
+
+_OPENAI_BODY_ENVELOPE_FIELDS = (
+    "object",
+    "choices",
+    "usage",
+    "id",
+    "created",
+    "model",
+    "system_fingerprint",
+)
+
+
+def _to_model_response_openai(
+    body: Body, model_response: Optional[ModelResponse]
+) -> ModelResponse:
+    """Mirror ``convert_to_model_response_object``'s completion-branch
+    assembly over the normalized body the openai_compat parser built: choices
+    are REBUILT (v1 replaces the list with ``Choices(...)`` carrying the
+    exact kwarg set), usage is the verbatim ``Usage(**raw_usage)``
+    passthrough, the wire id/created/system_fingerprint survive, and unknown
+    top-level keys are setattr'd."""
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        _safe_convert_created_field,
+    )
+    from litellm.types.utils import Choices, Message
+
+    response = model_response if model_response is not None else ModelResponse()
+    raw_choices = body.get("choices")
+    rebuilt = []
+    if isinstance(raw_choices, list):
+        for idx, choice in enumerate(raw_choices):
+            if not isinstance(choice, dict):
+                continue
+            message_payload = choice.get("message")
+            message = (
+                Message(**cast(Dict[str, Any], message_payload))
+                if isinstance(message_payload, dict)
+                else Message()
+            )
+            rebuilt.append(
+                Choices(
+                    finish_reason=choice.get("finish_reason"),
+                    index=idx,
+                    message=message,
+                    logprobs=choice.get("logprobs"),
+                    enhancements=choice.get("enhancements"),
+                    provider_specific_fields=choice.get("provider_specific_fields"),
+                )
+            )
+    response.choices = cast(Any, rebuilt)
+    usage_payload = body.get("usage")
+    if isinstance(usage_payload, dict):
+        setattr(response, "usage", Usage(**cast(Dict[str, Any], usage_payload)))
+    if "created" in body:
+        response.created = _safe_convert_created_field(cast(Any, body["created"]))
+    body_id = body.get("id")
+    if isinstance(body_id, str) and body_id:
+        response.id = body_id
+    if "system_fingerprint" in body:
+        response.system_fingerprint = cast(Any, body["system_fingerprint"])
+    model = body.get("model")
+    if isinstance(model, str) and response.model is None:
+        response.model = model
+    for key, value in body.items():
+        if key not in _OPENAI_BODY_ENVELOPE_FIELDS:
+            setattr(response, key, value)
     return response
 
 
@@ -176,18 +249,28 @@ def _build_usage(payload: dict) -> Usage:
 
 def to_model_response_stream(body: Body, stream_id: str):
     """Adapt one v2 chunk body onto ModelResponseStream; the stream id is
-    minted once per stream by the caller (v1 reuses one id for every chunk).
-    system_fingerprint/citations are set explicitly because v1's wrapper
-    always sets them and extra-field serialization only dumps set fields."""
+    minted once per stream by the caller (v1 reuses one id for every chunk)
+    unless the body pinned the wire id (openai dialect, mirroring v1's
+    ``set_model_id``). system_fingerprint/citations are set explicitly
+    because v1's wrapper always sets them and extra-field serialization only
+    dumps set fields; a body-carried ``usage`` becomes the verbatim
+    ``Usage(**dict)`` passthrough (v1 streaming_handler.py:1511-1516)."""
     from litellm.types.utils import ModelResponseStream
 
+    payload = dict(body)
+    body_id = payload.pop("id", None)
+    usage_payload = payload.pop("usage", None)
     chunk = ModelResponseStream(
-        id=stream_id, system_fingerprint=None, **cast(Dict[str, Any], body)
+        id=body_id if isinstance(body_id, str) and body_id else stream_id,
+        **cast(Dict[str, Any], {"system_fingerprint": None, **payload}),
     )
+    if isinstance(usage_payload, dict):
+        setattr(chunk, "usage", Usage(**cast(Dict[str, Any], usage_payload)))
     choices = body.get("choices")
-    first = choices[0] if isinstance(choices, list) and choices else {}
+    first = choices[0] if isinstance(choices, list) and choices else None
     if isinstance(first, dict) and first.get("finish_reason") is None:
-        # v1 sets citations only on content chunks, never the finish chunk.
+        # v1 sets citations only on content chunks, never the finish chunk
+        # nor the choices=[] usage chunk.
         setattr(chunk, "citations", None)
     return chunk
 
