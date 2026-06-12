@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, fields
 from typing import Literal, TypeVar, Union
 
-from expression import Option, case, tag, tagged_union
+from expression import Nothing, Option, case, tag, tagged_union
 from expression.collections import Block, Map
 
 Json = Union[None, bool, int, float, str, "Block[Json]", "Map[str, Json]"]
@@ -242,6 +242,9 @@ class ToolDef:
     description: Option[str]
     parameters: Option[JsonBlob]
     cache: Option[CacheControl]
+    strict: Option[bool] = Nothing
+    """OpenAI structured-outputs flag; passthrough providers re-emit it,
+    anthropic-family serializers ignore it (v1 drops it there too)."""
 
 
 @tagged_union(frozen=True)
@@ -273,6 +276,12 @@ class ToolChoice:
 @dataclass(frozen=True)
 class JsonSchemaSpec:
     schema: JsonBlob
+    name: Option[str] = Nothing
+    description: Option[str] = Nothing
+    strict: Option[bool] = Nothing
+    """``name``/``description``/``strict`` ride beside the schema on the
+    OpenAI wire; passthrough providers re-emit them, anthropic-family
+    serializers read only ``schema`` (v1 parity on both sides)."""
 
 
 @tagged_union(frozen=True)
@@ -332,6 +341,11 @@ class InferenceParams:
     top_p: Option[Sampling]
     top_k: Option[Sampling]
     stop: Block[str]
+    max_completion_tokens: Option[int] = Nothing
+    """The caller's verbatim ``max_completion_tokens`` when that key was sent.
+    ``max_tokens`` above stays the collapsed value every non-passthrough
+    provider reads; OpenAI-passthrough serializers re-emit the original key
+    (the raw guard rejects requests carrying both keys)."""
 
 
 @dataclass(frozen=True)
@@ -403,6 +417,11 @@ class ChatResponse:
     synthesized_json_content: bool
     """True when the provider rewrote a forced json_tool_call into plain
     content (v1 then emits a bare message: no provider fields, no thinking)."""
+    wire: Option[JsonBlob] = Nothing
+    """The raw provider response body, set by providers whose outbound dialect
+    is wire-derived (openai_compat: v1's convert_to_model_response_object is a
+    near-passthrough, so byte parity needs the wire fields the semantic IR
+    does not model — system_fingerprint, refusal, verbatim usage details)."""
 
 
 # --------------------------------------------------------------------------
@@ -469,6 +488,7 @@ class StreamEvent:
         "signature_delta",
         "finish",
         "stop",
+        "wire_chunk",
     ] = tag()
 
     start: StreamStart = case()
@@ -479,6 +499,11 @@ class StreamEvent:
     signature_delta: SignatureDelta = case()
     finish: StreamFinish = case()
     stop: Unit = case()
+    wire_chunk: JsonBlob = case()
+    """A same-family provider chunk carried verbatim (openai_compat): the
+    outbound chunk IS the inbound family, so a semantic re-encode would lose
+    wire bytes (refusal, system_fingerprint, logprobs). The openai chunk
+    dialect folds these; cross-family parsers never emit them."""
 
     @staticmethod
     def of_start(value: StreamStart) -> StreamEvent:
@@ -512,6 +537,10 @@ class StreamEvent:
     def of_stop() -> StreamEvent:
         return _stream_stop(UNIT)
 
+    @staticmethod
+    def of_wire_chunk(value: JsonBlob) -> StreamEvent:
+        return _stream_wire_chunk(value)
+
 
 _stream_start = _case_maker(StreamEvent, "start")
 _stream_text_delta = _case_maker(StreamEvent, "text_delta")
@@ -521,3 +550,4 @@ _stream_thinking_delta = _case_maker(StreamEvent, "thinking_delta")
 _stream_signature_delta = _case_maker(StreamEvent, "signature_delta")
 _stream_finish = _case_maker(StreamEvent, "finish")
 _stream_stop = _case_maker(StreamEvent, "stop")
+_stream_wire_chunk = _case_maker(StreamEvent, "wire_chunk")

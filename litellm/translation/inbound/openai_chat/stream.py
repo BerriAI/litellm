@@ -133,6 +133,10 @@ def step(state: StreamState, event: StreamEvent) -> _StepResult:
             return state, (chunk,)
         case "stop":
             return state, ()
+        case "wire_chunk":
+            # Placeholder until the openai chunk dialect lands: no parser
+            # registered today emits wire_chunk events.
+            return state, ()
     assert_never(event.tag)
 
 
