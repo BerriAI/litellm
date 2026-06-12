@@ -15,7 +15,10 @@ openai parser (all verified in-process at HEAD):
   + the FOLDED usage) so the seam's synthesized-final-usage contract from
   the openai port applies unchanged.
 - every usage-bearing chunk gets the reasoning fold + total normalize
-  (the dict variants of the response post-steps).
+  (the dict variants of the response post-steps), but the folded usage is
+  ATTACHED only to the ``choices: []`` tail: v1's wrapper strips usage from
+  every emitted content/finish chunk and only the synthesized final chunk
+  carries it (verifier-grok F2).
 - ``delta.reasoning`` is renamed to ``reasoning_content`` (the base
   handler's rename) and native ``reasoning_content`` deltas are admitted —
   real Grok reasoning traffic, not an unreachable shape.
@@ -26,12 +29,12 @@ openai parser (all verified in-process at HEAD):
 
 from __future__ import annotations
 
-import json
-
 from expression import Error, Ok, Result
+from expression.collections import Block
 
 from ...errors import BoundaryError, TranslationError
 from ...ir import JsonBlob, PlainJson, StreamEvent
+from ..openai_compat.stream import make_parse_line
 from .response import fold_reasoning_tokens, normalize_usage_totals
 
 _EventResult = Result[StreamEvent | None, TranslationError]
@@ -45,20 +48,6 @@ _DELTA_KEYS = (
     "reasoning",
     "reasoning_content",
 )
-
-
-def parse_line(line: str) -> _EventResult:
-    stripped = line.strip()
-    if not stripped.startswith("data:"):
-        return Ok(None)
-    payload = stripped[len("data:") :].strip()
-    if payload == "[DONE]":
-        return Ok(StreamEvent.of_stop())
-    try:
-        event: PlainJson = json.loads(payload)
-    except ValueError:
-        return Error(_boundary(f"stream payload is not JSON: {payload[:120]!r}"))
-    return parse_event(event)
 
 
 def parse_event(event: PlainJson) -> _EventResult:
@@ -75,12 +64,9 @@ def parse_event(event: PlainJson) -> _EventResult:
                 "multiple stream choices (n > 1); unreachable for v2-sent requests"
             )
         )
-    raw_usage = event.get("usage")
-    usage: PlainJson = (
-        normalize_usage_totals(fold_reasoning_tokens(raw_usage))
-        if isinstance(raw_usage, dict)
-        else None
-    )
+    folded = _folded_usage(event.get("usage"))
+    if isinstance(folded, TranslationError):
+        return Error(folded)
     normalized_choices: list[PlainJson] = []
     if len(choices) == 1:
         normalized = _normalize_choice(choices[0])
@@ -90,18 +76,32 @@ def parse_event(event: PlainJson) -> _EventResult:
     identifier = event.get("id")
     chunk: dict[str, PlainJson] = {
         # No extras passthrough and no system_fingerprint: the v1 chunk_parser
-        # rebuild keeps only id/created/model/choices/usage.
+        # rebuild keeps only id/created/model/choices/usage. Usage rides ONLY
+        # the choices:[] tail: v1's wrapper strips usage from every emitted
+        # content/finish chunk and re-synthesizes the final usage chunk
+        # (verifier-grok F2; the fold above still runs so uncoercible values
+        # stay as loud as v1's chunk_parser).
         "id": identifier if isinstance(identifier, str) else None,
         "system_fingerprint": None,
         "choices": normalized_choices,
-        "usage": usage,
+        "usage": folded if len(normalized_choices) == 0 else None,
     }
     return Ok(StreamEvent.of_wire_chunk(JsonBlob(value=chunk)))
 
 
-def _boundary(reason: str) -> TranslationError:
-    from expression.collections import Block
+def _folded_usage(raw_usage: PlainJson) -> PlainJson | TranslationError:
+    """v1 folds + normalizes every usage-bearing chunk inside chunk_parser;
+    an uncoercible token value raises out of the iterator there, so the
+    coercion errors from the shared arithmetic stay loud here too."""
+    if not isinstance(raw_usage, dict):
+        return None
+    folded = fold_reasoning_tokens(raw_usage)
+    if isinstance(folded, TranslationError):
+        return folded
+    return normalize_usage_totals(folded)
 
+
+def _boundary(reason: str) -> TranslationError:
     return TranslationError.of_boundary(BoundaryError.of(Block.of_seq([reason])))
 
 
@@ -170,9 +170,12 @@ def _normalize_delta(
                 return normalized
             gathered = [*gathered, normalized]
         normalized_calls = gathered
-    # No "refusal" key and an explicit provider_specific_fields: None — the
-    # dict-path wrapper rebuild drops refusal and always stamps the null
-    # provider field on content-bearing deltas (verified in-process replay).
+    # provider_specific_fields: None always (the dict-path wrapper stamps the
+    # null provider field on content-bearing deltas); refusal and
+    # reasoning_content ride VERBATIM but only when the wire carried the key,
+    # mirroring Delta's set-only serialization — v1 FORWARDS a refusal that
+    # rides a role/content delta and swallows refusal-only deltas
+    # (verifier-grok F1 corrected the earlier drop claim; replay-verified).
     base: dict[str, PlainJson] = {
         "content": _string_or_none(delta.get("content")),
         "function_call": None,
@@ -180,9 +183,10 @@ def _normalize_delta(
         "role": _string_or_none(delta.get("role")),
         "tool_calls": normalized_calls,
     }
+    if "refusal" in delta:
+        base = {**base, "refusal": _string_or_none(delta.get("refusal"))}
     # the base handler renames delta.reasoning unconditionally
-    # (_map_reasoning_to_reasoning_content); the key is only present when the
-    # wire carried one, mirroring Delta's set-only serialization.
+    # (_map_reasoning_to_reasoning_content)
     reasoning = (
         delta.get("reasoning")
         if "reasoning" in delta
@@ -222,3 +226,6 @@ def _delta_bears_content(delta: dict[str, PlainJson]) -> bool:
     return (isinstance(content, str) and len(content) > 0) or delta.get(
         "tool_calls"
     ) is not None
+
+
+parse_line = make_parse_line(parse_event)

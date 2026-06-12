@@ -83,7 +83,9 @@ translation/
 │   │   │                #   normalizer; transform_response is dead on the SDK
 │   │   │                #   path); rides the outbound body on ChatResponse.wire
 │   │   └── stream.py    # SSE chunk -> wire_chunk events normalized to the
-│   │                    #   SDK-dump shape; the openai chunk dialect folds them
+│   │                    #   SDK-dump shape; the openai chunk dialect folds
+│   │                    #   them; make_parse_line is the ONE data:-line
+│   │                    #   decode every same-family provider composes
 │   ├── google_genai/    # ONE generateContent family for BOTH google routes:
 │   │   │                #   providers "vertex_ai" and "gemini" are the same
 │   │   │                #   serializer parameterized by the drift list
@@ -166,11 +168,14 @@ translation/
 │       │                #   web_search_requests); the finish_reason "" chain
 │       │                #   needs no arm: v1's own fix is dead, both sides
 │       │                #   map "" -> "stop" in the live Choices constructor
-│       └── stream.py    # SSE dict-path parser: per-chunk usage fold, no
+│       └── stream.py    # SSE dict-path parser: per-chunk usage fold with
+│                        #   the folded usage attached ONLY to the choices:[]
+│                        #   tail (v1's wrapper strips it elsewhere), no
 │                        #   extras/system_fingerprint passthrough (the
 │                        #   chunk_parser rebuild drops them), reasoning
-│                        #   rename, tool_call type "function" default;
-│                        #   the "xai" chunk dialect folds it
+│                        #   rename, refusal forwarded when it rides a
+│                        #   role/content delta, tool_call type "function"
+│                        #   default; the "xai" chunk dialect folds it
 └── engine/
     ├── pipeline.py # prepare (pure, drives the fallback decision) -> send;
     │               #   per-provider serializer/parser/dialect tables; the
@@ -385,11 +390,19 @@ depth), the openai guard's raw shapes, and the parse-level unknowns v1
 passes through for grok (presence/frequency penalties on supported
 families, seed, logprobs, top_logprobs, logit_bias, n, stream_options,
 web_search_options). The xai completion() fork is NOT wired (integrator
-scope, like openai/azure); when it lands it must fall back on
-`use_xai_oauth`/web_search_options BEFORE building deps, route through
-`dispatch.route` with provider "xai", keep the bare wire model (the B1
-re-prefix arm must never fire: xai presets no model), and synthesize the
-final stream usage chunk from the passthrough `choices: []` tail.
+scope, like openai/azure); when it lands these are HARD OBLIGATIONS, not
+notes: the in-package `use_xai_oauth` guard arm is defense-in-depth ONLY
+and unreachable through `_raw_openai_body` (use_xai_oauth is a litellm
+param, never in non_default_params — the canary
+`test_use_xai_oauth_guard_reachability_facts` pins the classification), so
+the fork MUST either include the kwarg in the raw body it routes (making
+the guard live) or fall back on it BEFORE building deps, and MUST pin that
+with a completion()-level `use_xai_oauth=True` fallback test before the
+xai flag can turn on; route through `dispatch.route` with provider "xai";
+keep the bare wire model (the B1 re-prefix arm must never fire: xai
+presets no model); synthesize the final stream usage chunk from the
+passthrough `choices: []` tail (non-tail usage is withheld exactly like
+v1's wrapper, so the synthesis covers the tail-chunk shape only).
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body

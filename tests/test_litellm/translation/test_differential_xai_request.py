@@ -251,7 +251,10 @@ def test_unsupported_shape_is_a_typed_fallback(name: str) -> None:
 def test_reasoning_gate_matches_v1_capability_read() -> None:
     """The v2 gate reads deps.supports_capability over the ``xai/{model}``
     map key; it must agree with v1's litellm.supports_reasoning on the
-    models the corpus serves and falls back."""
+    models the corpus serves and falls back. The ``xai/`` prefix is
+    LOAD-BEARING: the model map has no bare-model rows, so an unprefixed
+    lookup is False even for reasoning models — asserted below so the next
+    consumer of this template cannot miss it."""
     import litellm
 
     from litellm.translation.providers.xai.params import supports_reasoning
@@ -267,3 +270,68 @@ def test_reasoning_gate_matches_v1_capability_read() -> None:
         assert supports_reasoning(model, deps) == litellm.supports_reasoning(
             model=model, custom_llm_provider="xai"
         ), model
+    assert deps.supports_capability("grok-3-mini", "supports_reasoning") is False
+    assert deps.supports_capability("xai/grok-3-mini", "supports_reasoning") is True
+
+
+def test_supported_list_mirrors_track_v1_at_head() -> None:
+    """Drift gate for the hand-copied supported-list mirrors (critic-grok
+    M4): for EVERY xai chat model in the map at HEAD, the v2 gates must
+    agree with ``XAIChatConfig.get_supported_openai_params``, and every
+    param the v2 serializer emits unconditionally must still be in v1's
+    supported list (otherwise v2 would serve what v1 raises on)."""
+    import litellm
+
+    from litellm.llms.xai.chat.transformation import XAIChatConfig
+
+    from litellm.translation.providers.xai.params import (
+        supports_reasoning,
+        supports_stop,
+    )
+
+    deps = build_real_deps()
+    config = XAIChatConfig()
+    models = sorted(
+        key.split("/", 1)[1]
+        for key, info in litellm.model_cost.items()
+        if key.startswith("xai/") and info.get("mode") == "chat"
+    )
+    assert len(models) >= 5, "model map lost its xai chat entries"
+    always_served = (
+        "max_tokens",
+        "parallel_tool_calls",
+        "response_format",
+        "stream",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_p",
+        "user",
+    )
+    for model in models:
+        supported = config.get_supported_openai_params(model)
+        assert supports_stop(model) == ("stop" in supported), model
+        assert supports_reasoning(model, deps) == (
+            "reasoning_effort" in supported
+        ), model
+        for param in always_served:
+            assert param in supported, (model, param)
+
+
+def test_use_xai_oauth_guard_reachability_facts() -> None:
+    """The use_xai_oauth guard arm is DEFENSE-IN-DEPTH, not the protection
+    (critic-grok M1): use_xai_oauth is a litellm param, so completion()
+    never places it in the OpenAI body and the seam's _raw_openai_body
+    cannot carry the key today. The protection is the seam obligation in
+    CLAUDE.md (route the kwarg into the raw body, or fall back on it before
+    building deps, pinned at completion() level before the flag turns on).
+    This canary pins the classification facts that analysis rests on; if
+    either flips, re-derive the guard's reachability."""
+    from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+    from litellm.types.utils import all_litellm_params
+
+    assert "use_xai_oauth" in all_litellm_params
+    assert "use_xai_oauth" not in OPENAI_CHAT_COMPLETION_PARAMS
+    # web_search_options IS an OpenAI param: that guard arm is genuinely
+    # reachable through _raw_openai_body
+    assert "web_search_options" in OPENAI_CHAT_COMPLETION_PARAMS

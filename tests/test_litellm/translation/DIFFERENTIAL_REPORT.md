@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: 3fe015ef6c
+- commit: ae4643ba8a
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -186,6 +186,7 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: cached_tokens_usage_passthrough
 - IDENTICAL: finish_empty_string_with_tool_calls
 - IDENTICAL: finish_stop_with_tool_calls_rewrites
+- IDENTICAL: numeric_string_usage_coerced
 - IDENTICAL: reasoning_tokens_already_folded_idempotent
 - IDENTICAL: reasoning_tokens_folded
 - IDENTICAL: text_basic
@@ -198,10 +199,12 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: empty_keepalive_swallowed
 - IDENTICAL: reasoning_content
 - IDENTICAL: reasoning_renamed
+- IDENTICAL: refusal_rides_content_deltas
 - IDENTICAL: text
 - IDENTICAL: text_no_leading_role
 - IDENTICAL: tools_typeless_continuation
 - SEAM CONTRACT: usage_tail_include_usage (v1's chunk_parser injects a dummy choice so the wrapper swallows the tail and synthesizes the final usage chunk; v2 passes the wire choices=[] chunk through with the FOLDED usage for the streaming seam to synthesize from)
+- IDENTICAL: usage_withheld_on_content_chunks
 
 ## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)
 

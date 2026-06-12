@@ -42,6 +42,16 @@ def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
             "(responses_api_bridge_check); v1 owns it"
         )
     if raw.get("use_xai_oauth"):
+        # DEFENSE-IN-DEPTH ONLY, unreachable through translation_seam's
+        # _raw_openai_body today: use_xai_oauth is a litellm param
+        # (all_litellm_params), not an OpenAI param, so completion() never
+        # places it in non_default_params/optional_param_args. The REAL
+        # protection is the seam obligation (CLAUDE.md): the xai fork must
+        # either include the kwarg in the raw body it routes (making this
+        # arm live) or fall back on it BEFORE building deps, and must pin
+        # that with a completion()-level test before the flag turns on.
+        # test_use_xai_oauth_guard_reachability pins the classification facts
+        # this analysis rests on.
         return TranslationError.of_unsupported(
             "use_xai_oauth: v1 runs an interactive browser PKCE flow inside "
             "validate_environment (llms/xai/oauth.py); v1 owns it"
@@ -82,7 +92,9 @@ def _nested_tool_strict_reason(raw: _Raw) -> str | None:
 
 def _contains_strict_key(value: object, depth: int) -> bool:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        return False
+        # exhaustion never admits: fall back (the polarity integration
+        # db99d00be5 set for cap exhaustion; strictly widens the fallback)
+        return True
     if isinstance(value, Mapping):
         mapping = cast(_Raw, value)
         return any(

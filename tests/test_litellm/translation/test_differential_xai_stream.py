@@ -171,3 +171,49 @@ def test_unreachable_chunk_shape_is_a_typed_error(name: str) -> None:
     result = parse_event(event)
     assert result.is_error(), f"{name} unexpectedly parsed"
     assert reason_fragment in result.error.summary, result.error.summary
+
+
+def test_numeric_string_usage_folds_like_v1s_own_arithmetic() -> None:
+    """v1's dict-path fold is int(x or 0): numeric strings fold
+    (completion 2+7 -> 9, untouched keys keep their original values).
+    Pinned against v1's OWN static methods (critic-grok M2)."""
+    from litellm.llms.xai.chat.transformation import XAIChatConfig
+
+    from litellm.translation.providers.xai.response import (
+        fold_reasoning_tokens,
+        normalize_usage_totals,
+    )
+
+    usage = {
+        "prompt_tokens": "171",
+        "completion_tokens": "2",
+        "total_tokens": "180",
+        "completion_tokens_details": {"reasoning_tokens": "7"},
+    }
+    v1_usage = copy.deepcopy(usage)
+    XAIChatConfig._fold_reasoning_tokens_into_completion(v1_usage)
+    XAIChatConfig._normalize_openai_compatible_usage_totals(v1_usage)
+    folded = fold_reasoning_tokens(copy.deepcopy(usage))
+    assert not isinstance(folded, Exception)
+    v2_usage = normalize_usage_totals(folded)
+    assert v2_usage == v1_usage
+    assert v2_usage["completion_tokens"] == 9
+
+
+def test_uncoercible_usage_chunk_is_loud_on_both_sides() -> None:
+    """v1's chunk_parser raises ValueError out of the stream iterator on an
+    uncoercible token value; v2's parse_event must error, never serve the
+    chunk with the field read as 0 (critic-grok M2)."""
+    from litellm.llms.xai.chat.transformation import XAIChatConfig
+
+    usage = {
+        "prompt_tokens": "abc",
+        "completion_tokens": 2,
+        "total_tokens": 180,
+        "completion_tokens_details": {"reasoning_tokens": 7},
+    }
+    with pytest.raises(ValueError):
+        XAIChatConfig._fold_reasoning_tokens_into_completion(copy.deepcopy(usage))
+    result = parse_event(_chunk(choices=[], usage=copy.deepcopy(usage)))
+    assert result.is_error(), "uncoercible usage must be loud, not a silent 0"
+    assert "not int-coercible" in result.error.summary, result.error.summary

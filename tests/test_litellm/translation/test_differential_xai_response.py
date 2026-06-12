@@ -157,3 +157,39 @@ def test_unreachable_response_shape_is_a_typed_error(name: str) -> None:
     result = parse_response(copy.deepcopy(raw), parsed.ok)
     assert result.is_error(), f"{name} unexpectedly parsed"
     assert reason_fragment in result.error.summary, result.error.summary
+
+
+def test_uncoercible_usage_is_loud_on_both_sides() -> None:
+    """v1 raises out of cdr's Usage validation for an uncoercible token
+    value; v2 must return a boundary error, never silently treat it as 0
+    (critic-grok M2). The numeric-string direction is the two-sided corpus
+    row numeric_string_usage_coerced."""
+    raw = {
+        "id": "resp-bad",
+        "object": "chat.completion",
+        "created": 1718000011,
+        "model": "grok-3-mini",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "logprobs": None,
+                "message": {"role": "assistant", "content": "a"},
+            }
+        ],
+        "usage": {
+            "prompt_tokens": "abc",
+            "completion_tokens": 2,
+            "total_tokens": 9,
+            "completion_tokens_details": {"reasoning_tokens": 7},
+        },
+    }
+    from ._xai_corpus import run_v1_response_transform
+
+    with pytest.raises(Exception):
+        run_v1_response_transform(raw, "grok-3-mini")
+    parsed = parse_request(copy.deepcopy(_REQUEST))
+    assert parsed.is_ok()
+    result = parse_response(copy.deepcopy(raw), parsed.ok)
+    assert result.is_error(), "uncoercible usage must be loud, not a silent 0"
+    assert "not int-coercible" in result.error.summary, result.error.summary

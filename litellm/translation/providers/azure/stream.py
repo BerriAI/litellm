@@ -14,36 +14,14 @@ empty-choices chunk entirely, which the fold reproduces.
 
 from __future__ import annotations
 
-import json
+from expression import Ok, Result
 
-from expression import Error, Ok, Result
-from expression.collections import Block
-
-from ...errors import BoundaryError, TranslationError
+from ...errors import TranslationError
 from ...ir import JsonBlob, PlainJson, StreamEvent
+from ..openai_compat.stream import make_parse_line
 from ..openai_compat.stream import parse_event as openai_parse_event
 
 _EventResult = Result[StreamEvent | None, TranslationError]
-
-
-def parse_line(line: str) -> _EventResult:
-    stripped = line.strip()
-    if not stripped.startswith("data:"):
-        return Ok(None)
-    payload = stripped[len("data:") :].strip()
-    if payload == "[DONE]":
-        return Ok(StreamEvent.of_stop())
-    try:
-        event: PlainJson = json.loads(payload)
-    except ValueError:
-        return Error(
-            TranslationError.of_boundary(
-                BoundaryError.of(
-                    Block.of_seq([f"stream payload is not JSON: {payload[:120]!r}"])
-                )
-            )
-        )
-    return parse_event(event)
 
 
 def parse_event(event: PlainJson) -> _EventResult:
@@ -68,3 +46,6 @@ def parse_event(event: PlainJson) -> _EventResult:
             JsonBlob(value={"service_tier": None, **chunk, "model": model})
         )
     )
+
+
+parse_line = make_parse_line(parse_event)

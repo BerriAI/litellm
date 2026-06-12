@@ -31,7 +31,10 @@ chunk that carries one, choice-level ``content_filter_results`` survives on
 content chunks (the ``StreamingChoices(**choice_json)`` rebuild) but not on
 the finish flush (default-choice ``Delta(content=None)``), and the
 empty-choices ``prompt_filter_results`` chunk is swallowed exactly like
-v1's empty-delta handling.
+v1's empty-delta handling. The ``xai`` dialect is the openai fold with two
+deltas: ``reasoning_content``-only deltas count as non-empty (v1 emits Grok
+reasoning chunks) and the model is never re-read from chunks (the httpx
+wrapper stamps the request model).
 """
 
 from __future__ import annotations
@@ -47,8 +50,8 @@ from ...ir import Body, CompositeChunk, PlainJson, StreamEvent
 
 BlockDialect = Literal["anthropic", "bedrock_converse"]
 """Dialects whose provider parsers emit per-block delta events
-(text/thinking/signature/tool deltas). The wire dialects (openai, azure)
-fold ``wire_chunk`` events and gemini folds composite ``chunk`` events;
+(text/thinking/signature/tool deltas). The wire dialects (openai, azure,
+xai) fold ``wire_chunk`` events and gemini folds composite ``chunk`` events;
 their parsers can never produce a per-block delta, and the step surfaces a
 loud error (never a fabricated placeholder body) if one ever arrives."""
 
