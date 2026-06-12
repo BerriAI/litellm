@@ -83,6 +83,11 @@ from ..providers.hosted_vllm import serialize_request as hosted_vllm_serialize_r
 from ..providers.hosted_vllm import (
     unsupported_request_shapes as hosted_vllm_unsupported_request_shapes,
 )
+from ..providers.huggingface import parse_response as huggingface_parse_response
+from ..providers.huggingface import serialize_request as huggingface_serialize_request
+from ..providers.huggingface import (
+    unsupported_request_shapes as huggingface_unsupported_request_shapes,
+)
 from ..providers.openai_compat import parse_response as openai_compat_parse_response
 from ..providers.openai_compat import (
     serialize_request as openai_compat_serialize_request,
@@ -146,6 +151,7 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "hosted_vllm": hosted_vllm_serialize_request,
         "fireworks_ai": fireworks_serialize_request,
         "snowflake": snowflake_serialize_request,
+        "huggingface": huggingface_serialize_request,
     }
 )
 
@@ -192,6 +198,7 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # snowflake: content_list pre-rewrite + the direct parser with the
         # snowflake/{wire model} prefix policy ("openai_like" seam arm).
         "snowflake": snowflake_parse_response,
+        "huggingface": huggingface_parse_response,
     }
 )
 
@@ -228,6 +235,7 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         "hosted_vllm": _OPENAI_DIALECT,
         "fireworks_ai": _OPENAI_DIALECT,
         "snowflake": _OPENAI_DIALECT,
+        "huggingface": _OPENAI_DIALECT,
     }
 )
 
@@ -258,6 +266,7 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         "hosted_vllm": hosted_vllm_unsupported_request_shapes,
         "fireworks_ai": fireworks_unsupported_request_shapes,
         "snowflake": snowflake_unsupported_request_shapes,
+        "huggingface": huggingface_unsupported_request_shapes,
     }
 )
 

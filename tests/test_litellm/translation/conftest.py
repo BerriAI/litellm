@@ -38,6 +38,7 @@ def build_real_deps(
     modify_params: bool = False,
     api_version: Optional[str] = None,
     base_model: Optional[str] = None,
+    api_base: Optional[str] = None,
 ) -> TranslationDeps:
     return TranslationDeps(
         max_tokens_for_model=_max_tokens_for_model,
@@ -51,6 +52,7 @@ def build_real_deps(
         modify_params=modify_params,
         api_version=api_version,
         base_model=base_model,
+        api_base=api_base,
     )
 
 

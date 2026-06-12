@@ -44,6 +44,14 @@ class TranslationDeps:
     - ``base_model``: the azure deployment's declared base model; v1 detects
       o-series/gpt-5 param families on ``base_model or model``
       (azure.py:245-247). ``None`` for providers without deployment aliasing.
+    - ``api_base``: the request-level api_base (v1: ``litellm_params
+      ["api_base"]``), wave-2b-alpha for huggingface — its transform forks
+      on EXACTLY this value (hf chat/transformation.py:135: the verbatim
+      dedicated-endpoint body vs the router route whose 3-segment names
+      fetch the HF provider mapping over HTTP inside the transform). v2
+      serves ONLY the api_base route; ``None`` means the seam never wired
+      the field and every huggingface request falls back typed. ``None``
+      for providers that never read it.
     """
 
     max_tokens_for_model: Callable[[str], int | None]
@@ -55,3 +63,4 @@ class TranslationDeps:
     modify_params: bool
     api_version: str | None = None
     base_model: str | None = None
+    api_base: str | None = None

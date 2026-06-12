@@ -397,6 +397,24 @@ translation/
 │   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
 │   │                    #   handler); joins the ONE error-chunk PINNED
 │   │                    #   DIVERGENCE row
+│   ├── huggingface/     # wave-2b-alpha own module — the api_base
+│   │   │                #   (dedicated endpoint) ROUTE ONLY (httpx elif
+│   │   │                #   main.py:3185, bare wire model)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   │                #   (the api_base arm sends messages VERBATIM)
+│   │   ├── params.py    # the ROUTE gate first: deps.api_base None ->
+│   │   │                #   EVERYTHING falls back (the router route's
+│   │   │                #   3-segment names fetch the HF provider mapping
+│   │   │                #   over HTTP INSIDE the transform; 1-segment
+│   │   │                #   names crash v1); then the plain base list +
+│   │   │                #   top_k (non-compat top-level passthrough)
+│   │   ├── serialize.py # openai_compat body verbatim (v1's
+│   │   │                #   ChatCompletionRequest passthrough: model and
+│   │   │                #   messages untouched, mct verbatim) + top_k
+│   │   ├── response.py  # shared openai parser re-export (no v1 override;
+│   │   │                #   NO huggingface/ prefix)
+│   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
+│   │                    #   handler); joins the ONE PINNED DIVERGENCE
 │   ├── openrouter/      # wave-2b-alpha own module (httpx dedicated elif
 │   │   │                #   main.py:3354, transforms LIVE, bare wire model)
 │   │   ├── guard.py     # explicit stream:false + the cache-capable-model
@@ -610,7 +628,7 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to seventy providers out — `anthropic`,
+OpenAI-chat-in to seventy-one providers out — `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
@@ -627,8 +645,8 @@ route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `datarobot`, `gradient_ai`, `ovhcloud`, `lemonade`), the five wave-2a
 providers (`perplexity`, `sambanova`, `deepinfra`, `moonshot` on the SDK
 path, `cometapi` on the httpx path), and the wave-2b-alpha own modules
-(`deepseek`, `openrouter`, `hosted_vllm`, `fireworks_ai`, `snowflake`) —
-request, response, and stream
+(`deepseek`, `openrouter`, `hosted_vllm`, `fireworks_ai`, `snowflake`,
+`huggingface` on its api_base route) — request, response, and stream
 translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk
@@ -958,6 +976,26 @@ are pure envelope (header-only auth, researcher-4's correction). Real
 Cortex STREAM delta shapes are unpinned upstream: a content_list delta
 would be a loud v2 error where v1 serves a chunk that silently lost it
 — get real fixtures before flag-on streaming.
+Deliberate wave-2b-alpha (huggingface) fallback surfaces (each names the
+v1 path): the WHOLE router route — `deps.api_base` None falls back every
+request typed (v1's 3-segment `provider/org/model` names fetch the HF
+inference-provider mapping over a BLOCKING HTTP GET inside
+transform_request and rewrite the model to providerId; 2-segment names
+skip the fetch but run the base transforms + router URL synthesis;
+1-segment names CRASH v1 with the split ValueError — all pinned); on the
+api_base route, `max_retries` (NOT popped on this arm — v1 serves it
+INTO the body, an oddity the row pins), user (model-list gated), message
+`name` and the other openai-guard raw shapes (v1 sends messages
+VERBATIM), and explicit stream:false (the body carries every
+optional_params key). SERVED: the verbatim body (model untouched, mct
+verbatim, no renames) plus top_k (the non-compat TOP-LEVEL passthrough).
+huggingface fork obligations: the fork MUST thread
+`litellm_params["api_base"]` into `deps.api_base` (the route gate keys
+on it — None means every request falls back; the env
+HF_API_BASE/HUGGINGFACE_API_BASE chain resolves in v1's envelope ABOVE
+the transform and does NOT arm the api_base transform route, so the
+fork must thread exactly the litellm_params value, not the env) and
+keep the bare wire model (no preset, "openai" construction arm).
 Streaming-seam obligations carried from wave 2a (verifier-wave2a W1/W2 —
 no impact while streaming stays on v1, pinned by
 `test_reasoning_stream_seam_obligation_canary`): the SDK family's openai

@@ -129,6 +129,10 @@ Provider = Literal[
     # content_list responses); snowflake/{wire model} prefix INSIDE the
     # parser; stream is ALWAYS a body key (absent == false on the wire).
     "snowflake",
+    # huggingface: ONLY the api_base (dedicated endpoint) route is ported —
+    # the router route (provider-mapping HTTP fetch INSIDE the transform)
+    # is a permanent typed fallback keyed on deps.api_base; bare wire model.
+    "huggingface",
 ]
 
 NeverPortProvider = Literal[

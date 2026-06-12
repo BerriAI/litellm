@@ -621,11 +621,16 @@ def _wave2b_alpha_error_chunk_pins() -> bool:
 
     from . import test_differential_snowflake_stream as _sf_stream
 
+    from litellm.translation.providers import huggingface as _huggingface_pkg
+
+    from . import test_differential_huggingface_stream as _hf_stream
+
     consumers = (
         (_ds_stream, _deepseek_pkg.parse_line),
         (_hv_stream, _hosted_vllm_pkg.parse_line),
         (_fw_stream, _fireworks_pkg.parse_line),
         (_sf_stream, _snowflake_pkg.parse_line),
+        (_hf_stream, _huggingface_pkg.parse_line),
     )
     for mod, line_parser in consumers:
         v1 = mod._v1_chunks(mod._ERROR_CHUNK_STREAM)
@@ -1172,6 +1177,99 @@ def _snowflake_rows(lines: list) -> int:
     return failures
 
 
+def _huggingface_rows(lines: list) -> int:
+    from . import _own_module_corpus as own
+    from . import test_differential_huggingface_request as req
+    from . import test_differential_huggingface_response as resp
+    from . import test_differential_huggingface_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## huggingface: request bodies — the api_base (dedicated endpoint)"
+        " route ONLY (v1 get_optional_params('huggingface') + the LIVE httpx"
+        " transform_request's VERBATIM ChatCompletionRequest arm vs v2"
+        " providers/huggingface; the router route is a typed fallback whole)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(req._v1(case))
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.EXPECTED_FALLBACKS):
+        case, reason = req.EXPECTED_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    router = req._v2(req.CASES["text"], api_base=None)
+    router_ok = (
+        router.is_error() and req._ROUTER_FALLBACK_REASON in router.error.summary
+    )
+    failures += 0 if router_ok else 1
+    label = "FALLBACK (v1 serves it)" if router_ok else "DIVERGENT"
+    lines.append(
+        f"- {label}: router_route_whole (no api_base: v1 synthesizes router"
+        ".huggingface.co URLs; 3-segment names fetch the HF provider mapping"
+        " over HTTP inside the transform — the in-transform I/O the port"
+        " refuses; 1-segment names CRASH v1)"
+    )
+    lines += [
+        "",
+        "## huggingface: responses (v1 base GPT transform_response over httpx"
+        " — LIVE on the dedicated elif — vs v2 shared openai parser with NO"
+        " model preset; bare wire model, the xai R4 pin)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = (
+            resp._norm(v2) == resp._norm(v1)
+            and v2["model"] == raw["model"]
+            and not str(v2["model"]).startswith("huggingface/")
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name} (no prefix)")
+    lines += [
+        "",
+        "## huggingface: streams (v1 base OpenAIChatCompletionStreamingHandler"
+        " + CustomStreamWrapper('huggingface') over SSE lines vs v2"
+        " huggingface parser — the httpx_chunk family policy — with the xai"
+        " chunk dialect)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    return failures
+
+
 def _wave2b_alpha_rows(lines: list) -> int:
     """wave-2b-alpha own-module providers, researcher-4 ascending-risk
     order. APPEND-ONLY: each provider's row function lands in its own
@@ -1182,6 +1280,7 @@ def _wave2b_alpha_rows(lines: list) -> int:
         + _hosted_vllm_rows(lines)
         + _fireworks_ai_rows(lines)
         + _snowflake_rows(lines)
+        + _huggingface_rows(lines)
     )
 
 
