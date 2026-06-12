@@ -2521,7 +2521,7 @@ async def gigachat_proxy_route(
             "ssl_verify": False,
         },
     )
-    data["http_client"] = client
+    data["client"] = client
 
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
 
@@ -2652,7 +2652,7 @@ async def handle_gigachat_passthrough_router_model(
         },
     )
 
-    data["http_client"] = client
+    data["client"] = client
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
 
     # Use the common passthrough processing to handle metadata and hooks

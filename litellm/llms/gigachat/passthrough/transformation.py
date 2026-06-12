@@ -11,7 +11,6 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
-
 if TYPE_CHECKING:
     from httpx import URL, Response
 
