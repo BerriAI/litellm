@@ -26,24 +26,9 @@ wire-proven in the request gate). v1 keeps the wire model bare on this path
 
 from __future__ import annotations
 
-from expression import Error, Result
-
-from ...deps import TranslationDeps
-from ...errors import TranslationError
 from ...ir import Body, ChatRequest, PlainJson, ThinkingParam
-from ..openai_compat.serialize import assemble_body
+from ..openai_compat.serialize import make_gated_serializer
 from . import params as p
-
-_SerializeResult = Result[Body, TranslationError]
-
-
-def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _SerializeResult:
-    reason = p.unsupported_params(request, deps)
-    if reason is not None:
-        return Error(TranslationError.of_unsupported(reason))
-    return assemble_body(request).map(
-        lambda body: _with_hosted_vllm_deltas(body, request)
-    )
 
 
 def _with_hosted_vllm_deltas(body: Body, request: ChatRequest) -> Body:
@@ -92,3 +77,6 @@ def _cleaned(value: PlainJson) -> PlainJson:
     if isinstance(value, list):
         return [_cleaned(item) for item in value]
     return value
+
+
+serialize_request = make_gated_serializer(p.unsupported_params, _with_hosted_vllm_deltas)

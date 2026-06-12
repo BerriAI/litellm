@@ -44,6 +44,7 @@ from expression import Result
 from ...errors import TranslationError
 from ...ir import StreamEvent
 from ..openai_compat.httpx_chunk import (
+    BASE_HANDLER_POLICY,
     HttpxChunkPolicy,
     StrictEnvelope,
     make_parse_event,
@@ -53,7 +54,7 @@ from .params import CompatHttpxProvider
 
 ParseLine = Callable[[str], Result[StreamEvent | None, TranslationError]]
 
-parse_event = make_parse_event(HttpxChunkPolicy(reasoning="rename"))
+parse_event = make_parse_event(BASE_HANDLER_POLICY)
 parse_line = make_parse_line(parse_event)
 
 

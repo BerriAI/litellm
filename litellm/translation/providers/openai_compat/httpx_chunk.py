@@ -97,6 +97,18 @@ class HttpxChunkPolicy:
     content/finish chunk and re-synthesizes the final usage chunk."""
 
 
+BASE_HANDLER_POLICY = HttpxChunkPolicy(reasoning="rename")
+"""The compat_httpx FAMILY policy — v1's BASE
+``OpenAIChatCompletionStreamingHandler`` rebuild (reasoning rename,
+value-checked error chunks, no required envelope keys, wire usage verbatim
+on the ``choices: []`` tail only). ONE name for the shared truth
+(critic-wave2b-alpha NIT-1: it was declared six times): compat_httpx and the
+five base-handler own modules (deepseek, hosted_vllm, fireworks_ai,
+snowflake, huggingface) all compose ``make_parse_event(BASE_HANDLER_POLICY)``
+— a family-policy fix is a one-site edit here, and each consumer's docstring
+stays the provider-specific pinned truth (v1 = the base handler)."""
+
+
 def _envelope_error(
     policy: HttpxChunkPolicy, event: dict[str, PlainJson]
 ) -> TranslationError | None:

@@ -34,26 +34,11 @@ model is ``fireworks_ai/{WIRE model}`` — response.py owns that prefix.
 
 from __future__ import annotations
 
-from expression import Error, Result
-
-from ...deps import TranslationDeps
-from ...errors import TranslationError
 from ...ir import Body, ChatRequest, PlainJson
-from ..openai_compat.serialize import assemble_body, strip_function_strict
+from ..openai_compat.serialize import make_gated_serializer, strip_function_strict
 from . import params as p
 
-_SerializeResult = Result[Body, TranslationError]
-
 _MODEL_PREFIX = "accounts/fireworks/models/"
-
-
-def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _SerializeResult:
-    reason = p.unsupported_params(request, deps)
-    if reason is not None:
-        return Error(TranslationError.of_unsupported(reason))
-    return assemble_body(request).map(
-        lambda body: _with_fireworks_deltas(body, request)
-    )
 
 
 def _wire_model(model: str) -> str:
@@ -110,3 +95,6 @@ def _with_inline_suffix(part: PlainJson) -> PlainJson:
     if not isinstance(url, str) or url.lower().startswith("data:"):
         return part
     return {**part, "image_url": {**image, "url": f"{url}#transform=inline"}}
+
+
+serialize_request = make_gated_serializer(p.unsupported_params, _with_fireworks_deltas)

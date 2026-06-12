@@ -87,5 +87,8 @@ def _parses_to_requested_function(content: str, requested: set[str]) -> bool:
         return False
     if not isinstance(parsed, dict):
         return False
+    # deliberately narrowing (critic NIT-2): isinstance proved dict; the cast
+    # only fixes the key/value parameters — json.loads keys are always str
+    # and its values are PlainJson by construction
     mapping = cast("dict[str, PlainJson]", parsed)
     return mapping.get("name") in requested

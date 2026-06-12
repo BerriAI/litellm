@@ -36,18 +36,16 @@ from types import MappingProxyType
 from typing import cast
 
 from ...errors import TranslationError
-from ..openai_compat.guard import carries_cache_control, explicit_stream_false
 from ..openai_compat.guard import (
-    unsupported_request_shapes as openai_unsupported_request_shapes,
+    carries_cache_control,
+    stream_false_then_unsupported_shapes,
 )
 from .params import ALLOWED, CompatSdkProvider
 
 _Raw = Mapping[str, object]
 _RawGuardFn = Callable[[_Raw], TranslationError | None]
 
-
-def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
-    return explicit_stream_false(raw) or openai_unsupported_request_shapes(raw)
+unsupported_request_shapes = stream_false_then_unsupported_shapes
 
 
 def cache_control_preserved(raw: _Raw, provider: str) -> TranslationError | None:

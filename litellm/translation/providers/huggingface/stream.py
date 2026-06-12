@@ -11,8 +11,8 @@ report's single named row. Folds use the ``"xai"`` ChunkDialect.
 
 from __future__ import annotations
 
-from ..openai_compat.httpx_chunk import HttpxChunkPolicy, make_parse_event
+from ..openai_compat.httpx_chunk import BASE_HANDLER_POLICY, make_parse_event
 from ..openai_compat.stream import make_parse_line
 
-parse_event = make_parse_event(HttpxChunkPolicy(reasoning="rename"))
+parse_event = make_parse_event(BASE_HANDLER_POLICY)
 parse_line = make_parse_line(parse_event)

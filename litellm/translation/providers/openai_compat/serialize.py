@@ -14,6 +14,8 @@ losslessly; o-series and gpt-5 models fail closed until their param families
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from expression import Error, Ok, Option, Result
 from expression.collections import Block
 from typing_extensions import assert_never
@@ -27,6 +29,29 @@ from . import params as p
 from .messages import serialize_messages
 
 _SerializeResult = Result[Body, TranslationError]
+
+_GateFn = Callable[[ChatRequest, TranslationDeps], str | None]
+_DeltasFn = Callable[[Body, ChatRequest], Body]
+_Serializer = Callable[[ChatRequest, TranslationDeps], _SerializeResult]
+
+
+def make_gated_serializer(gate: _GateFn, with_deltas: _DeltasFn) -> _Serializer:
+    """The own-module ``serialize_request`` shape — params gate ->
+    ``assemble_body`` -> provider deltas — as ONE factory instead of five
+    identical wrappers (critic-wave2b-alpha NIT-1). Consumers: deepseek,
+    openrouter, hosted_vllm, fireworks_ai, huggingface. snowflake binds the
+    chain explicitly: its deltas return a Result (the fail-closed tool arm),
+    so it is deliberately not a row here."""
+
+    def serialize_request(
+        request: ChatRequest, deps: TranslationDeps
+    ) -> _SerializeResult:
+        reason = gate(request, deps)
+        if reason is not None:
+            return Error(TranslationError.of_unsupported(reason))
+        return assemble_body(request).map(lambda body: with_deltas(body, request))
+
+    return serialize_request
 
 
 def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _SerializeResult:

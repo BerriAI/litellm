@@ -50,16 +50,33 @@ def carries_cache_control(value: object, depth: int = 0) -> bool:
         # as if it carried the marker (fall back to v1)
         return True
     if isinstance(value, Mapping):
+        # deliberately narrowing (critic NIT-2): isinstance proved Mapping;
+        # the cast only fixes the unparameterized key/value types to the
+        # untrusted-raw shape (str keys, object values) this guard scans
         mapping = cast(_Raw, value)
         if "cache_control" in mapping:
             return True
         return any(carries_cache_control(item, depth + 1) for item in mapping.values())
     if isinstance(value, Sequence) and not isinstance(value, str):
+        # deliberately narrowing: isinstance proved Sequence (non-str); the
+        # cast fixes the element type to object for the recursive scan
         return any(
             carries_cache_control(item, depth + 1)
             for item in cast(Sequence[object], value)
         )
     return False
+
+
+def stream_false_then_unsupported_shapes(raw: _Raw) -> TranslationError | None:
+    """The composed DEFAULT guard for paths that keep an explicitly-sent
+    ``stream: false`` on the wire and strip nothing: the stream arm, then
+    this module's guard with the FULL message-``name`` fallback. ONE home
+    for the shared composition (critic-wave2b-alpha NIT-1: it was four
+    byte-identical bodies): compat_sdk's family default and the deepseek /
+    hosted_vllm / fireworks_ai / huggingface own modules all bind it
+    (snowflake deliberately does NOT — stream is always a body key there,
+    so explicit false SERVES)."""
+    return explicit_stream_false(raw) or unsupported_request_shapes(raw)
 
 
 def unsupported_request_shapes(

@@ -10,16 +10,6 @@ fallback.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from ..openai_compat.guard import stream_false_then_unsupported_shapes
 
-from ...errors import TranslationError
-from ..openai_compat.guard import explicit_stream_false
-from ..openai_compat.guard import (
-    unsupported_request_shapes as openai_unsupported_request_shapes,
-)
-
-_Raw = Mapping[str, object]
-
-
-def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
-    return explicit_stream_false(raw) or openai_unsupported_request_shapes(raw)
+unsupported_request_shapes = stream_false_then_unsupported_shapes
