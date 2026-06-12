@@ -64,6 +64,17 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES.workflows).toBe("workflows");
     expect(MIGRATED_PAGES["guardrails-monitor"]).toBe("guardrails-monitor");
   });
+
+  it("maps the mcp-servers, search-tools, tag-management, vector-stores, and memory ids to their routes", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["mcp-servers"]).toBe("mcp-servers");
+    expect(MIGRATED_PAGES["search-tools"]).toBe("search-tools");
+    expect(MIGRATED_PAGES["tag-management"]).toBe("tag-management");
+    expect(MIGRATED_PAGES["vector-stores"]).toBe("vector-stores");
+    expect(MIGRATED_PAGES.memory).toBe("memory");
+  });
 });
 
 describe("dev server (NODE_ENV=development)", () => {
