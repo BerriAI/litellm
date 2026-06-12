@@ -1443,7 +1443,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             )
             if raw is not None:
                 attributes = _build_metric_attribute_filter(raw)
-                self.config.attributes = attributes
         (
             self._metric_attr_include,
             self._metric_attr_exclude,

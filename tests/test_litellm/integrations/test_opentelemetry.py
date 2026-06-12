@@ -5650,6 +5650,36 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                 )
                 self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, keys)
 
+    def test_callback_settings_validation_failure_is_not_sticky(self):
+        """On the lazy callback_settings path a validation failure must not cache
+        the bad config. Once the operator corrects
+        callback_settings['otel']['attributes'], the next record resolves the
+        fixed filter instead of re-raising the stale error until a restart."""
+        previous = litellm.callback_settings
+        litellm.callback_settings = {
+            "otel": {
+                "attributes": {
+                    "include_list": ["gen_ai.system"],
+                    "exclude_list": ["hidden_params"],
+                }
+            }
+        }
+        try:
+            otel = OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
+            attrs = {"gen_ai.system": "openai", "hidden_params": "{}"}
+
+            with self.assertRaises(ValueError):
+                otel._filter_metric_attributes(attrs)
+
+            litellm.callback_settings = {
+                "otel": {"attributes": {"exclude_list": ["hidden_params"]}}
+            }
+            filtered = otel._filter_metric_attributes(attrs)
+        finally:
+            litellm.callback_settings = previous
+
+        self.assertEqual(filtered, {"gen_ai.system": "openai"})
+
     def test_include_and_exclude_together_raise_value_error(self):
         with self.assertRaises(ValueError):
             OpenTelemetry(
