@@ -35,7 +35,7 @@ def _generic_passthrough_handler() -> BaseTranslation:
     return PassThroughEndpointHandler()
 
 
-_StringHolder = Tuple[Union[dict, list], Union[str, int]]
+_StringHolder = Tuple[Any, Union[str, int]]
 
 
 def _collect_strings(node: Any, holders: List[_StringHolder]) -> None:
@@ -43,22 +43,26 @@ def _collect_strings(node: Any, holders: List[_StringHolder]) -> None:
     Record a (container, key) holder for every non-empty string value nested
     under an arbitrary JSON node, so prompt content a caller hides in fields
     like ``toolUse.input`` or ``toolResult.content[].json`` is still scanned
-    and can be written back in place.
+    and can be written back in place. Iterative to avoid unbounded recursion
+    on deeply nested payloads.
     """
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if isinstance(value, str):
-                if value:
-                    holders.append((node, key))
-            else:
-                _collect_strings(value, holders)
-    elif isinstance(node, list):
-        for index, value in enumerate(node):
-            if isinstance(value, str):
-                if value:
-                    holders.append((node, index))
-            else:
-                _collect_strings(value, holders)
+    stack: List[Any] = [node]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                if isinstance(value, str):
+                    if value:
+                        holders.append((current, key))
+                else:
+                    stack.append(value)
+        elif isinstance(current, list):
+            for index, value in enumerate(current):
+                if isinstance(value, str):
+                    if value:
+                        holders.append((current, index))
+                else:
+                    stack.append(value)
 
 
 def _collect_block_text(block: dict, holders: List[_StringHolder]) -> None:
