@@ -19,6 +19,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
     A2AStreamingContext,
 )
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
+from litellm.interactions.agents.utils import merge_agent_headers
 
 # litellm_params key carrying the authenticated principal (hashed virtual key) so
 # A2A provider configs can scope provider-side state (e.g. LangFlow session memory)
@@ -133,10 +134,10 @@ class A2ACompletionBridgeHandler:
         )
 
         if agent_extra_headers:
-            completion_params["extra_headers"] = {
-                **agent_extra_headers,
-                **(completion_params.get("extra_headers") or {}),
-            }
+            completion_params["extra_headers"] = merge_agent_headers(
+                dynamic_headers=agent_extra_headers,
+                static_headers=completion_params.get("extra_headers"),
+            )
 
         # Call litellm.acompletion
         response = await litellm.acompletion(**completion_params)
@@ -259,10 +260,10 @@ class A2ACompletionBridgeHandler:
         )
 
         if agent_extra_headers:
-            completion_params["extra_headers"] = {
-                **agent_extra_headers,
-                **(completion_params.get("extra_headers") or {}),
-            }
+            completion_params["extra_headers"] = merge_agent_headers(
+                dynamic_headers=agent_extra_headers,
+                static_headers=completion_params.get("extra_headers"),
+            )
 
         # 1. Emit initial task event (kind: "task", status: "submitted")
         task_event = A2ACompletionBridgeTransformation.create_task_event(ctx)
