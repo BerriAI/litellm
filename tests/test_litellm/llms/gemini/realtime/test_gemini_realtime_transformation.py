@@ -1283,6 +1283,63 @@ def test_gemini_realtime_pipecat_semantic_vad_omits_realtime_input_config():
     assert setup["tools"][0]["function_declarations"][0]["name"] == "terminate_call"
 
 
+def test_gemini_input_audio_buffer_commit_maps_to_audio_stream_end():
+    config = GeminiRealtimeConfig()
+    setup = {
+        "setup": {
+            "realtimeInputConfig": {
+                "automaticActivityDetection": {"disabled": False},
+            }
+        }
+    }
+    messages = config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.commit"}),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=json.dumps(setup),
+    )
+    assert len(messages) == 1
+    assert json.loads(messages[0]) == {"realtimeInput": {"audioStreamEnd": True}}
+
+
+def test_gemini_input_audio_buffer_end_maps_to_audio_stream_end():
+    config = GeminiRealtimeConfig()
+    messages = config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.end"}),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+    assert len(messages) == 1
+    assert json.loads(messages[0]) == {"realtimeInput": {"audioStreamEnd": True}}
+
+
+def test_gemini_input_audio_buffer_clear_is_local_noop():
+    config = GeminiRealtimeConfig()
+    messages = config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.clear"}),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+    assert messages == []
+
+
+def test_gemini_input_audio_buffer_commit_maps_to_activity_end_when_manual_vad():
+    config = GeminiRealtimeConfig()
+    setup = {
+        "setup": {
+            "realtimeInputConfig": {
+                "automaticActivityDetection": {"disabled": True},
+            }
+        }
+    }
+    messages = config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.commit"}),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=json.dumps(setup),
+    )
+    assert len(messages) == 1
+    assert json.loads(messages[0]) == {"realtimeInput": {"activityEnd": True}}
+
+
 def test_gemini_subsequent_session_update_with_turn_detection_only_preserves_original_tools():
     """A subsequent session.update carrying only turn_detection (the
     guardrail-injected disable) must keep the original tools/generationConfig."""

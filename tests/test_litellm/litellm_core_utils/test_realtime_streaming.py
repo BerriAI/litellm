@@ -1159,11 +1159,10 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode():
     assert (
         streaming._has_realtime_guardrails() is True
     ), "pre_call guardrail should be recognized as a realtime guardrail"
-    # pre_call guardrail SHOULD trigger the audio/VAD session.update injection so
-    # that the LLM does not auto-respond before the guardrail can check the transcript.
+    # pre_call-only guardrails gate typed user messages / tool output, not audio VAD.
     assert (
-        streaming._has_audio_transcription_guardrails() is True
-    ), "pre_call guardrail should trigger audio transcription guardrail path"
+        streaming._has_audio_transcription_guardrails() is False
+    ), "pre_call-only guardrail must not disable server_vad auto-response"
 
     litellm.callbacks = []  # cleanup
 
@@ -1245,11 +1244,10 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
 
 
 @pytest.mark.asyncio
-async def test_realtime_session_created_injects_session_update_for_pre_call_guardrail():
+async def test_realtime_session_created_does_not_inject_session_update_for_pre_call_only():
     """
-    Test that when a pre_call guardrail is configured, session.created triggers the
-    session.update injection (create_response: false) so the LLM does not auto-respond
-    before the guardrail can check the voice transcript.
+    pre_call-only guardrails must not inject create_response:false on realtime
+    sessions — that breaks server_vad for audio-only voice agents (e.g. Model Armor).
     """
     import litellm
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -1288,22 +1286,62 @@ async def test_realtime_session_created_injects_session_update_for_pre_call_guar
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    # session.update SHOULD be injected so the LLM waits for guardrail approval
     sent_to_backend = [
         json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
     ]
     session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
     assert (
-        len(session_updates) == 1
-    ), f"pre_call guardrail should inject session.update to gate audio responses, got: {sent_to_backend}"
-    # GA shape: turn_detection must be nested under audio.input, not at top-level session
-    injected_session = session_updates[0]["session"]
-    assert (
-        injected_session["type"] == "realtime"
-    ), "GA session.update must include session.type='realtime'"
-    assert (
-        injected_session["audio"]["input"]["turn_detection"]["create_response"] is False
-    ), "GA session.update must nest turn_detection under audio.input"
+        len(session_updates) == 0
+    ), f"pre_call-only guardrail must not inject session.update, got: {sent_to_backend}"
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad():
+    """Model Armor-style pre_call + post_call must not gate audio VAD."""
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class ModelArmorStyleGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
+            return inputs
+
+    litellm.callbacks = [
+        ModelArmorStyleGuardrail(
+            guardrail_name="model_armor_all_pre_call",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=False,
+        ),
+        ModelArmorStyleGuardrail(
+            guardrail_name="model_armor_all_post_call",
+            event_hook=GuardrailEventHooks.post_call,
+            default_on=False,
+        ),
+    ]
+
+    client_ws = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        request_data={
+            "metadata": {
+                "guardrails": [
+                    "model_armor_all_pre_call",
+                    "model_armor_all_post_call",
+                ]
+            }
+        },
+    )
+
+    assert streaming._has_realtime_guardrails() is True
+    assert streaming._has_audio_transcription_guardrails() is False
 
     litellm.callbacks = []  # cleanup
 
@@ -2306,3 +2344,56 @@ async def test_audio_delta_frame_parsed_at_most_once():
         await streaming.backend_to_client_send_messages()
 
     assert calls["n"] == 1
+
+
+def test_collapse_buffered_audio_messages_applies_clear_semantics():
+    old = json.dumps({"type": "input_audio_buffer.append", "audio": "old"})
+    cleared = json.dumps({"type": "input_audio_buffer.clear"})
+    new = json.dumps({"type": "input_audio_buffer.append", "audio": "new"})
+    commit = json.dumps({"type": "input_audio_buffer.commit"})
+
+    collapsed = RealTimeStreaming._collapse_buffered_audio_messages(
+        [old, cleared, new, commit]
+    )
+
+    assert collapsed == [new, commit]
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_clear_drops_buffered_appends_on_flush():
+    client_ws = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    old_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "old"})
+    clear_msg = json.dumps({"type": "input_audio_buffer.clear"})
+    new_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "new"})
+
+    streaming._pending_messages_until_setup = [old_audio, clear_msg, new_audio]
+    streaming._sync_pending_messages_byte_total()
+
+    streaming._send_to_backend = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    await streaming._flush_pending_messages_until_setup()
+
+    assert streaming._send_to_backend.await_count == 1
+    assert streaming._send_to_backend.await_args_list[0].args[0] == new_audio
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_clear_drops_appends_when_buffered():
+    client_ws = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    old_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "old"})
+    clear_msg = json.dumps({"type": "input_audio_buffer.clear"})
+    new_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "new"})
+
+    streaming._buffer_pending_message_until_setup(old_audio)
+    streaming._buffer_pending_message_until_setup(clear_msg)
+    streaming._buffer_pending_message_until_setup(new_audio)
+
+    assert streaming._pending_messages_until_setup == [new_audio]
