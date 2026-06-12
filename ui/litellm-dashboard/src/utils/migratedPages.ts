@@ -23,6 +23,13 @@ export const MIGRATED_PAGES: Record<string, string> = {
   "tag-management": "tag-management",
   "vector-stores": "vector-stores",
   memory: "memory",
+  policies: "policies",
+  guardrails: "guardrails",
+  prompts: "prompts",
+  "tool-policies": "tool-policies",
+  skills: "skills",
+  // Legacy alias: the old switch matched ?page=claude-code-plugins for the same panel.
+  "claude-code-plugins": "skills",
   caching: "caching",
   "cost-tracking": "cost-tracking",
   "transform-request": "transform-request",

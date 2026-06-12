@@ -9,8 +9,8 @@
  *   - navigation specs that assert per-page URLs (tests/navigation/sidebar.spec.ts)
  *
  * Keep this in lockstep with MIGRATED_PAGES in src/utils/migratedPages.ts.
- * Pending (add as each PR lands): guardrails, policies, prompts, skills,
- * and tool-policies (#30263).
+ * Pending (add as each PR lands): admin-panel, logging-and-alerts,
+ * model-hub-table, and usage (#30268).
  */
 export const MIGRATED_E2E_PAGES: Record<string, string> = {
   api_ref: "api-reference",
@@ -25,6 +25,11 @@ export const MIGRATED_E2E_PAGES: Record<string, string> = {
   "tag-management": "tag-management",
   "vector-stores": "vector-stores",
   memory: "memory",
+  policies: "policies",
+  guardrails: "guardrails",
+  prompts: "prompts",
+  "tool-policies": "tool-policies",
+  skills: "skills",
   caching: "caching",
   "cost-tracking": "cost-tracking",
   "transform-request": "transform-request",

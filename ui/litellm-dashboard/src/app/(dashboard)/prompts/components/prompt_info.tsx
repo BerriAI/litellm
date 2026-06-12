@@ -29,7 +29,7 @@ import {
 } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import NotificationsManager from "../molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
 import { extractModel, extractTemplateVariables, getBasePromptId, getCurrentVersion } from "./prompt_utils";
 

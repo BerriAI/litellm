@@ -1489,6 +1489,65 @@ async def test_prepare_key_update_data_duration_none_never_expires():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cleared_value", [[], None])
+async def test_prepare_key_update_data_budget_limits_clears_field(cleared_value):
+    """budget_limits=[] / None must serialize to JSON null, never reach Prisma raw."""
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        metadata={},
+    )
+
+    update_request = UpdateKeyRequest(key="test-token", budget_limits=cleared_value)
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    assert result["budget_limits"] == json.dumps(None)
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_budget_limits_serializes_windows():
+    """Non-empty budget_limits stay JSON-encoded with reset_at initialized."""
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        metadata={},
+    )
+
+    update_request = UpdateKeyRequest(
+        key="test-token",
+        budget_limits=[{"budget_duration": "1d", "max_budget": 10.0}],
+    )
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    windows = json.loads(result["budget_limits"])
+    assert isinstance(result["budget_limits"], str)
+    assert windows[0]["max_budget"] == 10.0
+    assert windows[0]["reset_at"] is not None
+
+
+@pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_requires_team_id():
     """
     Test that validate_team_id_used_in_service_account_request raises HTTPException
@@ -6496,13 +6555,19 @@ async def test_reset_key_spend_success(monkeypatch):
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
         ) as mock_delete_cache,
-        patch(
-            "litellm.proxy.proxy_server._invalidate_spend_counter"
-        ) as mock_invalidate,
     ):
         mock_hash_token.return_value = hashed_key
         mock_check_admin.return_value = None
         mock_delete_cache.return_value = None
+
+        # Mock spend_counter_cache to verify direct cache set instead of
+        # _invalidate_spend_counter (removed in favour of atomic cache write).
+        mock_spend_counter_cache = MagicMock()
+        mock_spend_counter_cache.redis_cache = None
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.spend_counter_cache",
+            mock_spend_counter_cache,
+        )
 
         user_api_key_dict = UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -6523,7 +6588,9 @@ async def test_reset_key_spend_success(monkeypatch):
         assert response["max_budget"] == 200.0
         mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
         mock_delete_cache.assert_awaited_once()
-        mock_invalidate.assert_awaited_once_with(counter_key=f"spend:key:{hashed_key}")
+        mock_spend_counter_cache.in_memory_cache.set_cache.assert_called_once_with(
+            key=f"spend:key:{hashed_key}", value=50.0, ttl=60
+        )
 
 
 @pytest.mark.asyncio
@@ -9684,6 +9751,58 @@ class TestKeyOwnerPrivilegeEscalation:
                     user_api_key_cache=MagicMock(),
                 )
         mock_check.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cleared_value", [[], None])
+    async def test_creator_cannot_clear_own_budget_limits(self, cleared_value):
+        """Clearing budget_limits is a budget change and requires admin."""
+        data = UpdateKeyRequest(key="sk-test", budget_limits=cleared_value)
+        existing = self._make_existing_key(created_by="creator-123")
+        auth = self._make_auth(user_id="creator-123")
+
+        mock_check = AsyncMock(
+            side_effect=HTTPException(status_code=403, detail="Not authorized")
+        )
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            with pytest.raises(HTTPException):
+                await _validate_update_key_data(
+                    data=data,
+                    existing_key_row=existing,
+                    user_api_key_dict=auth,
+                    llm_router=None,
+                    premium_user=False,
+                    prisma_client=AsyncMock(),
+                    user_api_key_cache=MagicMock(),
+                )
+        mock_check.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_admin_can_clear_budget_limits(self):
+        data = UpdateKeyRequest(key="sk-test", budget_limits=[])
+        existing = self._make_existing_key(created_by="someone-else")
+        auth = UserAPIKeyAuth(
+            user_id="admin-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        mock_check = AsyncMock()
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=existing,
+                user_api_key_dict=auth,
+                llm_router=None,
+                premium_user=False,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        mock_check.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_admin_can_update_any_field(self):

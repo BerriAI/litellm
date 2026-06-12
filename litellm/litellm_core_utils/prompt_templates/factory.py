@@ -4741,6 +4741,12 @@ class BedrockConverseMessagesProcessor:
                                     guardContent={"text": {"text": element["text"]}}
                                 )
                                 _parts.append(_part)
+                            elif element["type"] in ("grounding_source", "query"):
+                                # Contextual grounding tags are guardrail metadata; the
+                                # model only needs the underlying text, so render them
+                                # as plain text on the generate path.
+                                _part = BedrockContentBlock(text=element["text"])
+                                _parts.append(_part)
                             elif element["type"] == "image_url":
                                 format: Optional[str] = None
                                 if isinstance(element["image_url"], dict):
@@ -5172,6 +5178,12 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockContentBlock(
                                 guardContent={"text": {"text": element["text"]}}
                             )
+                            _parts.append(_part)
+                        elif element["type"] in ("grounding_source", "query"):
+                            # Contextual grounding tags are guardrail metadata; the
+                            # model only needs the underlying text, so render them as
+                            # plain text on the generate path.
+                            _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "image_url":
                             format: Optional[str] = None
