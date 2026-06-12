@@ -1,0 +1,22 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "What is the capital of France?"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "max_output_tokens": 256
+  },
+  "system_instruction": {
+    "parts": [
+      {
+        "text": "You are a terse geographer."
+      }
+    ]
+  }
+}

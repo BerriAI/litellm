@@ -1,0 +1,19 @@
+{
+  "anthropic_version": "vertex-2023-10-16",
+  "max_tokens": 2048,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "thinking": {
+    "budget_tokens": 1024,
+    "type": "enabled"
+  }
+}

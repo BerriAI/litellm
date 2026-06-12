@@ -1,0 +1,6 @@
+data: {"candidates": [{"content": {"role": "model", "parts": [{"text": "Paris is the"}]}}], "modelVersion": "gemini-2.5-flash", "createTime": "2025-05-24T00:00:00.000000Z", "responseId": "char-gemini-stream-text-0001"}
+
+data: {"candidates": [{"content": {"role": "model", "parts": [{"text": " capital of France."}]}}], "modelVersion": "gemini-2.5-flash", "createTime": "2025-05-24T00:00:00.000000Z", "responseId": "char-gemini-stream-text-0001"}
+
+data: {"candidates": [{"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP"}], "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 8, "totalTokenCount": 16, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 8}], "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 8}]}, "modelVersion": "gemini-2.5-flash", "createTime": "2025-05-24T00:00:00.000000Z", "responseId": "char-gemini-stream-text-0001"}
+

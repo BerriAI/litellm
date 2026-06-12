@@ -1,0 +1,17 @@
+{
+  "id": "reasoning_effort_low",
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 2048,
+    "reasoning_effort": "low"
+  },
+  "skip": {
+    "azure": "v1 get_optional_params raises UnsupportedParamsError for `reasoning_effort` on gpt-4.1 (non-reasoning openai-family model)",
+    "openai": "v1 get_optional_params raises UnsupportedParamsError for `reasoning_effort` on gpt-4.1 (non-reasoning openai-family model)"
+  }
+}

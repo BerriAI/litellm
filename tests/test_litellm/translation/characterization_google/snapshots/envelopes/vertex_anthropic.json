@@ -1,0 +1,4 @@
+{
+  "stream_url": "https://us-east5-aiplatform.googleapis.com/v1/projects/char-test-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict",
+  "url": "https://us-east5-aiplatform.googleapis.com/v1/projects/char-test-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:rawPredict"
+}

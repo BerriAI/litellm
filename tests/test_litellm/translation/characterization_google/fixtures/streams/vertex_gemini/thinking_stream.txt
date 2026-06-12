@@ -1,0 +1,6 @@
+data: {"candidates": [{"content": {"role": "model", "parts": [{"text": "The user asks about France.", "thought": true}]}}], "modelVersion": "gemini-2.5-pro", "createTime": "2025-05-24T00:00:00.000000Z", "responseId": "char-vertex-gemini-stream-think-0001"}
+
+data: {"candidates": [{"content": {"role": "model", "parts": [{"text": " The capital is Paris.", "thought": true, "thoughtSignature": "c2lnLWNoYXItdmVydGV4LWdlbWluaQ=="}]}}], "modelVersion": "gemini-2.5-pro", "createTime": "2025-05-24T00:00:00.000000Z", "responseId": "char-vertex-gemini-stream-think-0001"}
+
+data: {"candidates": [{"content": {"role": "model", "parts": [{"text": "The capital of France is Paris."}]}, "finishReason": "STOP"}], "usageMetadata": {"promptTokenCount": 42, "candidatesTokenCount": 8, "totalTokenCount": 202, "thoughtsTokenCount": 152, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 42}], "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 8}], "trafficType": "ON_DEMAND"}, "modelVersion": "gemini-2.5-pro", "createTime": "2025-05-24T00:00:00.000000Z", "responseId": "char-vertex-gemini-stream-think-0001"}
+

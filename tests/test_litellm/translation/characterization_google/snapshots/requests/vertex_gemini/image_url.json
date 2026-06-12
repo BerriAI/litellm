@@ -1,0 +1,21 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "Describe this image."
+        },
+        {
+          "file_data": {
+            "file_uri": "https://example.com/cat.png",
+            "mime_type": "image/png"
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "max_output_tokens": 256
+  }
+}
