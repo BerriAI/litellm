@@ -261,6 +261,7 @@ router_settings:
 | custom_auth | string | Write your own custom authentication logic [Doc Custom Auth](./custom_auth) |
 | max_parallel_requests | integer | The max parallel requests allowed per deployment |
 | global_max_parallel_requests | integer | The max parallel requests allowed on the proxy overall |
+| cancel_on_disconnect | boolean | If true, cancels the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot). The cancelled request is logged as a 499 failure. Default `false` |
 | infer_model_from_keys | boolean | If true, infers the model from the provided keys |
 | background_health_checks | boolean | If true, enables background health checks. [Doc on health checks](health) |
 | health_check_interval | integer | The interval for health checks in seconds [Doc on health checks](health) |
