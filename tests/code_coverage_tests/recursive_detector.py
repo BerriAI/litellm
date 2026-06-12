@@ -50,6 +50,8 @@ IGNORE_FUNCTIONS = [
     "_resolve",  # OCI: $ref resolver bounded by `resolving_stack` cycle guard.
     "resolve_oci_schema_anyof",  # OCI: bounded by JSON-schema tree depth (no cycles possible in well-formed input).
     "sanitize_oci_schema",  # OCI: bounded by JSON-schema tree depth.
+    "freeze",  # translation/boundary: plain JSON -> frozen IR walker, bounded by input nesting depth (no cycles possible in JSON).
+    "thaw",  # translation/boundary: inverse of freeze, bounded by IR nesting depth (no cycles possible).
 ]
 
 

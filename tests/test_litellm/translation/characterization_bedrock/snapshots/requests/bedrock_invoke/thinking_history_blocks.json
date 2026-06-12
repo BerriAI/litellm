@@ -1,0 +1,42 @@
+{
+  "anthropic_version": "bedrock-2023-05-31",
+  "max_tokens": 2048,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "signature": "sig-char-deadbeef",
+          "thinking": "The user asks about France; the capital is Paris.",
+          "type": "thinking"
+        },
+        {
+          "text": "Paris.",
+          "type": "text"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "text": "And of Italy?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "thinking": {
+    "budget_tokens": 1024,
+    "type": "enabled"
+  }
+}

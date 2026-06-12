@@ -2958,6 +2958,26 @@ def completion(  # type: ignore # noqa: PLR0915
                     "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/messages suffix"
                 )
 
+            if litellm.translation_v2_providers:
+                from litellm import translation_seam
+
+                _v2_response = translation_seam.try_completion_v2(
+                    model=model,
+                    messages=messages,
+                    optional_param_args=optional_param_args,
+                    non_default_params=non_default_params,
+                    api_key=api_key,
+                    api_base=api_base,
+                    timeout=timeout,
+                    stream=stream,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    model_response=model_response,
+                    request_drop_params=kwargs.get("drop_params"),
+                )
+                if _v2_response is not None:
+                    return _v2_response
+
             response = anthropic_chat_completions.completion(
                 model=model,
                 messages=messages,
@@ -3978,6 +3998,26 @@ def completion(  # type: ignore # noqa: PLR0915
                 return response
             elif bedrock_route == "converse":
                 model = model.replace("converse/", "")
+                if litellm.translation_v2_providers:
+                    from litellm import translation_seam
+
+                    _v2_response = translation_seam.try_completion_v2_bedrock(
+                        bedrock_route="converse",
+                        model=model,
+                        messages=messages,
+                        optional_param_args=optional_param_args,
+                        non_default_params=non_default_params,
+                        api_key=api_key,
+                        api_base=api_base,
+                        timeout=timeout,
+                        stream=stream,
+                        acompletion=acompletion,
+                        logging_obj=logging,
+                        model_response=model_response,
+                        request_drop_params=kwargs.get("drop_params"),
+                    )
+                    if _v2_response is not None:
+                        return _v2_response
                 response = bedrock_converse_chat_completion.completion(
                     model=model,
                     messages=messages,
@@ -4015,6 +4055,26 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,
                 )
             else:
+                if litellm.translation_v2_providers:
+                    from litellm import translation_seam
+
+                    _v2_response = translation_seam.try_completion_v2_bedrock(
+                        bedrock_route="invoke",
+                        model=model,
+                        messages=messages,
+                        optional_param_args=optional_param_args,
+                        non_default_params=non_default_params,
+                        api_key=api_key,
+                        api_base=api_base,
+                        timeout=timeout,
+                        stream=stream,
+                        acompletion=acompletion,
+                        logging_obj=logging,
+                        model_response=model_response,
+                        request_drop_params=kwargs.get("drop_params"),
+                    )
+                    if _v2_response is not None:
+                        return _v2_response
                 response = base_llm_http_handler.completion(
                     model=model,
                     stream=stream,

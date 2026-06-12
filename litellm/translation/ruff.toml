@@ -1,0 +1,24 @@
+# Folder-scoped ruff gates for translation v2 (02-mateo-scope.md):
+# never-nester (PLR1702, preview), complexity (C901), function length
+# (PLR0915), full annotations with no Any (ANN incl. ANN401), and no
+# module-global rebinding (PLW0603). Inherits the repo config; ruff's
+# hierarchical discovery applies this file to this subtree automatically,
+# so the repo-wide `ruff check` enforces it with no extra wiring.
+
+extend = "../../ruff.toml"
+preview = true
+
+[lint]
+extend-select = [
+    "PLR1702",
+    "C901",
+    "PLR0915",
+    "ANN",
+    "PLW0603",
+]
+
+[lint.mccabe]
+max-complexity = 10
+
+[lint.pylint]
+max-statements = 50
