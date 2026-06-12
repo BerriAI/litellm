@@ -1,0 +1,11 @@
+extend = "ruff.toml"
+
+[lint]
+select = ["ANN001", "ANN002", "ANN003", "ANN401", "B006", "C901", "PLR0913", "PLW0603", "RUF012"]
+extend-select = []
+
+[lint.mccabe]
+max-complexity = 15
+
+[lint.pylint]
+max-args = 5

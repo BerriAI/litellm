@@ -5,6 +5,7 @@
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
+	lint-suppressions lint-suppressions-update \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
@@ -24,6 +25,8 @@ help:
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-mypy          - Run MyPy type checking only"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
+	@echo "  make lint-suppressions  - Check strict ruff rules against the grandfathered baseline"
+	@echo "  make lint-suppressions-update - Regenerate ruff-suppressions.json (ratchet the baseline)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -122,6 +125,12 @@ lint-mypy: install-dev
 
 lint-black: format-check
 
+lint-suppressions: install-dev
+	$(UV_RUN) python scripts/ruff_suppressions.py check
+
+lint-suppressions-update: install-dev
+	$(UV_RUN) python scripts/ruff_suppressions.py update
+
 check-circular-imports: install-dev
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
 
@@ -129,7 +138,7 @@ check-import-safety: install-dev
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
 # Combined linting (matches test-linting.yml workflow)
-lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety
+lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety lint-suppressions
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed lint-mypy check-circular-imports check-import-safety

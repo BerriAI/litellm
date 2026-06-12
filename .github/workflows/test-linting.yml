@@ -67,6 +67,10 @@ jobs:
           uv run --no-sync ruff check .
           cd ..
 
+      - name: Check strict-rule suppressions budget
+        run: |
+          uv run --no-sync python scripts/ruff_suppressions.py check
+
       - name: Print OpenAI version
         run: |
           uv run --no-sync python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
