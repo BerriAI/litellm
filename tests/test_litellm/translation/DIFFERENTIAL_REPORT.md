@@ -1,4 +1,4 @@
-# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha own modules)
+# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules)
 
 v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
 explained FALLBACK that v1 serves) for a provider's flag to turn on.
@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: ac3edc764f
+- commit: 5eae6d3e55
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -2092,6 +2092,333 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: text
 - IDENTICAL: tools
 - SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+
+## cohere v2 (wave-2b-beta): requests (v1 get_optional_params + CohereV2ChatConfig.transform_request vs v2 providers/cohere — both provider names, cohere and cohere_chat)
+
+- IDENTICAL: cohere/mct_renamed
+- IDENTICAL: cohere/plain
+- IDENTICAL: cohere/sampling
+- IDENTICAL: cohere/stream_true
+- IDENTICAL: cohere/system_history
+- IDENTICAL: cohere/tool_choice_required_dropped
+- IDENTICAL: cohere/tools
+- IDENTICAL: cohere/top_k_wire_proven
+- IDENTICAL: cohere_chat/mct_renamed
+- IDENTICAL: cohere_chat/plain
+- IDENTICAL: cohere_chat/sampling
+- IDENTICAL: cohere_chat/stream_true
+- IDENTICAL: cohere_chat/system_history
+- IDENTICAL: cohere_chat/tool_choice_required_dropped
+- IDENTICAL: cohere_chat/tools
+- IDENTICAL: cohere_chat/top_k_wire_proven
+- FALLBACK (v1 raises UnsupportedParamsError): cohere/parallel_tool_calls
+- FALLBACK (v1 raises UnsupportedParamsError): cohere/reasoning_effort
+- FALLBACK (v1 raises UnsupportedParamsError): cohere/response_format
+- FALLBACK (v1 raises UnsupportedParamsError): cohere/thinking
+- FALLBACK (v1 raises UnsupportedParamsError): cohere_chat/parallel_tool_calls
+- FALLBACK (v1 raises UnsupportedParamsError): cohere_chat/reasoning_effort
+- FALLBACK (v1 raises UnsupportedParamsError): cohere_chat/response_format
+- FALLBACK (v1 raises UnsupportedParamsError): cohere_chat/thinking
+- FALLBACK (v1 serves): cohere/explicit_stream_false
+- FALLBACK (v1 serves): cohere/frequency_penalty_parse_level
+- FALLBACK (v1 serves): cohere/message_name_forwarded
+- FALLBACK (v1 serves): cohere/n_parse_level
+- FALLBACK (v1 serves): cohere/presence_penalty_parse_level
+- FALLBACK (v1 serves): cohere/seed_parse_level
+- FALLBACK (v1 serves): cohere/user_silent_drop
+- FALLBACK (v1 serves): cohere/v1_route_predicate
+- FALLBACK (v1 serves): cohere/v2_prefix_envelope_strip
+- FALLBACK (v1 serves): cohere_chat/explicit_stream_false
+- FALLBACK (v1 serves): cohere_chat/frequency_penalty_parse_level
+- FALLBACK (v1 serves): cohere_chat/message_name_forwarded
+- FALLBACK (v1 serves): cohere_chat/n_parse_level
+- FALLBACK (v1 serves): cohere_chat/presence_penalty_parse_level
+- FALLBACK (v1 serves): cohere_chat/seed_parse_level
+- FALLBACK (v1 serves): cohere_chat/user_silent_drop
+- FALLBACK (v1 serves): cohere_chat/v1_route_predicate
+- FALLBACK (v1 serves): cohere_chat/v2_prefix_envelope_strip
+
+## cohere v2: responses (v1 CohereV2ChatConfig.transform_response — fresh-ModelResponse mutation, request model verbatim, finish always stop — vs v2 cohere parser + the seam's openai construction arm)
+
+- IDENTICAL: billed_units_ignored
+- IDENTICAL: citations_to_annotations
+- IDENTICAL: missing_tokens_defaults_zero
+- IDENTICAL: null_content
+- IDENTICAL: text
+- IDENTICAL: tool_calls
+- IDENTICAL: tool_calls_discard_text_keep_annotations
+- FALLBACK (v1 raises): citation_entry_int
+- FALLBACK (v1 raises): citation_entry_string
+- FALLBACK (v1 raises): citations_dict
+- FALLBACK (v1 raises): citations_string
+- FALLBACK (v1 raises): document_non_dict
+- FALLBACK (v1 raises): missing_message
+- FALLBACK (v1 raises): missing_usage
+- FALLBACK (v1 raises): non_object_body
+- FALLBACK (v1 raises): non_string_text
+- FALLBACK (v1 raises): null_tokens_object
+- FALLBACK (v1 raises): source_entry_int
+- FALLBACK (v1 raises): sources_dict
+- FALLBACK (v1 raises): sources_string
+- FALLBACK (v1 raises): string_content
+- FALLBACK (v1 raises): string_token_count
+- FALLBACK (v1 raises): tool_call_missing_function
+- FALLBACK (v1 serves the unvalidated annotation): citation_end_bool
+- FALLBACK (v1 serves the unvalidated annotation): citation_start_string
+- FALLBACK (v1 serves the unvalidated annotation): citation_title_int
+- FALLBACK (v1 serves the unvalidated annotation): citation_url_int
+
+## cohere v2: streams (v1 bare-JSON line replay through CohereV2ModelResponseIterator + CustomStreamWrapper('cohere_chat') generic arm vs v2 cohere parser + the generic chunk dialect; ids normalized — v1 mints a fresh chatcmpl id per chunk)
+
+- SEAM CONTRACT: real-wire text (v2 == v1 minus the wrapper's synthesized stop tail — the generic streaming seam owns it)
+- SEAM CONTRACT: real-wire tools (v2 == v1 minus the wrapper's synthesized tool_calls tail — the generic streaming seam owns it)
+- IDENTICAL: event-keyed error_toxic_maps_to_content_filter
+- IDENTICAL: event-keyed max_tokens_maps_to_length
+- IDENTICAL: event-keyed plan_citation_content
+- IDENTICAL: event-keyed tool_then_event_end_no_rewrite
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- PINNED DIVERGENCE (fail-closed on a failure path): non-str content.text — v1 silently swallows the chunk, v2 errors loudly naming the shape (re-decide if either half stops holding)
+- FALLBACK (v1 raises): mixed_type_token_counts
+- FALLBACK (v1 raises): non_dict_delta
+- FALLBACK (v1 raises): non_dict_tool_call_entry
+- FALLBACK (v1 raises): non_finite_index
+- FALLBACK (v1 raises): non_numeric_index
+- FALLBACK (v1 raises): null_usage_tokens
+- FALLBACK (v1 serves): str+str message-end token counts (v1 concatenates then re-sums in its include_usage chunk; deliberately left to v1 — the response-side _int_token decision, critic M1)
+
+## mistral (wave-2b-beta): requests (v1 get_optional_params + MistralConfig.transform_request — the two-branch message munge — vs v2 providers/mistral)
+
+- IDENTICAL: assistant_tool_history
+- IDENTICAL: empty_assistant_removed
+- IDENTICAL: explicit_stream_false_dropped
+- IDENTICAL: flatten_multi_text_list
+- IDENTICAL: image_branch_verbatim
+- IDENTICAL: image_branch_with_tool_history
+- IDENTICAL: mct_renamed
+- IDENTICAL: parallel_tool_calls
+- IDENTICAL: plain
+- IDENTICAL: response_format_json_object
+- IDENTICAL: sampling
+- IDENTICAL: stream_true
+- IDENTICAL: system_first
+- IDENTICAL: tool_choice_dict_dropped
+- IDENTICAL: tool_choice_required_to_any
+- IDENTICAL: tools_auto
+- IDENTICAL: tools_schema_refs_stripped
+- IDENTICAL: tools_schema_refs_stripped_4_levels_deep
+- IDENTICAL: top_k_wire_proven
+- IDENTICAL: user_name_dropped_both_sides
+- FALLBACK (v1 raises UnsupportedParamsError): frequency_penalty
+- FALLBACK (v1 raises UnsupportedParamsError): logprobs
+- FALLBACK (v1 raises UnsupportedParamsError): n
+- FALLBACK (v1 raises UnsupportedParamsError): presence_penalty
+- FALLBACK (v1 raises UnsupportedParamsError): reasoning_effort_non_magistral
+- FALLBACK (v1 raises UnsupportedParamsError): thinking_non_magistral
+- FALLBACK (v1 serves): image_branch_name_forwarded
+- FALLBACK (v1 serves): magistral_reasoning_prompt_injection
+- FALLBACK (v1 serves): magistral_thinking_prompt_injection
+- FALLBACK (v1 serves): seed_random_seed_extra_body
+- FALLBACK (v1 serves): single_text_list_flatten
+- FALLBACK (v1 serves): string_stop_verbatim
+- FALLBACK (v1 serves): tool_name_kept_by_v1
+- FALLBACK (v1 serves): user_silent_drop
+
+## mistral: responses (v1 transform_response pre-steps + cdr vs v2 mistral pre-steps + the shared openai parser; bare wire model)
+
+- IDENTICAL: empty_content_to_none
+- IDENTICAL: last_text_block_wins
+- IDENTICAL: magistral_thinking_blocks
+- IDENTICAL: text
+- IDENTICAL: thinking_only_keeps_empty_string
+- IDENTICAL: tool_calls
+- FALLBACK (v1 raises): empty_content_list
+- FALLBACK (v1 raises): non_dict_content_block
+- FALLBACK (v1 raises): non_list_thinking
+- FALLBACK (v1 raises): non_string_thinking_text
+
+## mistral: streams (v1 SSE line replay through MistralChatResponseIterator + CustomStreamWrapper('mistral') vs v2 mistral pre-step + the httpx_chunk factory (rename + passthrough thinking_blocks) + the xai chunk dialect)
+
+- IDENTICAL: empty_thinking_role_only_chunk
+- IDENTICAL: magistral_thinking_blocks
+- IDENTICAL: reasoning_rename
+- IDENTICAL: text
+- IDENTICAL: tools
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- FALLBACK (v1 raises MidStreamFallbackError): non_dict_content_block
+- FALLBACK (v1 raises MidStreamFallbackError): non_list_thinking
+- FALLBACK (v1 raises MidStreamFallbackError): non_string_thinking_text
+- FALLBACK (v1 raises MidStreamFallbackError): non_string_thinking_text_beside_ok_text
+- FALLBACK (unreachable for v2-sent requests): unknown_delta_key
+
+## watsonx (wave-2b-beta): requests (v1 get_optional_params + _get_api_params/_prepare_payload + the openai_like body assembly vs v2 providers/watsonx with deps-borne project/space ids)
+
+- IDENTICAL: explicit_stream_false
+- IDENTICAL: plain
+- IDENTICAL: reasoning_effort
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema
+- IDENTICAL: sampling
+- IDENTICAL: stream_true
+- IDENTICAL: tool_choice_dict_rides_verbatim
+- IDENTICAL: tool_choice_required_to_option
+- IDENTICAL: tool_history
+- IDENTICAL: tools_strict_and_additional_properties_stripped
+- FALLBACK (v1 raises UnsupportedParamsError): max_completion_tokens
+- FALLBACK (v1 raises UnsupportedParamsError): parallel_tool_calls
+- FALLBACK (v1 raises UnsupportedParamsError): thinking
+- FALLBACK: top_k (v1 raises the legacy watsonx_text ValueError)
+- FALLBACK: missing project/space ids (v1 raises WatsonXAIError 401)
+- FALLBACK: deployment/ model (envelope routing; v1 serves)
+- FALLBACK (v1 serves): frequency_penalty_parse_level
+- FALLBACK (v1 serves): logprobs_parse_level
+- FALLBACK (v1 serves): message_name_forwarded
+- FALLBACK (v1 serves): n_parse_level
+- FALLBACK (v1 serves): seed_parse_level
+- FALLBACK (v1 serves): user_silent_drop
+
+## watsonx: responses (v1 OpenAILike _transform_response with the LIVE watsonx/{wire_model} prefix vs v2 watsonx parser + the seam's openai_like construction arm)
+
+- IDENTICAL: missing_model_prefixes_empty
+- IDENTICAL: null_usage_tokens_sanitized
+- IDENTICAL: text
+- IDENTICAL: tool_calls
+- FALLBACK (v1 raises ValidationError): non-string wire model
+
+## watsonx: streams (v1 line replay through the databricks ModelResponseIterator + CustomStreamWrapper('watsonx') generic arm vs v2 watsonx parser + the generic chunk dialect; ids normalized)
+
+- IDENTICAL: content_and_finish_in_one_wire_chunk
+- IDENTICAL: ibm_time_limit_maps_to_stop
+- IDENTICAL: mid_stream_usage_stripped
+- IDENTICAL: name_only_tool_start_rides_with_empty_arguments
+- IDENTICAL: non_str_finish_bool_serves_stop
+- IDENTICAL: non_str_finish_int_serves_stop
+- IDENTICAL: text
+- IDENTICAL: tool_index_bool_lax_coerces
+- IDENTICAL: tool_index_str_lax_coerces
+- IDENTICAL: tools
+- IDENTICAL: unknown_finish_eos_token_serves_stop
+- IDENTICAL: unknown_finish_string_serves_stop
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: no-wire-finish stream (v2 == v1 minus the wrapper's synthesized stop tail — the generic streaming seam owns it)
+- PINNED DIVERGENCE (fail-closed on a failure path): mid_stream_usage_bad_values — v1's iterator silently swallows it, v2 errors loudly
+- PINNED DIVERGENCE (fail-closed on a failure path): missing_choices — v1's iterator silently swallows it, v2 errors loudly
+- PINNED DIVERGENCE (fail-closed on a failure path): non_json_line — v1's iterator silently swallows it, v2 errors loudly
+- PINNED DIVERGENCE (fail-closed on a failure path): non_string_content — v1's iterator silently swallows it, v2 errors loudly
+- PINNED DIVERGENCE (fail-closed on a failure path): tool_call_id_non_str — v1's iterator silently swallows it, v2 errors loudly
+- PINNED DIVERGENCE (fail-closed on a failure path): tool_call_index_fractional — v1's iterator silently swallows it, v2 errors loudly
+- PINNED DIVERGENCE (fail-closed on a failure path): tool_call_index_non_coercible — v1's iterator silently swallows it, v2 errors loudly
+- PINNED DIVERGENCE (fail-closed on a failure path): tool_call_name_non_str — v1's iterator silently swallows it, v2 errors loudly
+- PINNED DIVERGENCE (fail-closed on a failure path): tool_call_type_non_str — v1's iterator silently swallows it, v2 errors loudly
+- PINNED DIVERGENCE (fail-closed on a failure path): tool_call_without_function — v1's iterator silently swallows it, v2 errors loudly
+- PINNED DIVERGENCE (fail-closed on a failure path): usage_tail_bad_values — v1's iterator silently swallows it, v2 errors loudly
+- FALLBACK (v1 raises MidStreamFallbackError): delta_non_dict
+- FALLBACK (v1 raises MidStreamFallbackError): finish_truthy_unhashable
+- FALLBACK (v1 raises MidStreamFallbackError): mid_stream_usage_non_dict
+- FALLBACK (v1 raises MidStreamFallbackError): tool_calls_non_list
+- FALLBACK (v1 raises MidStreamFallbackError): usage_tail_non_dict
+- SEAM CONTRACT: falsy (empty-string) finish_reason — no finish rides (v1's truthy gate); v2 == v1 minus the wrapper's synthesized stop tail
+- SEAM CONTRACT: falsy (empty-object) finish_reason — no finish rides (v1's truthy gate); v2 == v1 minus the wrapper's synthesized stop tail
+
+## sagemaker_chat (wave-2b-beta): requests (v1 get_optional_params + the base GPT transform_request vs v2 providers/sagemaker_chat; SigV4 signs after assembly — envelope)
+
+- IDENTICAL: mct_verbatim_no_rename
+- IDENTICAL: parallel_tool_calls
+- IDENTICAL: plain
+- IDENTICAL: response_format_json_object
+- IDENTICAL: sampling
+- IDENTICAL: stream_true
+- IDENTICAL: tool_history
+- IDENTICAL: tools
+- IDENTICAL: top_k_wire_proven
+- FALLBACK (v1 raises UnsupportedParamsError): reasoning_effort
+- FALLBACK (v1 raises UnsupportedParamsError): response_format_on_gpt4_named_endpoint
+- FALLBACK (v1 raises UnsupportedParamsError): thinking
+- FALLBACK (v1 serves): aws_kwarg_rides_v1_body
+- FALLBACK (v1 serves): explicit_stream_false
+- FALLBACK (v1 serves): logit_bias_parse_level
+- FALLBACK (v1 serves): message_name_forwarded
+- FALLBACK (v1 serves): n_parse_level
+- FALLBACK (v1 serves): seed_parse_level
+- FALLBACK (v1 serves): user_silent_drop
+
+## sagemaker_chat: responses (v1 base transform_response/cdr vs the shared openai parser; bare wire model, no seam preset)
+
+- IDENTICAL: stop_to_tool_calls_rewrite
+- IDENTICAL: text
+- IDENTICAL: tool_calls
+
+## sagemaker_chat: streams (v1 AWS event-stream PARSED-event replay through AWSEventStreamDecoder(is_messages_api) + CustomStreamWrapper('sagemaker_chat') vs v2 openai parser + the litellm-validation post-step, 'openai' dialect)
+
+- IDENTICAL: choice_index_bool_coerces
+- IDENTICAL: non_str_finish_bool_serves_stop
+- IDENTICAL: non_str_finish_int_serves_stop
+- IDENTICAL: text
+- IDENTICAL: tool_index_str_coerces
+- IDENTICAL: tools
+- IDENTICAL: unknown_finish_string_serves_stop
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- FALLBACK (v1 raises ValidationError): choice_index_null (loud on both sides)
+- FALLBACK (v1 raises ValidationError): content_non_str (loud on both sides)
+- FALLBACK (v1 raises ValidationError): delta_non_dict (loud on both sides)
+- FALLBACK (v1 raises ValidationError): finish_truthy_unhashable (loud on both sides)
+- FALLBACK (v1 raises ValidationError): mid_usage_bad_values (loud on both sides)
+- FALLBACK (v1 raises ValidationError): mid_usage_non_dict (loud on both sides)
+- FALLBACK (v1 raises ValidationError): tool_arguments_non_str (loud on both sides)
+- FALLBACK (v1 raises ValidationError): tool_calls_non_list (loud on both sides)
+- FALLBACK (v1 raises ValidationError): tool_function_missing (loud on both sides)
+- FALLBACK (v1 raises ValidationError): tool_id_non_str (loud on both sides)
+- FALLBACK (v1 raises ValidationError): tool_index_non_coercible (loud on both sides)
+- FALLBACK (v1 raises ValidationError): tool_name_non_str (loud on both sides)
+- FALLBACK (v1 raises ValidationError): tool_type_non_str (loud on both sides)
+- SEAM CONTRACT: falsy (empty-string) finish_reason — no finish rides (v1's truthy gate); v2 == v1 minus the wrapper's synthesized stop tail
+- SEAM CONTRACT: falsy (empty-object) finish_reason — no finish rides (v1's truthy gate); v2 == v1 minus the wrapper's synthesized stop tail
+
+## groq (wave-2b-beta): requests (v1 get_optional_params + GroqChatConfig.transform_request + hh's extra_body merge vs v2 providers/groq; the json_schema three-way fork)
+
+- IDENTICAL: assistant_none_strip
+- IDENTICAL: mct_renamed
+- IDENTICAL: parallel_tool_calls
+- IDENTICAL: plain
+- IDENTICAL: reasoning_effort_capable_model
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_schema_native_passthrough
+- IDENTICAL: sampling
+- IDENTICAL: stream_true
+- IDENTICAL: tools
+- IDENTICAL: top_k_extra_body_merged
+- FALLBACK (v1 raises UnsupportedParamsError): reasoning_effort_non_reasoning_model
+- FALLBACK (v1 raises UnsupportedParamsError): thinking
+- FALLBACK (v1 raises BadRequestError): response_format json_schema + tools on a non-native model
+- FALLBACK (v1 serves): explicit_stream_false
+- FALLBACK (v1 serves): logit_bias_parse_level
+- FALLBACK (v1 serves): message_name_forwarded
+- FALLBACK (v1 serves): n_parse_level
+- FALLBACK (v1 serves): response_format_schema_workaround
+- FALLBACK (v1 serves): seed_parse_level
+- FALLBACK (v1 serves): service_tier_parse_level
+- FALLBACK (v1 serves): user_silent_drop
+
+## groq: responses (v1 OpenAILike direct construction + the service_tier clamp vs v2 groq parser + the seam's openai_like arm; bare wire model)
+
+- IDENTICAL: flex_tier_kept
+- IDENTICAL: null_tier_to_auto
+- IDENTICAL: text_tier_clamped_to_auto
+- IDENTICAL: tool_calls
+- IDENTICAL: x_groq_extra_survives
+- FALLBACK (v1 raises AttributeError): response without service_tier (v1's clamp post-step crashes)
+- FALLBACK (v1 raises ValidationError): non-string wire model
+
+## groq: streams (v1 SSE line replay through GroqChatCompletionStreamingHandler + CustomStreamWrapper('groq') vs v2 httpx_chunk factory (rename) + the xai chunk dialect)
+
+- IDENTICAL: reasoning_pop_rename
+- IDENTICAL: text
+- IDENTICAL: tools
+- IDENTICAL: x_groq_extras_dropped
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- FALLBACK (v1 raises MidStreamFallbackError): error chunk (loud on both sides — the truthy-value check)
+- FALLBACK (v1 raises APIError): non-str delta reasoning (the F6 groq-local pre-step; the wrapper epilogue join TypeErrors in v1)
+- FALLBACK (v1 raises APIError): non-str delta reasoning_content (the F6 groq-local pre-step; the wrapper epilogue join TypeErrors in v1)
+- INTEGRATOR-FLIP HANDOFF (current behavior guarded): non-str refusal — v1 forwards 7, the SHARED httpx_chunk factory nulls it; the fix belongs to the alpha fix round's concurrent httpx_chunk edit (verifier-wave2b-alpha F1) — the sibling-merge integrator flips this row and the gate test to v1 parity
 
 ## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)
 

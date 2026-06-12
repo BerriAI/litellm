@@ -1341,6 +1341,850 @@ def _cometapi_rows(lines: list) -> int:
     return failures
 
 
+def _cohere_rows(lines: list) -> int:
+    """wave-2b-beta: cohere/cohere_chat (the v2 chat wire, the DEFAULT
+    route at HEAD)."""
+    import copy
+
+    from . import test_differential_cohere_request as req
+    from . import test_differential_cohere_response as resp
+    from . import test_differential_cohere_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## cohere v2 (wave-2b-beta): requests (v1 get_optional_params +"
+        " CohereV2ChatConfig.transform_request vs v2 providers/cohere — both"
+        " provider names, cohere and cohere_chat)",
+        "",
+    ]
+    for provider, name in req._rows(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(provider, case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(provider, case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider}/{name}")
+    for provider, name in req._rows(req.V1_RAISES):
+        case, fragment = req.V1_RAISES[name]
+        result = req._v2(provider, case)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                req.run_v1_request_transform(provider, case)
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises UnsupportedParamsError)' if ok else 'DIVERGENT'}:"
+            f" {provider}/{name}"
+        )
+    for provider, name in req._rows(req.V1_SERVES_FALLBACKS):
+        case, fragment = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(provider, case)
+        ok = result.is_error() and fragment in result.error.summary
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 serves)' if ok else 'DIVERGENT'}: {provider}/{name}"
+        )
+    lines += [
+        "",
+        "## cohere v2: responses (v1 CohereV2ChatConfig.transform_response —"
+        " fresh-ModelResponse mutation, request model verbatim, finish always"
+        " stop — vs v2 cohere parser + the seam's openai construction arm)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = (
+            resp._norm(v2) == resp._norm(v1)
+            and v2["model"] == resp.MODEL
+            and v2["choices"][0]["finish_reason"] == "stop"
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(resp._LOUD):
+        raw, fragment = resp._LOUD[name]
+        result = resp._v2_parse(raw)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                resp._v1_model_response(copy.deepcopy(raw))
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 raises)' if ok else 'DIVERGENT'}: {name}")
+    for name in sorted(resp._V1_SERVES_FALLBACKS):
+        raw, fragment = resp._V1_SERVES_FALLBACKS[name]
+        result = resp._v2_parse(raw)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            v1 = resp._v1_model_response(copy.deepcopy(raw))
+            ok = bool(v1["choices"][0]["message"].get("annotations"))
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 serves the unvalidated annotation)' if ok else 'DIVERGENT'}:"
+            f" {name}"
+        )
+    lines += [
+        "",
+        "## cohere v2: streams (v1 bare-JSON line replay through"
+        " CohereV2ModelResponseIterator + CustomStreamWrapper('cohere_chat')"
+        " generic arm vs v2 cohere parser + the generic chunk dialect; ids"
+        " normalized — v1 mints a fresh chatcmpl id per chunk)",
+        "",
+    ]
+    for name in sorted(stream.REAL_WIRE_STREAMS):
+        events, synth_finish = stream.REAL_WIRE_STREAMS[name]
+        v1 = stream._v1_chunks(events)
+        v2 = stream._v2_chunks(events)
+        ok = (
+            len(v1) == len(v2) + 1
+            and stream._norm(v2) == stream._norm(v1[:-1])
+            and v1[-1]["choices"][0]["finish_reason"] == synth_finish
+        )
+        failures += 0 if ok else 1
+        lines.append(
+            ("- SEAM CONTRACT: " if ok else "- DIVERGENT: ")
+            + f"real-wire {name} (v2 == v1 minus the wrapper's synthesized"
+            f" {synth_finish} tail — the generic streaming seam owns it)"
+        )
+    for name in sorted(stream.EVENT_KEYED_STREAMS):
+        events = stream.EVENT_KEYED_STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: event-keyed {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    divergence_event = {
+        "type": "content-delta",
+        "delta": {"message": {"content": {"text": 5}}},
+    }
+    v1_swallows = all(
+        choice["delta"]["content"] in (None, "")
+        for chunk in stream._v1_chunks([copy.deepcopy(divergence_event)])
+        for choice in chunk["choices"]
+    )
+    v2_loud = stream.parse_event(copy.deepcopy(divergence_event)).is_error()
+    pinned = v1_swallows and v2_loud
+    failures += 0 if pinned else 1
+    lines.append(
+        (
+            "- PINNED DIVERGENCE (fail-closed on a failure path): "
+            if pinned
+            else "- DIVERGENT: "
+        )
+        + "non-str content.text — v1 silently swallows the chunk, v2 errors"
+        " loudly naming the shape (re-decide if either half stops holding)"
+    )
+    for name in sorted(stream._LOUD_CHUNKS):
+        event, fragment = stream._LOUD_CHUNKS[name]
+        result = stream.parse_event(copy.deepcopy(event))
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                stream._v1_chunks([copy.deepcopy(event)])
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 raises)' if ok else 'DIVERGENT'}: {name}")
+    str_tokens_event = {
+        "event": "message-end",
+        "data": {
+            "delta": {
+                "finish_reason": "COMPLETE",
+                "usage": {"tokens": {"input_tokens": "5", "output_tokens": "3"}},
+            }
+        },
+    }
+    result = stream.parse_event(copy.deepcopy(str_tokens_event))
+    served = stream._v1_chunks(
+        [
+            {
+                "type": "content-delta",
+                "delta": {"message": {"content": {"text": "Hi"}}},
+            },
+            copy.deepcopy(str_tokens_event),
+        ],
+        stream_options={"include_usage": True},
+    )
+    ok = (
+        result.is_error()
+        and "v1 SERVES" in result.error.summary
+        and served[-1]["usage"]["total_tokens"] == 8
+    )
+    failures += 0 if ok else 1
+    lines.append(
+        f"- {'FALLBACK (v1 serves)' if ok else 'DIVERGENT'}: str+str"
+        " message-end token counts (v1 concatenates then re-sums in its"
+        " include_usage chunk; deliberately left to v1 — the response-side"
+        " _int_token decision, critic M1)"
+    )
+    return failures
+
+
+def _mistral_rows(lines: list) -> int:
+    """wave-2b-beta: mistral (httpx path, bare wire model)."""
+    import copy
+
+    from . import test_differential_mistral_request as req
+    from . import test_differential_mistral_response as resp
+    from . import test_differential_mistral_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## mistral (wave-2b-beta): requests (v1 get_optional_params +"
+        " MistralConfig.transform_request — the two-branch message munge —"
+        " vs v2 providers/mistral)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, fragment = req.V1_RAISES[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                req.run_v1_request_transform(case)
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises UnsupportedParamsError)' if ok else 'DIVERGENT'}:"
+            f" {name}"
+        )
+    for name in sorted(req.V1_SERVES_FALLBACKS):
+        case, fragment = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 serves)' if ok else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## mistral: responses (v1 transform_response pre-steps + cdr vs v2"
+        " mistral pre-steps + the shared openai parser; bare wire model)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = (
+            resp._norm(v2) == resp._norm(v1)
+            and v2["model"] == resp.WIRE_MODEL
+            and not str(v2["model"]).startswith("mistral/")
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(resp._LOUD):
+        raw, fragment = resp._LOUD[name]
+        result = resp._v2_parse(raw)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                resp._v1_model_response(copy.deepcopy(raw))
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 raises)' if ok else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## mistral: streams (v1 SSE line replay through"
+        " MistralChatResponseIterator + CustomStreamWrapper('mistral') vs v2"
+        " mistral pre-step + the httpx_chunk factory (rename +"
+        " passthrough thinking_blocks) + the xai chunk dialect)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    for name in sorted(stream._LOUD_CHUNKS):
+        event, fragment = stream._LOUD_CHUNKS[name]
+        result = stream.parse_event(copy.deepcopy(event))
+        ok = result.is_error() and fragment in result.error.summary
+        if ok and name != "unknown_delta_key":
+            try:
+                stream._v1_chunks([copy.deepcopy(event)])
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        label = (
+            "FALLBACK (unreachable for v2-sent requests)"
+            if name == "unknown_delta_key"
+            else "FALLBACK (v1 raises MidStreamFallbackError)"
+        )
+        lines.append(f"- {label if ok else 'DIVERGENT'}: {name}")
+    return failures
+
+
+def _watsonx_rows(lines: list) -> int:
+    """wave-2b-beta: watsonx (the OpenAILikeChatHandler route; live
+    watsonx/{wire} response prefix; generic stream dialect)."""
+    import copy
+
+    import pytest
+
+    from . import test_differential_watsonx_request as req
+    from . import test_differential_watsonx_response as resp
+    from . import test_differential_watsonx_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## watsonx (wave-2b-beta): requests (v1 get_optional_params +"
+        " _get_api_params/_prepare_payload + the openai_like body assembly"
+        " vs v2 providers/watsonx with deps-borne project/space ids)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, fragment = req.V1_RAISES[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                req.run_v1_request_transform(case)
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises UnsupportedParamsError)' if ok else 'DIVERGENT'}:"
+            f" {name}"
+        )
+    for label, case_fn in (
+        (
+            "top_k (v1 raises the legacy watsonx_text ValueError)",
+            lambda: req._v2({"model": req.MODEL, "messages": req._U, "top_k": 5}),
+        ),
+        (
+            "missing project/space ids (v1 raises WatsonXAIError 401)",
+            lambda: req._v2(
+                req.CASES["plain"], deps=req._deps(project_id=None, space_id=None)
+            ),
+        ),
+        (
+            "deployment/ model (envelope routing; v1 serves)",
+            lambda: req._v2({"model": "deployment/dep-1", "messages": req._U}),
+        ),
+    ):
+        ok = case_fn().is_error()
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK' if ok else 'DIVERGENT'}: {label}")
+    for name in sorted(req.V1_SERVES_FALLBACKS):
+        case, fragment = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 serves)' if ok else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## watsonx: responses (v1 OpenAILike _transform_response with the"
+        " LIVE watsonx/{wire_model} prefix vs v2 watsonx parser + the seam's"
+        " openai_like construction arm)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        same = resp._norm(resp._v2_model_response(raw)) == resp._norm(
+            resp._v1_model_response(raw)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    f2 = resp._v2_parse({**resp._RESPONSES["text"], "model": 7})
+    ok = f2.is_error() and "non-string wire model" in f2.error.summary
+    if ok:
+        with pytest.raises(Exception):
+            resp._v1_model_response({**resp._RESPONSES["text"], "model": 7})
+    failures += 0 if ok else 1
+    lines.append(
+        f"- {'FALLBACK (v1 raises ValidationError)' if ok else 'DIVERGENT'}:"
+        " non-string wire model"
+    )
+    lines += [
+        "",
+        "## watsonx: streams (v1 line replay through the databricks"
+        " ModelResponseIterator + CustomStreamWrapper('watsonx') generic arm"
+        " vs v2 watsonx parser + the generic chunk dialect; ids normalized)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    no_finish = [stream._chunk({"role": "assistant", "content": "Hi"})]
+    v1 = stream._v1_chunks(no_finish)
+    v2 = stream._v2_chunks(no_finish)
+    synth_ok = (
+        len(v1) == len(v2) + 1
+        and stream._norm(v2) == stream._norm(v1[:-1])
+        and v1[-1]["choices"][0]["finish_reason"] == "stop"
+    )
+    failures += 0 if synth_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if synth_ok else "- DIVERGENT: ")
+        + "no-wire-finish stream (v2 == v1 minus the wrapper's synthesized"
+        " stop tail — the generic streaming seam owns it)"
+    )
+    for name in sorted(stream._PINNED_DIVERGENCES):
+        events, raw_lines, fragment = stream._PINNED_DIVERGENCES[name]
+        v1 = stream._v1_chunks(events, raw_lines=raw_lines)
+        swallows = all(
+            choice["delta"]["content"] in (None, "")
+            and not choice["delta"]["tool_calls"]
+            for chunk in v1
+            for choice in chunk["choices"]
+        )
+        if raw_lines is not None:
+            result = stream.parse_line(raw_lines[0])
+        else:
+            result = stream.parse_event(copy.deepcopy(events[0]))
+        pinned = swallows and result.is_error() and fragment in result.error.summary
+        failures += 0 if pinned else 1
+        lines.append(
+            (
+                "- PINNED DIVERGENCE (fail-closed on a failure path): "
+                if pinned
+                else "- DIVERGENT: "
+            )
+            + f"{name} — v1's iterator silently swallows it, v2 errors loudly"
+        )
+    for name in sorted(stream._V1_RAISES_LOUD):
+        events, fragment = stream._V1_RAISES_LOUD[name]
+        result = stream.parse_event(copy.deepcopy(events[0]))
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                stream._v1_chunks(events)
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises MidStreamFallbackError)' if ok else 'DIVERGENT'}:"
+            f" {name}"
+        )
+    for falsy, label in (("", "empty-string"), ({}, "empty-object")):
+        events = [
+            stream._chunk({"role": "assistant", "content": "Hi"}),
+            stream._chunk({}, finish=falsy),
+        ]
+        v1 = stream._v1_chunks(events)
+        v2 = stream._v2_chunks(events)
+        ok = (
+            len(v1) == len(v2) + 1
+            and stream._norm(v2) == stream._norm(v1[:-1])
+            and v1[-1]["choices"][0]["finish_reason"] == "stop"
+        )
+        failures += 0 if ok else 1
+        lines.append(
+            ("- SEAM CONTRACT: " if ok else "- DIVERGENT: ")
+            + f"falsy ({label}) finish_reason — no finish rides (v1's truthy"
+            " gate); v2 == v1 minus the wrapper's synthesized stop tail"
+        )
+    return failures
+
+
+def _sagemaker_chat_rows(lines: list) -> int:
+    """wave-2b-beta: sagemaker_chat (base GPT config over SigV4 transport;
+    sagemaker_nova deliberately unregistered)."""
+    import pytest
+
+    from . import test_differential_sagemaker_chat_request as req
+    from . import test_differential_sagemaker_chat_response as resp
+    from . import test_differential_sagemaker_chat_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## sagemaker_chat (wave-2b-beta): requests (v1 get_optional_params"
+        " + the base GPT transform_request vs v2 providers/sagemaker_chat;"
+        " SigV4 signs after assembly — envelope)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, fragment = req.V1_RAISES[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                req.run_v1_request_transform(case)
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises UnsupportedParamsError)' if ok else 'DIVERGENT'}:"
+            f" {name}"
+        )
+    for name in sorted(req.V1_SERVES_FALLBACKS):
+        case, fragment = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 serves)' if ok else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## sagemaker_chat: responses (v1 base transform_response/cdr vs the"
+        " shared openai parser; bare wire model, no seam preset)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = resp._norm(v2) == resp._norm(v1) and v2["model"] == resp.WIRE_MODEL
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## sagemaker_chat: streams (v1 AWS event-stream PARSED-event replay"
+        " through AWSEventStreamDecoder(is_messages_api) +"
+        " CustomStreamWrapper('sagemaker_chat') vs v2 openai parser + the"
+        " litellm-validation post-step, 'openai' dialect)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    for name in sorted(stream._V1_RAISES):
+        bad, fragment = stream._V1_RAISES[name]
+        result = stream.parse_event(dict(bad))
+        loud = result.is_error() and fragment in result.error.summary
+        if loud:
+            with pytest.raises(Exception):
+                stream._v1_chunks([bad])
+        failures += 0 if loud else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises ValidationError)' if loud else 'DIVERGENT'}:"
+            f" {name} (loud on both sides)"
+        )
+    for falsy, label in (("", "empty-string"), ({}, "empty-object")):
+        events = [
+            stream._chunk({"role": "assistant", "content": "x"}),
+            stream._chunk({}, finish=falsy),
+        ]
+        v1 = stream._v1_chunks(events)
+        v2 = stream._v2_chunks(events)
+        ok = (
+            len(v1) == len(v2) + 1
+            and stream._norm(v2) == stream._norm(v1[:-1])
+            and v1[-1]["choices"][0]["finish_reason"] == "stop"
+        )
+        failures += 0 if ok else 1
+        lines.append(
+            ("- SEAM CONTRACT: " if ok else "- DIVERGENT: ")
+            + f"falsy ({label}) finish_reason — no finish rides (v1's truthy"
+            " gate); v2 == v1 minus the wrapper's synthesized stop tail"
+        )
+    return failures
+
+
+def _groq_rows(lines: list) -> int:
+    """wave-2b-beta: groq (httpx path; bare wire model + service_tier
+    clamp; the json_schema fork rows)."""
+    import copy
+
+    import pytest
+
+    from . import test_differential_groq_request as req
+    from . import test_differential_groq_response as resp
+    from . import test_differential_groq_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## groq (wave-2b-beta): requests (v1 get_optional_params +"
+        " GroqChatConfig.transform_request + hh's extra_body merge vs v2"
+        " providers/groq; the json_schema three-way fork)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, fragment = req.V1_RAISES[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                req.run_v1_request_transform(case)
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises UnsupportedParamsError)' if ok else 'DIVERGENT'}:"
+            f" {name}"
+        )
+    schema_tools_case = {
+        "model": req.MODEL,
+        "messages": req._U,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "s",
+                "schema": {"type": "object", "properties": {}},
+                "strict": True,
+            },
+        },
+        "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}],
+    }
+    bad_request = req._v2(schema_tools_case)
+    ok = bad_request.is_error() and "BadRequestError" in bad_request.error.summary
+    if ok:
+        try:
+            req.run_v1_request_transform(schema_tools_case)
+            ok = False
+        except Exception:
+            pass
+    failures += 0 if ok else 1
+    lines.append(
+        f"- {'FALLBACK (v1 raises BadRequestError)' if ok else 'DIVERGENT'}:"
+        " response_format json_schema + tools on a non-native model"
+    )
+    for name in sorted(req.V1_SERVES_FALLBACKS):
+        case, fragment = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 serves)' if ok else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## groq: responses (v1 OpenAILike direct construction + the"
+        " service_tier clamp vs v2 groq parser + the seam's openai_like"
+        " arm; bare wire model)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = resp._norm(v2) == resp._norm(v1) and v2["model"] == resp.MODEL
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    missing_tier = {
+        **{k: v for k, v in resp._BASE.items() if k != "service_tier"},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "x"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    tier_result = resp._v2_parse(missing_tier)
+    ok = tier_result.is_error() and "service_tier" in tier_result.error.summary
+    if ok:
+        with pytest.raises(AttributeError):
+            resp._v1_model_response(missing_tier)
+    failures += 0 if ok else 1
+    lines.append(
+        f"- {'FALLBACK (v1 raises AttributeError)' if ok else 'DIVERGENT'}:"
+        " response without service_tier (v1's clamp post-step crashes)"
+    )
+    f2 = resp._v2_parse({**resp._RESPONSES["text_tier_clamped_to_auto"], "model": 7})
+    ok = f2.is_error() and "non-string wire model" in f2.error.summary
+    failures += 0 if ok else 1
+    lines.append(
+        f"- {'FALLBACK (v1 raises ValidationError)' if ok else 'DIVERGENT'}:"
+        " non-string wire model"
+    )
+    lines += [
+        "",
+        "## groq: streams (v1 SSE line replay through"
+        " GroqChatCompletionStreamingHandler + CustomStreamWrapper('groq')"
+        " vs v2 httpx_chunk factory (rename) + the xai chunk dialect)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    err = {"error": {"message": "boom", "code": 500}}
+    loud = stream.parse_event(dict(err)).is_error()
+    failures += 0 if loud else 1
+    lines.append(
+        f"- {'FALLBACK (v1 raises MidStreamFallbackError)' if loud else 'DIVERGENT'}:"
+        " error chunk (loud on both sides — the truthy-value check)"
+    )
+    for key in ("reasoning", "reasoning_content"):
+        bad = stream._chunk({"role": "assistant", key: 5})
+        result = stream.parse_event(copy.deepcopy(bad))
+        ok = result.is_error() and "is not a string" in result.error.summary
+        if ok:
+            try:
+                stream._v1_chunks([bad, stream._chunk({}, finish="stop")])
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises APIError)' if ok else 'DIVERGENT'}:"
+            f" non-str delta {key} (the F6 groq-local pre-step; the wrapper"
+            " epilogue join TypeErrors in v1)"
+        )
+    refusal_events = [
+        stream._chunk({"role": "assistant", "refusal": 7, "content": "x"}),
+        stream._chunk({}, finish="stop"),
+    ]
+    v1 = stream._v1_chunks(refusal_events)
+    v2 = stream._v2_chunks(refusal_events)
+    handoff = (
+        v1[0]["choices"][0]["delta"]["refusal"] == 7
+        and v2[0]["choices"][0]["delta"]["refusal"] is None
+    )
+    failures += 0 if handoff else 1
+    lines.append(
+        (
+            "- INTEGRATOR-FLIP HANDOFF (current behavior guarded): "
+            if handoff
+            else "- DIVERGENT: "
+        )
+        + "non-str refusal — v1 forwards 7, the SHARED httpx_chunk factory"
+        " nulls it; the fix belongs to the alpha fix round's concurrent"
+        " httpx_chunk edit (verifier-wave2b-alpha F1) — the sibling-merge"
+        " integrator flips this row and the gate test to v1 parity"
+    )
+    return failures
+
+
 def _azure_rows(lines: list) -> int:
     import os
 
@@ -1812,7 +2656,7 @@ def main() -> None:
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha own modules)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -1830,6 +2674,11 @@ def main() -> None:
     failures += _compat_httpx_rows(lines)
     failures += _cometapi_rows(lines)
     failures += _wave2b_alpha_rows(lines)
+    failures += _cohere_rows(lines)
+    failures += _mistral_rows(lines)
+    failures += _watsonx_rows(lines)
+    failures += _sagemaker_chat_rows(lines)
+    failures += _groq_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

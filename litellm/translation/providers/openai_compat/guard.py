@@ -80,16 +80,26 @@ def stream_false_then_unsupported_shapes(raw: _Raw) -> TranslationError | None:
 
 
 def unsupported_request_shapes(
-    raw: _Raw, *, name_fallback_user_only: bool = False
+    raw: _Raw,
+    *,
+    name_fallback_user_only: bool = False,
+    skip_name_fallback: bool = False,
 ) -> TranslationError | None:
     """``name_fallback_user_only``: providers whose v1 transform STRIPS the
     message ``name`` from non-user roles (xai ``strip_name_from_messages``)
     only need the fallback for user messages, where v1 forwards it verbatim;
-    the IR's name-drop IS v1's behavior on the other roles."""
+    the IR's name-drop IS v1's behavior on the other roles.
+
+    ``skip_name_fallback`` (wave-2b-beta): providers whose name semantics are
+    a per-role/per-branch matrix (mistral keeps TOOL-role names and forwards
+    every name on its image branch) run their OWN name arm first and skip the
+    shared one entirely."""
     reason = (
         _params_reason(raw)
         or _tools_reason(raw)
-        or _messages_reason(raw, name_fallback_user_only)
+        or _messages_reason(
+            raw, name_fallback_user_only, skip_name_fallback=skip_name_fallback
+        )
     )
     if reason is None:
         return None
@@ -139,7 +149,12 @@ def _tools_reason(raw: _Raw) -> str | None:
     return None
 
 
-def _messages_reason(raw: _Raw, name_fallback_user_only: bool = False) -> str | None:
+def _messages_reason(
+    raw: _Raw,
+    name_fallback_user_only: bool = False,
+    *,
+    skip_name_fallback: bool = False,
+) -> str | None:
     messages = _as_seq(raw.get("messages"))
     if messages is None:
         return None
@@ -152,8 +167,10 @@ def _messages_reason(raw: _Raw, name_fallback_user_only: bool = False) -> str | 
             # keep scanning so the guard stays locally conservative too
             continue
         role = entry.get("role")
-        if entry.get("name") is not None and (
-            not name_fallback_user_only or role == "user"
+        if (
+            not skip_name_fallback
+            and entry.get("name") is not None
+            and (not name_fallback_user_only or role == "user")
         ):
             return "message name field (not carried by the IR)"
         reason = _message_reason(entry, role, seen_non_system)

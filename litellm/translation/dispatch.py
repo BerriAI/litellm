@@ -133,6 +133,32 @@ Provider = Literal[
     # the router route (provider-mapping HTTP fetch INSIDE the transform)
     # is a permanent typed fallback keyed on deps.api_base; bare wire model.
     "huggingface",
+    # wave-2b-beta: own-module providers (providers/<name>/). cohere and
+    # cohere_chat are ONE module (main.py's elif handles both names; the v2
+    # wire is the DEFAULT route at HEAD — the legacy "v1/" route predicate
+    # is a typed fallback inside the cohere guard, researcher-4 §11).
+    "cohere",
+    "cohere_chat",
+    # wave-2b-beta: mistral (httpx path, dedicated elif; bare wire model on
+    # responses; the magistral reasoning-prompt injection is a typed
+    # fallback inside the module — codestral reuses the v1 config but is
+    # NOT a wave-2b provider and stays a v1 fallback).
+    "mistral",
+    # wave-2b-beta: watsonx (the OpenAILikeChatHandler route; the IAM-token
+    # auth is envelope, project/space ids ride deps; the LIVE
+    # watsonx/{wire_model} response prefix is parser scope; streams ride the
+    # generic dialect via the databricks iterator).
+    "watsonx",
+    # wave-2b-beta: sagemaker_chat (base GPT config over SigV4 transport;
+    # the endpoint name is the model; streams pinned at the AWS
+    # event-stream PARSED-event seam with the openai dialect).
+    # sagemaker_nova shares the main.py branch but carries its OWN config
+    # overrides and is deliberately ABSENT (stays a typed v1 fallback).
+    "sagemaker_chat",
+    # wave-2b-beta: groq (httpx path; bare wire model + the service_tier
+    # clamp on responses; the json_schema workaround/raise arms are typed
+    # fallbacks, native-schema models serve verbatim).
+    "groq",
 ]
 
 NeverPortProvider = Literal[
