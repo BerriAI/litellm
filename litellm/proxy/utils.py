@@ -6309,6 +6309,18 @@ def create_model_info_response(
         "owned_by": provider,
     }
 
+    # Surface context-window limits for OpenAI-compatible discovery clients.
+    # Only emitted when known, so wildcard routes and limitless backends stay clean.
+    if llm_router is not None:
+        model_group_info = llm_router.get_model_group_info(model_id)
+        if model_group_info is not None:
+            if model_group_info.max_input_tokens is not None:
+                model_info["max_input_tokens"] = int(model_group_info.max_input_tokens)
+            if model_group_info.max_output_tokens is not None:
+                model_info["max_output_tokens"] = int(
+                    model_group_info.max_output_tokens
+                )
+
     # Add metadata if requested
     if include_metadata:
         metadata = {}
