@@ -1518,16 +1518,16 @@ def test_vertex_text_embedding_request_includes_labels_from_metadata():
     assert req.get("labels") == {"project_id": "cost-center-1"}
 
 
-def test_lyria_models_route_to_gemini():
+def test_lyria_models_route_to_lyria():
     from litellm.llms.vertex_ai.common_utils import (
         VertexAIModelRoute,
         get_vertex_ai_model_route,
     )
 
     assert (
-        get_vertex_ai_model_route("lyria-3-clip-preview") == VertexAIModelRoute.GEMINI
+        get_vertex_ai_model_route("lyria-3-clip-preview") == VertexAIModelRoute.LYRIA
     )
-    assert get_vertex_ai_model_route("lyria-3-pro-preview") == VertexAIModelRoute.GEMINI
+    assert get_vertex_ai_model_route("lyria-3-pro-preview") == VertexAIModelRoute.LYRIA
 
 
 def test_lyria_model_pricing_in_model_cost_map():

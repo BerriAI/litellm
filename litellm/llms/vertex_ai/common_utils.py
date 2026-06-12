@@ -85,6 +85,7 @@ class VertexAIModelRoute(str, Enum):
     NON_GEMINI = "non_gemini"
     OPENAI_COMPATIBLE = "openai"
     AGENT_ENGINE = "agent_engine"
+    LYRIA = "lyria"
 
 
 VERTEX_AI_MODEL_ROUTES = [f"{route.value}/" for route in VertexAIModelRoute]
@@ -156,8 +157,12 @@ def get_vertex_ai_model_route(
     if "openai" in model or model.startswith("xai/"):
         return VertexAIModelRoute.MODEL_GARDEN
 
-    # Check for gemini models and lyria music generation models (both use generateContent API)
-    if "gemini" in model or "lyria" in model:
+    # Lyria music generation models use the Interactions API (v1beta1/locations/global/interactions)
+    if "lyria" in model:
+        return VertexAIModelRoute.LYRIA
+
+    # Check for gemini models
+    if "gemini" in model:
         return VertexAIModelRoute.GEMINI
 
     # Default to non-gemini (legacy vertex models like chat-bison, text-bison, etc.)

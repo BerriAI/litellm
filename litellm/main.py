@@ -3681,6 +3681,34 @@ def completion(  # type: ignore # noqa: PLR0915
                     provider_config=vertex_agent_engine_config,
                     headers=headers or {},
                 )
+            elif model_route == VertexAIModelRoute.LYRIA:
+                # Vertex AI Lyria music generation — uses v1beta1 Interactions API
+                from litellm.llms.vertex_ai.lyria.transformation import LyriaConfig
+
+                lyria_config = LyriaConfig()
+
+                litellm_params["vertex_project"] = vertex_ai_project
+                litellm_params["vertex_location"] = vertex_ai_location
+                litellm_params["vertex_credentials"] = vertex_credentials
+
+                model_response = base_llm_http_handler.completion(
+                    model=model,
+                    stream=stream,
+                    messages=messages,
+                    model_response=model_response,
+                    optional_params=new_params,
+                    litellm_params=litellm_params,  # type: ignore
+                    encoding=_get_encoding(),
+                    api_key=None,
+                    api_base=api_base,
+                    logging_obj=logging,
+                    acompletion=acompletion,
+                    timeout=timeout,
+                    client=client,
+                    custom_llm_provider="vertex_ai",
+                    provider_config=lyria_config,
+                    headers=headers or {},
+                )
             else:  # VertexAIModelRoute.NON_GEMINI
                 model_response = vertex_ai_non_gemini.completion(
                     model=model,
