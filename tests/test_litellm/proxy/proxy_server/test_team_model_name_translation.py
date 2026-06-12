@@ -457,3 +457,32 @@ async def test_model_info_v1_team_id_without_db_fails_fast(monkeypatch):
     assert exc_info.value.status_code == 500
     assert "DB not connected" in exc_info.value.detail["error"]
     enrich_spy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_include_team_models_without_db_fails_fast(monkeypatch):
+    """`include_team_models` without a connected DB raises 500 instead of silently
+    returning an empty list (the access fields can only be populated from the DB)."""
+    router = MagicMock()
+    router.model_list = [_team_row()]
+
+    enrich_spy = MagicMock(side_effect=lambda model, **kw: model)
+
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "llm_model_list", router.model_list)
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps, "_enrich_model_info_with_litellm_data", enrich_spy)
+
+    admin = UserAPIKeyAuth(
+        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
+    )
+
+    with pytest.raises(ps.HTTPException) as exc_info:
+        await ps.model_info_v1(
+            user_api_key_dict=admin, litellm_model_id=None, include_team_models=True
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "DB not connected" in exc_info.value.detail["error"]
+    enrich_spy.assert_not_called()

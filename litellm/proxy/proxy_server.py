@@ -12757,7 +12757,9 @@ async def model_info_v1(  # noqa: PLR0915
         )
         return {"data": [_deployment_info_dict]}
 
-    if teamId is not None and teamId.strip() and prisma_client is None:
+    if prisma_client is None and (
+        include_team_models or (teamId is not None and teamId.strip())
+    ):
         raise HTTPException(
             status_code=500,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
