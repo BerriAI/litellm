@@ -1394,3 +1394,35 @@ format: write `providers/<name>/`, register it in
 `engine/pipeline._SERIALIZERS` / `_RESPONSE_PARSERS` / `_RESPONSE_DIALECTS`
 (plus `_RAW_GUARDS` when the inbound schema is the provider's own family),
 add a differential corpus, keep the flag off until differential-green.
+
+## Standing typed-discipline batch ("azure-N5"): the ONE canonical member list
+
+This list is the authoritative enumeration of the deferred typed-discipline
+cleanup batch (critic-wave2b-final NIT-4: the members were scattered across
+six reports with no canonical home). New deferrals into the batch APPEND a
+line here in the same commit and cite this section; the batch executor starts
+from this list, not from a report grep. Every member shares the lineage:
+outcome parity holds, only typed/`Any` discipline or shared-seam structure is
+at stake.
+
+- critic-azure N5 (origin): Any-heavy test plumbing — `_azure_corpus.py`
+  (`Dict[str, Any]` throughout, `load_json -> Any`, `jsonable`),
+  `test_differential_azure_request.py` `_v1_body`/`_v2_body` untyped
+  params, `generate_differential_report.py` `_azure_rows(lines: list)` +
+  the unrestored `os.environ.pop("AZURE_API_VERSION")`.
+- critic-wave1b N3: the corpus-helper untyped-invoker lineage the azure
+  plumbing copied.
+- critic-wave2a N6: the report generator's bare `lines: list` parameter
+  house style (every `_*_rows` signature).
+- critic-longtail NIT-5: the ~70-line normalizer residue batched per that
+  critic's own disposition.
+- verifier-longtail F3: the cdr arm's id guard (`isinstance(body_id, str)
+  and body_id`, `litellm/translation_seam.py`) rewrites non-string/empty
+  wire ids to the ambient chatcmpl id where v1's cdr keeps the wire value
+  — touches already-wired openai-style consumers; re-decide with a probe.
+- critic-wave2b-alpha NIT-3: `_own_module_corpus.py`'s Any-heavy invoker,
+  the generator's newer `lines: list` params, and the per-commit
+  interleaved import blocks in `_wave2b_alpha_error_chunk_pins`.
+- verifier-wave2b-beta F8 residual: watsonx response `id: 7` — both sides
+  raise the same ValidationError but v2's raise escapes from the seam,
+  not as a typed fallback (the F2 fail-closed arm covers only `model`).

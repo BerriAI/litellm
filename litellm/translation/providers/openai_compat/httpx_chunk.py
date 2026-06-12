@@ -222,7 +222,9 @@ def _normalize_choice(
         return normalized_delta
     if finish is not None and _delta_bears_content(normalized_delta):
         return TranslationError.of_unsupported(
-            "finish chunk with a non-empty delta; v1's wrapper interleaves it"
+            "finish chunk with a non-empty delta; the v2 fold cannot"
+            " reproduce v1 (the base wrapper interleaves it as its own"
+            " chunk; groq's own v1 wrapper silently DROPS the value)"
         )
     index = choice.get("index")
     return {
@@ -298,6 +300,22 @@ def _copy_passthrough_keys(
     return {**base, **extra} if extra else base
 
 
+def _crash_checked_reasoning_keys(mode: ReasoningMode) -> tuple[str, ...]:
+    """Which delta keys can feed v1's crashing reasoning join, one named arm
+    per ReasoningMode member + ``assert_never`` (critic-wave2b-final NIT-2:
+    this was the implicit-else shape critic-wave2b-alpha MAJOR-3 banned from
+    ``_reasoning_tail``). The native ``reasoning_content`` key is exempt in
+    the unconditional mode only: there v1's assignment clobbers it to None
+    before it can reach the join (replay-pinned), so v1 never crashes."""
+    if mode == "unconditional":
+        return ("reasoning",)
+    if mode == "copy_both":
+        return ("reasoning", "reasoning_content")
+    if mode == "rename":
+        return ("reasoning", "reasoning_content")
+    assert_never(mode)
+
+
 def _non_string_reasoning_error(
     mode: ReasoningMode, delta: dict[str, PlainJson]
 ) -> TranslationError | None:
@@ -305,15 +323,8 @@ def _non_string_reasoning_error(
     reasoning value verbatim, then the stream CRASHES at the end (APIError
     out of the chunk builder's reasoning join) — never serve what v1 raises
     on, so the coercion-to-None that silently swallowed the chunk is now a
-    loud error. The native ``reasoning_content`` key is exempt in the
-    unconditional mode only: there v1's assignment clobbers it to None
-    before it can reach the join (replay-pinned), so v1 never crashes."""
-    checked = (
-        ("reasoning",)
-        if mode == "unconditional"
-        else ("reasoning", "reasoning_content")
-    )
-    for key in checked:
+    loud error."""
+    for key in _crash_checked_reasoning_keys(mode):
         value = delta.get(key)
         if value is not None and not isinstance(value, str):
             return _boundary(

@@ -23,16 +23,9 @@ openai_compat assembly with:
 
 from __future__ import annotations
 
-from expression import Result
-
-from ...errors import TranslationError
 from ...ir import Body, ChatRequest, PlainJson
 from ..openai_compat.serialize import make_gated_serializer
 from . import params as p
-
-_SerializeResult = Result[Body, TranslationError]
-
-
 
 
 def _with_groq_deltas(body: Body, request: ChatRequest) -> Body:
