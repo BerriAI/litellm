@@ -2486,14 +2486,15 @@ if MCP_AVAILABLE:
                 None,
             )
 
-        all_registry_prefixes: Set[str] = set()
-        for registry_server in global_mcp_server_manager.get_registry().values():
-            for known_prefix in iter_known_server_prefixes(registry_server):
-                all_registry_prefixes.add(normalize_server_name(known_prefix))
-
-        name_is_prefixed = is_tool_name_prefixed(
-            name, known_server_prefixes=all_registry_prefixes
-        )
+        name_is_prefixed = False
+        if requested_server is not None:
+            all_registry_prefixes: Set[str] = set()
+            for registry_server in global_mcp_server_manager.get_registry().values():
+                for known_prefix in iter_known_server_prefixes(registry_server):
+                    all_registry_prefixes.add(normalize_server_name(known_prefix))
+            name_is_prefixed = is_tool_name_prefixed(
+                name, known_server_prefixes=all_registry_prefixes
+            )
 
         if requested_server is not None and not name_is_prefixed:
             if MCP_TOOL_PREFIX_SEPARATOR in name:
