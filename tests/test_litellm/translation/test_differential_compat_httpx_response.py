@@ -19,12 +19,13 @@ httpx path — over an ``httpx.Response`` with a FRESH ``ModelResponse()``
 
 import copy
 import json
-from typing import Any, cast
+from typing import cast
 
 import pytest
 
 from litellm.types.utils import ModelResponse
 
+from litellm.translation.dispatch import Provider
 from litellm.translation.inbound.openai_chat import parse_request
 from litellm.translation.inbound.openai_chat.response import serialize_response
 from litellm.translation.providers.compat_httpx import PARSERS
@@ -156,7 +157,7 @@ _STOP_WITH_TOOL_CALLS_BODY = {
 
 
 def _v2_with_style(
-    provider: str, raw: dict, style: str, model_response: ModelResponse
+    provider: str, raw: dict, style: UsageStyle, model_response: ModelResponse
 ) -> dict:
     parsed = parse_request(_request_for(provider))
     assert parsed.is_ok(), parsed.error.summary
@@ -164,7 +165,7 @@ def _v2_with_style(
     assert response.is_ok(), response.error.summary
     body = serialize_response(response.ok, build_translation_deps(), "openai")
     return to_model_response(
-        body, model_response, usage_style=cast(UsageStyle, style)
+        body, model_response, usage_style=style
     ).model_dump()
 
 
@@ -185,16 +186,20 @@ def test_construction_arm_must_come_from_response_styles(
     ``{provider}/{wire model}`` where v1 serves the bare wire model /
     request-model prefix — a real dump divergence for EVERY member. The
     obligated combination (fresh ModelResponse + RESPONSE_STYLES) equals v1
-    byte-for-byte. NOTE (probed at the sibling merge): over
-    parser-admissible bodies with a FRESH ModelResponse the two seam arms
-    currently produce identical dumps — the arms' equality is incidental
-    (cdr's preset/re-prefix and unknown-key semantics vs OpenAILike's),
-    so the RESPONSE_STYLES read stays a HARD OBLIGATION and the companion
-    AST gate below fails the moment a fork is wired through the dialect
-    helper."""
+    byte-for-byte. The arms-coincide note that used to live here was
+    REFUTED (verifier-longtail F1): over parser-admissible bodies the two
+    seam arms diverge on real shapes (choice-index enumerate rewrite,
+    unknown choice keys, created/id/model/system_fingerprint coercion vs
+    pydantic ValidationError), so the RESPONSE_STYLES read is a LIVE
+    byte-parity obligation — pinned per openai_like member by
+    ``test_construction_arms_diverge_on_wire_choice_index`` below — and
+    the companion AST gate fails the moment a fork is wired through the
+    dialect helper."""
     from litellm.translation.engine.pipeline import response_dialect
 
-    dialect_answer = response_dialect(cast(Any, provider))
+    # the corpus PROVIDERS tuple is str-typed; every member is a registered
+    # pipeline Provider row (the critic-wave1b N4 cast shape, not Any)
+    dialect_answer = response_dialect(cast(Provider, provider))
     assert dialect_answer == "openai", provider
     if RESPONSE_STYLES[provider] == "openai_like":
         # the table the fork MUST read disagrees with the dialect helper
@@ -223,40 +228,138 @@ def test_construction_arm_must_come_from_response_styles(
     )
 
 
-def test_seam_forks_never_select_usage_style_via_response_dialect() -> None:
-    """The MECHANICAL half of the F3 gate: any completion() fork in
-    litellm/translation_seam.py that threads ``response_dialect(...)`` into
-    ``to_model_response(usage_style=...)`` fails this test unless it is the
-    one audited bedrock fork (whose dialects are exactly the two bedrock
-    construction styles). The compat_httpx fork MUST read
-    ``compat_httpx.RESPONSE_STYLES`` instead (the CLAUDE.md HARD
-    OBLIGATION); wiring it through the dialect helper makes this test red
-    before any differential row can."""
+_INDEX_REWRITE_BODY = {
+    "id": "resp-armdiverge",
+    "object": "chat.completion",
+    "created": 1718000000,
+    "model": "wire-model-x",
+    "choices": [
+        {
+            # The arm discriminator (verifier-longtail F1, the cleanest of
+            # its 31 counterexamples): the openai (cdr) arm REBUILDS choices
+            # under enumerate (index becomes 0); the openai_like arm's
+            # ModelResponse(**body) keeps the verbatim wire index.
+            "index": 5,
+            "finish_reason": "stop",
+            "logprobs": None,
+            "message": {"role": "assistant", "content": "hello"},
+        }
+    ],
+    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+}
+
+_OPENAI_LIKE_MEMBERS = sorted(
+    provider
+    for provider in PROVIDERS
+    if RESPONSE_STYLES[provider] == "openai_like"
+)
+
+
+@pytest.mark.parametrize("provider", _OPENAI_LIKE_MEMBERS)
+def test_construction_arms_diverge_on_wire_choice_index(
+    provider: str, frozen_ambient
+) -> None:
+    """The behavioral half of the F3 gate on the STYLE axis (verifier-longtail
+    F1 refuted the arms-coincide note this branch shipped with): a
+    parser-admissible body where the two seam arms produce DIFFERENT dumps
+    with a fresh ModelResponse and no preset. The correct (openai_like) arm
+    equals v1 byte-for-byte and keeps the verbatim wire choice index; the
+    openai arm's enumerate rebuild rewrites it to 0 — so inheriting the
+    wrong construction arm is a live byte divergence the differential
+    catches, not an incidental no-op."""
+    raw = _INDEX_REWRITE_BODY
+    v1 = run_v1_response_transform(provider, raw, SPECS[provider].model).model_dump()
+    correct = _v2_with_style(provider, raw, "openai_like", ModelResponse())
+    wrong = _v2_with_style(provider, raw, "openai", ModelResponse())
+    assert _norm(correct) == _norm(v1), provider
+    assert correct["choices"][0]["index"] == 5, provider
+    assert wrong["choices"][0]["index"] == 0, provider
+    assert _norm(wrong) != _norm(v1), (
+        provider,
+        "the seam arms stopped diverging on the index-rewrite body — the "
+        "style-axis half of the F3 gate lost its discriminator; re-decide "
+        "before relying on it",
+    )
+
+
+def _dialect_coupled_functions(source: str) -> list[str]:
+    """Functions whose body contains BOTH a ``response_dialect(...)`` call
+    AND a ``to_model_response(...)`` call — however the value travels
+    (keyword, local variable, positional argument, attribute access).
+    Deliberately COARSER than matching a ``usage_style=`` keyword whose
+    value mentions the dialect helper: that predicate was disarmed by a
+    local-variable refactor or a positional third argument
+    (critic-longtail MAJOR-1; both dodges are pinned below)."""
     import ast as ast_mod
-    import inspect
 
-    import litellm.translation_seam as seam
-
-    tree = ast_mod.parse(inspect.getsource(seam))
+    tree = ast_mod.parse(source)
     offenders: list[str] = []
     for node in ast_mod.walk(tree):
         if not isinstance(node, (ast_mod.FunctionDef, ast_mod.AsyncFunctionDef)):
             continue
+        called = set()
         for call in ast_mod.walk(node):
             if not isinstance(call, ast_mod.Call):
                 continue
-            for keyword in call.keywords:
-                if keyword.arg != "usage_style":
-                    continue
-                names = {
-                    sub.id
-                    for sub in ast_mod.walk(keyword.value)
-                    if isinstance(sub, ast_mod.Name)
-                }
-                if "response_dialect" in names:
-                    offenders.append(node.name)
+            if isinstance(call.func, ast_mod.Name):
+                called.add(call.func.id)
+            if isinstance(call.func, ast_mod.Attribute):
+                called.add(call.func.attr)
+        if {"response_dialect", "to_model_response"} <= called:
+            offenders.append(node.name)
+    return offenders
+
+
+def test_seam_forks_never_select_usage_style_via_response_dialect() -> None:
+    """The MECHANICAL half of the F3 gate: any completion() fork in
+    litellm/translation_seam.py that BOTH calls ``response_dialect(...)``
+    and constructs through ``to_model_response(...)`` fails this test
+    unless it is the one audited bedrock fork (whose dialects are exactly
+    the two bedrock construction styles). The compat_httpx fork MUST read
+    ``compat_httpx.RESPONSE_STYLES`` instead (the CLAUDE.md HARD
+    OBLIGATION); wiring it through the dialect helper makes this test red
+    before any differential row can."""
+    import inspect
+
+    import litellm.translation_seam as seam
+
+    offenders = _dialect_coupled_functions(inspect.getsource(seam))
     assert offenders == ["_send_v2_bedrock"], (
-        "a seam fork selects usage_style via response_dialect(); the "
-        "compat_httpx family MUST read compat_httpx.RESPONSE_STYLES "
+        "a seam fork couples response_dialect() with to_model_response(); "
+        "the compat_httpx family MUST read compat_httpx.RESPONSE_STYLES "
         f"(verifier-wave1b F3). Offending functions: {offenders}"
     )
+
+
+_DODGE_LOCAL_VARIABLE = '''
+def _send_v2_family(provider_key, body, model_response):
+    style = response_dialect(provider_key)
+    return to_model_response(body, model_response, usage_style=style)
+'''
+
+_DODGE_POSITIONAL_ARGUMENT = '''
+def _send_v2_family(provider_key, body, model_response):
+    return to_model_response(body, model_response, response_dialect(provider_key))
+'''
+
+
+@pytest.mark.parametrize(
+    "dodge",
+    [_DODGE_LOCAL_VARIABLE, _DODGE_POSITIONAL_ARGUMENT],
+    ids=["local-variable", "positional-argument"],
+)
+def test_construction_arm_gate_catches_the_critic_dodges(dodge: str) -> None:
+    """critic-longtail MAJOR-1's two disarm simulations, frozen as negative
+    tests: both formatting-level refactors of the dialect-shortcut fork
+    must stay offenders under the gate's predicate."""
+    assert _dialect_coupled_functions(dodge) == ["_send_v2_family"]
+
+
+def test_usage_style_is_keyword_only() -> None:
+    """The signature half of the MAJOR-1 fix: ``usage_style`` can never be
+    passed positionally (dodge B is a TypeError at runtime and a pyright
+    error at the call site, before the AST gate even runs)."""
+    import inspect
+
+    parameter = inspect.signature(to_model_response).parameters["usage_style"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY

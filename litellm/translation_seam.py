@@ -82,9 +82,14 @@ the table read mechanically — verifier-wave1b F3)."""
 def to_model_response(
     body: Body,
     model_response: Optional[ModelResponse] = None,
+    *,
     usage_style: UsageStyle = "anthropic",
 ) -> ModelResponse:
     """Adapt a v2 response body onto litellm's ModelResponse envelope.
+
+    ``usage_style`` is keyword-only so a positional third argument can never
+    smuggle a construction style past the construction-arm gate
+    (critic-longtail MAJOR-1, dodge B).
 
     Mirrors v1's per-provider response assembly exactly (assign into the
     pre-allocated response's first choice, stamp created/model, setattr a
