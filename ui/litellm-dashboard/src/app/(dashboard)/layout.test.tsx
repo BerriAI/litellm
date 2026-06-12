@@ -29,19 +29,23 @@ vi.mock("@/components/common_components/LoadingScreen", () => ({
   default: () => <div data-testid="loading-screen" />,
 }));
 
-const deferred = (() => {
+type Deferred = { promise: Promise<void>; resolve: () => void };
+
+const createDeferred = (): Deferred => {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => {
     resolve = r;
   });
   return { promise, resolve };
-})();
+};
+
+let pendingUiConfig: Deferred;
 
 vi.mock("@/components/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/networking")>();
   return {
     ...actual,
-    getUiConfig: vi.fn(() => deferred.promise),
+    getUiConfig: vi.fn(() => pendingUiConfig.promise),
     setGlobalLitellmHeaderName: vi.fn(),
   };
 });
@@ -49,6 +53,7 @@ vi.mock("@/components/networking", async (importOriginal) => {
 describe("(dashboard) Layout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pendingUiConfig = createDeferred();
   });
 
   it("does not mount route content until getUiConfig has resolved", async () => {
@@ -60,14 +65,11 @@ describe("(dashboard) Layout", () => {
       </AuthProvider>,
     );
 
-    // While getUiConfig is in flight, proxyBaseUrl/serverRootPath still hold their
-    // module defaults; mounting pages now would fire fetches without the
-    // SERVER_ROOT_PATH prefix. The layout must hold them back.
     await waitFor(() => expect(screen.getByTestId("loading-screen")).toBeTruthy());
     expect(screen.queryByTestId("page-content")).toBeNull();
     expect(screen.queryByTestId("navbar")).toBeNull();
 
-    deferred.resolve();
+    pendingUiConfig.resolve();
 
     await waitFor(() => expect(screen.getByTestId("page-content")).toBeTruthy());
     expect(screen.getByTestId("navbar")).toBeTruthy();

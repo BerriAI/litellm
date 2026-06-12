@@ -48,10 +48,6 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const { accessToken, authLoading } = useAuth();
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
 
-  // Block rendering until getUiConfig() has resolved proxyBaseUrl/serverRootPath
-  // (AuthContext clears authLoading only after that). Pages fetch on mount with a
-  // cookie-decoded token, so rendering earlier sends API calls without the
-  // SERVER_ROOT_PATH prefix and they 404 behind a path-routing reverse proxy.
   if (authLoading) {
     return <LoadingScreen />;
   }
