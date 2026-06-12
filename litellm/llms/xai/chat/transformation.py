@@ -5,10 +5,12 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
+from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
 )
+from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
@@ -35,8 +37,74 @@ class XAIChatConfig(OpenAIGPTConfig):
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("XAI_API_KEY")
+        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
         return api_base, dynamic_api_key
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        from litellm.llms.xai.oauth import (
+            XAIOAuthAuthenticator,
+            XAIOAuthError,
+            should_use_xai_oauth,
+        )
+
+        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
+        if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
+            try:
+                headers["Authorization"] = (
+                    f"Bearer {XAIOAuthAuthenticator().get_access_token()}"
+                )
+            except XAIOAuthError as exc:
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider=self.custom_llm_provider or "xai",
+                    message=str(exc),
+                ) from exc
+            if "content-type" not in headers and "Content-Type" not in headers:
+                headers["Content-Type"] = "application/json"
+            return headers
+
+        return super().validate_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=dynamic_api_key,
+            api_base=api_base,
+        )
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
+
+        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
+        if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
+            api_base = XAIOAuthAuthenticator().get_api_base()
+
+        return super().get_complete_url(
+            api_base=api_base,
+            api_key=dynamic_api_key,
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            stream=stream,
+        )
 
     def get_supported_openai_params(self, model: str) -> list:
         base_openai_params = [

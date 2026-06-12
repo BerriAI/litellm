@@ -82,7 +82,9 @@ def test_async_fallbacks(caplog):
     asyncio.run(_make_request())
     captured_logs = [rec.message for rec in caplog.records]
 
-    # on circle ci the captured logs get some async task exception logs - filter them out "Task exception was never retrieved"
+    # on circle ci the captured logs get async cleanup noise from the gc (leaked
+    # task warnings, plus aiohttp "Unclosed client session"/"Unclosed connector"
+    # warnings from cached clients other router tests evicted) - filter it out
     captured_logs = [
         log
         for log in captured_logs
@@ -90,6 +92,8 @@ def test_async_fallbacks(caplog):
         and "Task was destroyed but it is pending" not in log
         and "get_available_deployment" not in log
         and "in the Langfuse queue" not in log
+        and "Unclosed client session" not in log
+        and "Unclosed connector" not in log
     ]
 
     print("\n Captured caplog records - ", captured_logs)

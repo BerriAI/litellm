@@ -18,14 +18,21 @@ export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" |
 
 interface UseMcpOAuthFlowOptions {
   accessToken: string | null;
-  getCredentials: () => {
-    client_id?: string;
-    client_secret?: string;
-    scopes?: string[];
-  } | undefined;
+  getCredentials: () =>
+    | {
+        client_id?: string;
+        client_secret?: string;
+        scopes?: string[];
+      }
+    | undefined;
   getTemporaryPayload: () => Record<string, any> | null;
   onTokenReceived: (tokenResponse: Record<string, any>) => void;
   onBeforeRedirect?: () => void;
+  // Distinguishes which form started the flow (e.g. "create" vs "edit"). Both forms
+  // mount this hook with shared storage keys, so the return handler only processes a
+  // callback whose stored flowSource matches, preventing one form from grabbing the
+  // other's OAuth result.
+  flowSource: string;
 }
 
 interface UseMcpOAuthFlowResult {
@@ -33,6 +40,7 @@ interface UseMcpOAuthFlowResult {
   status: McpOAuthStatus;
   error: string | null;
   tokenResponse: Record<string, any> | null;
+  reset: () => void;
 }
 
 export const useMcpOAuthFlow = ({
@@ -41,6 +49,7 @@ export const useMcpOAuthFlow = ({
   getTemporaryPayload,
   onTokenReceived,
   onBeforeRedirect,
+  flowSource,
 }: UseMcpOAuthFlowOptions): UseMcpOAuthFlowResult => {
   const [status, setStatus] = useState<McpOAuthStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +67,7 @@ export const useMcpOAuthFlow = ({
     clientSecret?: string;
     serverId: string;
     redirectUri: string;
+    flowSource?: string;
   };
 
   const setStorageItem = (key: string, value: string) => {
@@ -134,7 +144,9 @@ export const useMcpOAuthFlow = ({
       }
 
       let registeredClient: { clientId?: string; clientSecret?: string } = {};
-      const hasPreconfiguredCredentials = Boolean(temporaryPayload.credentials?.client_id && temporaryPayload.credentials?.client_secret);
+      const hasPreconfiguredCredentials = Boolean(
+        temporaryPayload.credentials?.client_id && temporaryPayload.credentials?.client_secret,
+      );
 
       if (!hasPreconfiguredCredentials) {
         const registration = await registerMcpOAuthClient(accessToken, serverId, {
@@ -175,6 +187,7 @@ export const useMcpOAuthFlow = ({
         clientSecret: registeredClient.clientSecret || credentials.client_secret,
         serverId,
         redirectUri: callbackUrl(),
+        flowSource,
       };
 
       if (typeof window === "undefined") {
@@ -253,6 +266,16 @@ export const useMcpOAuthFlow = ({
       return;
     }
 
+    // Only the form that started this redirect should consume the result. The create
+    // form and the edit form both mount this hook with shared storage keys, so without
+    // this another instance (e.g. the always-mounted create form) would grab and handle
+    // an edit-page authorization. Bail out without clearing RESULT_KEY so the matching
+    // instance can still process it.
+    if (flowState?.flowSource !== flowSource) {
+      processingRef.current = false;
+      return;
+    }
+
     // Clear the result key after reading it
     if (typeof window !== "undefined") {
       try {
@@ -267,7 +290,7 @@ export const useMcpOAuthFlow = ({
       if (!flowState || !flowState.state || !flowState.codeVerifier || !flowState.serverId) {
         throw new Error(
           "OAuth session state was lost. This can happen if you have strict browser privacy settings. " +
-          "Please try again and ensure cookies/storage is enabled."
+            "Please try again and ensure cookies/storage is enabled.",
         );
       }
       if (!payload.state || payload.state !== flowState.state) {
@@ -314,10 +337,18 @@ export const useMcpOAuthFlow = ({
     resumeOAuthFlow();
   }, [resumeOAuthFlow]);
 
+  const reset = useCallback(() => {
+    setStatus("idle");
+    setError(null);
+    setTokenResponse(null);
+    processingRef.current = false;
+  }, []);
+
   return {
     startOAuthFlow,
     status,
     error,
     tokenResponse,
+    reset,
   };
 };

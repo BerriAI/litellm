@@ -398,6 +398,9 @@ REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(
 REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(
     os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60)
 )
+REDIS_CIRCUIT_BREAKER_ENABLED = (
+    os.getenv("REDIS_CIRCUIT_BREAKER_ENABLED", "true").lower() == "true"
+)
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
@@ -585,6 +588,7 @@ LITELLM_CHAT_PROVIDERS = [
     "volcengine",
     "codestral",
     "text-completion-codestral",
+    "text-completion-inception",
     "deepseek",
     "sambanova",
     "maritalk",
@@ -620,6 +624,7 @@ LITELLM_CHAT_PROVIDERS = [
     "oci",
     "morph",
     "lambda_ai",
+    "inception",
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
@@ -676,6 +681,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "extra_headers",
     "thinking",
     "web_search_options",
+    "include_server_side_tool_invocations",
     "service_tier",
     "prompt_cache_key",
     "prompt_cache_retention",
@@ -737,6 +743,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "verbosity": None,
     "thinking": None,
     "web_search_options": None,
+    "include_server_side_tool_invocations": None,
     "service_tier": None,
     "safety_identifier": None,
     "prompt_cache_key": None,
@@ -771,6 +778,7 @@ openai_compatible_endpoints: List = [
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
     "https://api.synthetic.new/openai/v1",
+    "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
     "https://nano-gpt.com/api/v1",
     "https://api.poe.com/v1",
@@ -778,6 +786,7 @@ openai_compatible_endpoints: List = [
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
+    "https://api.inceptionlabs.ai/v1",
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
@@ -820,10 +829,12 @@ openai_compatible_providers: List = [
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
+    "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
+    "parasail",  # Parasail - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
@@ -833,6 +844,7 @@ openai_compatible_providers: List = [
     "helicone",
     "morph",
     "lambda_ai",
+    "inception",
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
@@ -855,6 +867,7 @@ openai_text_completion_compatible_providers: List = (
         "moonshot",
         "publicai",
         "synthetic",
+        "tensormesh",
         "apertis",
         "nano-gpt",
         "poe",
@@ -868,6 +881,7 @@ openai_text_completion_compatible_providers: List = (
 _openai_like_providers: List = [
     "predibase",
     "databricks",
+    "lemonade",
     "watsonx",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
@@ -1147,6 +1161,8 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5",
+    "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
     "anthropic.claude-opus-4-6-v1",
@@ -1408,6 +1424,13 @@ LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
 # Prometheus metrics, audit trails, or any other downstream consumer.
 LITELLM_PROXY_MASTER_KEY_ALIAS = "litellm_proxy_master_key"
 
+# Marker placed in ``model_call_details`` on a synthetic ``Logging`` object that
+# records a proxy-gate error (auth/rate-limit rejection) for a request that never
+# reached an upstream provider. Tracing callbacks key off it to avoid fabricating
+# an LLM-call span for a call that did not happen. See
+# ``ProxyLogging._handle_logging_proxy_only_error``.
+LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL = "litellm_no_upstream_llm_call"
+
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
@@ -1473,6 +1496,10 @@ SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(
 )
 SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = float(
     os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
+)
+SPEND_LOG_PARTITION_INTERVAL = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
+SPEND_LOG_PARTITION_PRECREATE_AHEAD = int(
+    os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7)
 )
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))

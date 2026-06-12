@@ -75,9 +75,9 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [authEnabled, setAuthEnabled] = useState(initialEndpointData?.auth || false);
   const [selectedMethods, setSelectedMethods] = useState<string[]>(initialEndpointData?.methods || []);
-  const [guardrails, setGuardrails] = useState<Record<string, { request_fields?: string[]; response_fields?: string[] } | null>>(
-    initialEndpointData?.guardrails || {}
-  );
+  const [guardrails, setGuardrails] = useState<
+    Record<string, { request_fields?: string[]; response_fields?: string[] } | null>
+  >(initialEndpointData?.guardrails || {});
   const [form] = Form.useForm();
 
   const handleEndpointUpdate = async (values: any) => {
@@ -256,9 +256,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       <div className="font-medium text-sm">{name}</div>
                       {settings && (settings.request_fields || settings.response_fields) && (
                         <div className="mt-2 text-xs text-gray-600 space-y-1">
-                          {settings.request_fields && (
-                            <div>Request fields: {settings.request_fields.join(", ")}</div>
-                          )}
+                          {settings.request_fields && <div>Request fields: {settings.request_fields.join(", ")}</div>}
                           {settings.response_fields && (
                             <div>Response fields: {settings.response_fields.join(", ")}</div>
                           )}
@@ -319,12 +317,12 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item 
+                    <Form.Item
                       label="HTTP Methods (Optional)"
                       name="methods"
                       extra={
-                        selectedMethods.length === 0 
-                          ? "All HTTP methods supported (default)" 
+                        selectedMethods.length === 0
+                          ? "All HTTP methods supported (default)"
                           : `Only ${selectedMethods.join(", ")} requests will be routed to this endpoint`
                       }
                     >
@@ -398,9 +396,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     )}
                     <div>
                       <Text className="font-medium">Authentication Required</Text>
-                      <Badge color={endpointData.auth ? "green" : "gray"}>
-                        {endpointData.auth ? "Yes" : "No"}
-                      </Badge>
+                      <Badge color={endpointData.auth ? "green" : "gray"}>{endpointData.auth ? "Yes" : "No"}</Badge>
                     </div>
                     <div>
                       <Text className="font-medium">Headers</Text>

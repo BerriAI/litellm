@@ -16,4 +16,3 @@ const ExportSummary: React.FC<ExportSummaryProps> = ({ dateRange, selectedFilter
 };
 
 export default ExportSummary;
-

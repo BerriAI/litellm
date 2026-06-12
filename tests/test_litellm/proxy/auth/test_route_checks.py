@@ -224,6 +224,28 @@ def test_virtual_key_mcp_routes_allows_v1_mcp_server():
     assert result is True
 
 
+def test_auth_enforced_passthrough_check_does_not_apply_to_info_routes():
+    """Auth-enforced passthrough gating only applies to OpenAI/LLM route groups."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["info_routes"],
+    )
+
+    with patch.object(
+        RouteChecks,
+        "is_auth_enforced_pass_through_route",
+        return_value=True,
+    ) as mock_is_auth_enforced_pass_through_route:
+        result = RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/team/info",
+            valid_token=valid_token,
+        )
+
+    assert result is True
+    mock_is_auth_enforced_pass_through_route.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "route",
     [
@@ -262,10 +284,164 @@ def test_virtual_key_mcp_routes_allows_v1_mcp_server_subpaths(route):
 )
 def test_mcp_management_routes_classified_as_management_not_llm_api(route):
     """MCP server CRUD must be management routes, not llm_api routes, so
-    DISABLE_LLM_API_ENDPOINTS on admin nodes does not block the Admin UI."""
+    DISABLE_LLM_API_ENDPOINTS on admin nodes does not block the Admin UI.
+
+    Note: virtual keys with allowed_routes=["llm_api_routes"] can still call
+    *GET* `/v1/mcp/server` and *GET* `/v1/mcp/server/{server_id}` — that
+    carve-out is enforced method-aware inside
+    `is_virtual_key_allowed_to_call_route`, not by adding the paths to
+    `llm_api_routes`. So `is_llm_api_route()` still returns False here and
+    `DISABLE_LLM_API_ENDPOINTS` still does not block these paths.
+    """
 
     assert RouteChecks.is_llm_api_route(route=route) is False
     assert RouteChecks.is_management_route(route=route) is True
+
+
+def _mock_request(method: str) -> Request:
+    request = MagicMock(spec=Request)
+    request.method = method
+    return request
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/mcp/server",
+        "/v1/mcp/server/abc-123",
+    ],
+)
+def test_virtual_key_llm_api_routes_allows_get_mcp_server_discovery(route):
+    """
+    Regression test: virtual keys with allowed_routes=["llm_api_routes"] must
+    be able to list/inspect MCP servers via GET /v1/mcp/server[/{server_id}].
+
+    The handlers strip credential-bearing fields via
+    `_sanitize_mcp_server_list_for_virtual_key` when the caller is a
+    restricted virtual key, so GET is safe to expose. The carve-out is
+    method-aware (see below) — non-GET requests to the same paths are
+    rejected at this layer, so admin-only writes remain gated.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+        request=_mock_request("GET"),
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/mcp/server",
+        "/v1/mcp/server/abc-123",
+    ],
+)
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_virtual_key_llm_api_routes_rejects_non_get_mcp_server_discovery(route, method):
+    """Method-aware: the MCP server discovery carve-out is GET-only.
+
+    POST/PUT/PATCH/DELETE on `/v1/mcp/server[/{server_id}]` are admin-only
+    management writes and must not be reachable via llm_api_routes.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+            request=_mock_request(method),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        # Multi-segment admin-only sub-paths must NOT be reachable via
+        # llm_api_routes, even on GET.
+        "/v1/mcp/server/abc-123/approve",
+        "/v1/mcp/server/abc-123/reject",
+        "/v1/mcp/server/oauth/session",
+        "/v1/mcp/server/abc-123/user-credential",
+    ],
+)
+def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
+    route,
+):
+    """Multi-segment admin-only MCP sub-paths are not reachable via llm_api_routes.
+
+    The discovery carve-out only matches `/v1/mcp/server` and
+    `/v1/mcp/server/{server_id}` (single segment after `/server/`), so any
+    path with additional segments is rejected even when the request is GET.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+            request=_mock_request("GET"),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_spend_logs_v2_classified_as_management_not_llm_api():
+    """Paginated spend logs are a management/spend read route, not an LLM API."""
+
+    assert RouteChecks.is_llm_api_route(route="/spend/logs/v2") is False
+    assert RouteChecks.is_management_route(route="/spend/logs/v2") is True
+
+
+def test_virtual_key_management_routes_allows_spend_logs_v2():
+    """Management virtual keys should be allowed to call the v2 spend logs endpoint."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["management_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/spend/logs/v2",
+        valid_token=valid_token,
+    )
+
+    assert result is True
+
+
+def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
+    """AI API virtual keys should not gain spend-log access."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/spend/logs/v2",
+            valid_token=valid_token,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
 
 
 @pytest.mark.parametrize(
@@ -532,24 +708,22 @@ def test_anthropic_count_tokens_route_accessible_to_internal_users():
 
 def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
     """
-    Test that virtual keys with llm_api_routes permission can access registered pass-through endpoints.
-
-    This tests the scenario where a pass-through endpoint is registered from the DB
-    (e.g., /azure-assistant) and a virtual key with llm_api_routes permission should be able to access
-    both the exact path and subpaths (e.g., /azure-assistant/openai/assistants).
+    Virtual keys with llm_api_routes can access auth=true pass-through endpoints only when
+    allowed_passthrough_routes is configured on the key or team.
     """
 
-    # Mock the registered pass-through routes
     mock_registered_routes = {
-        "test-uuid-1:exact:/azure-assistant": {
+        "test-uuid-1:exact:/azure-assistant:DELETE,GET,PATCH,POST,PUT": {
             "endpoint_id": "test-uuid-1",
             "path": "/azure-assistant",
             "type": "exact",
+            "auth": True,
         },
-        "test-uuid-2:subpath:/custom-endpoint": {
+        "test-uuid-2:subpath:/custom-endpoint:DELETE,GET,PATCH,POST,PUT": {
             "endpoint_id": "test-uuid-2",
             "path": "/custom-endpoint",
             "type": "subpath",
+            "auth": True,
         },
     }
 
@@ -559,36 +733,272 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
-        # Create a virtual key with llm_api_routes permission
+        valid_token = UserAPIKeyAuth(
+            user_id="test_user",
+            allowed_routes=["llm_api_routes"],
+            metadata={
+                "allowed_passthrough_routes": [
+                    "/azure-assistant",
+                    "/custom-endpoint",
+                ]
+            },
+        )
+
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/azure-assistant",
+                valid_token=valid_token,
+            )
+            is True
+        )
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/custom-endpoint/openai/assistants",
+                valid_token=valid_token,
+            )
+            is True
+        )
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/custom-endpoint",
+                valid_token=valid_token,
+            )
+            is True
+        )
+
+
+def test_virtual_key_llm_api_routes_allows_non_auth_enforced_pass_through_endpoints():
+    """
+    Virtual keys with llm_api_routes can access registered pass-through endpoints that
+    are NOT auth-enforced (auth=false) without configuring allowed_passthrough_routes.
+    This is the original behaviour and must not regress.
+    """
+
+    mock_registered_routes = {
+        "test-uuid-1:exact:/azure-assistant:DELETE,GET,PATCH,POST,PUT": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/azure-assistant",
+            "type": "exact",
+            "auth": False,
+        },
+        "test-uuid-2:subpath:/custom-endpoint:DELETE,GET,PATCH,POST,PUT": {
+            "endpoint_id": "test-uuid-2",
+            "path": "/custom-endpoint",
+            "type": "subpath",
+            "auth": False,
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.utils.get_server_root_path",
+            return_value="/",
+        ),
+    ):
         valid_token = UserAPIKeyAuth(
             user_id="test_user",
             allowed_routes=["llm_api_routes"],
         )
 
-        # Test exact match for registered pass-through endpoint
-        result1 = RouteChecks.is_virtual_key_allowed_to_call_route(
-            route="/azure-assistant",
-            valid_token=valid_token,
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/azure-assistant",
+                valid_token=valid_token,
+            )
+            is True
         )
-        assert result1 is True
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/custom-endpoint/openai/assistants",
+                valid_token=valid_token,
+            )
+            is True
+        )
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/custom-endpoint",
+                valid_token=valid_token,
+            )
+            is True
+        )
 
-        # Test subpath for registered pass-through endpoint with subpath type
-        result2 = RouteChecks.is_virtual_key_allowed_to_call_route(
-            route="/custom-endpoint/openai/assistants",
-            valid_token=valid_token,
-        )
-        assert result2 is True
 
-        # Test exact match for subpath type
-        result3 = RouteChecks.is_virtual_key_allowed_to_call_route(
-            route="/custom-endpoint",
-            valid_token=valid_token,
+def test_virtual_key_llm_api_routes_denies_auth_pass_through_without_allowlist():
+    """auth=true pass-through must not be reachable via llm_api_routes alone."""
+
+    mock_registered_routes = {
+        "test-uuid-1:exact:/azure-assistant:GET,POST": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/azure-assistant",
+            "type": "exact",
+            "auth": True,
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.utils.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        valid_token = UserAPIKeyAuth(
+            user_id="test_user",
+            allowed_routes=["llm_api_routes"],
         )
-        assert result3 is True
+
+        with pytest.raises(HTTPException) as exc_info:
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/azure-assistant",
+                valid_token=valid_token,
+            )
+        assert exc_info.value.status_code == 403
+        assert "allowed_passthrough_routes" in exc_info.value.detail
+
+
+def test_virtual_key_llm_api_routes_uses_method_specific_auth_setting():
+    """Same-path pass-through routes must be checked against the request method."""
+
+    mock_registered_routes = {
+        "test-uuid-1:exact:/custom:GET": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/custom",
+            "type": "exact",
+            "methods": ["GET"],
+            "auth": False,
+        },
+        "test-uuid-2:exact:/custom:POST": {
+            "endpoint_id": "test-uuid-2",
+            "path": "/custom",
+            "type": "exact",
+            "methods": ["POST"],
+            "auth": True,
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.utils.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        valid_token = UserAPIKeyAuth(
+            user_id="test_user",
+            allowed_routes=["llm_api_routes"],
+        )
+
+        get_request = MagicMock(spec=Request)
+        get_request.method = "GET"
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/custom",
+                valid_token=valid_token,
+                request=get_request,
+            )
+            is True
+        )
+
+        post_request = MagicMock(spec=Request)
+        post_request.method = "POST"
+        with pytest.raises(HTTPException) as exc_info:
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/custom",
+                valid_token=valid_token,
+                request=post_request,
+            )
+
+        assert exc_info.value.status_code == 403
+
+
+def test_non_proxy_admin_denies_auth_pass_through_without_allowlist():
+    """Internal users must not bypass allowed_passthrough_routes via openai_routes."""
+
+    mock_registered_routes = {
+        "test-uuid-1:exact:/my-pass-through:GET,POST": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/my-pass-through",
+            "type": "exact",
+            "auth": True,
+        },
+    }
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.utils.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            RouteChecks.non_proxy_admin_allowed_routes_check(
+                user_obj=None,
+                _user_role=LitellmUserRoles.INTERNAL_USER.value,
+                route="/my-pass-through",
+                request=MagicMock(spec=Request),
+                valid_token=valid_token,
+                request_data={},
+            )
+        assert exc_info.value.status_code == 403
+        assert "allowed_passthrough_routes" in exc_info.value.detail
+
+
+def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
+    mock_registered_routes = {
+        "test-uuid-1:exact:/my-pass-through:GET,POST": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/my-pass-through",
+            "type": "exact",
+            "auth": True,
+        },
+    }
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        team_metadata={"allowed_passthrough_routes": ["/my-pass-through"]},
+    )
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.utils.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/my-pass-through",
+            request=MagicMock(spec=Request),
+            valid_token=valid_token,
+            request_data={},
+        )
 
 
 def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
@@ -611,7 +1021,7 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -1322,6 +1732,7 @@ ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
     "/cost/estimate",
     # Public spend logs / spend tracking routes that admin viewer should read
     "/spend/logs",
+    "/spend/logs/v2",
     "/spend/keys",
     "/spend/users",
     "/spend/tags",
@@ -2191,3 +2602,72 @@ def test_legitimate_passthrough_routes_still_classified_as_llm_route(route):
     assert (
         RouteChecks.is_llm_api_route(route=route) is True
     ), f"{route!r} should be classified as an LLM API route"
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/search_tools/list",
+        "/search_tools/ui/available_providers",
+    ],
+)
+def test_internal_user_can_read_search_tools(route):
+    """Regression for LIT-3150: internal users must be able to view search tools,
+    the same way they can view vector stores."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/search_tools",  # create
+        "/search_tools/abc123",  # update / delete / get-by-id
+        "/search_tools/test_connection",
+    ],
+)
+def test_internal_user_blocked_from_search_tool_writes(route):
+    """Read access must not leak the search-tool management write routes to
+    internal users; only proxy admins create/update/delete/test them."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert "Only proxy admin" in str(exc_info.value)
+    assert f"Route={route}" in str(exc_info.value)
+    assert "Your role=internal_user" in str(exc_info.value)

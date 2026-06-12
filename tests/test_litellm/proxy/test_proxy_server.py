@@ -604,6 +604,46 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     assert "login" in response.text
 
 
+def test_admin_ui_export_serves_nested_extensionless_routes():
+    out_dir = Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
+    assert out_dir.is_dir(), f"missing UI export at {out_dir}"
+
+    nested_html_offenders = [
+        path.relative_to(out_dir).as_posix()
+        for path in out_dir.rglob("*.html")
+        if path.parent != out_dir
+        and path.name != "index.html"
+        and "_next" not in path.parts
+        and "litellm-asset-prefix" not in path.parts
+    ]
+    assert not nested_html_offenders, (
+        "Nested routes must be named index.html. Offenders: " f"{nested_html_offenders}"
+    )
+
+    callback_index = out_dir / "mcp" / "oauth" / "callback" / "index.html"
+    assert callback_index.is_file(), (
+        f"MCP OAuth callback page must exist at {callback_index}; "
+        "without it /ui/mcp/oauth/callback 404s after Linear redirects back."
+    )
+
+    fastapi_app = FastAPI()
+    fastapi_app.mount("/ui", StaticFiles(directory=str(out_dir), html=True), name="ui")
+    client = TestClient(fastapi_app)
+
+    redirect = client.get(
+        "/ui/mcp/oauth/callback?code=abc&state=xyz",
+        follow_redirects=False,
+    )
+    assert redirect.status_code == 307
+    assert redirect.headers["location"].endswith(
+        "/ui/mcp/oauth/callback/?code=abc&state=xyz"
+    )
+
+    landed = client.get("/ui/mcp/oauth/callback?code=abc&state=xyz")
+    assert landed.status_code == 200
+    assert "<html" in landed.text.lower()
+
+
 def test_restructure_always_happens(monkeypatch):
     """
     Test that restructuring logic always executes regardless of LITELLM_NON_ROOT setting.
@@ -2280,6 +2320,36 @@ async def test_custom_ui_sso_sign_in_handler_config_loading():
 
 
 @pytest.mark.asyncio
+async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeypatch):
+    """
+    max_budget configured as os.environ/MAX_BUDGET resolves to a string;
+    load_config must coerce it to float so the startup check
+    `litellm.max_budget > 0` doesn't raise TypeError.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("MAX_BUDGET", "10")
+    test_config = {
+        "model_list": [],
+        "litellm_settings": {"max_budget": "os.environ/MAX_BUDGET"},
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original_max_budget = litellm.max_budget
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert isinstance(litellm.max_budget, float)
+        assert litellm.max_budget == 10.0
+        assert litellm.max_budget > 0
+    finally:
+        litellm.max_budget = original_max_budget
+
+
+@pytest.mark.asyncio
 async def test_load_environment_variables_direct_and_os_environ():
     """
     Test _load_environment_variables method with direct values and os.environ/ prefixed values
@@ -3770,14 +3840,15 @@ async def test_model_info_v1_oci_secrets_not_leaked():
 
     # Mock the llm_router to return our test data
     mock_router = MagicMock()
+    mock_router.model_list = [mock_model_data]
     mock_router.get_model_names.return_value = ["oci-grok-test"]
     mock_router.get_model_access_groups.return_value = {}
-    mock_router.get_model_list.return_value = [mock_model_data]
 
     # Mock global variables
     with (
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
         patch("litellm.proxy.proxy_server.llm_model_list", [mock_model_data]),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {"infer_model_from_keys": False},
@@ -4252,6 +4323,111 @@ async def test_init_sso_settings_in_db_empty_settings():
 
         # Verify empty dictionary
         assert uppercased_settings == {}
+
+
+@pytest.mark.asyncio
+async def test_init_sso_settings_in_db_retries_on_transport_error():
+    """`_init_sso_settings_in_db` self-heals across one ClientNotConnectedError
+    via call_with_db_reconnect_retry — mirrors the auth-path behavior so
+    startup/reload bursts don't spam the log."""
+    import prisma
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_sso_config = MagicMock()
+    mock_sso_config.sso_settings = {"GOOGLE_CLIENT_ID": "xxx"}
+
+    invocations: list = []
+
+    async def _flaky_find_unique(**kwargs):
+        invocations.append(None)
+        if len(invocations) == 1:
+            raise prisma.errors.ClientNotConnectedError()
+        return mock_sso_config
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        side_effect=_flaky_find_unique
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    with patch.object(
+        proxy_config, "_decrypt_and_set_db_env_variables"
+    ) as mock_decrypt:
+        await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+
+    assert len(invocations) == 2
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
+    assert reconnect_kwargs["reason"] == "init_sso_settings_in_db_lookup_failure"
+    mock_decrypt.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_init_sso_settings_in_db_propagates_when_reconnect_fails():
+    """When reconnect returns False (cooldown / lock contention), the original
+    ClientNotConnectedError is caught by the function's `except Exception` and
+    logged — no retry storm, no crash."""
+    import prisma
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        side_effect=prisma.errors.ClientNotConnectedError()
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    # Should NOT raise — the function's own try/except swallows the propagated error.
+    await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_init_hashicorp_vault_config_override_retries_on_transport_error():
+    """`_init_hashicorp_vault_config_override` self-heals across one
+    ClientNotConnectedError via call_with_db_reconnect_retry."""
+    import prisma
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._last_hashicorp_vault_config = None
+
+    invocations: list = []
+
+    async def _flaky_find_unique(**kwargs):
+        invocations.append(None)
+        if len(invocations) == 1:
+            raise prisma.errors.ClientNotConnectedError()
+        return None  # No config in DB → function returns early after retry.
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_configoverrides.find_unique = AsyncMock(
+        side_effect=_flaky_find_unique
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    await proxy_config._init_hashicorp_vault_config_override(
+        prisma_client=mock_prisma_client
+    )
+
+    assert len(invocations) == 2
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
+    assert (
+        reconnect_kwargs["reason"]
+        == "init_hashicorp_vault_config_override_lookup_failure"
+    )
 
 
 def test_update_config_fields_uppercases_env_vars(monkeypatch):
@@ -5126,6 +5302,110 @@ async def test_async_data_generator_passes_through_google_native_sse_bytes():
 
 
 @pytest.mark.asyncio
+async def test_async_data_generator_google_genai_stream_omits_openai_done():
+    """
+    google-genai SDK streamGenerateContent?alt=sse must not receive data: [DONE].
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-2.0-flash",
+        "_litellm_skip_openai_stream_done": True,
+    }
+    gemini_event = (
+        b'data: {"candidates": [{"content": {"parts": [{"text": "Hi"}]}}]}\n\n'
+    )
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield gemini_event
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert yielded_text == [gemini_event.decode("utf-8")]
+    assert "[DONE]" not in "".join(yielded_text)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_google_genai_stream_forwards_error_without_done():
+    """Stream errors must still reach the client when OpenAI [DONE] is skipped."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    error_sse = 'data: {"error": {"message": "stream failed"}}\n\n'
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-2.0-flash",
+        "_litellm_skip_openai_stream_done": True,
+    }
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield error_sse
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert yielded_text == [error_sse]
+    assert "[DONE]" not in "".join(yielded_text)
+
+
+@pytest.mark.asyncio
 async def test_async_data_generator_cleanup_on_normal_completion():
     """
     Test that async_data_generator calls response.aclose() even on normal completion.
@@ -5859,15 +6139,16 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
         if call.kwargs.get("nx") is True
     ]
     assert len(nx_writes) == 2
-    assert sorted(set_results) == [False, True], (
-        f"expected exactly one SET NX winner and one loser, got {set_results}"
-    )
+    assert sorted(set_results) == [
+        False,
+        True,
+    ], f"expected exactly one SET NX winner and one loser, got {set_results}"
     # Loser path executed: after the winner's SET NX returned True, the
     # losing coalesced() call falls back to async_get_cache to read the
     # winner's value rather than re-seeding.
-    assert get_after_set_count >= 1, (
-        "loser branch (else: read back winner's value) was never exercised"
-    )
+    assert (
+        get_after_set_count >= 1
+    ), "loser branch (else: read back winner's value) was never exercised"
 
 
 @pytest.mark.asyncio
@@ -6329,7 +6610,12 @@ async def test_increment_spend_counters_finalizes_none_cost_reservation():
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_invalidates_bad_reserved_counter_without_failing():
+async def test_increment_spend_counters_falls_back_to_direct_increment_on_bad_reserved_counter():
+    """When the reservation reconcile fails, the reserved counters are
+    invalidated and the actual response cost must still be written via the
+    direct increment fallback. Leaving the counter at ``None`` lets the next
+    request reseed a stale value from the DB and silently stops budget gating,
+    which is the bug this fix addresses."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import increment_spend_counters
 
@@ -6370,7 +6656,7 @@ async def test_increment_spend_counters_invalidates_bad_reserved_counter_without
             counter_cache.in_memory_cache.get_cache(
                 key="spend:key:key-bad-reserved-counter"
             )
-            is None
+            == 0.25
         )
     finally:
         ps.spend_counter_cache = orig_counter
@@ -7093,6 +7379,25 @@ class TestLazyFeatureRegistry:
 
         names = [f.name for f in LAZY_FEATURES]
         assert len(names) == len(set(names)), "duplicate feature names"
+
+    def test_matches_covers_prefix_and_suffix(self):
+        """``matches`` is the single matcher shared by the middleware (request
+        paths) and the warm endpoint (registered route paths), so a route that
+        only matches via suffix — e.g. ``/v1/a2a/{id}/message/send`` against the
+        ``/a2a`` prefix — must still be claimed by the feature."""
+        from litellm.proxy._lazy_features import LazyFeature
+
+        feat = LazyFeature(
+            name="a2a",
+            module_path="json",
+            path_prefixes=("/a2a",),
+            path_suffixes=("/message/send",),
+        )
+        assert feat.matches("/a2a/abc/message/send")
+        assert feat.matches("/v1/a2a/abc/message/send")
+        assert feat.matches("/a2a/abc/.well-known/agent-card.json")
+        assert not feat.matches("/v1/a2a/discover")
+        assert not feat.matches("/unrelated")
 
 
 class TestLazyFeaturesNotImportedAtStartup:

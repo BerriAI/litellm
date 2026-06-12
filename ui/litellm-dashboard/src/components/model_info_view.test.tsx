@@ -557,8 +557,7 @@ describe("ModelInfoView", () => {
       .getAllByRole("textbox")
       .find(
         (input) =>
-          input.tagName === "TEXTAREA" &&
-          (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
+          input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
       );
     expect(litellmParamsInput).toBeDefined();
     if (!litellmParamsInput) {
@@ -687,7 +686,6 @@ describe("ModelInfoView", () => {
       expect(screen.getByRole("button", { name: /edit auto router/i })).toBeInTheDocument();
     });
   });
-
 
   it("should display model access groups field", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });

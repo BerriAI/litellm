@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import httpx
 
@@ -65,7 +65,8 @@ class OllamaModelInfo(BaseLLMModelInfo):
         from litellm.secret_managers.main import get_secret_str
 
         return (
-            os.environ.get("OLLAMA_API_KEY")
+            api_key
+            or os.environ.get("OLLAMA_API_KEY")
             or litellm.api_key
             or litellm.openai_key
             or get_secret_str("OLLAMA_API_KEY")
@@ -78,13 +79,31 @@ class OllamaModelInfo(BaseLLMModelInfo):
         # env var OLLAMA_API_BASE or default
         return api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
 
+    @classmethod
+    def get_server_api_base(cls, api_base: Optional[str] = None) -> str:
+        api_base = cls.get_api_base(api_base).rstrip("/")
+        for suffix in (
+            "/api/generate",
+            "/api/chat",
+            "/api/embed",
+            "/api/embeddings",
+            "/api/show",
+            "/api/tags",
+        ):
+            if api_base.endswith(suffix):
+                return api_base[: -len(suffix)]
+        return api_base
+
     def get_models(self, api_key=None, api_base: Optional[str] = None) -> List[str]:
         """
         List all models available on the Ollama server via /api/tags endpoint.
         """
 
-        base = self.get_api_base(api_base)
-        api_key = self.get_api_key()
+        passed_api_base = api_base
+        base = self.get_server_api_base(api_base)
+        api_key = (
+            self.get_api_key(api_key) if passed_api_base is None or api_key else None
+        )
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         names: set[str] = set()
@@ -125,6 +144,103 @@ class OllamaModelInfo(BaseLLMModelInfo):
         # assemble full model names
         result = sorted(names)
         return result
+
+    @staticmethod
+    def _strip_ollama_model_prefix(model: str) -> str:
+        if model.startswith("ollama/") or model.startswith("ollama_chat/"):
+            return model.split("/", 1)[1]
+        return model
+
+    @staticmethod
+    def _is_static_ollama_model(model: str) -> bool:
+        from litellm import model_cost
+
+        stripped_model = OllamaModelInfo._strip_ollama_model_prefix(model)
+        potential_model_names = {
+            model,
+            stripped_model,
+            "ollama/" + stripped_model,
+            "ollama_chat/" + stripped_model,
+        }
+        model_cost_keys = {key.lower() for key in model_cost}
+        return any(name.lower() in model_cost_keys for name in potential_model_names)
+
+    @staticmethod
+    def _supports_function_calling(ollama_model_info: dict) -> bool:
+        _template: str = str(ollama_model_info.get("template", "") or "")
+        return "tools" in _template.lower()
+
+    @staticmethod
+    def _get_max_tokens(ollama_model_info: dict) -> Optional[int]:
+        _model_info: dict = ollama_model_info.get("model_info", {})
+
+        for key, value in _model_info.items():
+            if "context_length" in key:
+                return value
+        return None
+
+    def get_runtime_model_info(
+        self,
+        model: str,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> dict[str, Any]:
+        from litellm import module_level_client
+
+        model = self._strip_ollama_model_prefix(model)
+        passed_api_base = api_base
+        api_base = self.get_server_api_base(api_base)
+        api_key = (
+            self.get_api_key(api_key) if passed_api_base is None or api_key else None
+        )
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+        try:
+            response = module_level_client.post(
+                url=f"{api_base}/api/show",
+                json={"name": model},
+                headers=headers,
+            )
+            response.raise_for_status()
+        except Exception:
+            verbose_logger.debug("OllamaError: Could not get model info.")
+            return {
+                "key": model,
+                "litellm_provider": "ollama",
+                "mode": "chat",
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "max_tokens": None,
+                "max_input_tokens": None,
+                "max_output_tokens": None,
+            }
+
+        model_info = response.json()
+        max_tokens = self._get_max_tokens(model_info)
+
+        return {
+            "key": model,
+            "litellm_provider": "ollama",
+            "mode": "chat",
+            "supports_function_calling": self._supports_function_calling(model_info),
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "max_tokens": max_tokens,
+            "max_input_tokens": max_tokens,
+            "max_output_tokens": max_tokens,
+        }
+
+    def get_model_info(
+        self,
+        model: str,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        if self._is_static_ollama_model(model):
+            return None
+        return self.get_runtime_model_info(
+            model=model, api_base=api_base, api_key=api_key
+        )
 
     def validate_environment(
         self,
