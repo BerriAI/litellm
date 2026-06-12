@@ -212,26 +212,24 @@ def llm_passthrough_route(
     litellm_params_dict = get_litellm_params(**kwargs)
 
     if client is None:
-        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-            resolve_llm_passthrough_timeout,
+        from litellm.llms.custom_httpx.http_handler import (
+            _get_httpx_client,
+            get_async_httpx_client,
         )
+        from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
+        from litellm.types.llms.custom_http import httpxSpecialProvider
 
         resolved_timeout = resolve_llm_passthrough_timeout(
             kwargs=kwargs,
             litellm_params=litellm_params_dict,
         )
         if _is_async:
-            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-            from litellm.types.llms.custom_http import httpxSpecialProvider
-
             client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.PassThroughEndpoint,
                 params={"timeout": resolved_timeout},
             )
         else:
-            from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-            client = HTTPHandler(timeout=resolved_timeout)
+            client = _get_httpx_client(params={"timeout": resolved_timeout})
 
     # Add model_id to litellm_params if present in kwargs (for Bedrock Application Inference Profiles)
     if "model_id" in kwargs:

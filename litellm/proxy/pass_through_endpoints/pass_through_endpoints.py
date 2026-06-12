@@ -696,52 +696,11 @@ def _carry_guardrail_logging_info(
     metadata.setdefault("standard_logging_guardrail_information", list(entries))
 
 
-DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS = 600.0
-
-
-def resolve_pass_through_request_timeout(
-    endpoint_timeout: Optional[float] = None,
-) -> float:
-    """
-    Resolve the upstream httpx timeout for pass_through_request.
-
-    Precedence: per-endpoint timeout -> general_settings.pass_through_request_timeout -> 600s default.
-    """
-    if endpoint_timeout is not None:
-        return float(endpoint_timeout)
-
-    try:
-        from litellm.proxy.proxy_server import general_settings
-
-        global_timeout = general_settings.get("pass_through_request_timeout")
-        if global_timeout is not None:
-            return float(global_timeout)
-    except Exception:
-        pass
-
-    return DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS
-
-
-def resolve_llm_passthrough_timeout(
-    kwargs: Optional[dict] = None,
-    litellm_params: Optional[dict] = None,
-) -> float:
-    """
-    Resolve upstream httpx timeout for SDK native passthrough (e.g. Bedrock /converse).
-
-    Precedence: kwargs timeout/request_timeout -> litellm_params timeout/request_timeout
-    -> general_settings.pass_through_request_timeout -> 600s default.
-    """
-    kwargs = kwargs or {}
-    litellm_params = litellm_params or {}
-
-    for source in (kwargs, litellm_params):
-        for key in ("timeout", "request_timeout"):
-            val = source.get(key)
-            if val is not None:
-                return float(val)
-
-    return resolve_pass_through_request_timeout()
+from litellm.passthrough.timeout_utils import (
+    DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
+    resolve_llm_passthrough_timeout,
+    resolve_pass_through_request_timeout,
+)  # re-exported for backward compat; resolve_pass_through_request_timeout also used below
 
 
 async def pass_through_request(  # noqa: PLR0915
