@@ -649,6 +649,155 @@ def _cometapi_rows(lines: list) -> int:
     return failures
 
 
+def _cohere_rows(lines: list) -> int:
+    """wave-2b-beta: cohere/cohere_chat (the v2 chat wire, the DEFAULT
+    route at HEAD)."""
+    import copy
+
+    from . import test_differential_cohere_request as req
+    from . import test_differential_cohere_response as resp
+    from . import test_differential_cohere_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## cohere v2 (wave-2b-beta): requests (v1 get_optional_params +"
+        " CohereV2ChatConfig.transform_request vs v2 providers/cohere — both"
+        " provider names, cohere and cohere_chat)",
+        "",
+    ]
+    for provider, name in req._rows(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(provider, case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(provider, case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider}/{name}")
+    for provider, name in req._rows(req.V1_RAISES):
+        case, fragment = req.V1_RAISES[name]
+        result = req._v2(provider, case)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                req.run_v1_request_transform(provider, case)
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises UnsupportedParamsError)' if ok else 'DIVERGENT'}:"
+            f" {provider}/{name}"
+        )
+    for provider, name in req._rows(req.V1_SERVES_FALLBACKS):
+        case, fragment = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(provider, case)
+        ok = result.is_error() and fragment in result.error.summary
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 serves)' if ok else 'DIVERGENT'}: {provider}/{name}"
+        )
+    lines += [
+        "",
+        "## cohere v2: responses (v1 CohereV2ChatConfig.transform_response —"
+        " fresh-ModelResponse mutation, request model verbatim, finish always"
+        " stop — vs v2 cohere parser + the seam's openai construction arm)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = (
+            resp._norm(v2) == resp._norm(v1)
+            and v2["model"] == resp.MODEL
+            and v2["choices"][0]["finish_reason"] == "stop"
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(resp._LOUD):
+        raw, fragment = resp._LOUD[name]
+        result = resp._v2_parse(raw)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                resp._v1_model_response(copy.deepcopy(raw))
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 raises)' if ok else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## cohere v2: streams (v1 bare-JSON line replay through"
+        " CohereV2ModelResponseIterator + CustomStreamWrapper('cohere_chat')"
+        " generic arm vs v2 cohere parser + the generic chunk dialect; ids"
+        " normalized — v1 mints a fresh chatcmpl id per chunk)",
+        "",
+    ]
+    for name in sorted(stream.REAL_WIRE_STREAMS):
+        events, synth_finish = stream.REAL_WIRE_STREAMS[name]
+        v1 = stream._v1_chunks(events)
+        v2 = stream._v2_chunks(events)
+        ok = (
+            len(v1) == len(v2) + 1
+            and stream._norm(v2) == stream._norm(v1[:-1])
+            and v1[-1]["choices"][0]["finish_reason"] == synth_finish
+        )
+        failures += 0 if ok else 1
+        lines.append(
+            ("- SEAM CONTRACT: " if ok else "- DIVERGENT: ")
+            + f"real-wire {name} (v2 == v1 minus the wrapper's synthesized"
+            f" {synth_finish} tail — the generic streaming seam owns it)"
+        )
+    for name in sorted(stream.EVENT_KEYED_STREAMS):
+        events = stream.EVENT_KEYED_STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: event-keyed {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    divergence_event = {
+        "type": "content-delta",
+        "delta": {"message": {"content": {"text": 5}}},
+    }
+    v1_swallows = all(
+        choice["delta"]["content"] in (None, "")
+        for chunk in stream._v1_chunks([copy.deepcopy(divergence_event)])
+        for choice in chunk["choices"]
+    )
+    v2_loud = stream.parse_event(copy.deepcopy(divergence_event)).is_error()
+    pinned = v1_swallows and v2_loud
+    failures += 0 if pinned else 1
+    lines.append(
+        (
+            "- PINNED DIVERGENCE (fail-closed on a failure path): "
+            if pinned
+            else "- DIVERGENT: "
+        )
+        + "non-str content.text — v1 silently swallows the chunk, v2 errors"
+        " loudly naming the shape (re-decide if either half stops holding)"
+    )
+    return failures
+
+
 def _azure_rows(lines: list) -> int:
     import os
 
@@ -1120,7 +1269,7 @@ def main() -> None:
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-beta own modules)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -1137,6 +1286,7 @@ def main() -> None:
     failures += _compat_sdk_rows(lines)
     failures += _compat_httpx_rows(lines)
     failures += _cometapi_rows(lines)
+    failures += _cohere_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

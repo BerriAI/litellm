@@ -110,6 +110,12 @@ Provider = Literal[
     "deepinfra",
     "moonshot",
     "cometapi",
+    # wave-2b-beta: own-module providers (providers/<name>/). cohere and
+    # cohere_chat are ONE module (main.py's elif handles both names; the v2
+    # wire is the DEFAULT route at HEAD — the legacy "v1/" route predicate
+    # is a typed fallback inside the cohere guard, researcher-4 §11).
+    "cohere",
+    "cohere_chat",
 ]
 
 NeverPortProvider = Literal[

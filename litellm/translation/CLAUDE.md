@@ -325,6 +325,39 @@ translation/
 │   │                    #   two-sided-pinned + a named report row; v1's
 │   │                    #   cometapi handler RAISES instead — its policy
 │   │                    #   row mirrors that raise)
+│   ├── cohere/          # wave-2b-beta: the cohere V2 chat wire — the
+│   │   │                #   DEFAULT route at HEAD for BOTH provider names
+│   │   │                #   ("cohere" and "cohere_chat" resolve to
+│   │   │                #   CohereV2ChatConfig and one main.py elif); the
+│   │   │                #   legacy "v1/" route and the explicit "v2/"
+│   │   │                #   model prefix (an envelope strip) are route
+│   │   │                #   predicates in the guard, never Literal rows
+│   │   ├── guard.py     # v1-route/v2-prefix predicates + explicit
+│   │   │                #   stream:false + the shared openai guard (FULL
+│   │   │                #   message-name fallback: the transform is the
+│   │   │                #   inherited GPT one, names ride verbatim)
+│   │   ├── params.py    # supported-list truths as typed fallbacks
+│   │   │                #   (response_format/parallel_tool_calls/thinking/
+│   │   │                #   reasoning_effort RAISE in v1; user is silently
+│   │   │                #   dropped upstream — fallback, v1 serves)
+│   │   ├── serialize.py # openai_compat assemble_body + renames (top_p->p,
+│   │   │                #   stop->stop_sequences, mct->max_tokens),
+│   │   │                #   tool_choice DROPPED (supported list, no map
+│   │   │                #   arm), top_k emitted verbatim top-level (the
+│   │   │                #   generic passthrough — wire-proven, NOT the
+│   │   │                #   extra_body arm)
+│   │   ├── response.py  # cohere-native body -> normalized chat-completion
+│   │   │                #   body on ChatResponse.wire (content join,
+│   │   │                #   citations->annotations, tool-call message
+│   │   │                #   REPLACEMENT, usage.tokens — finish is ALWAYS
+│   │   │                #   "stop", the wire id/finish are never read)
+│   │   └── stream.py    # bare-JSON line seam (NO data:/[DONE] framing) ->
+│   │                    #   GenericStreamingChunk payloads folded by the
+│   │                    #   inbound "generic" chunk dialect; the v1 parser
+│   │                    #   reads message-end off the ``event`` key while
+│   │                    #   the real wire sends ``type`` — both regimes
+│   │                    #   pinned (wrapper end-of-stream synthesis = seam
+│   │                    #   scope)
 │   └── xai/             # Grok over openai_compat (httpx path: NO model
 │       │                #   prefix anywhere, transform_response is LIVE):
 │       ├── guard.py     # web_search_options (v1's Responses-bridge reroute
@@ -484,7 +517,9 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to sixty-five providers out — `anthropic`,
+OpenAI-chat-in to sixty-seven providers out (wave-2b-beta adds
+`cohere`/`cohere_chat`, one module — see the cohere paragraph below) —
+`anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
@@ -724,6 +759,43 @@ keep the bare wire model (the B1 re-prefix arm must never fire: xai
 presets no model); synthesize the final stream usage chunk from the
 passthrough `choices: []` tail (non-tail usage is withheld exactly like
 v1's wrapper, so the synthesis covers the tail-chunk shape only).
+Deliberate wave-2b-beta cohere fallback surfaces (providers/cohere — both
+provider names; each names the v1 path): the legacy ``v1/`` route (the v1
+chat wire is DON'T-PORT; route predicate in the guard) and the explicit
+``v2/`` model prefix (main.py strips it before transform — an envelope
+rewrite v2 does not reproduce); every supported-list raise
+(response_format, parallel_tool_calls, thinking, reasoning_effort —
+NOTE the get_optional_params drift: the cohere arm runs the LEGACY
+CohereChatConfig map, byte-equivalent to the v2 config's over the shared
+list, probed at HEAD); ``user`` (silently dropped upstream, v1 serves the
+drop); n/seed/frequency_penalty/presence_penalty (v1 SERVES them — renamed
+n->num_generations — but they are parse-level unknowns, so v1 keeps
+serving); explicit stream:false; message ``name`` (forwarded verbatim by
+the GPT transform, full-name guard arm). SERVED quirks pinned IDENTICAL:
+tool_choice silently dropped (in the supported list with no map arm),
+top_k emitted verbatim top-level (wire-proven — the generic passthrough,
+NOT the extra_body arm), mct->max_tokens, response finish_reason ALWAYS
+"stop" (v1 never reads the wire finish; the fresh-Choices default
+survives even on tool calls), the wire response id IGNORED (ambient
+chatcmpl id), tool-call responses REPLACING the message (text content
+lost, annotations kwarg explicit). Cohere stream/fork obligations (the
+forks are NOT wired; integrator scope): the response construction arm is
+"openai" with NO model preset and the request model riding the body; the
+chunk fold dialect is "generic" (the wrapper's GenericStreamingChunk arm)
+over providers/cohere.parse_line — a BARE-JSON line seam (v1's iterator
+json.loads each line; no data:/[DONE] framing); the generic streaming
+seam must mint a FRESH chunk id per chunk (v1's wrapper does), must NOT
+preset citations/system_fingerprint (to_model_response_stream's openai
+preset would diverge — the cohere stream gate's local adapter is the
+contract), and OWNS v1's end-of-stream synthesis: the real (type-keyed)
+cohere wire never matches the parser's event-keyed message-end arm, so
+v1 synthesizes the trailing finish chunk at StopIteration ("tool_calls"
+when tool deltas were seen, else "stop") and, under include_usage, a
+final usage chunk with token-counter ESTIMATES (the wire usage never
+reaches the wrapper on that regime). One PINNED DIVERGENCE (fail-closed
+on a failure path, the compat_httpx error-chunk precedent): non-str
+stream ``content.text`` — v1 silently swallows the chunk, v2 errors
+loudly (named report row).
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body

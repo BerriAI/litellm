@@ -53,6 +53,11 @@ from ..providers.bedrock_invoke import parse_response as bedrock_invoke_parse_re
 from ..providers.bedrock_invoke import (
     serialize_request as bedrock_invoke_serialize_request,
 )
+from ..providers.cohere import parse_response as cohere_parse_response
+from ..providers.cohere import serialize_request as cohere_serialize_request
+from ..providers.cohere import (
+    unsupported_request_shapes as cohere_unsupported_request_shapes,
+)
 from ..providers.compat_httpx import GUARDS as compat_httpx_guards
 from ..providers.compat_httpx import PARSERS as compat_httpx_parsers
 from ..providers.compat_httpx import SERIALIZERS as compat_httpx_serializers
@@ -114,6 +119,10 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         # compat_httpx family (wave-1b): the dedicated-elif shims; same
         # splice convention, second family variant (no seam model preset).
         **compat_httpx_serializers,
+        # wave-2b-beta own modules: cohere/cohere_chat are ONE module (the
+        # main.py elif serves both provider names; v2 is the default route).
+        "cohere": cohere_serialize_request,
+        "cohere_chat": cohere_serialize_request,
     }
 )
 
@@ -144,6 +153,12 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # lemonade request-model prefixes, which are parser scope (the
         # family's PARSERS table carries the per-provider truth).
         **compat_httpx_parsers,
+        # wave-2b-beta: the cohere parser builds the normalized body itself
+        # (cohere-native wire) and rides it on ChatResponse.wire; the seam's
+        # "openai" construction arm reproduces v1's fresh-ModelResponse
+        # mutation byte-for-byte (probed; finish is ALWAYS "stop" in v1).
+        "cohere": cohere_parse_response,
+        "cohere_chat": cohere_parse_response,
     }
 )
 
@@ -172,6 +187,13 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # policy for the rest — selected by the stream gates/future
         # streaming seam, not this outbound-body table)
         **{provider: _OPENAI_DIALECT for provider in compat_httpx_serializers},
+        # wave-2b-beta: the cohere parser rides the normalized
+        # chat-completion body on ChatResponse.wire (the openai outbound
+        # dialect); the chunk-fold dialect is "generic" (the wrapper's
+        # GenericStreamingChunk arm — selected by the stream gates/future
+        # streaming seam, not this outbound-body table).
+        "cohere": _OPENAI_DIALECT,
+        "cohere_chat": _OPENAI_DIALECT,
     }
 )
 
@@ -195,6 +217,11 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         # the shared guard for everyone else)
         **compat_sdk_guards,
         **compat_httpx_guards,
+        # wave-2b-beta: the cohere guard carries the v1-route / explicit-v2-
+        # prefix predicates plus the shared openai guard (full message-name
+        # fallback — cohere's transform is the inherited GPT one).
+        "cohere": cohere_unsupported_request_shapes,
+        "cohere_chat": cohere_unsupported_request_shapes,
     }
 )
 
