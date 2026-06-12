@@ -1,0 +1,18 @@
+{
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "what is this",
+          "type": "text"
+        },
+        {
+          "image_url": "https://e.test/a.png",
+          "type": "image_url"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709"
+}

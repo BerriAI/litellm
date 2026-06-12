@@ -98,7 +98,7 @@ def parse_response(raw: PlainJson, request: ChatRequest) -> _ParseResult:
             model=model if isinstance(model, str) else request.model,
             content=Block.of_seq(blocks),
             finish=semantic_finish,
-            usage=_semantic_usage(raw.get("usage")),
+            usage=semantic_usage(raw.get("usage")),
             synthesized_json_content=False,
             wire=Some(JsonBlob(value=body)),
         )
@@ -327,7 +327,7 @@ def _tool_use_block(call: PlainJson) -> ContentBlock | TranslationError:
     )
 
 
-def _semantic_usage(raw: PlainJson) -> ResponseUsage:
+def semantic_usage(raw: PlainJson) -> ResponseUsage:
     if not isinstance(raw, dict):
         return ResponseUsage(
             input_tokens=0,

@@ -1,0 +1,28 @@
+{
+  "body": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "a",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1718000004,
+    "id": "resp-f2",
+    "model": "grok-3-mini",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 12,
+      "completion_tokens_details": {
+        "reasoning_tokens": 7
+      },
+      "prompt_tokens": 10,
+      "total_tokens": 22
+    }
+  },
+  "model": "grok-3-mini"
+}

@@ -37,6 +37,13 @@ def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _Serialize
     )
     if reason is not None:
         return Error(TranslationError.of_unsupported(reason))
+    return assemble_body(request)
+
+
+def assemble_body(request: ChatRequest) -> _SerializeResult:
+    """The gate-free five-touch body assembly, for consumers (xai) whose v1
+    config inherits OpenAIGPTConfig's transform_request but replaces the
+    openai param gates with their own."""
     messages = serialize_messages(request)
     if isinstance(messages, TranslationError):
         return Error(messages)

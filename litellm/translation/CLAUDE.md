@@ -83,7 +83,9 @@ translation/
 │   │   │                #   normalizer; transform_response is dead on the SDK
 │   │   │                #   path); rides the outbound body on ChatResponse.wire
 │   │   └── stream.py    # SSE chunk -> wire_chunk events normalized to the
-│   │                    #   SDK-dump shape; the openai chunk dialect folds them
+│   │                    #   SDK-dump shape; the openai chunk dialect folds
+│   │                    #   them; make_parse_line is the ONE data:-line
+│   │                    #   decode every same-family provider composes
 │   ├── google_genai/    # ONE generateContent family for BOTH google routes:
 │   │   │                #   providers "vertex_ai" and "gemini" are the same
 │   │   │                #   serializer parameterized by the drift list
@@ -137,15 +139,43 @@ translation/
 │   │   │                #   normalizer; json_mode requests fail closed)
 │   │   └── stream.py    # openai parser + per-chunk model re-attach and the
 │   │                    #   SDK service_tier default; "azure" chunk dialect
-│   └── azure_ai/        # the Foundry override set + the Claude route:
-│       ├── guard.py     # azure guard + the text-only content-list flatten
-│       ├── serialize.py # azure_ai gates (grok, model-map tool_choice) then
-│       │                #   the openai_compat body
-│       ├── response.py  # openai parser + the azure_ai/{model} rename
-│       ├── stream.py    # re-export of the azure parser ("azure" dialect)
-│       └── claude.py    # anthropic serializer/parsers re-exported; NO
-│                        #   response-format model spoof (v1 maps with the
-│                        #   real model); billing-header blocks fail closed
+│   ├── azure_ai/        # the Foundry override set + the Claude route:
+│   │   ├── guard.py     # azure guard + the text-only content-list flatten
+│   │   ├── serialize.py # azure_ai gates (grok, model-map tool_choice) then
+│   │   │                #   the openai_compat body
+│   │   ├── response.py  # openai parser + the azure_ai/{model} rename
+│   │   ├── stream.py    # re-export of the azure parser ("azure" dialect)
+│   │   └── claude.py    # anthropic serializer/parsers re-exported; NO
+│   │                    #   response-format model spoof (v1 maps with the
+│   │                    #   real model); billing-header blocks fail closed
+│   └── xai/             # Grok over openai_compat (httpx path: NO model
+│       │                #   prefix anywhere, transform_response is LIVE):
+│       ├── guard.py     # web_search_options (v1's Responses-bridge reroute
+│       │                #   sits ABOVE the seam) + use_xai_oauth (PKCE I/O
+│       │                #   in validate_environment) + explicit stream:false
+│       │                #   + nested tool `strict` keys; then the openai
+│       │                #   guard with the user-only message-name fallback
+│       │                #   (v1 strips non-user names, so the IR drop IS v1)
+│       ├── params.py    # v1's RAISE-unless-drop_params supported-list truth
+│       │                #   as typed fallbacks (max_completion_tokens always;
+│       │                #   stop/frequency_penalty/reasoning_effort per model
+│       │                #   family; reasoning via deps over xai/{model})
+│       ├── serialize.py # xai gates -> openai_compat assemble_body ->
+│       │                #   function-level strict strip + user/
+│       │                #   reasoning_effort emission
+│       ├── response.py  # openai parser + the xai usage post-steps (reasoning
+│       │                #   fold, total normalize, num_sources_used ->
+│       │                #   web_search_requests); the finish_reason "" chain
+│       │                #   needs no arm: v1's own fix is dead, both sides
+│       │                #   map "" -> "stop" in the live Choices constructor
+│       └── stream.py    # SSE dict-path parser: per-chunk usage fold with
+│                        #   the folded usage attached ONLY to the choices:[]
+│                        #   tail (v1's wrapper strips it elsewhere), no
+│                        #   extras/system_fingerprint passthrough (the
+│                        #   chunk_parser rebuild drops them), reasoning
+│                        #   rename, refusal forwarded when it rides a
+│                        #   role/content delta, tool_call type "function"
+│                        #   default; the "xai" chunk dialect folds it
 └── engine/
     ├── pipeline.py # prepare (pure, drives the fallback decision) -> send;
     │               #   per-provider serializer/parser/dialect tables; the
@@ -270,17 +300,21 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to ten providers out — `anthropic`, `bedrock_converse`,
+OpenAI-chat-in to eleven providers out — `anthropic`, `bedrock_converse`,
 `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini route), `gemini`
 (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
-`azure_ai_anthropic` — request, response, and stream translation,
+`azure_ai_anthropic`, `xai` — request, response, and stream translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk
 corpora; openai: 17-shape request corpus + 17 typed-fallback rows +
 response and SDK-chunk stream replays; azure: 19-shape request corpus + the
 vendored characterization corpus second gate + content-filter
 response/stream rows with the azure dialect's per-chunk model re-read;
-azure_ai: the Foundry override-set and no-spoof Claude-route corpora),
+azure_ai: the Foundry override-set and no-spoof Claude-route corpora;
+xai: a 21-shape generated characterization corpus — provenance v1
+in-process at HEAD, zero recorded vendor fixtures exist — two-sided over
+`tests/test_litellm/translation/characterization_xai/` plus 7 rows pinning
+v1's UnsupportedParamsError raises and the line-seam stream replays),
 fail-closed everywhere else, with non-streaming flag-gated seams live in
 `completion()` for the anthropic, bedrock, and google routes (the
 openai/azure seam forks are integrator scope and NOT wired; the google
@@ -342,6 +376,33 @@ tool_choice, grok models, and `x-anthropic-billing-header` system blocks on
 the Claude route. None of the azure family fast-paths; the api-version
 URL/query, deployment SDK client, api-key-vs-AD-token auth and the
 `.../anthropic/v1/messages` rewrite are envelope (seam scope, unwired here).
+Deliberate xai fallback surfaces (each names the v1 path): every param v1's
+supported-list gate RAISES on (max_completion_tokens on every grok model —
+the rename arm is dead code; stop on grok-3-mini/grok-4/grok-code-fast;
+frequency_penalty on grok-4/grok-code-fast; reasoning_effort on
+non-reasoning models per the model map), `web_search_options` (v1 reroutes
+to the Responses-API bridge above the chat seam), `use_xai_oauth` (browser
+PKCE flow inside validate_environment), explicit `stream: false` (the httpx
+path keeps the key on the wire), user-message `name` (v1 forwards it; non-
+user names are STRIPPED by v1, so those serve through the IR drop), tool
+definitions with `strict` keys below the function level (v1 deletes every
+depth), the openai guard's raw shapes, and the parse-level unknowns v1
+passes through for grok (presence/frequency penalties on supported
+families, seed, logprobs, top_logprobs, logit_bias, n, stream_options,
+web_search_options). The xai completion() fork is NOT wired (integrator
+scope, like openai/azure); when it lands these are HARD OBLIGATIONS, not
+notes: the in-package `use_xai_oauth` guard arm is defense-in-depth ONLY
+and unreachable through `_raw_openai_body` (use_xai_oauth is a litellm
+param, never in non_default_params — the canary
+`test_use_xai_oauth_guard_reachability_facts` pins the classification), so
+the fork MUST either include the kwarg in the raw body it routes (making
+the guard live) or fall back on it BEFORE building deps, and MUST pin that
+with a completion()-level `use_xai_oauth=True` fallback test before the
+xai flag can turn on; route through `dispatch.route` with provider "xai";
+keep the bare wire model (the B1 re-prefix arm must never fire: xai
+presets no model); synthesize the final stream usage chunk from the
+passthrough `choices: []` tail (non-tail usage is withheld exactly like
+v1's wrapper, so the synthesis covers the tail-chunk shape only).
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body

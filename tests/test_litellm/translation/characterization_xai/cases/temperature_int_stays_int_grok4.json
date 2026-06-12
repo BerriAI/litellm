@@ -1,0 +1,10 @@
+{
+  "messages": [
+    {
+      "content": "hi",
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709",
+  "temperature": 1
+}

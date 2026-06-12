@@ -1,0 +1,12 @@
+{
+  "messages": [
+    {
+      "content": "json please",
+      "role": "user"
+    }
+  ],
+  "model": "grok-4-0709",
+  "response_format": {
+    "type": "json_object"
+  }
+}

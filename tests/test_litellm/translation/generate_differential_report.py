@@ -146,6 +146,121 @@ def _openai_rows(lines: list) -> int:
     return failures
 
 
+def _xai_rows(lines: list) -> int:
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import _xai_corpus as corpus
+    from . import test_differential_xai_request as req
+    from . import test_differential_xai_response as resp
+    from . import test_differential_xai_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## xai: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON; v1 = get_optional_params('xai') + transform_request)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        snapshot = (corpus.SNAPSHOTS_DIR / "requests" / f"{name}.json").read_text()
+        v1_same = corpus.canonical_json(corpus.run_v1_request_transform(case)) == (
+            snapshot
+        )
+        result = req._v2(case)
+        v2_same = result.is_ok() and req._norm(result.ok) == req._norm(
+            corpus.load_json(corpus.SNAPSHOTS_DIR / "requests" / f"{name}.json")
+        )
+        same = v1_same and v2_same
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, reason = req.V1_RAISES[name]
+        result = req._v2(case)
+        try:
+            corpus.run_v1_request_transform(case)
+            raised = False
+        except UnsupportedParamsError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req.EXPECTED_FALLBACKS):
+        case, reason = req.EXPECTED_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## xai: responses (snapshot == v1 XAIChatConfig.transform_response == v2; the LIVE httpx-path normalizer incl. the usage post-steps)",
+        "",
+    ]
+    responses = corpus.corpus("responses")
+    for name in sorted(responses):
+        row = responses[name]
+        snapshot = (corpus.SNAPSHOTS_DIR / "responses" / f"{name}.json").read_text()
+        same = (
+            corpus.canonical_json(
+                corpus.run_v1_response_transform(row["body"], row["model"])
+            )
+            == snapshot
+            and corpus.canonical_json(
+                resp._v2_model_response(row["body"], row["model"])
+            )
+            == snapshot
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## xai: streams (snapshot == v1 line-seam replay through XAIChatCompletionStreamingHandler + CustomStreamWrapper('xai') == v2 xai dialect)",
+        "",
+    ]
+    streams = corpus.corpus("streams")
+    for name in sorted(streams):
+        row = streams[name]
+        snapshot_text = (corpus.SNAPSHOTS_DIR / "streams" / f"{name}.json").read_text()
+        v1_same = (
+            corpus.canonical_json(
+                corpus.replay_xai_sse_lines(row["events"], row["stream_options"])
+            )
+            == snapshot_text
+        )
+        if name == stream._TAIL_ROW:
+            snapshot = corpus.load_json(
+                corpus.SNAPSHOTS_DIR / "streams" / f"{name}.json"
+            )
+            v2 = stream._v2_chunks(row["events"])
+            tail_ok = (
+                v1_same
+                and len(v2) == len(snapshot)
+                and stream._norm(v2[:-1]) == stream._norm(snapshot[: len(v2) - 1])
+                and v2[-1]["choices"] == []
+                and all(
+                    snapshot[-1]["usage"][k] == v2[-1]["usage"][k]
+                    for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+                )
+            )
+            failures += 0 if tail_ok else 1
+            lines.append(
+                ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+                + f"{name} (v1's chunk_parser injects a dummy choice so the"
+                " wrapper swallows the tail and synthesizes the final usage"
+                " chunk; v2 passes the wire choices=[] chunk through with the"
+                " FOLDED usage for the streaming seam to synthesize from)"
+            )
+            continue
+        v2_same = stream._norm(stream._v2_chunks(row["events"])) == stream._norm(
+            corpus.load_json(corpus.SNAPSHOTS_DIR / "streams" / f"{name}.json")
+        )
+        same = v1_same and v2_same
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    return failures
+
+
 def _azure_rows(lines: list) -> int:
     import os
 
@@ -617,7 +732,7 @@ def main() -> None:
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -630,6 +745,7 @@ def main() -> None:
     ]
     failures = _anthropic_rows(lines)
     failures += _openai_rows(lines)
+    failures += _xai_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

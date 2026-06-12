@@ -1,0 +1,36 @@
+{
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "message": {
+        "content": null,
+        "function_call": null,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"city\":\"Rome\"}",
+              "name": "get_weather"
+            },
+            "id": "call_2",
+            "type": "function"
+          }
+        ]
+      },
+      "provider_specific_fields": {}
+    }
+  ],
+  "created": 1718000002,
+  "id": "resp-r2",
+  "model": "grok-4-0709",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 6,
+    "completion_tokens_details": null,
+    "prompt_tokens": 12,
+    "prompt_tokens_details": null,
+    "total_tokens": 18
+  }
+}

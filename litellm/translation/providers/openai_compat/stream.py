@@ -16,6 +16,7 @@ values.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from expression import Error, Ok, Result
 from expression.collections import Block
@@ -24,6 +25,8 @@ from ...errors import BoundaryError, TranslationError
 from ...ir import JsonBlob, PlainJson, StreamEvent
 
 _EventResult = Result[StreamEvent | None, TranslationError]
+_ParseEvent = Callable[[PlainJson], _EventResult]
+_ParseLine = Callable[[str], _EventResult]
 
 _DELTA_KEYS = ("content", "function_call", "refusal", "role", "tool_calls")
 
@@ -44,18 +47,27 @@ _ENVELOPE_KEYS = frozenset(
 )
 
 
-def parse_line(line: str) -> _EventResult:
-    stripped = line.strip()
-    if not stripped.startswith("data:"):
-        return Ok(None)
-    payload = stripped[len("data:") :].strip()
-    if payload == "[DONE]":
-        return Ok(StreamEvent.of_stop())
-    try:
-        event: PlainJson = json.loads(payload)
-    except ValueError:
-        return Error(_boundary(f"stream payload is not JSON: {payload[:120]!r}"))
-    return parse_event(event)
+def make_parse_line(parse_event: _ParseEvent) -> _ParseLine:
+    """The ONE SSE ``data:``-line decode over any chunk parser (a single-line
+    subset; the v2 HttpPort streaming seam owns real SSE framing when it
+    lands). Same-family providers compose their parser through this factory
+    instead of pasting the decode (critic-openai N3 / critic-azure N1 /
+    critic-grok M3)."""
+
+    def parse_line(line: str) -> _EventResult:
+        stripped = line.strip()
+        if not stripped.startswith("data:"):
+            return Ok(None)
+        payload = stripped[len("data:") :].strip()
+        if payload == "[DONE]":
+            return Ok(StreamEvent.of_stop())
+        try:
+            event: PlainJson = json.loads(payload)
+        except ValueError:
+            return Error(_boundary(f"stream payload is not JSON: {payload[:120]!r}"))
+        return parse_event(event)
+
+    return parse_line
 
 
 def parse_event(event: PlainJson) -> _EventResult:
@@ -218,3 +230,6 @@ def _delta_bears_content(delta: dict[str, PlainJson]) -> bool:
     return (isinstance(content, str) and len(content) > 0) or delta.get(
         "tool_calls"
     ) is not None
+
+
+parse_line = make_parse_line(parse_event)

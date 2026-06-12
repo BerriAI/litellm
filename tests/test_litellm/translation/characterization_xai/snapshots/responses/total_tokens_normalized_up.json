@@ -1,0 +1,27 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "a",
+        "function_call": null,
+        "role": "assistant",
+        "tool_calls": null
+      },
+      "provider_specific_fields": {}
+    }
+  ],
+  "created": 1718000006,
+  "id": "resp-n1",
+  "model": "grok-4-0709",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 9,
+    "completion_tokens_details": null,
+    "prompt_tokens": 30,
+    "prompt_tokens_details": null,
+    "total_tokens": 39
+  }
+}

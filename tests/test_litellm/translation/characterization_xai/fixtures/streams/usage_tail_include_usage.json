@@ -1,0 +1,79 @@
+{
+  "events": [
+    {
+      "choices": [
+        {
+          "delta": {
+            "content": "",
+            "role": "assistant"
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null
+        }
+      ],
+      "created": 1718000000,
+      "id": "cmpl-xs1",
+      "model": "grok-3-mini",
+      "object": "chat.completion.chunk",
+      "system_fingerprint": "fp_xai_s",
+      "usage": null
+    },
+    {
+      "choices": [
+        {
+          "delta": {
+            "content": "Hello"
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null
+        }
+      ],
+      "created": 1718000000,
+      "id": "cmpl-xs1",
+      "model": "grok-3-mini",
+      "object": "chat.completion.chunk",
+      "system_fingerprint": "fp_xai_s",
+      "usage": null
+    },
+    {
+      "choices": [
+        {
+          "delta": {},
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": null
+        }
+      ],
+      "created": 1718000000,
+      "id": "cmpl-xs1",
+      "model": "grok-3-mini",
+      "object": "chat.completion.chunk",
+      "system_fingerprint": "fp_xai_s",
+      "usage": null
+    },
+    {
+      "choices": [],
+      "created": 1718000000,
+      "id": "cmpl-xs1",
+      "model": "grok-3-mini",
+      "object": "chat.completion.chunk",
+      "system_fingerprint": "fp_xai_s",
+      "usage": {
+        "completion_tokens": 2,
+        "completion_tokens_details": {
+          "reasoning_tokens": 7
+        },
+        "prompt_tokens": 171,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 180
+      }
+    }
+  ],
+  "stream_options": {
+    "include_usage": true
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": null,
+        "function_call": null,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"city\":\"Paris\"}",
+              "name": "get_weather"
+            },
+            "id": "call_1",
+            "type": "function"
+          }
+        ]
+      },
+      "provider_specific_fields": {
+        "native_finish_reason": ""
+      }
+    }
+  ],
+  "created": 1718000001,
+  "id": "resp-r1",
+  "model": "grok-4-0709",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 6,
+    "completion_tokens_details": null,
+    "prompt_tokens": 12,
+    "prompt_tokens_details": null,
+    "total_tokens": 18
+  }
+}

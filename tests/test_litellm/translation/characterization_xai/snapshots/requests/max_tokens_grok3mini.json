@@ -1,0 +1,10 @@
+{
+  "max_tokens": 64,
+  "messages": [
+    {
+      "content": "hi",
+      "role": "user"
+    }
+  ],
+  "model": "grok-3-mini"
+}

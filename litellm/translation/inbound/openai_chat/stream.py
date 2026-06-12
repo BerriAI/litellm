@@ -31,7 +31,10 @@ chunk that carries one, choice-level ``content_filter_results`` survives on
 content chunks (the ``StreamingChoices(**choice_json)`` rebuild) but not on
 the finish flush (default-choice ``Delta(content=None)``), and the
 empty-choices ``prompt_filter_results`` chunk is swallowed exactly like
-v1's empty-delta handling.
+v1's empty-delta handling. The ``xai`` dialect is the openai fold with two
+deltas: ``reasoning_content``-only deltas count as non-empty (v1 emits Grok
+reasoning chunks) and the model is never re-read from chunks (the httpx
+wrapper stamps the request model).
 """
 
 from __future__ import annotations
@@ -47,12 +50,12 @@ from ...ir import Body, CompositeChunk, PlainJson, StreamEvent
 
 BlockDialect = Literal["anthropic", "bedrock_converse"]
 """Dialects whose provider parsers emit per-block delta events
-(text/thinking/signature/tool deltas). The wire dialects (openai, azure)
-fold ``wire_chunk`` events and gemini folds composite ``chunk`` events;
+(text/thinking/signature/tool deltas). The wire dialects (openai, azure,
+xai) fold ``wire_chunk`` events and gemini folds composite ``chunk`` events;
 their parsers can never produce a per-block delta, and the step surfaces a
 loud error (never a fabricated placeholder body) if one ever arrives."""
 
-ChunkDialect = Literal[BlockDialect, "openai", "azure", "gemini"]
+ChunkDialect = Literal[BlockDialect, "openai", "azure", "gemini", "xai"]
 
 
 @dataclass(frozen=True)
@@ -131,7 +134,7 @@ def _as_block_dialect(
     match dialect:
         case "anthropic" | "bedrock_converse":
             return dialect
-        case "openai" | "azure" | "gemini":
+        case "openai" | "azure" | "gemini" | "xai":
             # wire/composite dialects fold whole chunks; a per-block delta
             # here is a wiring bug and must be loud, never a fabricated
             # anthropic-shaped placeholder (critic-google M5 / critic-azure M3).
@@ -197,7 +200,7 @@ _OPENAI_WIRE_KEYS = frozenset({"id", "model", "system_fingerprint", "choices", "
 
 
 def _step_openai(state: StreamState, chunk: PlainJson) -> _StepResult:
-    if state.dialect not in ("openai", "azure"):
+    if state.dialect not in ("openai", "azure", "xai"):
         return _dialect_mismatch(state.dialect, "wire_chunk")
     if not isinstance(chunk, dict):
         return state, ()  # the parser only emits dict wire chunks
@@ -307,6 +310,12 @@ def _openai_chunk_non_empty(state: StreamState, delta: dict[str, PlainJson]) -> 
     tool_calls = delta.get("tool_calls")
     if isinstance(tool_calls, list) and len(tool_calls) > 0:
         return True
+    if state.dialect == "xai":
+        # Grok reasoning deltas carry only reasoning_content; v1's wrapper
+        # emits them (is_delta_empty consults reasoning_content too).
+        reasoning = delta.get("reasoning_content")
+        if isinstance(reasoning, str) and len(reasoning) > 0:
+            return True
     return not state.sent_role and delta.get("role") is not None
 
 

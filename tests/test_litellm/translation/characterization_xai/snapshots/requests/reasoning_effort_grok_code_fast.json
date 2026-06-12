@@ -1,0 +1,10 @@
+{
+  "messages": [
+    {
+      "content": "code",
+      "role": "user"
+    }
+  ],
+  "model": "grok-code-fast-1",
+  "reasoning_effort": "low"
+}

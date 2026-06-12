@@ -1,0 +1,10 @@
+{
+  "messages": [
+    {
+      "content": "think",
+      "role": "user"
+    }
+  ],
+  "model": "grok-3-mini",
+  "reasoning_effort": "high"
+}

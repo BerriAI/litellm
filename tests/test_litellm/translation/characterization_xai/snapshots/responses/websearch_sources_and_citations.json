@@ -1,0 +1,34 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "cited answer",
+        "function_call": null,
+        "role": "assistant",
+        "tool_calls": null
+      },
+      "provider_specific_fields": {}
+    }
+  ],
+  "citations": [
+    "https://a.test",
+    "https://b.test"
+  ],
+  "created": 1718000005,
+  "id": "resp-w1",
+  "model": "grok-4-0709",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 9,
+    "completion_tokens_details": null,
+    "num_sources_used": 3,
+    "prompt_tokens": 30,
+    "prompt_tokens_details": {
+      "web_search_requests": 3
+    },
+    "total_tokens": 39
+  }
+}
