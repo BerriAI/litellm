@@ -1197,6 +1197,50 @@ class TestNativeWebSocketGuardrailMasking:
         assert obj["response"]["input"] == "<EMAIL_ADDRESS_1>"
 
     @pytest.mark.asyncio
+    async def test_mask_response_create_flat_instructions(self):
+        guardrail = _FakeWSGuardrail()
+        handler = _make_streaming(request_data={}, guardrail_callbacks=[guardrail])
+
+        masked = await handler._mask_response_create(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "input": "hi",
+                    "instructions": "reply to alice@example.com",
+                }
+            )
+        )
+        obj = json.loads(masked)
+
+        assert obj["instructions"] == "reply to <EMAIL_ADDRESS_1>"
+        assert handler.request_data["metadata"]["pii_tokens"] == {
+            "<EMAIL_ADDRESS_1>": "alice@example.com"
+        }
+
+    @pytest.mark.asyncio
+    async def test_mask_response_create_nested_instructions(self):
+        guardrail = _FakeWSGuardrail()
+        handler = _make_streaming(request_data={}, guardrail_callbacks=[guardrail])
+
+        masked = await handler._mask_response_create(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "response": {
+                        "input": "hi",
+                        "instructions": "email alice@example.com",
+                    },
+                }
+            )
+        )
+        obj = json.loads(masked)
+
+        assert obj["response"]["instructions"] == "email <EMAIL_ADDRESS_1>"
+        assert handler.request_data["metadata"]["pii_tokens"] == {
+            "<EMAIL_ADDRESS_1>": "alice@example.com"
+        }
+
+    @pytest.mark.asyncio
     async def test_mask_response_create_non_create_unchanged(self):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
@@ -1406,6 +1450,33 @@ class TestNativeWebSocketGuardrailMasking:
         )
 
     @pytest.mark.asyncio
+    async def test_mask_response_completed_masks_function_call_arguments(self):
+        guardrail = _FakeWSGuardrail()
+        handler = _make_streaming(
+            request_data={}, output_guardrail_callbacks=[guardrail]
+        )
+
+        event = json.dumps(
+            {
+                "type": "response.completed",
+                "response": {
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "name": "send_email",
+                            "arguments": '{"to": "alice@example.com"}',
+                        }
+                    ]
+                },
+            }
+        )
+        masked = json.loads(await handler._mask_response_completed(event))
+        assert (
+            masked["response"]["output"][0]["arguments"]
+            == '{"to": "<EMAIL_ADDRESS_1>"}'
+        )
+
+    @pytest.mark.asyncio
     async def test_mask_response_completed_delta_unchanged(self):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
@@ -1555,6 +1626,66 @@ class TestNativeWebSocketGuardrailMasking:
             forwarded["response"]["output"][0]["content"][0]["text"]
             == "contact <EMAIL_ADDRESS_1>"
         )
+
+    @pytest.mark.asyncio
+    async def test_backend_to_client_suppresses_function_call_arguments_done(self):
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        guardrail = _FakeWSGuardrail()
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps(
+                    {
+                        "type": "response.function_call_arguments.done",
+                        "arguments": '{"to": "alice@example.com"}',
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "output": [
+                                {
+                                    "type": "function_call",
+                                    "name": "send_email",
+                                    "arguments": '{"to": "alice@example.com"}',
+                                }
+                            ]
+                        },
+                    }
+                ),
+                Exception("stop"),
+            ]
+        )
+        logging_obj = MagicMock()
+        logging_obj.async_success_handler = AsyncMock()
+
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={},
+            output_guardrail_callbacks=[guardrail],
+        )
+
+        await handler.backend_to_client()
+
+        # The unmasked function-call arguments must never reach the client; only
+        # the masked response.completed is forwarded.
+        websocket.send_text.assert_awaited_once()
+        sent_payload = websocket.send_text.await_args[0][0]
+        forwarded = json.loads(sent_payload)
+        assert forwarded["type"] == "response.completed"
+        assert (
+            forwarded["response"]["output"][0]["arguments"]
+            == '{"to": "<EMAIL_ADDRESS_1>"}'
+        )
+        assert "alice@example.com" not in sent_payload
 
 
 class TestWebSocketChunkTypes:

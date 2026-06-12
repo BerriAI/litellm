@@ -1429,8 +1429,8 @@ class ResponsesWebSocketStreaming:
 
         - Overwrites any ``model`` field with the connection-authorized model
           to prevent deployment-substitution attacks (always applied).
-        - Walks the ``input`` field, calls ``check_pii`` on every text block,
-          and stores the resulting ``pii_tokens`` map in
+        - Walks the ``input`` and ``instructions`` fields, calls ``check_pii``
+          on every text block, and stores the resulting ``pii_tokens`` map in
           ``self.request_data["metadata"]`` for later unmasking.
 
         Non-``response.create`` messages are returned unchanged.
@@ -1457,35 +1457,39 @@ class ResponsesWebSocketStreaming:
             presidio_config = cb.get_presidio_settings_from_request_data(
                 self.request_data
             )
-            # response.create supports two shapes:
-            #   flat:   {"type": "response.create", "input": [...], ...}
-            #   nested: {"type": "response.create", "response": {"input": [...], ...}}
-            # Mask both so PII is never forwarded unmasked regardless of shape.
+            # response.create carries client text in two shapes:
+            #   flat:   {"type": "response.create", "input": ..., "instructions": ...}
+            #   nested: {"type": "response.create", "response": {"input": ..., "instructions": ...}}
+            # Mask "input" and "instructions" in both shapes so PII is never
+            # forwarded unmasked regardless of where the client places it.
             nested_response = (
                 msg_obj.get("response")
                 if isinstance(msg_obj.get("response"), dict)
                 else None
             )
-            input_containers: list[tuple[dict, str]] = []
-            if "input" in msg_obj:
-                input_containers.append((msg_obj, "input"))
-            if nested_response is not None and "input" in nested_response:
-                input_containers.append((nested_response, "input"))
+            text_containers: list[tuple[dict, str]] = []
+            for container in (msg_obj, nested_response):
+                if container is None:
+                    continue
+                if "input" in container:
+                    text_containers.append((container, "input"))
+                if isinstance(container.get("instructions"), str):
+                    text_containers.append((container, "instructions"))
 
-            for container, key in input_containers:
-                input_data = container[key]
+            for container, key in text_containers:
+                field_value = container[key]
 
-                if isinstance(input_data, str):
+                if isinstance(field_value, str):
                     container[key] = await cb.check_pii(
-                        text=input_data,
+                        text=field_value,
                         output_parse_pii=True,
                         presidio_config=presidio_config,
                         request_data=self.request_data,
                     )
                     modified = True
 
-                elif isinstance(input_data, list):
-                    for item in input_data:
+                elif isinstance(field_value, list):
+                    for item in field_value:
                         if not isinstance(item, dict):
                             continue
                         content = item.get("content", [])
@@ -1524,14 +1528,16 @@ class ResponsesWebSocketStreaming:
         }
     )
 
-    # Terminal events that carry the full output text already delivered by
-    # ``response.completed``. Suppressed when output masking is active so the
-    # unmasked copy never reaches the client before the masked completed event.
+    # Terminal events that carry the full output text or tool-call arguments
+    # already delivered by ``response.completed``. Suppressed when output masking
+    # is active so the unmasked copy never reaches the client before the masked
+    # completed event.
     _OUTPUT_DONE_EVENT_TYPES = frozenset(
         {
             "response.output_text.done",
             "response.content_part.done",
             "response.output_item.done",
+            "response.function_call_arguments.done",
         }
     )
 
@@ -1603,10 +1609,11 @@ class ResponsesWebSocketStreaming:
         Apply Presidio output masking (apply_to_output=True) to the
         ``response.completed`` event before it is forwarded to the client.
 
-        Walks ``response.output[*].content[*].text`` and masks every text block.
-        Delta events are suppressed upstream in ``backend_to_client`` when output
-        masking is active, so only the authoritative full-output view reaches
-        this method; events of other types are returned unchanged.
+        Walks ``response.output[*].content[*].text`` and masks every text block,
+        as well as ``response.output[*].arguments`` on function-call items. Delta
+        and ``*.done`` events are suppressed upstream in ``backend_to_client`` when
+        output masking is active, so only the authoritative full-output view
+        reaches this method; events of other types are returned unchanged.
         """
         if not self.output_guardrail_callbacks:
             return response_str
@@ -1630,6 +1637,17 @@ class ResponsesWebSocketStreaming:
             for output_item in response_obj.get("output") or []:
                 if not isinstance(output_item, dict):
                     continue
+                arguments = output_item.get("arguments")
+                if isinstance(arguments, str):
+                    masked_args = await cb.check_pii(
+                        text=arguments,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=self.request_data,
+                    )
+                    if masked_args != arguments:
+                        output_item["arguments"] = masked_args
+                        modified = True
                 content = output_item.get("content") or []
                 if not isinstance(content, list):
                     continue
