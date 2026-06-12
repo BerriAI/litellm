@@ -358,6 +358,23 @@ translation/
 │   │                    #   the real wire sends ``type`` — both regimes
 │   │                    #   pinned (wrapper end-of-stream synthesis = seam
 │   │                    #   scope)
+│   ├── groq/            # wave-2b-beta: groq over openai_compat (httpx
+│   │   │                #   path, bare wire model)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   ├── params.py    # thinking raise, user drop, reasoning_effort
+│   │   │                #   capability gate (groq/{m}), the json_schema
+│   │   │                #   THREE-WAY fork (native serve / workaround
+│   │   │                #   fallback / BadRequestError fallback)
+│   │   ├── serialize.py # assemble_body + mct rename + reasoning_effort +
+│   │   │                #   top_k (extra_body->wire merge) + assistant
+│   │   │                #   None-strip
+│   │   ├── response.py  # openai parse + verbatim wire + the service_tier
+│   │   │                #   clamp (a MISSING service_tier key fails closed
+│   │   │                #   — v1's getattr crashes); F2 arm; construction
+│   │   │                #   arm "openai_like"
+│   │   └── stream.py    # httpx_chunk factory, reasoning="rename" (groq's
+│   │                    #   pop == rename, verified — no new arm); "xai"
+│   │                    #   chunk dialect
 │   ├── mistral/         # wave-2b-beta: mistral over openai_compat (httpx
 │   │   │                #   path, dedicated elif, bare wire model)
 │   │   ├── guard.py     # own name matrix (tool-role names kept by v1;
@@ -583,9 +600,9 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to seventy providers out (wave-2b-beta adds
-`cohere`/`cohere_chat` (one module), `mistral`, `watsonx`, and
-`sagemaker_chat` — see their paragraphs below) —
+OpenAI-chat-in to seventy-one providers out (wave-2b-beta adds
+`cohere`/`cohere_chat` (one module), `mistral`, `watsonx`,
+`sagemaker_chat`, and `groq` — see their paragraphs below) —
 `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
@@ -958,6 +975,42 @@ swallow). sagemaker_nova shares the main.py branch but carries its own
 config overrides and stays a typed v1 fallback (canary in the request
 gate). SigV4 + the /invocations[-response-stream] URL split are envelope;
 the fork must sign AFTER wire_body finalizes (the bedrock rule).
+Deliberate wave-2b-beta groq fallback surfaces (providers/groq; each names
+the v1 path): ``thinking`` (raises), ``reasoning_effort`` on models
+without the ``groq/{m}`` supports_reasoning flag (raises), ``user``
+(silent drop), ``response_format`` with a json_schema on NON-native models
+(v1 serves its json_tool_call WORKAROUND — tools + forced tool_choice +
+json_mode + fake_stream, the cross-plane rewrite v2 deliberately does not
+reproduce; researcher-4's prescribed shape), the same plus user tools (v1
+raises ``litellm.BadRequestError`` — the wave's one
+non-UnsupportedParamsError request raise, exact type pinned), explicit
+stream:false, message ``name``, and the parse-level unknowns
+(seed/n/penalties/logit_bias/logprobs/top_logprobs/service_tier/
+web_search_options/max_retries — v1 serves or silently drops each).
+SERVED pins: mct->max_tokens (groq's map forwards POSITIONALLY so the
+OpenAILike rename runs — its own replace_...=False default is never
+threaded), top_k via extra_body -> hh's wire merge (wire-equivalent
+top-level emission), response_format json_object verbatim (fake_stream is
+a routing key hh pops), json_schema VERBATIM on native-schema models
+(llama-4 / gpt-oss / kimi-k2-0905 map rows; capability via deps over
+groq/{m}), assistant-message None-strip (content: None never reaches the
+wire), reasoning_effort verbatim on flagged models, responses
+ModelResponse(**json)-direct (BARE wire model — the prefix arm is dead,
+custom_llm_provider=None) with x_groq extras surviving and the
+service_tier CLAMP ({auto,default,flex}, null/unknown -> "auto") — a
+response body MISSING the service_tier key fails closed (v1's clamp reads
+getattr with no default and CRASHES with AttributeError, probed), and
+streams through the httpx_chunk factory reasoning="rename" (groq's pop ==
+the existing mode, verified — no new ReasoningMode arm) with truthy error
+chunks loud on both sides (v1 raises -> MidStreamFallbackError; error:
+null serves, the value-check pin). Groq fork obligations (NOT wired;
+integrator scope): construction arm "openai_like", no model preset,
+streams fold with the "xai" dialect over providers/groq.parse_line, and
+the main.py groq elif merges ``GroqChatConfig.get_config()`` CLASS-ATTR
+state into optional_params (main.py:2338-2344) — ambient module state v2
+cannot see, so the fork MUST fall back to v1 when that config is
+non-empty (the ambient-globals rule: vertex_ai_safety_settings/
+custom_prompt_dict precedent).
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body

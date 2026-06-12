@@ -1173,6 +1173,160 @@ def _sagemaker_chat_rows(lines: list) -> int:
     return failures
 
 
+def _groq_rows(lines: list) -> int:
+    """wave-2b-beta: groq (httpx path; bare wire model + service_tier
+    clamp; the json_schema fork rows)."""
+    import pytest
+
+    from . import test_differential_groq_request as req
+    from . import test_differential_groq_response as resp
+    from . import test_differential_groq_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## groq (wave-2b-beta): requests (v1 get_optional_params +"
+        " GroqChatConfig.transform_request + hh's extra_body merge vs v2"
+        " providers/groq; the json_schema three-way fork)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, fragment = req.V1_RAISES[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                req.run_v1_request_transform(case)
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises UnsupportedParamsError)' if ok else 'DIVERGENT'}:"
+            f" {name}"
+        )
+    schema_tools_case = {
+        "model": req.MODEL,
+        "messages": req._U,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "s",
+                "schema": {"type": "object", "properties": {}},
+                "strict": True,
+            },
+        },
+        "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}],
+    }
+    bad_request = req._v2(schema_tools_case)
+    ok = bad_request.is_error() and "BadRequestError" in bad_request.error.summary
+    if ok:
+        try:
+            req.run_v1_request_transform(schema_tools_case)
+            ok = False
+        except Exception:
+            pass
+    failures += 0 if ok else 1
+    lines.append(
+        f"- {'FALLBACK (v1 raises BadRequestError)' if ok else 'DIVERGENT'}:"
+        " response_format json_schema + tools on a non-native model"
+    )
+    for name in sorted(req.V1_SERVES_FALLBACKS):
+        case, fragment = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 serves)' if ok else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## groq: responses (v1 OpenAILike direct construction + the"
+        " service_tier clamp vs v2 groq parser + the seam's openai_like"
+        " arm; bare wire model)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = resp._norm(v2) == resp._norm(v1) and v2["model"] == resp.MODEL
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    missing_tier = {
+        **{k: v for k, v in resp._BASE.items() if k != "service_tier"},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "x"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    tier_result = resp._v2_parse(missing_tier)
+    ok = tier_result.is_error() and "service_tier" in tier_result.error.summary
+    if ok:
+        with pytest.raises(AttributeError):
+            resp._v1_model_response(missing_tier)
+    failures += 0 if ok else 1
+    lines.append(
+        f"- {'FALLBACK (v1 raises AttributeError)' if ok else 'DIVERGENT'}:"
+        " response without service_tier (v1's clamp post-step crashes)"
+    )
+    f2 = resp._v2_parse({**resp._RESPONSES["text_tier_clamped_to_auto"], "model": 7})
+    ok = f2.is_error() and "non-string wire model" in f2.error.summary
+    failures += 0 if ok else 1
+    lines.append(
+        f"- {'FALLBACK (v1 raises ValidationError)' if ok else 'DIVERGENT'}:"
+        " non-string wire model"
+    )
+    lines += [
+        "",
+        "## groq: streams (v1 SSE line replay through"
+        " GroqChatCompletionStreamingHandler + CustomStreamWrapper('groq')"
+        " vs v2 httpx_chunk factory (rename) + the xai chunk dialect)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    err = {"error": {"message": "boom", "code": 500}}
+    loud = stream.parse_event(dict(err)).is_error()
+    failures += 0 if loud else 1
+    lines.append(
+        f"- {'FALLBACK (v1 raises MidStreamFallbackError)' if loud else 'DIVERGENT'}:"
+        " error chunk (loud on both sides — the truthy-value check)"
+    )
+    return failures
+
+
 def _azure_rows(lines: list) -> int:
     import os
 
@@ -1665,6 +1819,7 @@ def main() -> None:
     failures += _mistral_rows(lines)
     failures += _watsonx_rows(lines)
     failures += _sagemaker_chat_rows(lines)
+    failures += _groq_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

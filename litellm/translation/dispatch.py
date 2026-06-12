@@ -132,6 +132,10 @@ Provider = Literal[
     # sagemaker_nova shares the main.py branch but carries its OWN config
     # overrides and is deliberately ABSENT (stays a typed v1 fallback).
     "sagemaker_chat",
+    # wave-2b-beta: groq (httpx path; bare wire model + the service_tier
+    # clamp on responses; the json_schema workaround/raise arms are typed
+    # fallbacks, native-schema models serve verbatim).
+    "groq",
 ]
 
 NeverPortProvider = Literal[

@@ -73,6 +73,11 @@ from ..providers.google_genai import (
 from ..providers.google_genai import (
     unsupported_request_shapes as google_unsupported_request_shapes,
 )
+from ..providers.groq import parse_response as groq_parse_response
+from ..providers.groq import serialize_request as groq_serialize_request
+from ..providers.groq import (
+    unsupported_request_shapes as groq_unsupported_request_shapes,
+)
 from ..providers.mistral import parse_response as mistral_parse_response
 from ..providers.mistral import serialize_request as mistral_serialize_request
 from ..providers.mistral import (
@@ -145,6 +150,7 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "mistral": mistral_serialize_request,
         "watsonx": watsonx_serialize_request,
         "sagemaker_chat": sagemaker_chat_serialize_request,
+        "groq": groq_serialize_request,
     }
 )
 
@@ -193,6 +199,10 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # sagemaker_chat: the shared openai parser verbatim (base
         # transform_response is LIVE; bare wire model, no seam preset).
         "sagemaker_chat": sagemaker_chat_parse_response,
+        # groq: openai parse for validation, verbatim wire + the
+        # service_tier clamp (bare wire model; construction arm
+        # "openai_like" — the direct ModelResponse(**json) style).
+        "groq": groq_parse_response,
     }
 )
 
@@ -239,6 +249,10 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # sagemaker_chat: openai everywhere (chunk-fold dialect "openai" at
         # the AWS event-stream parsed-event seam).
         "sagemaker_chat": _OPENAI_DIALECT,
+        # groq: openai outbound body; chunk-fold dialect "xai" (the httpx
+        # dict path) over the groq line parser; seam construction arm
+        # "openai_like".
+        "groq": _OPENAI_DIALECT,
     }
 )
 
@@ -278,6 +292,9 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         # sagemaker_chat: explicit stream:false + the shared openai guard
         # (full name fallback).
         "sagemaker_chat": sagemaker_chat_unsupported_request_shapes,
+        # groq: explicit stream:false + the shared openai guard (full name
+        # fallback).
+        "groq": groq_unsupported_request_shapes,
     }
 )
 

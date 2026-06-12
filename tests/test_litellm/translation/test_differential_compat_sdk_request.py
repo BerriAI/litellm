@@ -613,6 +613,7 @@ def test_registered_providers_have_differential_coverage() -> None:
         "mistral",  # test_differential_mistral_{request,response,stream}
         "watsonx",  # test_differential_watsonx_{request,response,stream}
         "sagemaker_chat",  # test_differential_sagemaker_chat_{request,response,stream}
+        "groq",  # test_differential_groq_{request,response,stream}
     }
     assert providers == dedicated_gates | set(SPECS) | set(HTTPX_SPECS)
 
