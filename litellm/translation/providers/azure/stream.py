@@ -37,15 +37,10 @@ def parse_event(event: PlainJson) -> _EventResult:
     chunk = parsed.wire_chunk.value
     if not isinstance(model, str) or not isinstance(chunk, dict):
         return base
-    # The azure decode seam is the VALIDATED SDK ChatCompletionChunk, which
-    # materializes service_tier=None even when the wire JSON omits it; v1's
-    # preserve_upstream_non_openai_attributes then copies it onto every
-    # emitted chunk.
-    return Ok(
-        StreamEvent.of_wire_chunk(
-            JsonBlob(value={"service_tier": None, **chunk, "model": model})
-        )
-    )
+    # The SDK service_tier materialization preset lives in the shared openai
+    # parser (the SAME validated-ChatCompletionChunk seam); only the model
+    # re-attach is azure's.
+    return Ok(StreamEvent.of_wire_chunk(JsonBlob(value={**chunk, "model": model})))
 
 
 parse_line = make_parse_line(parse_event)

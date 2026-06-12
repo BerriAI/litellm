@@ -83,9 +83,13 @@ translation/
 │   │   │                #   normalizer; transform_response is dead on the SDK
 │   │   │                #   path); rides the outbound body on ChatResponse.wire
 │   │   └── stream.py    # SSE chunk -> wire_chunk events normalized to the
-│   │                    #   SDK-dump shape; the openai chunk dialect folds
-│   │                    #   them; make_parse_line is the ONE data:-line
-│   │                    #   decode every same-family provider composes
+│   │                    #   SDK-dump shape (service_tier preset to None:
+│   │                    #   the validated SDK chunk materializes it even
+│   │                    #   when the wire omits the key, and v1's wrapper
+│   │                    #   copies it onto every chunk); the openai chunk
+│   │                    #   dialect folds them; make_parse_line is the ONE
+│   │                    #   data:-line decode every same-family provider
+│   │                    #   composes
 │   ├── google_genai/    # ONE generateContent family for BOTH google routes:
 │   │   │                #   providers "vertex_ai" and "gemini" are the same
 │   │   │                #   serializer parameterized by the drift list
@@ -137,8 +141,9 @@ translation/
 │   │   ├── serialize.py # azure gates then the openai_compat body verbatim
 │   │   ├── response.py  # re-export of openai parse_response (same live
 │   │   │                #   normalizer; json_mode requests fail closed)
-│   │   └── stream.py    # openai parser + per-chunk model re-attach and the
-│   │                    #   SDK service_tier default; "azure" chunk dialect
+│   │   └── stream.py    # openai parser + per-chunk model re-attach;
+│   │                    #   "azure" chunk dialect (the SDK service_tier
+│   │                    #   preset is the shared openai parser's)
 │   ├── azure_ai/        # the Foundry override set + the Claude route:
 │   │   ├── guard.py     # azure guard + the text-only content-list flatten
 │   │   ├── serialize.py # azure_ai gates (grok, model-map tool_choice) then
