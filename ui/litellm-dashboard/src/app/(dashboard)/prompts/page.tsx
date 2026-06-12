@@ -1,6 +1,6 @@
 "use client";
 
-import PromptsPanel from "@/components/prompts";
+import PromptsPanel from "./components";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function Prompts() {
