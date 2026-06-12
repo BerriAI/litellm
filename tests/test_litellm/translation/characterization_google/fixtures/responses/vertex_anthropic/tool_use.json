@@ -1,0 +1,24 @@
+{
+  "id": "msg_vrtx_01CharVtxTool0001",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-20250514",
+  "content": [
+    {"type": "text", "text": "I'll check the weather in Paris."},
+    {
+      "type": "tool_use",
+      "id": "toolu_vrtx_01CharWeather01",
+      "name": "get_weather",
+      "input": {"city": "Paris"}
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 410,
+    "output_tokens": 67,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "service_tier": "standard"
+  }
+}

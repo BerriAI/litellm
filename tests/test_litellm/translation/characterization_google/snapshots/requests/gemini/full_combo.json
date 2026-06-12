@@ -1,0 +1,82 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "Weather in Paris?"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "parts": [
+        {
+          "function_call": {
+            "args": {
+              "city": "Paris"
+            },
+            "name": "get_weather"
+          }
+        }
+      ],
+      "role": "model"
+    },
+    {
+      "parts": [
+        {
+          "function_response": {
+            "name": "get_weather",
+            "response": {
+              "content": "18C, clear"
+            }
+          }
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "parts": [
+        {
+          "text": "Summarize, then check the weather again."
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "max_output_tokens": 2048,
+    "temperature": 1,
+    "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingBudget": 1024
+    }
+  },
+  "system_instruction": {
+    "parts": [
+      {
+        "text": "You are a terse geographer."
+      }
+    ]
+  },
+  "tools": [
+    {
+      "function_declarations": [
+        {
+          "description": "Get current weather for a city.",
+          "name": "get_weather",
+          "parameters": {
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "type": "object"
+          }
+        }
+      ]
+    }
+  ]
+}

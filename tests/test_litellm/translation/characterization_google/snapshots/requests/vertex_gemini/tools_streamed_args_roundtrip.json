@@ -1,0 +1,93 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "Weather and time in Paris?"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "parts": [
+        {
+          "function_call": {
+            "args": {
+              "city": "Paris"
+            },
+            "name": "get_weather"
+          }
+        },
+        {
+          "function_call": {
+            "args": {
+              "tz": "Europe/Paris"
+            },
+            "name": "get_time"
+          }
+        }
+      ],
+      "role": "model"
+    },
+    {
+      "parts": [
+        {
+          "function_response": {
+            "name": "get_weather",
+            "response": {
+              "content": "18C, clear"
+            }
+          }
+        },
+        {
+          "function_response": {
+            "name": "get_time",
+            "response": {
+              "content": "14:05"
+            }
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "max_output_tokens": 256
+  },
+  "tools": [
+    {
+      "function_declarations": [
+        {
+          "description": "Get current weather for a city.",
+          "name": "get_weather",
+          "parameters": {
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "description": "Get current time for a timezone.",
+          "name": "get_time",
+          "parameters": {
+            "properties": {
+              "tz": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tz"
+            ],
+            "type": "object"
+          }
+        }
+      ]
+    }
+  ]
+}

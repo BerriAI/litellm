@@ -3541,6 +3541,25 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             api_base = api_base or litellm.api_base or get_secret("GEMINI_API_BASE")
+            if custom_llm_provider == "gemini" and litellm.translation_v2_providers:
+                from litellm import translation_seam_google_send
+
+                _v2_response = translation_seam_google_send.try_completion_v2_gemini(
+                    model=model,
+                    messages=messages,
+                    optional_param_args=optional_param_args,
+                    non_default_params=non_default_params,
+                    gemini_api_key=gemini_api_key,
+                    api_base=api_base,
+                    timeout=timeout,
+                    stream=stream,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    model_response=model_response,
+                    request_drop_params=kwargs.get("drop_params"),
+                )
+                if _v2_response is not None:
+                    return _v2_response
             new_params = safe_deep_copy(optional_params or {})
             response = vertex_chat_completion.completion(  # type: ignore
                 model=model,
@@ -3589,6 +3608,29 @@ def completion(  # type: ignore # noqa: PLR0915
             model_route = get_vertex_ai_model_route(
                 model=model, litellm_params=litellm_params
             )
+
+            if litellm.translation_v2_providers:
+                from litellm import translation_seam_google_send
+
+                _v2_response = translation_seam_google_send.try_completion_v2_vertex(
+                    model_route=model_route,
+                    model=model,
+                    messages=messages,
+                    optional_param_args=optional_param_args,
+                    non_default_params=non_default_params,
+                    vertex_project=vertex_ai_project,
+                    vertex_location=vertex_ai_location,
+                    vertex_credentials=vertex_credentials,
+                    api_base=api_base,
+                    timeout=timeout,
+                    stream=stream,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    model_response=model_response,
+                    request_drop_params=kwargs.get("drop_params"),
+                )
+                if _v2_response is not None:
+                    return _v2_response
 
             if model_route == VertexAIModelRoute.PARTNER_MODELS:
                 model_response = vertex_partner_models_chat_completion.completion(

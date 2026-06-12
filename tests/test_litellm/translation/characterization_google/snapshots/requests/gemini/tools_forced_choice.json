@@ -1,0 +1,44 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "What is the capital of France?"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "max_output_tokens": 256
+  },
+  "toolConfig": {
+    "functionCallingConfig": {
+      "allowed_function_names": [
+        "get_weather"
+      ],
+      "mode": "ANY"
+    }
+  },
+  "tools": [
+    {
+      "function_declarations": [
+        {
+          "description": "Get current weather for a city.",
+          "name": "get_weather",
+          "parameters": {
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "type": "object"
+          }
+        }
+      ]
+    }
+  ]
+}

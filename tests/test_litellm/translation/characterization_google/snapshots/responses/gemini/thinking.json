@@ -1,0 +1,54 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "The capital of France is Paris.",
+        "function_call": null,
+        "images": [],
+        "provider_specific_fields": {
+          "thought_signatures": [
+            "c2lnLWNoYXItdmVydGV4LWdlbWluaQ=="
+          ]
+        },
+        "reasoning_content": "The user asks about France. The capital is Paris.",
+        "role": "assistant",
+        "thinking_blocks": [
+          {
+            "signature": "c2lnLWNoYXItdmVydGV4LWdlbWluaQ==",
+            "thinking": "The user asks about France. The capital is Paris.",
+            "type": "thinking"
+          }
+        ],
+        "tool_calls": null
+      }
+    }
+  ],
+  "created": 1718064000,
+  "id": "char-gemini-think-0001",
+  "model": "gemini-2.5-flash",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "usage": {
+    "cache_read_input_tokens": 1024,
+    "completion_tokens": 160,
+    "completion_tokens_details": {
+      "reasoning_tokens": 152,
+      "text_tokens": 8
+    },
+    "prompt_tokens": 1290,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cached_tokens": 1024,
+      "image_tokens": null,
+      "text_tokens": 266,
+      "video_tokens": null
+    },
+    "total_tokens": 1450
+  },
+  "vertex_ai_citation_metadata": [],
+  "vertex_ai_grounding_metadata": [],
+  "vertex_ai_safety_results": [],
+  "vertex_ai_url_context_metadata": []
+}

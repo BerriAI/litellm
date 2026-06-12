@@ -1,12 +1,12 @@
-# Translation v2 differential report (anthropic + bedrock + openai)
+# Translation v2 differential report (anthropic + bedrock + openai + google)
 
 v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
 explained FALLBACK that v1 serves) for a provider's flag to turn on.
-Bedrock rows additionally pin the characterization-corpus snapshot, so
-each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
+Bedrock and google rows additionally pin the characterization-corpus
+snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: c1fee272a0
+- commit: 91a84b7edf
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -210,6 +210,128 @@ each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 ## bedrock_invoke: streams (snapshot == real decoder replay == v2 fold, parsed-event seam)
 
 - IDENTICAL: text_stream
+- IDENTICAL: tool_stream
+
+## gemini: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON)
+
+- IDENTICAL: cache_control_messages
+- IDENTICAL: cache_control_tools
+- IDENTICAL: full_combo
+- IDENTICAL: image_base64
+- SKIPPED (corpus): image_url (v1 downloads URL media for google ai studio transforms (network); the vertex_ai gemini route passes the URL through as fileData and is pinned)
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: multi_turn
+- IDENTICAL: params_sampling
+- FALLBACK (v1 serves it): pdf_base64 (file/document parts are outside the v2 inbound surface)
+- IDENTICAL: plain_text
+- IDENTICAL: reasoning_effort_low
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema
+- IDENTICAL: system_prompt
+- IDENTICAL: thinking_enabled
+- IDENTICAL: thinking_history_blocks
+- IDENTICAL: tools_basic
+- IDENTICAL: tools_forced_choice
+- IDENTICAL: tools_parallel
+- IDENTICAL: tools_streamed_args_roundtrip
+
+## vertex_anthropic: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON)
+
+- IDENTICAL: cache_control_messages
+- IDENTICAL: cache_control_tools
+- IDENTICAL: full_combo
+- IDENTICAL: image_base64
+- SKIPPED (corpus): image_url (v1 downloads URL media for claude-on-vertex transforms (network); native anthropic passes the URL through and is pinned)
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: multi_turn
+- IDENTICAL: params_sampling
+- FALLBACK (v1 serves it): pdf_base64 (file/document parts are outside the v2 inbound surface)
+- IDENTICAL: plain_text
+- IDENTICAL: reasoning_effort_low
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema
+- IDENTICAL: system_prompt
+- IDENTICAL: thinking_enabled
+- IDENTICAL: thinking_history_blocks
+- IDENTICAL: tools_basic
+- IDENTICAL: tools_forced_choice
+- IDENTICAL: tools_parallel
+- IDENTICAL: tools_streamed_args_roundtrip
+
+## vertex_gemini: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON)
+
+- IDENTICAL: cache_control_messages
+- IDENTICAL: cache_control_tools
+- IDENTICAL: full_combo
+- IDENTICAL: image_base64
+- IDENTICAL: image_url
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: multi_turn
+- IDENTICAL: params_sampling
+- FALLBACK (v1 serves it): pdf_base64 (file/document parts are outside the v2 inbound surface)
+- IDENTICAL: plain_text
+- IDENTICAL: reasoning_effort_low
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema
+- IDENTICAL: system_prompt
+- IDENTICAL: thinking_enabled
+- IDENTICAL: thinking_history_blocks
+- IDENTICAL: tools_basic
+- IDENTICAL: tools_forced_choice
+- IDENTICAL: tools_parallel
+- IDENTICAL: tools_streamed_args_roundtrip
+
+## google quirk corpus (v1 in-process reference)
+
+- IDENTICAL: quirk gemini3_default_temperature_and_level (vertex_ai/gemini-3-pro-preview)
+- IDENTICAL: quirk gemini3_studio_forwards_function_call_ids (gemini/gemini-3-pro-preview)
+- IDENTICAL: quirk image_url_format_override (vertex_ai/gemini-2.5-pro)
+- IDENTICAL: quirk multi_system_messages_two_parts (vertex_ai/gemini-2.5-pro)
+- IDENTICAL: quirk parallel_tool_calls_never_reaches_wire (vertex_ai/gemini-2.5-pro)
+- IDENTICAL: quirk reasoning_effort_minimal_model_budget (vertex_ai/gemini-2.5-pro)
+- IDENTICAL: quirk stop_as_string (vertex_ai/gemini-2.5-pro)
+- IDENTICAL: quirk studio_response_schema_property_ordering (gemini/gemini-exp-1206)
+- IDENTICAL: quirk studio_schema_prompt_for_unsupported_model (gemini/gemini-1.5-flash)
+- IDENTICAL: quirk studio_top_k_passthrough (gemini/gemini-2.5-flash)
+- IDENTICAL: quirk system_only_blank_user_message (vertex_ai/gemini-2.5-pro)
+- IDENTICAL: quirk thinking_budget_zero (vertex_ai/gemini-2.5-pro)
+- IDENTICAL: quirk tool_choice_none_mode (vertex_ai/gemini-2.5-pro)
+- IDENTICAL: quirk tool_without_parameters (vertex_ai/gemini-2.5-pro)
+- IDENTICAL: quirk vertex_schema_prompt_for_unsupported_capability (vertex_ai/gemini-pro-latest)
+- IDENTICAL: quirk vertex_top_k_passthrough (vertex_ai/gemini-2.5-pro)
+
+## gemini: responses (snapshot == v1 transform_response == v2)
+
+- IDENTICAL: text_basic
+- IDENTICAL: thinking
+- IDENTICAL: tool_use
+
+## vertex_anthropic: responses (snapshot == v1 transform_response == v2)
+
+- IDENTICAL: text_basic
+- IDENTICAL: thinking
+- IDENTICAL: tool_use
+
+## vertex_gemini: responses (snapshot == v1 transform_response == v2)
+
+- IDENTICAL: text_basic
+- IDENTICAL: thinking
+- IDENTICAL: tool_use
+
+## gemini: streams (snapshot == real decoder replay == v2 fold)
+
+- IDENTICAL: text_stream
+- IDENTICAL: tool_stream
+
+## vertex_anthropic: streams (snapshot == real decoder replay == v2 fold)
+
+- IDENTICAL: text_stream
+- IDENTICAL: tool_stream
+
+## vertex_gemini: streams (snapshot == real decoder replay == v2 fold)
+
+- IDENTICAL: text_stream
+- IDENTICAL: thinking_stream
 - IDENTICAL: tool_stream
 
 Result: 0 divergent rows. Shapes outside the corpus fall back to v1 (fail-closed), so this table is the complete flag-on surface.

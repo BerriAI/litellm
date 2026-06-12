@@ -1,0 +1,36 @@
+{
+  "anthropic_version": "vertex-2023-10-16",
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "tool_choice": {
+    "name": "json_tool_call",
+    "type": "tool"
+  },
+  "tools": [
+    {
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "capital": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "capital"
+        ],
+        "type": "object"
+      },
+      "name": "json_tool_call"
+    }
+  ]
+}

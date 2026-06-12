@@ -1,0 +1,60 @@
+{
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "message": {
+        "content": null,
+        "function_call": null,
+        "images": [],
+        "role": "assistant",
+        "thinking_blocks": [],
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"city\": \"Paris\"}",
+              "name": "get_weather"
+            },
+            "id": "call_0000000000000000000000000000",
+            "index": 0,
+            "type": "function"
+          },
+          {
+            "function": {
+              "arguments": "{\"tz\": \"Europe/Paris\"}",
+              "name": "get_time"
+            },
+            "id": "call_0000000000000000000000000000",
+            "index": 1,
+            "type": "function"
+          }
+        ]
+      }
+    }
+  ],
+  "created": 1718064000,
+  "id": "char-gemini-tool-0001",
+  "model": "gemini-2.5-flash",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "usage": {
+    "cache_read_input_tokens": null,
+    "completion_tokens": 22,
+    "completion_tokens_details": {
+      "text_tokens": 22
+    },
+    "prompt_tokens": 74,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cached_tokens": null,
+      "image_tokens": null,
+      "text_tokens": 74,
+      "video_tokens": null
+    },
+    "total_tokens": 96
+  },
+  "vertex_ai_citation_metadata": [],
+  "vertex_ai_grounding_metadata": [],
+  "vertex_ai_safety_results": [],
+  "vertex_ai_url_context_metadata": []
+}

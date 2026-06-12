@@ -1,0 +1,116 @@
+[
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": null,
+          "function_call": null,
+          "provider_specific_fields": null,
+          "reasoning_content": "The user asks about France.",
+          "role": "assistant",
+          "tool_calls": null
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "char-vertex-gemini-stream-think-0001",
+    "model": "gemini-2.5-pro",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "system_fingerprint": null,
+    "vertex_ai_citation_metadata": [],
+    "vertex_ai_grounding_metadata": [],
+    "vertex_ai_safety_ratings": [],
+    "vertex_ai_safety_results": [],
+    "vertex_ai_url_context_metadata": []
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": null,
+          "function_call": null,
+          "provider_specific_fields": {
+            "thought_signatures": [
+              "c2lnLWNoYXItdmVydGV4LWdlbWluaQ=="
+            ]
+          },
+          "reasoning_content": " The capital is Paris.",
+          "role": null,
+          "tool_calls": null
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "char-vertex-gemini-stream-think-0001",
+    "model": "gemini-2.5-pro",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "system_fingerprint": null,
+    "vertex_ai_citation_metadata": [],
+    "vertex_ai_grounding_metadata": [],
+    "vertex_ai_safety_ratings": [],
+    "vertex_ai_safety_results": [],
+    "vertex_ai_url_context_metadata": []
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": "The capital of France is Paris.",
+          "function_call": null,
+          "provider_specific_fields": null,
+          "role": null,
+          "tool_calls": null
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "char-vertex-gemini-stream-think-0001",
+    "model": "gemini-2.5-pro",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "system_fingerprint": null,
+    "vertex_ai_citation_metadata": [],
+    "vertex_ai_grounding_metadata": [],
+    "vertex_ai_safety_ratings": [],
+    "vertex_ai_safety_results": [],
+    "vertex_ai_url_context_metadata": []
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": null,
+          "function_call": null,
+          "role": null,
+          "tool_calls": null
+        },
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "created": 1718064000,
+    "id": "char-vertex-gemini-stream-think-0001",
+    "model": "gemini-2.5-pro",
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null
+  }
+]
