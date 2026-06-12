@@ -358,3 +358,126 @@ async def test_bedrock_apply_guardrail_blocked_with_disable_exception_on_block()
             )
 
         assert "unable to be answered" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_does_not_leak_tool_content_with_flag():
+    """
+    Regression test for issue #23476: with
+    experimental_use_latest_role_message_only enabled, a conversation ending in
+    a tool message (agentic tool-calling loop) must scan the latest USER
+    message — not the tool result.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    structured_messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "what is the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "TOOL OUTPUT SECRET"},
+    ]
+    # Flat texts as built by the unified guardrail translation handler
+    texts = ["rules", "what is the weather?", "TOOL OUTPUT SECRET"]
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        mock_api.return_value = {"action": "NONE", "output": []}
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": texts, "structured_messages": structured_messages},
+            request_data={"messages": structured_messages},
+            input_type="request",
+        )
+
+        assert mock_api.called
+        _, kwargs = mock_api.call_args
+        # The latest USER message is scanned — not the trailing tool message
+        assert kwargs["messages"] == [structured_messages[1]]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_skips_scan_when_no_user_message_with_flag():
+    """With the flag on and no user-role message in the request, there is nothing
+    to scan as INPUT — the guardrail must not be called."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    structured_messages = [
+        {"role": "assistant", "content": "assistant text"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "tool text"},
+    ]
+    texts = ["assistant text", "tool text"]
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": texts, "structured_messages": structured_messages},
+            request_data={"messages": structured_messages},
+            input_type="request",
+        )
+
+        assert not mock_api.called
+        assert result.get("texts") == texts
+
+
+@pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_masking_written_back_to_correct_position():
+    """When only the latest user message is scanned, masked content must be
+    written back to that message's position in the flat texts list — other
+    entries stay untouched."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    structured_messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "my SSN is 123-45-6789"},
+        {"role": "assistant", "content": "assistant text"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "tool text"},
+    ]
+    texts = ["rules", "my SSN is 123-45-6789", "assistant text", "tool text"]
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        mock_api.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "output": [{"text": "my SSN is {SSN}"}],
+        }
+
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": texts, "structured_messages": structured_messages},
+            request_data={"messages": structured_messages},
+            input_type="request",
+        )
+
+        assert guardrailed_inputs.get("texts") == [
+            "rules",
+            "my SSN is {SSN}",
+            "assistant text",
+            "tool text",
+        ]
