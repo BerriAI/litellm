@@ -8012,3 +8012,35 @@ class TestDeleteDeploymentSync:
         assert (
             result is None
         ), f"Expected None on DB failure to signal fetch error, got {result!r}"
+
+
+def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
+    """Follow-up to #30223: the flag must be discoverable via /config/list,
+    which requires both the ConfigGeneralSettings field and the allowed_args
+    entry in get_config_list; missing either silently hides it from the UI."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert "cancel_on_disconnect" in fields
+        assert fields["cancel_on_disconnect"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()
