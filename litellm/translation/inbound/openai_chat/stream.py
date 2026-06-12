@@ -27,9 +27,9 @@ from typing import Literal
 
 from typing_extensions import assert_never
 
-from ...ir import Body, PlainJson, StreamEvent
+from ...ir import Body, CompositeChunk, PlainJson, StreamEvent
 
-ChunkDialect = Literal["anthropic", "bedrock_converse"]
+ChunkDialect = Literal["anthropic", "bedrock_converse", "gemini"]
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,9 @@ class StreamState:
     sent_role: bool
     tool_index: int
     dialect: ChunkDialect
+    seen_tool_calls: bool = False
+    """gemini: tool calls and finishReason arrive in separate wire chunks, so
+    a later ``stop`` rewrites to ``tool_calls`` (v1 ``has_seen_tool_calls``)."""
 
 
 def initial_state(model: str = "", dialect: ChunkDialect = "anthropic") -> StreamState:
@@ -133,7 +136,91 @@ def step(state: StreamState, event: StreamEvent) -> _StepResult:
             return state, (chunk,)
         case "stop":
             return state, ()
+        case "chunk":
+            return _gemini_chunk_step(state, event.chunk)
     assert_never(event.tag)
+
+
+_GEMINI_METADATA_FIELDS: tuple[str, ...] = (
+    "vertex_ai_grounding_metadata",
+    "vertex_ai_url_context_metadata",
+    "vertex_ai_safety_ratings",
+    "vertex_ai_safety_results",
+    "vertex_ai_citation_metadata",
+)
+
+
+def _gemini_chunk_step(state: StreamState, chunk: CompositeChunk) -> _StepResult:
+    """One composite gemini wire event -> at most one content chunk plus, at
+    stream end, the finish chunk v1's wrapper synthesizes (the finish-bearing
+    wire event is the last one, so emitting both here yields v1's order).
+    Usage is withheld exactly like v1 without ``stream_options``."""
+    text = chunk.text.default_value(None)
+    reasoning = chunk.reasoning.default_value(None)
+    has_payload = (
+        text is not None or reasoning is not None or len(chunk.tool_calls) > 0
+    )
+    tool_index = state.tool_index
+    bodies: tuple[Body, ...] = ()
+    sent_role = state.sent_role
+    if has_payload:
+        entries: list[PlainJson] = []
+        for call in chunk.tool_calls:
+            tool_index = tool_index + 1
+            entry: dict[str, PlainJson] = {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": call.arguments_json},
+                "index": tool_index,
+            }
+            entries = [*entries, entry]
+        signatures = list(chunk.signatures)
+        delta: dict[str, PlainJson] = {
+            "role": None if sent_role else "assistant",
+            "content": text,
+            "reasoning_content": reasoning,
+            "tool_calls": entries or None,
+            "provider_specific_fields": (
+                {"thought_signatures": signatures} if signatures else None
+            ),
+        }
+        body: Body = {
+            "id": chunk.id,
+            "model": state.model,
+            "object": "chat.completion.chunk",
+            **{field: [] for field in _GEMINI_METADATA_FIELDS},
+            "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+        }
+        bodies = (body,)
+        sent_role = True
+    seen = state.seen_tool_calls or len(chunk.tool_calls) > 0
+    finish = chunk.finish.default_value(None)
+    if finish is not None:
+        final: Body = {
+            "id": chunk.id,
+            "model": state.model,
+            "object": "chat.completion.chunk",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": (
+                        "tool_calls" if seen and finish == "stop" else finish
+                    ),
+                }
+            ],
+        }
+        bodies = (*bodies, final)
+    return (
+        StreamState(
+            model=state.model,
+            sent_role=sent_role,
+            tool_index=tool_index,
+            dialect=state.dialect,
+            seen_tool_calls=seen,
+        ),
+        bodies,
+    )
 
 
 def _thinking_delta_body(

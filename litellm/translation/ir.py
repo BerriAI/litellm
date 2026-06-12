@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, fields
 from typing import Literal, TypeVar, Union
 
-from expression import Option, case, tag, tagged_union
+from expression import Nothing, Option, case, tag, tagged_union
 from expression.collections import Block, Map
 
 Json = Union[None, bool, int, float, str, "Block[Json]", "Map[str, Json]"]
@@ -98,6 +98,9 @@ class Base64Source:
 @dataclass(frozen=True)
 class UrlSource:
     url: str
+    format: Option[str] = Nothing
+    """Caller-supplied media type override; the anthropic family ignores it
+    for URL sources (so does v1) but gemini uses it for ``file_data`` mime."""
 
 
 @tagged_union(frozen=True)
@@ -377,6 +380,21 @@ class CacheCreationDetails:
 
 
 @dataclass(frozen=True)
+class ModalityTokens:
+    """Per-modality token breakdown (gemini ``usageMetadata`` details).
+
+    Values are post-processing in v1's ``_calculate_usage`` terms: prompt text
+    tokens already have cached tokens subtracted, completion text tokens are
+    computed from the candidate total minus the other modalities.
+    """
+
+    text: Option[int]
+    audio: Option[int]
+    image: Option[int]
+    video: Option[int]
+
+
+@dataclass(frozen=True)
 class ResponseUsage:
     """Provider-reported token counts, provider-neutral.
 
@@ -391,6 +409,14 @@ class ResponseUsage:
     cache_read_input_tokens: int
     cache_creation: Option[CacheCreationDetails]
     total_tokens: Option[int]
+    reasoning_tokens: Option[int] = Nothing
+    """Wire-reported reasoning tokens (gemini ``thoughtsTokenCount``);
+    ``Nothing`` for providers whose dialect estimates them (anthropic)."""
+    prompt_modalities: Option[ModalityTokens] = Nothing
+    completion_modalities: Option[ModalityTokens] = Nothing
+    cache_read_reported: bool = True
+    """False when the wire omitted ``cachedContentTokenCount`` entirely (the
+    gemini dialect then emits null cached-token fields instead of 0)."""
 
 
 @dataclass(frozen=True)
@@ -458,6 +484,34 @@ class StreamFinish:
     output_tokens: int
 
 
+@dataclass(frozen=True)
+class StreamToolCall:
+    """A COMPLETE tool call inside one stream chunk (gemini never streams
+    partial arguments). An empty ``id`` (or one starting with the
+    thought-signature separator) means the wire had no native id and the seam
+    mints v1's ambient ``call_<uuid>`` prefix."""
+
+    id: str
+    name: str
+    arguments_json: str
+
+
+@dataclass(frozen=True)
+class CompositeChunk:
+    """One gemini ``GenerateContentResponse`` stream event: text, thinking,
+    complete tool calls, the finish reason, and usage can all ride together,
+    so the wire event maps onto one composite IR event (and back onto exactly
+    one outbound chunk, matching v1's ``ModelResponseIterator``)."""
+
+    id: str
+    text: Option[str]
+    reasoning: Option[str]
+    signatures: Block[str]
+    tool_calls: Block[StreamToolCall]
+    finish: Option[FinishReason]
+    usage: Option[ResponseUsage]
+
+
 @tagged_union(frozen=True)
 class StreamEvent:
     tag: Literal[
@@ -469,6 +523,7 @@ class StreamEvent:
         "signature_delta",
         "finish",
         "stop",
+        "chunk",
     ] = tag()
 
     start: StreamStart = case()
@@ -479,6 +534,7 @@ class StreamEvent:
     signature_delta: SignatureDelta = case()
     finish: StreamFinish = case()
     stop: Unit = case()
+    chunk: CompositeChunk = case()
 
     @staticmethod
     def of_start(value: StreamStart) -> StreamEvent:
@@ -512,6 +568,10 @@ class StreamEvent:
     def of_stop() -> StreamEvent:
         return _stream_stop(UNIT)
 
+    @staticmethod
+    def of_chunk(value: CompositeChunk) -> StreamEvent:
+        return _stream_chunk(value)
+
 
 _stream_start = _case_maker(StreamEvent, "start")
 _stream_text_delta = _case_maker(StreamEvent, "text_delta")
@@ -521,3 +581,4 @@ _stream_thinking_delta = _case_maker(StreamEvent, "thinking_delta")
 _stream_signature_delta = _case_maker(StreamEvent, "signature_delta")
 _stream_finish = _case_maker(StreamEvent, "finish")
 _stream_stop = _case_maker(StreamEvent, "stop")
+_stream_chunk = _case_maker(StreamEvent, "chunk")

@@ -39,6 +39,19 @@ from ..providers.bedrock_invoke import parse_response as bedrock_invoke_parse_re
 from ..providers.bedrock_invoke import (
     serialize_request as bedrock_invoke_serialize_request,
 )
+from ..providers.google_genai import parse_response as google_parse_response
+from ..providers.google_genai import (
+    serialize_request_studio as google_serialize_request_studio,
+)
+from ..providers.google_genai import (
+    serialize_request_vertex as google_serialize_request_vertex,
+)
+from ..providers.vertex_anthropic import (
+    parse_response as vertex_anthropic_parse_response,
+)
+from ..providers.vertex_anthropic import (
+    serialize_request as vertex_anthropic_serialize_request,
+)
 from .http import Endpoint, ExecuteError, HttpPort, ProviderHttpError
 
 _Serializer = Callable[[ChatRequest, TranslationDeps], Result[Body, TranslationError]]
@@ -51,6 +64,9 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "anthropic": serialize_request,
         "bedrock_converse": bedrock_converse_serialize_request,
         "bedrock_invoke": bedrock_invoke_serialize_request,
+        "vertex_ai": google_serialize_request_vertex,
+        "gemini": google_serialize_request_studio,
+        "vertex_anthropic": vertex_anthropic_serialize_request,
     }
 )
 
@@ -59,6 +75,9 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         "anthropic": parse_response,
         "bedrock_converse": bedrock_converse_parse_response,
         "bedrock_invoke": bedrock_invoke_parse_response,
+        "vertex_ai": google_parse_response,
+        "gemini": google_parse_response,
+        "vertex_anthropic": vertex_anthropic_parse_response,
     }
 )
 
@@ -67,6 +86,9 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         "anthropic": "anthropic",
         "bedrock_converse": "bedrock_converse",
         "bedrock_invoke": "anthropic",  # invoke delegates to the anthropic transform
+        "vertex_ai": "gemini",
+        "gemini": "gemini",
+        "vertex_anthropic": "anthropic",  # vertex claude delegates to the anthropic transform
     }
 )
 

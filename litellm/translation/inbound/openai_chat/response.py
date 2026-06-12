@@ -27,7 +27,7 @@ from expression.collections import Block
 from ...deps import TranslationDeps
 from ...ir import Body, ChatResponse, ContentBlock, PlainJson, ResponseUsage
 
-ResponseDialect = Literal["anthropic", "bedrock_converse"]
+ResponseDialect = Literal["anthropic", "bedrock_converse", "gemini"]
 
 
 def serialize_response(
@@ -35,6 +35,8 @@ def serialize_response(
     deps: TranslationDeps,
     dialect: ResponseDialect = "anthropic",
 ) -> Body:
+    if dialect == "gemini":
+        return _gemini_body(response)
     text = "".join(block.text.text for block in response.content if block.tag == "text")
     thinking_blocks = _thinking_blocks(response.content)
     reasoning: str | None = None
@@ -172,6 +174,179 @@ def _thinking_block_json(block: ContentBlock) -> PlainJson:
             return {**base, "signature": signature}
         case _:
             return base
+
+
+_THOUGHT_SIGNATURE_SEPARATOR = "__thought__"
+
+
+def _gemini_body(response: ChatResponse) -> Body:
+    """Mirror v1 ``_process_candidates`` + ``_calculate_usage`` shapes: the
+    message keys are set conditionally exactly like v1 (``thinking_blocks``
+    and ``images`` are always-set lists, possibly empty), tool ids keep the
+    empty-prefix sentinel for the seam to mint ``call_<uuid>``, and the usage
+    JSON carries v1's exact wrapper-kwarg sets (the seam rebuilds ``Usage``
+    from them)."""
+    text = "".join(block.text.text for block in response.content if block.tag == "text")
+    reasoning = (
+        "".join(
+            block.thinking.thinking
+            for block in response.content
+            if block.tag == "thinking"
+        )
+        or None
+    )
+    message: dict[str, PlainJson] = {
+        "role": "assistant",
+        "content": text or None,
+        "thinking_blocks": _gemini_thinking_blocks(response.content),
+        "images": [],
+    }
+    if reasoning is not None:
+        message = {**message, "reasoning_content": reasoning}
+    tool_calls = _gemini_tool_calls(response.content)
+    if tool_calls:
+        message = {**message, "tool_calls": tool_calls}
+    signatures = _thought_signatures(response.content)
+    if signatures:
+        message = {
+            **message,
+            "provider_specific_fields": {"thought_signatures": signatures},
+        }
+    body: Body = {
+        "object": "chat.completion",
+        "model": response.model,
+        "choices": [
+            {"index": 0, "finish_reason": response.finish, "message": message}
+        ],
+        "usage": _gemini_usage_json(response.usage),
+    }
+    if response.id:
+        body = {**body, "id": response.id}
+    return body
+
+
+def _gemini_thinking_blocks(content: Block[ContentBlock]) -> PlainJson:
+    blocks: list[PlainJson] = []
+    for block in content:
+        if block.tag != "thinking":
+            continue
+        entry: dict[str, PlainJson] = {
+            "type": "thinking",
+            "thinking": block.thinking.thinking,
+        }
+        match block.thinking.signature:
+            case Option(tag="some", some=signature):
+                entry = {**entry, "signature": signature}
+            case _:
+                pass
+        blocks.append(entry)  # nosemgrep: translation-no-mutation
+    return blocks
+
+
+def _gemini_tool_calls(content: Block[ContentBlock]) -> list[PlainJson]:
+    calls: list[PlainJson] = []
+    index = 0
+    for block in content:
+        if block.tag != "tool_use":
+            continue
+        identifier = block.tool_use.id
+        signature = identifier.partition(_THOUGHT_SIGNATURE_SEPARATOR)[2]
+        entry: dict[str, PlainJson] = {
+            "id": identifier,
+            "type": "function",
+            "function": {
+                "name": block.tool_use.name,
+                "arguments": json.dumps(
+                    block.tool_use.arguments.value, ensure_ascii=False
+                ),
+            },
+            "index": index,
+        }
+        if signature:
+            entry = {
+                **entry,
+                "provider_specific_fields": {"thought_signature": signature},
+            }
+        calls.append(entry)  # nosemgrep: translation-no-mutation
+        index = index + 1
+    return calls
+
+
+def _thought_signatures(content: Block[ContentBlock]) -> list[PlainJson]:
+    signatures: list[PlainJson] = []
+    for block in content:
+        if block.tag == "thinking":
+            match block.thinking.signature:
+                case Option(tag="some", some=signature):
+                    signatures.append(  # nosemgrep: translation-no-mutation
+                        signature
+                    )
+                case _:
+                    pass
+        elif block.tag == "tool_use":
+            suffix = block.tool_use.id.partition(_THOUGHT_SIGNATURE_SEPARATOR)[2]
+            if suffix:
+                signatures.append(suffix)  # nosemgrep: translation-no-mutation
+    return signatures
+
+
+def _gemini_usage_json(usage: ResponseUsage) -> PlainJson:
+    """v1 ``_calculate_usage`` output, with set-only completion detail keys
+    (the wrapper only serializes explicitly assigned fields)."""
+    cached: PlainJson = (
+        usage.cache_read_input_tokens if usage.cache_read_reported else None
+    )
+    prompt_details: dict[str, PlainJson] = {
+        "cached_tokens": cached,
+        "audio_tokens": None,
+        "text_tokens": None,
+        "image_tokens": None,
+        "video_tokens": None,
+    }
+    match usage.prompt_modalities:
+        case Option(tag="some", some=prompt_tokens):
+            prompt_details = {
+                "cached_tokens": cached,
+                "audio_tokens": prompt_tokens.audio.default_value(None),
+                "text_tokens": prompt_tokens.text.default_value(None),
+                "image_tokens": prompt_tokens.image.default_value(None),
+                "video_tokens": prompt_tokens.video.default_value(None),
+            }
+        case _:
+            pass
+    completion_details: dict[str, PlainJson] = {}
+    match usage.completion_modalities:
+        case Option(tag="some", some=completion_tokens):
+            for key, option in (
+                ("text_tokens", completion_tokens.text),
+                ("audio_tokens", completion_tokens.audio),
+                ("image_tokens", completion_tokens.image),
+                ("video_tokens", completion_tokens.video),
+            ):
+                match option:
+                    case Option(tag="some", some=value):
+                        completion_details = {**completion_details, key: value}
+                    case _:
+                        pass
+        case _:
+            pass
+    reasoning_tokens = usage.reasoning_tokens.default_value(None)
+    if reasoning_tokens is not None:
+        completion_details = {
+            **completion_details,
+            "reasoning_tokens": reasoning_tokens,
+        }
+    return {
+        "prompt_tokens": usage.input_tokens,
+        "completion_tokens": usage.output_tokens,
+        "total_tokens": usage.total_tokens.default_value(
+            usage.input_tokens + usage.output_tokens
+        ),
+        "prompt_tokens_details": prompt_details,
+        "completion_tokens_details": completion_details,
+        "cache_read_input_tokens": cached,
+        "reasoning_tokens": reasoning_tokens,
+    }
 
 
 def _converse_usage_json(
