@@ -97,6 +97,12 @@ class Credential(BaseModel):
     credential_ref: CredentialRef = Field(default_factory=CredentialRef)
     client_certificate: Optional[ClientCertificate] = None
 
+    # Raw bearer/access token as presented by the caller, retained so it can be
+    # used as the subject_token for downstream token exchange (RFC 8693) when
+    # calling LLM providers or MCP servers on the caller's behalf. None for
+    # schemes without an exchangeable token (API key, HTTP basic, mTLS).
+    subject_token: Optional[str] = None
+
 
 class Principal(BaseModel):
     """Normalized caller identity. Identity only, no policy/budget state."""

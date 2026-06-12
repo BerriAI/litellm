@@ -87,6 +87,7 @@ class OAuth2Authenticator(Authenticator):
             audience=token_audience,
             scopes=split_scope(body.get("scope")),
             claims=claims,
+            subject_token=token,
         )
 
     def challenge(self) -> str:

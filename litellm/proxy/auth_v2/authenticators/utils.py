@@ -66,6 +66,7 @@ def credential_from_claims(
         scopes=split_scope(claims.get("scope")),
         claims=claims,
         credential_ref=CredentialRef(key_id=header.get("kid"), token_id=claims.get("jti")),
+        subject_token=token,
     )
 
 
