@@ -1069,6 +1069,110 @@ def _watsonx_rows(lines: list) -> int:
     return failures
 
 
+def _sagemaker_chat_rows(lines: list) -> int:
+    """wave-2b-beta: sagemaker_chat (base GPT config over SigV4 transport;
+    sagemaker_nova deliberately unregistered)."""
+    import pytest
+
+    from . import test_differential_sagemaker_chat_request as req
+    from . import test_differential_sagemaker_chat_response as resp
+    from . import test_differential_sagemaker_chat_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## sagemaker_chat (wave-2b-beta): requests (v1 get_optional_params"
+        " + the base GPT transform_request vs v2 providers/sagemaker_chat;"
+        " SigV4 signs after assembly — envelope)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, fragment = req.V1_RAISES[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        if ok:
+            try:
+                req.run_v1_request_transform(case)
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises UnsupportedParamsError)' if ok else 'DIVERGENT'}:"
+            f" {name}"
+        )
+    for name in sorted(req.V1_SERVES_FALLBACKS):
+        case, fragment = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and fragment in result.error.summary
+        failures += 0 if ok else 1
+        lines.append(f"- {'FALLBACK (v1 serves)' if ok else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## sagemaker_chat: responses (v1 base transform_response/cdr vs the"
+        " shared openai parser; bare wire model, no seam preset)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = resp._norm(v2) == resp._norm(v1) and v2["model"] == resp.WIRE_MODEL
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "## sagemaker_chat: streams (v1 AWS event-stream PARSED-event replay"
+        " through AWSEventStreamDecoder(is_messages_api) +"
+        " CustomStreamWrapper('sagemaker_chat') vs v2 openai parser + the"
+        " litellm-validation post-step, 'openai' dialect)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
+    bad = stream._chunk({"content": 5})
+    loud = stream.parse_event(dict(bad)).is_error()
+    if loud:
+        with pytest.raises(Exception):
+            stream._v1_chunks([bad])
+    failures += 0 if loud else 1
+    lines.append(
+        f"- {'FALLBACK (v1 raises ValidationError)' if loud else 'DIVERGENT'}:"
+        " non-string delta content (loud on both sides)"
+    )
+    return failures
+
+
 def _azure_rows(lines: list) -> int:
     import os
 
@@ -1560,6 +1664,7 @@ def main() -> None:
     failures += _cohere_rows(lines)
     failures += _mistral_rows(lines)
     failures += _watsonx_rows(lines)
+    failures += _sagemaker_chat_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

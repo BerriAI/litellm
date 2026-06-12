@@ -85,6 +85,15 @@ from ..providers.openai_compat import (
 from ..providers.openai_compat import (
     unsupported_request_shapes as openai_compat_unsupported_request_shapes,
 )
+from ..providers.sagemaker_chat import (
+    parse_response as sagemaker_chat_parse_response,
+)
+from ..providers.sagemaker_chat import (
+    serialize_request as sagemaker_chat_serialize_request,
+)
+from ..providers.sagemaker_chat import (
+    unsupported_request_shapes as sagemaker_chat_unsupported_request_shapes,
+)
 from ..providers.vertex_anthropic import (
     parse_response as vertex_anthropic_parse_response,
 )
@@ -135,6 +144,7 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "cohere_chat": cohere_serialize_request,
         "mistral": mistral_serialize_request,
         "watsonx": watsonx_serialize_request,
+        "sagemaker_chat": sagemaker_chat_serialize_request,
     }
 )
 
@@ -180,6 +190,9 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # wave-2b consumer; the seam must construct with usage_style
         # "openai_like", NOT "openai").
         "watsonx": watsonx_parse_response,
+        # sagemaker_chat: the shared openai parser verbatim (base
+        # transform_response is LIVE; bare wire model, no seam preset).
+        "sagemaker_chat": sagemaker_chat_parse_response,
     }
 )
 
@@ -223,6 +236,9 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # "openai_like" — this table is the outbound-body dialect only (the
         # construction-arm gate guards the seam read).
         "watsonx": _OPENAI_DIALECT,
+        # sagemaker_chat: openai everywhere (chunk-fold dialect "openai" at
+        # the AWS event-stream parsed-event seam).
+        "sagemaker_chat": _OPENAI_DIALECT,
     }
 )
 
@@ -259,6 +275,9 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         # watsonx: the shared openai guard (full name fallback); no
         # stream:false arm — the wire ALWAYS carries the stream key.
         "watsonx": watsonx_unsupported_request_shapes,
+        # sagemaker_chat: explicit stream:false + the shared openai guard
+        # (full name fallback).
+        "sagemaker_chat": sagemaker_chat_unsupported_request_shapes,
     }
 )
 

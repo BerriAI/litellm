@@ -384,6 +384,22 @@ translation/
 │   │                    #   httpx_chunk factory (reasoning="rename" + the
 │   │                    #   passthrough_delta_keys axis admitting
 │   │                    #   thinking_blocks); "xai" chunk dialect
+│   ├── sagemaker_chat/  # wave-2b-beta: SageMaker Messages-API endpoints —
+│   │   │                #   the BASE GPT config over SigV4 transport (the
+│   │   │                #   sign-after-body-final bedrock precedent;
+│   │   │                #   endpoint name == model; sagemaker_nova is
+│   │   │                #   deliberately unregistered)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   ├── params.py    # thinking/reasoning_effort raises, user drop,
+│   │   │                #   the gpt-4-named-endpoint response_format raise
+│   │   ├── serialize.py # assemble_body verbatim + top_k (mct passes
+│   │   │                #   VERBATIM — the widest list in the wave)
+│   │   ├── response.py  # re-export of the shared openai parser (bare
+│   │   │                #   wire model, construction arm "openai")
+│   │   └── stream.py    # openai parser + the litellm-validation post-step
+│   │                    #   (psf:None on every delta, tool type null ->
+│   │                    #   "function") at the AWS event-stream
+│   │                    #   PARSED-event seam; "openai" chunk dialect
 │   ├── watsonx/         # wave-2b-beta: watsonx /ml/v1/text/chat over the
 │   │   │                #   OpenAILikeChatHandler route (auth incl. the
 │   │   │                #   IAM-token network POST is envelope; project/
@@ -567,9 +583,9 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to sixty-nine providers out (wave-2b-beta adds
-`cohere`/`cohere_chat` (one module), `mistral`, and `watsonx` — see their
-paragraphs below) —
+OpenAI-chat-in to seventy providers out (wave-2b-beta adds
+`cohere`/`cohere_chat` (one module), `mistral`, `watsonx`, and
+`sagemaker_chat` — see their paragraphs below) —
 `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
@@ -919,6 +935,29 @@ Watsonx fork obligations (NOT wired; integrator scope): construction arm
 "openai_like" (NEVER "openai" — the construction-arm gate applies), no
 model preset, deps built with the resolved project/space ids, streams fold
 with the "generic" dialect over providers/watsonx.parse_line.
+Deliberate wave-2b-beta sagemaker_chat fallback surfaces
+(providers/sagemaker_chat; each names the v1 path): thinking/
+reasoning_effort (raises — the BASE GPT list, the widest in the wave),
+``user`` (silent drop), response_format on endpoints literally named
+gpt-4/gpt-3.5-turbo-16k (the base-list name gate raises — endpoint names
+are arbitrary so the corner is REACHABLE), explicit stream:false (rides
+the wire), aws_* kwargs (v1 places them in optional_params and the BODY
+carries them — wire-probed aws_region_name; v2's parse rejects the
+unknown key, v1 serves), message ``name`` (forwarded), and the
+parse-level unknowns (n/seed/penalties/logprobs/logit_bias/
+web_search_options — v1 serves all verbatim). SERVED pins:
+max_completion_tokens VERBATIM (no rename), top_k top-level
+(wire-proven), bare wire model on responses (cdr, construction arm
+"openai", NO preset), and streams at the AWS event-stream PARSED-event
+seam (botocore framing is transport — the bedrock precedent): the shared
+openai parser + a post-step mirroring the decoder's litellm validation
+(provider_specific_fields: None materialized on every delta, tool_call
+type missing-or-null -> "function") with wrong-typed delta strings LOUD
+(v1's StreamingChatCompletionChunk validation raises — not the watsonx
+swallow). sagemaker_nova shares the main.py branch but carries its own
+config overrides and stays a typed v1 fallback (canary in the request
+gate). SigV4 + the /invocations[-response-stream] URL split are envelope;
+the fork must sign AFTER wire_body finalizes (the bedrock rule).
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body

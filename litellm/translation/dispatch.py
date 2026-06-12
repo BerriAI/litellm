@@ -126,6 +126,12 @@ Provider = Literal[
     # watsonx/{wire_model} response prefix is parser scope; streams ride the
     # generic dialect via the databricks iterator).
     "watsonx",
+    # wave-2b-beta: sagemaker_chat (base GPT config over SigV4 transport;
+    # the endpoint name is the model; streams pinned at the AWS
+    # event-stream PARSED-event seam with the openai dialect).
+    # sagemaker_nova shares the main.py branch but carries its OWN config
+    # overrides and is deliberately ABSENT (stays a typed v1 fallback).
+    "sagemaker_chat",
 ]
 
 NeverPortProvider = Literal[
