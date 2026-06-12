@@ -464,6 +464,23 @@ def test_refs_depth_cap_is_v1s_default_max_recurse_depth(levels: int) -> None:
     assert stripped == (levels < 96), "the cap boundary moved; re-derive"
 
 
+def test_non_object_content_entry_reason_names_v1s_attribute_error() -> None:
+    """verifier-wave2b-beta F10: the old reason inherited the family's
+    'v1 forwards the original shape' suffix — for mistral, v1's
+    _transform_messages fork check raises AttributeError on a non-object
+    content entry (two-sided here)."""
+    case = {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "a"}, 5]}],
+    }
+    result = _v2(case)
+    assert result.is_error()
+    assert "raises AttributeError" in result.error.summary
+    assert "forwards the original shape" not in result.error.summary
+    with pytest.raises(AttributeError):
+        run_v1_request_transform(case)
+
+
 def test_empty_text_list_falls_back_v1_keeps_list_form() -> None:
     """v1's flatten only assigns a TRUTHY join: a list flattening to ""
     keeps its LIST form on the wire, which the IR cannot reproduce."""

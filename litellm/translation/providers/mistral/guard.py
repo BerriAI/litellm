@@ -31,10 +31,34 @@ _Raw = Mapping[str, object]
 
 
 def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
-    reason = _name_reason(raw)
+    reason = _name_reason(raw) or _malformed_entry_reason(raw)
     if reason is not None:
         return TranslationError.of_unsupported(reason)
     return openai_unsupported_request_shapes(raw, skip_name_fallback=True)
+
+
+def _malformed_entry_reason(raw: _Raw) -> str | None:
+    """verifier-wave2b-beta F10: the shared guard's 'v1 forwards the
+    original shape' suffix is FALSE for mistral's non-object content-list
+    entries — v1's ``_transform_messages`` fork check reads ``part.get``
+    over the raw list and raises AttributeError. Fallback-safe either way;
+    this arm fires first so the reason names mistral's real v1 path."""
+    messages = _as_seq(raw.get("messages"))
+    if messages is None:
+        return None
+    for item in messages:
+        entry = _as_map(item)
+        if entry is None:
+            continue
+        content = _as_seq(entry.get("content"))
+        if content is None:
+            continue
+        if any(_as_map(part) is None for part in content):
+            return (
+                "non-object content-list entry: v1's mistral "
+                "_transform_messages fork check raises AttributeError on it"
+            )
+    return None
 
 
 def _name_reason(raw: _Raw) -> str | None:
