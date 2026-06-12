@@ -80,6 +80,19 @@ class MTHeadroomAggressive(HeadroomCallback):
     tool_result becomes a compression target instead of a protected one.
     """
 
+    # LiteLLM's pre-call dispatch (litellm/proxy/utils.py:1508) only invokes
+    # async_pre_call_hook when the method is defined directly on the registered
+    # class (`"async_pre_call_hook" in vars(_callback.__class__)`). If we only
+    # inherit it from HeadroomCallback, the dispatch skips us silently. So
+    # re-declare the hook here as a thin pass-through to super().
+    async def async_pre_call_hook(
+        self,
+        user_api_key: str,
+        data: dict[str, Any],
+        call_type: str,
+    ) -> dict[str, Any]:
+        return await super().async_pre_call_hook(user_api_key, data, call_type)
+
     def _local_compress(self, messages: list[dict], model: str) -> dict[str, Any] | None:
         from headroom.compress import compress  # type: ignore[import-not-found]
 
