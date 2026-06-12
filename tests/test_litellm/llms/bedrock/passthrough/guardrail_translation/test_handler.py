@@ -598,6 +598,25 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         assert result["stopReason"] == "end_turn"
 
     @pytest.mark.asyncio
+    async def test_response_guardrail_returning_no_texts_preserves_output(self, monkeypatch):
+        """A guardrail that returns no texts must leave the response untouched and
+        not warn, mirroring the request path's empty-result guard."""
+        handler = BedrockPassthroughGuardrailHandler()
+        response = self._converse_response("Model reply")
+        guardrail = _make_guardrail({"texts": []})
+
+        warnings = []
+        monkeypatch.setattr(
+            "litellm.llms.bedrock.passthrough.guardrail_translation.handler.verbose_proxy_logger.warning",
+            lambda *args, **kwargs: warnings.append(args),
+        )
+
+        result = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+
+        assert not warnings
+        assert result["output"]["message"]["content"][0]["text"] == "Model reply"
+
+    @pytest.mark.asyncio
     async def test_response_reasoning_and_tooluse_extracted_and_masked(self):
         """Model output hidden in reasoningContent.reasoningText.text and
         toolUse.input must be scanned and masked, but the reasoning signature

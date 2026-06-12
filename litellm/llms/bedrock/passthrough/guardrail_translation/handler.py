@@ -497,6 +497,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         )
 
         guardrailed_texts = guardrailed_inputs.get("texts", [])
-        _write_back_texts(guardrailed_texts, holders)
+        if guardrailed_texts:
+            _write_back_texts(guardrailed_texts, holders)
 
         return response
