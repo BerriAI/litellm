@@ -92,6 +92,13 @@ def parse_event(event: PlainJson) -> _EventResult:
         normalized_choices = [normalized]
     identifier = event.get("id")
     chunk: dict[str, PlainJson] = {
+        # The decode seam on this path is the VALIDATED SDK
+        # ChatCompletionChunk, which materializes service_tier=None even when
+        # the wire JSON omits the key, and v1's wrapper copies it onto every
+        # emitted chunk; preset it so the real wire shape (key absent)
+        # matches v1's SDK-materialized null (verifier-wave1a F1). A
+        # wire-carried value overrides via the spread below.
+        "service_tier": None,
         # Keys outside ModelResponseStream's field set ride along verbatim:
         # v1's wrapper setattrs them onto every emitted chunk
         # (preserve_upstream_non_openai_attributes, e.g. service_tier).

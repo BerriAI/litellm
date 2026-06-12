@@ -32,6 +32,23 @@ Provider = Literal[
     "gemini",
     "vertex_anthropic",
     "xai",
+    # wave-1a: the SDK-path openai-compat family (providers/compat_sdk).
+    # baseten is deliberately ABSENT: its streams ride a dedicated legacy
+    # CustomStreamWrapper branch (handle_baseten_chunk), not the openai
+    # dialect, so it stays a typed v1 fallback (wave1a-port.md).
+    "together_ai",
+    "cerebras",
+    "nvidia_nim",
+    "lm_studio",
+    "llamafile",
+    "lambda_ai",
+    "nebius",
+    "novita",
+    "wandb",
+    "featherless_ai",
+    "nscale",
+    "hyperbolic",
+    "volcengine",
 ]
 
 _SAME_FAMILY: frozenset[tuple[InboundSchema, Provider]] = frozenset(
@@ -44,6 +61,10 @@ _SAME_FAMILY: frozenset[tuple[InboundSchema, Provider]] = frozenset(
         # xai is NOT same-family despite speaking openai-chat: v1's transform
         # touches the body (tools strict strip, non-user message name strip),
         # so a verbatim fast-path forward would diverge from v1.
+        # The compat_sdk family is NOT same-family either: their param maps
+        # touch the body (mct -> max_tokens renames, supported-list raises,
+        # together's response_format pop), so a verbatim forward would
+        # diverge from v1's gates.
     }
 )
 

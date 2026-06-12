@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from ...ir import ChatRequest
 
-_RESPONSE_FORMAT_UNSUPPORTED_MODELS = ("gpt-4", "gpt-3.5-turbo-16k")
+RESPONSE_FORMAT_UNSUPPORTED_MODELS = ("gpt-4", "gpt-3.5-turbo-16k")
 """v1's get_supported_openai_params excludes response_format for exactly
 these two model names (gpt_transformation.py:172-175) and then DROPS or
 RAISES on it in get_optional_params; fail closed instead of re-deriving the
@@ -52,7 +52,7 @@ def unsupported_params(request: ChatRequest) -> str | None:
 def unsupported_response_format(request: ChatRequest) -> str | None:
     if request.response_format.is_none():
         return None
-    if request.model in _RESPONSE_FORMAT_UNSUPPORTED_MODELS:
+    if request.model in RESPONSE_FORMAT_UNSUPPORTED_MODELS:
         return (
             f"response_format on {request.model}: outside v1's supported set "
             "(gpt_transformation.py:172-175); v1 raises or drops it"

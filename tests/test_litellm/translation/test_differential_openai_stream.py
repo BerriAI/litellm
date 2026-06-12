@@ -35,13 +35,17 @@ MODEL = "gpt-4o"
 
 
 def _chunk(delta=None, finish=None, usage=None, choices=None):
+    # The REAL wire shape: no service_tier key (compat wires essentially
+    # never carry it). v1's validated SDK ChatCompletionChunk materializes
+    # service_tier=None anyway; hard-coding the key here biased every replay
+    # toward that SDK artifact and masked the divergence (verifier-wave1a
+    # F1) -- the v2 parser now presets the key instead.
     payload = {
         "id": "chatcmpl-S1",
         "object": "chat.completion.chunk",
         "created": 1718000000,
         "model": "gpt-4o-2024-08-06",
         "system_fingerprint": "fp_stream",
-        "service_tier": None,
         "choices": [
             {
                 "index": 0,
@@ -127,6 +131,12 @@ STREAMS = {
         _chunk(_delta(content="ok")),
         _chunk(_delta(), finish="stop"),
     ],
+    "service_tier_wire_carried": [
+        # the other F1 direction: a wire-CARRIED service_tier value must
+        # override the parser's None preset on both sides
+        {**_chunk(_delta(role="assistant", content="hi")), "service_tier": "default"},
+        {**_chunk(_delta(), finish="stop"), "service_tier": "default"},
+    ],
 }
 
 _USAGE = {
@@ -187,6 +197,16 @@ def _norm(chunks: list) -> str:
 def test_v2_stream_matches_v1(name: str, frozen_ambient) -> None:
     events = STREAMS[name]
     assert _norm(_v2_chunks(events)) == _norm(_v1_chunks(events))
+
+
+def test_wire_carried_service_tier_overrides_the_preset(frozen_ambient) -> None:
+    """Both directions of the F1 fix: the de-biased STREAMS rows pin
+    key-absent wire chunks (v1's SDK materializes service_tier=None; the v2
+    parser presets it), and this one pins that a wire-CARRIED value rides
+    through the preset verbatim on both sides (parity itself is the
+    parametrized STREAMS row)."""
+    v2 = _v2_chunks(STREAMS["service_tier_wire_carried"])
+    assert all(chunk["service_tier"] == "default" for chunk in v2)
 
 
 def test_v2_stream_decodes_sse_lines_identically(frozen_ambient) -> None:

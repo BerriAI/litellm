@@ -53,6 +53,10 @@ from ..providers.bedrock_invoke import parse_response as bedrock_invoke_parse_re
 from ..providers.bedrock_invoke import (
     serialize_request as bedrock_invoke_serialize_request,
 )
+from ..providers.compat_sdk import SERIALIZERS as compat_sdk_serializers
+from ..providers.compat_sdk import (
+    unsupported_request_shapes as compat_sdk_unsupported_request_shapes,
+)
 from ..providers.google_genai import parse_response as google_parse_response
 from ..providers.google_genai import (
     serialize_request_studio as google_serialize_request_studio,
@@ -101,6 +105,11 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "azure_ai": azure_ai_serialize_request,
         "azure_ai_anthropic": azure_ai_claude_serialize_request,
         "xai": xai_serialize_request,
+        # compat_sdk family: the registry is the family's own frozen
+        # PROFILES-derived table, spliced in whole. This splice (one line per
+        # TABLE, never per provider) is the registration convention every
+        # wave-1b/2 family follows.
+        **compat_sdk_serializers,
     }
 )
 
@@ -117,8 +126,18 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         "azure_ai": azure_ai_parse_response,
         "azure_ai_anthropic": azure_ai_claude_parse_response,
         "xai": xai_parse_response,
+        # compat_sdk family: the live v1 normalizer is the same
+        # convert_to_model_response_object the openai parser mirrors; the
+        # {provider}/{wire_model} re-prefix is the seam's preset arm
+        # (_to_model_response_openai), not parser scope.
+        **{
+            provider: openai_compat_parse_response
+            for provider in compat_sdk_serializers
+        },
     }
 )
+
+_OPENAI_DIALECT: ResponseDialect = "openai"
 
 _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
     {
@@ -133,6 +152,9 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         "azure_ai": "openai",
         "azure_ai_anthropic": "anthropic",  # genuine anthropic wire format
         "xai": "openai",  # httpx path, same normalized wire-body ride
+        # compat_sdk family: SDK path, default openai wrapper arm (the
+        # per-provider stream replays pin that no dedicated branch fires)
+        **{provider: _OPENAI_DIALECT for provider in compat_sdk_serializers},
     }
 )
 
@@ -151,6 +173,10 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         "vertex_ai": google_unsupported_request_shapes,
         "gemini": google_unsupported_request_shapes,
         "xai": xai_unsupported_request_shapes,
+        **{
+            provider: compat_sdk_unsupported_request_shapes
+            for provider in compat_sdk_serializers
+        },
     }
 )
 

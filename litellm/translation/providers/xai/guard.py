@@ -27,6 +27,7 @@ from typing import cast
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 from ...errors import TranslationError
+from ..openai_compat.guard import explicit_stream_false
 from ..openai_compat.guard import (
     unsupported_request_shapes as openai_unsupported_request_shapes,
 )
@@ -56,11 +57,9 @@ def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
             "use_xai_oauth: v1 runs an interactive browser PKCE flow inside "
             "validate_environment (llms/xai/oauth.py); v1 owns it"
         )
-    if "stream" in raw and raw.get("stream") is False:
-        return TranslationError.of_unsupported(
-            "explicit stream: false (the xai httpx path keeps the key on the "
-            "wire; absent-vs-false is lost in the IR)"
-        )
+    stream_false = explicit_stream_false(raw)
+    if stream_false is not None:
+        return stream_false
     reason = _nested_tool_strict_reason(raw)
     if reason is not None:
         return TranslationError.of_unsupported(reason)
