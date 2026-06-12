@@ -1097,7 +1097,9 @@ class HTTPHandler:
         default_headers = get_default_headers() if not disable_default_headers else None
 
         if client is None:
-            _transport = transport if transport is not None else self._create_sync_transport()
+            _transport = (
+                transport if transport is not None else self._create_sync_transport()
+            )
 
             # Create a client with a connection pool
             self.client = httpx.Client(
