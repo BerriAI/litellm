@@ -64,13 +64,23 @@ _hr_config.DEFAULT_EXCLUDE_TOOLS = frozenset(
 
 # ---------------------------------------------------------------------------
 # Step 2: subclass HeadroomCallback to pass aggressive flags to compress().
+#
+# ALSO mix in CustomLogger so LiteLLM's pre-call dispatcher accepts us.
+# proxy/utils.py:1486 gates dispatch on
+#     isinstance(_callback, CustomLogger)
+#         and "async_pre_call_hook" in vars(_callback.__class__)
+#         and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
+# Upstream HeadroomCallback inherits from object only, so without CustomLogger
+# in our MRO the dispatch silently skips us even though we appear in
+# ``litellm.callbacks``.
 # ---------------------------------------------------------------------------
 from headroom.integrations.litellm_callback import (  # noqa: E402  type: ignore[import-not-found]
     HeadroomCallback,
 )
+from litellm.integrations.custom_logger import CustomLogger  # noqa: E402
 
 
-class MTHeadroomAggressive(HeadroomCallback):
+class MTHeadroomAggressive(HeadroomCallback, CustomLogger):
     """LiteLLM callback that compresses with Phase A's proven aggressive flags.
 
     The default `HeadroomCallback._local_compress` calls
