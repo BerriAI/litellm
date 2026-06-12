@@ -111,13 +111,14 @@ METRIC_METADATA_KEYS: Tuple[str, ...] = (
     "vector_store_request_metadata",
 )
 
+TOKEN_TYPE_ATTRIBUTE: str = "gen_ai.token.type"
+
 VALID_METRIC_ATTRIBUTE_NAMES: FrozenSet[str] = frozenset(
     (
         "gen_ai.operation.name",
         "gen_ai.system",
         "gen_ai.request.model",
         "gen_ai.framework",
-        "gen_ai.token.type",
         "hidden_params",
     )
     + tuple(f"metadata.{key}" for key in METRIC_METADATA_KEYS)
@@ -155,10 +156,14 @@ def _resolve_metric_attribute_filter(
         raise ValueError(
             "otel.attributes: include_list and exclude_list are mutually exclusive"
         )
+    requested = include or exclude or []
+    if TOKEN_TYPE_ATTRIBUTE in requested:
+        raise ValueError(
+            f"otel.attributes: {TOKEN_TYPE_ATTRIBUTE} is a structural token-usage "
+            "discriminator and cannot be filtered"
+        )
     unknown = sorted(
-        name
-        for name in (include or exclude or [])
-        if name not in VALID_METRIC_ATTRIBUTE_NAMES
+        name for name in requested if name not in VALID_METRIC_ATTRIBUTE_NAMES
     )
     if unknown:
         raise ValueError(
@@ -1484,8 +1489,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 and (usage := response_obj.get("usage"))
                 and self._token_usage_histogram
             ):
-                in_attrs = {**common_attrs, "gen_ai.token.type": "input"}
-                out_attrs = {**common_attrs, "gen_ai.token.type": "output"}
+                in_attrs = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "input"}
+                out_attrs = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "output"}
                 self._token_usage_histogram.record(
                     usage.get("prompt_tokens", 0), attributes=in_attrs
                 )

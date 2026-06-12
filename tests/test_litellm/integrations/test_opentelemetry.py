@@ -5698,15 +5698,19 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
         attrs = {"gen_ai.request.model": "m", "hidden_params": "{}"}
         self.assertIs(otel._filter_metric_attributes(attrs), attrs)
 
-    def test_exclude_list_cannot_strip_token_type_discriminator(self):
-        """gen_ai.token.type is stamped onto the input/output token series after
-        filtering, so it survives even when explicitly excluded. Stripping it
-        would collapse the two series into one and corrupt the metric; this
-        locks that contract so a refactor moving the filter past it trips."""
-        reader = self._record(
-            OTELMetricAttributeFilter(exclude_list=["gen_ai.token.type"])
-        )
-        token_keysets = self._keysets(reader, self.TOKEN_METRIC)
-        self.assertTrue(token_keysets, "token-usage metric was not recorded")
-        for keys in token_keysets:
-            self.assertIn("gen_ai.token.type", keys)
+    def test_token_type_discriminator_rejected_from_either_list(self):
+        """gen_ai.token.type is a structural discriminator stamped onto the
+        input/output token series after filtering; it cannot be filtered without
+        collapsing the two series into one. Listing it in include_list or
+        exclude_list is rejected loudly at startup rather than silently ignored,
+        so an operator gets an error instead of a no-op."""
+        for attributes in (
+            OTELMetricAttributeFilter(exclude_list=["gen_ai.token.type"]),
+            OTELMetricAttributeFilter(include_list=["gen_ai.token.type"]),
+        ):
+            with self.assertRaises(ValueError):
+                OpenTelemetry(
+                    config=OpenTelemetryConfig(
+                        exporter="console", attributes=attributes
+                    )
+                )
