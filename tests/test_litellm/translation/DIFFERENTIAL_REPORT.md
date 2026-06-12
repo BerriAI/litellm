@@ -1,4 +1,4 @@
-# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the wave-1a compat_sdk family)
+# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family: wave 1a + wave 2a)
 
 v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
 explained FALLBACK that v1 serves) for a provider's flag to turn on.
@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: c6dfb86247
+- commit: c52360173d
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -229,6 +229,54 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): cerebras:seed_outside_ir (seed)
 - FALLBACK (v1 serves it): cerebras:string_form_stop (string-form stop)
 
+## cometapi: request bodies (v1 get_optional_params('cometapi') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): cometapi:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 serves it): cometapi:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): cometapi:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): cometapi:message_name_field (message name field)
+- FALLBACK (v1 serves it): cometapi:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): cometapi:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): cometapi:top_k_extra_body (extra_body)
+- FALLBACK (v1 serves it): cometapi:user_model_list_gate (user)
+
+## deepinfra: request bodies (v1 get_optional_params('deepinfra') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): deepinfra:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): deepinfra:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): deepinfra:tool_choice_required (tool_choice)
+- FALLBACK (v1 raises UnsupportedParamsError): deepinfra:tool_choice_specific (tool_choice)
+- FALLBACK (v1 serves it): deepinfra:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): deepinfra:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): deepinfra:message_name_field (message name field)
+- FALLBACK (v1 serves it): deepinfra:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): deepinfra:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): deepinfra:tool_message_list_content (list-form tool content)
+- FALLBACK (v1 serves it): deepinfra:top_k_extra_body (extra_body)
+- FALLBACK (v1 serves it): deepinfra:user_model_list_gate (user)
+
 ## featherless_ai: request bodies (v1 get_optional_params('featherless_ai') + transform_request vs v2 compat_sdk)
 
 - IDENTICAL: max_completion_tokens
@@ -338,6 +386,33 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): lm_studio:string_form_stop (string-form stop)
 - FALLBACK (v1 serves it): lm_studio:user_model_list_gate (user)
 
+## moonshot: request bodies (v1 get_optional_params('moonshot') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): moonshot:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): moonshot:tool_choice_on_kimi_thinking_preview (kimi-thinking-preview)
+- FALLBACK (v1 raises UnsupportedParamsError): moonshot:tools_on_kimi_thinking_preview (kimi-thinking-preview)
+- FALLBACK (v1 serves it): moonshot:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): moonshot:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): moonshot:message_name_field (message name field)
+- FALLBACK (v1 serves it): moonshot:reasoning_model_tool_history (fill_reasoning_content)
+- FALLBACK (v1 serves it): moonshot:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): moonshot:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): moonshot:tool_choice_required (synthetic user message)
+- FALLBACK (v1 serves it): moonshot:top_k_extra_body (extra_body)
+- FALLBACK (v1 serves it): moonshot:user_model_list_gate (user)
+
 ## nebius: request bodies (v1 get_optional_params('nebius') + transform_request vs v2 compat_sdk)
 
 - IDENTICAL: max_completion_tokens
@@ -428,6 +503,57 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): nvidia_nim:string_form_stop (string-form stop)
 - FALLBACK (v1 serves it): nvidia_nim:user_model_list_gate (user)
 
+## perplexity: request bodies (v1 get_optional_params('perplexity') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- FALLBACK (v1 raises UnsupportedParamsError): perplexity:parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): perplexity:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): perplexity:stop (stop)
+- FALLBACK (v1 raises UnsupportedParamsError): perplexity:tool_choice (tool_choice)
+- FALLBACK (v1 raises UnsupportedParamsError): perplexity:tools (tools)
+- FALLBACK (v1 serves it): perplexity:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): perplexity:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): perplexity:message_name_field (message name field)
+- FALLBACK (v1 serves it): perplexity:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): perplexity:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): perplexity:top_k_extra_body (extra_body)
+- FALLBACK (v1 serves it): perplexity:user_model_list_gate (user)
+- FALLBACK (v1 serves it): perplexity:web_search_options (web_search_options)
+
+## sambanova: request bodies (v1 get_optional_params('sambanova') + transform_request vs v2 compat_sdk)
+
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: stop_list
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): sambanova:parallel_on_non_fc_model (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): sambanova:reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): sambanova:tool_choice_on_non_fc_model (tool_choice)
+- FALLBACK (v1 raises UnsupportedParamsError): sambanova:tools_on_non_fc_model (tools)
+- FALLBACK (v1 serves it): sambanova:both_max_tokens_keys (both max_tokens and max_completion_tokens)
+- FALLBACK (v1 serves it): sambanova:explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): sambanova:image_content_list (non-text content block)
+- FALLBACK (v1 serves it): sambanova:message_name_field (message name field)
+- FALLBACK (v1 serves it): sambanova:seed_outside_ir (seed)
+- FALLBACK (v1 serves it): sambanova:stream_options (stream_options)
+- FALLBACK (v1 serves it): sambanova:string_form_stop (string-form stop)
+- FALLBACK (v1 serves it): sambanova:top_k_extra_body (extra_body)
+- FALLBACK (v1 serves it): sambanova:user_model_list_gate (user)
+
 ## together_ai: request bodies (v1 get_optional_params('together_ai') + transform_request vs v2 compat_sdk)
 
 - IDENTICAL: max_completion_tokens
@@ -500,11 +626,14 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): wandb:string_form_stop (string-form stop)
 - FALLBACK (v1 serves it): wandb:user_model_list_gate (user)
 
-## compat_sdk family: responses (v1 convert_to_model_response_object with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm)
+## compat_sdk family: responses (v1 convert_to_model_response_object with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm; SDK-path members only — cometapi's no-prefix rows are below)
 
 - IDENTICAL: cerebras cached_and_reasoning_usage_details
 - IDENTICAL: cerebras text
 - IDENTICAL: cerebras tool_calls_rewrites_stop
+- IDENTICAL: deepinfra cached_and_reasoning_usage_details
+- IDENTICAL: deepinfra text
+- IDENTICAL: deepinfra tool_calls_rewrites_stop
 - IDENTICAL: featherless_ai cached_and_reasoning_usage_details
 - IDENTICAL: featherless_ai text
 - IDENTICAL: featherless_ai tool_calls_rewrites_stop
@@ -520,6 +649,9 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: lm_studio cached_and_reasoning_usage_details
 - IDENTICAL: lm_studio text
 - IDENTICAL: lm_studio tool_calls_rewrites_stop
+- IDENTICAL: moonshot cached_and_reasoning_usage_details
+- IDENTICAL: moonshot text
+- IDENTICAL: moonshot tool_calls_rewrites_stop
 - IDENTICAL: nebius cached_and_reasoning_usage_details
 - IDENTICAL: nebius text
 - IDENTICAL: nebius tool_calls_rewrites_stop
@@ -532,6 +664,12 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: nvidia_nim cached_and_reasoning_usage_details
 - IDENTICAL: nvidia_nim text
 - IDENTICAL: nvidia_nim tool_calls_rewrites_stop
+- IDENTICAL: perplexity cached_and_reasoning_usage_details
+- IDENTICAL: perplexity text
+- IDENTICAL: perplexity tool_calls_rewrites_stop
+- IDENTICAL: sambanova cached_and_reasoning_usage_details
+- IDENTICAL: sambanova text
+- IDENTICAL: sambanova tool_calls_rewrites_stop
 - IDENTICAL: together_ai cached_and_reasoning_usage_details
 - IDENTICAL: together_ai text
 - IDENTICAL: together_ai tool_calls_rewrites_stop
@@ -541,12 +679,16 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: wandb cached_and_reasoning_usage_details
 - IDENTICAL: wandb text
 - IDENTICAL: wandb tool_calls_rewrites_stop
+- IDENTICAL: perplexity citations dormancy (transform_response's annotation/citation-token enrichment is DEAD on the SDK path; citations/search_results survive via cdr's unknown-key mirror only)
 
-## compat_sdk family: streams (v1 CustomStreamWrapper(provider) over SDK chunks vs v2 openai dialect)
+## compat_sdk family: streams (v1 CustomStreamWrapper(provider) over SDK chunks vs v2 openai dialect; SDK-path members only)
 
 - IDENTICAL: cerebras empty_keepalive_swallowed
 - IDENTICAL: cerebras text
 - IDENTICAL: cerebras tools
+- IDENTICAL: deepinfra empty_keepalive_swallowed
+- IDENTICAL: deepinfra text
+- IDENTICAL: deepinfra tools
 - IDENTICAL: featherless_ai empty_keepalive_swallowed
 - IDENTICAL: featherless_ai text
 - IDENTICAL: featherless_ai tools
@@ -562,6 +704,9 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: lm_studio empty_keepalive_swallowed
 - IDENTICAL: lm_studio text
 - IDENTICAL: lm_studio tools
+- IDENTICAL: moonshot empty_keepalive_swallowed
+- IDENTICAL: moonshot text
+- IDENTICAL: moonshot tools
 - IDENTICAL: nebius empty_keepalive_swallowed
 - IDENTICAL: nebius text
 - IDENTICAL: nebius tools
@@ -574,6 +719,12 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: nvidia_nim empty_keepalive_swallowed
 - IDENTICAL: nvidia_nim text
 - IDENTICAL: nvidia_nim tools
+- IDENTICAL: perplexity empty_keepalive_swallowed
+- IDENTICAL: perplexity text
+- IDENTICAL: perplexity tools
+- IDENTICAL: sambanova empty_keepalive_swallowed
+- IDENTICAL: sambanova text
+- IDENTICAL: sambanova tools
 - IDENTICAL: together_ai empty_keepalive_swallowed
 - IDENTICAL: together_ai text
 - IDENTICAL: together_ai tools
@@ -583,21 +734,41 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: wandb empty_keepalive_swallowed
 - IDENTICAL: wandb text
 - IDENTICAL: wandb tools
+- IDENTICAL: perplexity wire-carried citations (body value survives the seam's citations preset; None preset where the wire carried none)
 - SEAM CONTRACT: cerebras usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: deepinfra usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: featherless_ai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: hyperbolic usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: lambda_ai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: llamafile usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: lm_studio usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: moonshot usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: nebius usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: novita usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: nscale usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: nvidia_nim usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: perplexity usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
+- SEAM CONTRACT: sambanova usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: together_ai usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: volcengine usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 - SEAM CONTRACT: wandb usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 
 - DROPPED FROM WAVE 1A: baseten (streams ride the dedicated legacy handle_baseten_chunk wrapper branch, not the openai dialect; unregistered, typed v1 fallback; canary test_baseten_drop_canary pins the evidence)
+
+## cometapi: responses (v1 CometAPIConfig.transform_response over httpx — LIVE on the dedicated elif, main.py:2547 — vs v2 shared openai parser with NO model preset; bare wire model, the xai R4 pin)
+
+- IDENTICAL: reasoning_usage_details (no prefix)
+- IDENTICAL: text (no prefix)
+- IDENTICAL: tool_calls (no prefix)
+
+## cometapi: streams (v1 line-seam replay through CometAPIChatCompletionStreamingHandler + CustomStreamWrapper('cometapi') vs v2 cometapi parser + the shared xai chunk dialect)
+
+- IDENTICAL: extras_dropped
+- IDENTICAL: native_reasoning_content
+- IDENTICAL: reasoning_rename
+- IDENTICAL: text
+- IDENTICAL: tools
+- SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; the streaming seam owns v1's synthesized final chunk)
 
 ## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)
 
