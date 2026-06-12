@@ -102,6 +102,18 @@ def _openai_rows(lines: list) -> int:
         )
         failures += 0 if same else 1
         lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for preset in (resp.PRESET_PREFIXED_MODEL, "no-slash-model"):
+        same = resp._norm(
+            resp._v2_model_response(resp._RESPONSES["text"], preset_model=preset)
+        ) == resp._norm(
+            resp._v1_model_response(resp._RESPONSES["text"], preset_model=preset)
+        )
+        failures += 0 if same else 1
+        lines.append(
+            f"- {'IDENTICAL' if same else 'DIVERGENT'}: "
+            f"text (pre-set model_response.model={preset!r}; the compat"
+            " provider/wire-model re-prefix arm)"
+        )
     lines += [
         "",
         "## openai_compat: streams (v1 CustomStreamWrapper over SDK chunks vs v2 fold)",

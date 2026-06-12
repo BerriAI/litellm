@@ -249,20 +249,26 @@ _UNSUPPORTED = {
 }
 
 
-def _v1_model_response(raw: dict) -> dict:
+PRESET_PREFIXED_MODEL = "someprovider/pre-call-model"
+
+
+def _v1_model_response(raw: dict, preset_model: str | None = None) -> dict:
     result = convert_to_model_response_object(
-        response_object=copy.deepcopy(raw), model_response_object=ModelResponse()
+        response_object=copy.deepcopy(raw),
+        model_response_object=ModelResponse(model=preset_model),
     )
     return result.model_dump()
 
 
-def _v2_model_response(raw: dict) -> dict:
+def _v2_model_response(raw: dict, preset_model: str | None = None) -> dict:
     parsed = parse_request(copy.deepcopy(_REQUEST))
     assert parsed.is_ok(), parsed.error.summary
     response = parse_response(copy.deepcopy(raw), parsed.ok)
     assert response.is_ok(), response.error.summary
     body = serialize_response(response.ok, build_translation_deps(), "openai")
-    return to_model_response(body, usage_style="openai").model_dump()
+    return to_model_response(
+        body, ModelResponse(model=preset_model), usage_style="openai"
+    ).model_dump()
 
 
 def _norm(payload: dict) -> str:
@@ -273,6 +279,27 @@ def _norm(payload: dict) -> str:
 def test_v2_response_matches_v1(name: str, frozen_ambient) -> None:
     raw = _RESPONSES[name]
     assert _norm(_v2_model_response(raw)) == _norm(_v1_model_response(raw))
+
+
+@pytest.mark.parametrize("preset", [PRESET_PREFIXED_MODEL, "no-slash-model"])
+def test_preset_model_handling_matches_v1(preset: str, frozen_ambient) -> None:
+    """v1's openai handler pre-sets model_response.model to
+    "{custom_llm_provider}/{model}" for every non-"openai" compat consumer
+    BEFORE conversion, and the completion branch then rewrites it to
+    "{provider}/{wire model}". A fresh ModelResponse (model=None) can never
+    exercise that arm, so these rows pass a pre-set model into BOTH sides:
+    the prefixed preset must be re-prefixed onto the wire model, the
+    slash-free preset must be kept verbatim (critic-openai B1)."""
+    raw = _RESPONSES["text"]
+    v1 = _v1_model_response(raw, preset_model=preset)
+    v2 = _v2_model_response(raw, preset_model=preset)
+    assert _norm(v2) == _norm(v1)
+    expected = (
+        "someprovider/gpt-4o-2024-08-06"
+        if preset == PRESET_PREFIXED_MODEL
+        else "no-slash-model"
+    )
+    assert v2["model"] == expected
 
 
 @pytest.mark.parametrize("name", sorted(_UNSUPPORTED))

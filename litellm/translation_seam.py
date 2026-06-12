@@ -176,9 +176,18 @@ def _to_model_response_openai(
         response.id = body_id
     if "system_fingerprint" in body:
         response.system_fingerprint = cast(Any, body["system_fingerprint"])
-    model = body.get("model")
-    if isinstance(model, str) and response.model is None:
-        response.model = model
+    if "model" in body:
+        wire_model = body["model"]
+        if response.model is None:
+            response.model = cast(Any, wire_model)
+        elif "/" in response.model and wire_model is not None:
+            # v1's openai handler pre-sets model_response.model to
+            # "{custom_llm_provider}/{model}" for every non-"openai" compat
+            # consumer (llms/openai/openai.py), and the completion branch then
+            # rewrites it to "{provider}/{wire model}"
+            # (convert_dict_to_response.py:699-711). Mirror it verbatim.
+            compat_provider = response.model.split("/")[0]
+            response.model = f"{compat_provider}/{wire_model}"
     for key, value in body.items():
         if key not in _OPENAI_BODY_ENVELOPE_FIELDS:
             setattr(response, key, value)
