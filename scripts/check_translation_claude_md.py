@@ -23,11 +23,16 @@ CLAUDE_MD = PACKAGE / "CLAUDE.md"
 DIR_TOKEN = re.compile(r"([A-Za-z_][\w.]*)/")
 
 
+def is_tooling_dir(path: Path) -> bool:
+    parts = path.relative_to(PACKAGE).parts
+    return any(part == "__pycache__" or part.startswith(".") for part in parts)
+
+
 def real_dirs() -> frozenset[str]:
     return frozenset(
         p.name
         for p in PACKAGE.rglob("*")
-        if p.is_dir() and p.name != "__pycache__"
+        if p.is_dir() and not is_tooling_dir(p)
     )
 
 
