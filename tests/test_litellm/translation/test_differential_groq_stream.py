@@ -236,25 +236,46 @@ def test_null_reasoning_still_serves(frozen_ambient) -> None:
     assert _norm(_v2_chunks(events)) == _norm(_v1_chunks(events))
 
 
-def test_non_str_refusal_nulling_handoff_to_the_factory_fix(frozen_ambient) -> None:
-    """INTEGRATOR-FLIP (wave-2b-beta F6 handoff — sibling merge): a non-str
-    ``refusal`` is nulled by the SHARED factory's _string_or_none
-    (openai_compat/httpx_chunk.py) while v1 FORWARDS it on the wire — both
-    serve, bodies differ. That file is the alpha fix round's concurrent
-    edit (verifier-wave2b-alpha F1, same machinery), so this branch does
-    NOT touch it; this row GUARDS THE CURRENT (divergent) behavior so the
-    sibling-merge integrator flips the assertions to v1 parity (refusal
-    forwarded verbatim) when the factory fix lands. See the merge notes in
-    ~/sprint/reports/wave2b-beta-port.md (Fix round section)."""
+@pytest.mark.parametrize("refusal", [7, {"a": 1}], ids=["int", "dict"])
+def test_non_str_refusal_forwarded_verbatim_like_v1(refusal, frozen_ambient) -> None:
+    """wave-2b-beta F6 refusal half, DISCHARGED at the sibling merge (the
+    named INTEGRATOR-FLIP handoff): the SHARED factory used to null a
+    non-str ``refusal`` (_string_or_none) that v1 FORWARDS on the wire and
+    serves end-to-end (re-probed two-sided at the merge: v1's wrapper
+    emits the verbatim value and the stream completes without the
+    reasoning-style epilogue crash). The factory now forwards the refusal
+    VALUE verbatim — full byte parity, the marker row in _groq_rows
+    flipped with this test."""
     events = [
-        _chunk({"role": "assistant", "refusal": 7, "content": "x"}),
+        _chunk({"role": "assistant", "refusal": refusal, "content": "x"}),
         _chunk({}, finish="stop"),
     ]
     v1 = _v1_chunks(events)
     v2 = _v2_chunks(events)
-    assert (
-        v1[0]["choices"][0]["delta"]["refusal"] == 7
-    ), "v1 stopped forwarding the non-str refusal; re-decide the handoff"
-    # CURRENT factory behavior — the integrator flips this to == 7 with the
-    # alpha httpx_chunk fix:
-    assert v2[0]["choices"][0]["delta"]["refusal"] is None
+    assert v1[0]["choices"][0]["delta"]["refusal"] == refusal, (
+        "v1 stopped forwarding the non-str refusal; re-decide the discharge"
+    )
+    assert _norm(v2) == _norm(v1)
+
+
+def test_refusal_on_finish_chunk_is_loud_where_v1_drops_it(frozen_ambient) -> None:
+    """The finish-chunk half of the refusal discharge, named: groq's v1
+    wrapper silently DROPS a refusal riding the finish chunk (the served
+    finish delta carries no refusal key — probed; unlike openrouter/xai,
+    whose wrappers interleave a separate chunk, verifier-wave2b-alpha F1).
+    With the value now riding verbatim, _delta_bears_content counts it and
+    v2 takes the LOUD finish-chunk fallback — fail-closed where v1 serves
+    a body that silently LOST the refusal (before the discharge a non-str
+    value was nulled first and v2 accidentally served the same lossy
+    finish; the str case was already loud)."""
+    events = [
+        _chunk({"role": "assistant", "content": "x"}),
+        _chunk({"refusal": 7}, finish="stop"),
+    ]
+    v1 = _v1_chunks(events)
+    assert "refusal" not in v1[-1]["choices"][0]["delta"], (
+        "v1 stopped dropping refusal-on-finish; re-derive this row"
+    )
+    result = parse_event(copy.deepcopy(events[-1]))
+    assert result.is_error(), "refusal-on-finish must be loud, never lossy"
+    assert "finish chunk with a non-empty delta" in result.error.summary

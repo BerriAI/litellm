@@ -16,12 +16,12 @@ verifier-wave2b-beta F6: a NON-STR truthy ``reasoning``/
 factory's ``_string_or_none`` quietly nulled it where v1 RAISES (the
 wrapper's stream_chunk_builder epilogue ``"".join`` TypeErrors ->
 APIError). Null reasoning stays served (verified identical). The
-refusal-value half of F6 lives in the SHARED factory
-(``_string_or_none`` nulls a non-str refusal v1 forwards on the wire) —
-that file is the alpha fix round's concurrent edit
-(verifier-wave2b-alpha F1, same machinery), so the groq-side obligation
-rides the sibling-merge handoff: see the INTEGRATOR-FLIP row in
-test_differential_groq_stream.py and this branch's merge notes.
+refusal-value half of F6 was DISCHARGED at the wave-2b sibling merge
+(the named INTEGRATOR-FLIP handoff): the shared factory now forwards a
+non-str refusal VERBATIM exactly like v1's Delta (re-probed two-sided);
+a refusal riding the FINISH chunk is the loud finish-chunk fallback
+where groq's v1 wrapper silently drops the value — both pinned in
+test_differential_groq_stream.py.
 """
 
 from __future__ import annotations

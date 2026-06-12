@@ -260,7 +260,14 @@ def _normalize_delta(
     # null provider field on content-bearing deltas); refusal and the
     # reasoning keys ride set-only, mirroring Delta's set-field serialization
     # on the dict path — v1 FORWARDS a refusal that rides a role/content
-    # delta and swallows refusal-only deltas (verifier-grok F1).
+    # delta and swallows refusal-only deltas (verifier-grok F1). The refusal
+    # VALUE rides VERBATIM, any type: v1's Delta forwards non-string
+    # refusals on the wire and serves the stream end-to-end (probed two-sided
+    # for groq), so the old _string_or_none nulling diverged on every
+    # non-string value (verifier-wave2b-beta F6's refusal half — the named
+    # INTEGRATOR-FLIP handoff, discharged at the wave-2b sibling merge). A
+    # refusal-bearing FINISH delta stays the loud finish-chunk fallback via
+    # _delta_bears_content (non-None values count).
     base: dict[str, PlainJson] = {
         "content": _string_or_none(delta.get("content")),
         "function_call": None,
@@ -269,7 +276,7 @@ def _normalize_delta(
         "tool_calls": normalized_calls,
     }
     if "refusal" in delta:
-        base = {**base, "refusal": _string_or_none(delta.get("refusal"))}
+        base = {**base, "refusal": delta.get("refusal")}
     reasoning_error = _non_string_reasoning_error(policy.reasoning, delta)
     if reasoning_error is not None:
         return reasoning_error

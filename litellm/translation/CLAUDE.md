@@ -1142,9 +1142,16 @@ inherits them): a reasoning/refusal-bearing FINISH delta is the LOUD
 finish-chunk fallback (v1's wrapper interleaves it as a separate chunk
 the fold cannot reproduce — the pre-fix factory served an empty finish
 chunk with the text silently GONE; two-sided rows in the openrouter and
-xai stream gates, all base-handler consumers inherit), and a non-string
-non-None reasoning value is a loud error (v1 serves it then RAISES
-APIError at stream end in the chunk builder). One NAMED zero-data
+xai stream gates, all base-handler consumers inherit; groq's v1 wrapper
+DROPS the finish-riding refusal instead of interleaving — same loud
+fallback, pinned in its gate), and a non-string non-None reasoning value
+is a loud error (v1 serves it then RAISES APIError at stream end in the
+chunk builder). Discharged at the wave-2b sibling merge
+(verifier-wave2b-beta F6's refusal half, the named INTEGRATOR-FLIP
+handoff): a delta ``refusal`` VALUE rides VERBATIM, any type — v1's
+Delta forwards non-string refusals and serves the stream end-to-end
+(re-probed two-sided for groq), so the factory's old _string_or_none
+nulling was the divergence, not the fix. One NAMED zero-data
 divergence remains for the streaming seam to inherit deliberately: v1
 serves a mid-stream empty-string reasoning delta as its own chunk while
 the v2 fold swallows the empty delta (byte-identical otherwise) —

@@ -2166,21 +2166,18 @@ def _groq_rows(lines: list) -> int:
     ]
     v1 = stream._v1_chunks(refusal_events)
     v2 = stream._v2_chunks(refusal_events)
-    handoff = (
+    discharged = stream._norm(v2) == stream._norm(v1) and (
         v1[0]["choices"][0]["delta"]["refusal"] == 7
-        and v2[0]["choices"][0]["delta"]["refusal"] is None
     )
-    failures += 0 if handoff else 1
+    failures += 0 if discharged else 1
     lines.append(
-        (
-            "- INTEGRATOR-FLIP HANDOFF (current behavior guarded): "
-            if handoff
-            else "- DIVERGENT: "
-        )
-        + "non-str refusal — v1 forwards 7, the SHARED httpx_chunk factory"
-        " nulls it; the fix belongs to the alpha fix round's concurrent"
-        " httpx_chunk edit (verifier-wave2b-alpha F1) — the sibling-merge"
-        " integrator flips this row and the gate test to v1 parity"
+        ("- IDENTICAL: " if discharged else "- DIVERGENT: ")
+        + "non-str refusal forwarded VERBATIM (the wave-2b-beta F6"
+        " INTEGRATOR-FLIP handoff, discharged at the sibling merge: the"
+        " shared httpx_chunk factory used to null what v1 forwards; the"
+        " refusal-on-finish half is the loud finish-chunk fallback where"
+        " v1 silently drops the value —"
+        " test_refusal_on_finish_chunk_is_loud_where_v1_drops_it)"
     )
     return failures
 
