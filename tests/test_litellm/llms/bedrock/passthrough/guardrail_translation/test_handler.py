@@ -842,3 +842,166 @@ class TestDeAnonymizeConverseStream:
             if msg.headers.get(":event-type") == "contentBlockDelta"
         ]
         assert "".join(texts) == "Jane"
+
+    @staticmethod
+    def _token_replacing_hook(mapping: dict):
+        async def mock_hook(data, user_api_key_dict, response):
+            for block in response["output"]["message"]["content"]:
+                text = block["text"]
+                for token, value in mapping.items():
+                    text = text.replace(token, value)
+                block["text"] = text
+            return response
+
+        return mock_hook
+
+    def _decode_deltas(self, result: bytes) -> list:
+        import json
+        from botocore.eventstream import EventStreamBuffer
+
+        buf = EventStreamBuffer()
+        buf.add_data(result)
+        return [
+            json.loads(msg.payload)["delta"]
+            for msg in buf
+            if msg.headers.get(":event-type") == "contentBlockDelta"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_reasoning_text_delta_de_anonymized(self):
+        """Reasoning deltas carry model output; their text must be guardrailed while the reasoning signature is left untouched."""
+        stream_bytes = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"})
+            + _build_event_stream_frame(
+                "contentBlockDelta",
+                {
+                    "contentBlockIndex": 0,
+                    "delta": {
+                        "reasoningContent": {
+                            "text": "thinking about <PERSON_1>",
+                            "signature": "sig-do-not-touch",
+                        }
+                    },
+                },
+            )
+            + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
+        )
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(
+                self._token_replacing_hook({"<PERSON_1>": "Alice"})
+            ),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        deltas = self._decode_deltas(result)
+        assert deltas[0]["reasoningContent"]["text"] == "thinking about Alice"
+        assert deltas[0]["reasoningContent"]["signature"] == "sig-do-not-touch"
+
+    @pytest.mark.asyncio
+    async def test_tool_use_input_delta_de_anonymized(self):
+        """toolUse.input deltas carry model-generated tool arguments and must be guardrailed instead of being forwarded raw."""
+        stream_bytes = _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"toolUse": {"input": '{"q":"<PERSON_1>"}'}}},
+        )
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(
+                self._token_replacing_hook({"<PERSON_1>": "Alice"})
+            ),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        deltas = self._decode_deltas(result)
+        assert deltas[0]["toolUse"]["input"] == '{"q":"Alice"}'
+
+    @pytest.mark.asyncio
+    async def test_citations_content_delta_de_anonymized(self):
+        """citationsContent grounded text must be guardrailed while citation sources are preserved."""
+        stream_bytes = _build_event_stream_frame(
+            "contentBlockDelta",
+            {
+                "contentBlockIndex": 0,
+                "delta": {
+                    "citationsContent": {
+                        "content": [{"text": "Contact <PERSON_1>"}],
+                        "citations": [{"source": "https://example.com", "title": "Example"}],
+                    }
+                },
+            },
+        )
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(
+                self._token_replacing_hook({"<PERSON_1>": "Alice"})
+            ),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        citations = self._decode_deltas(result)[0]["citationsContent"]
+        assert citations["content"][0]["text"] == "Contact Alice"
+        assert citations["citations"][0]["source"] == "https://example.com"
+
+    @pytest.mark.asyncio
+    async def test_text_and_reasoning_deltas_de_anonymized_independently(self):
+        """Distinct delta kinds must each be guardrailed and written back into their own field without bleeding the de-anonymized text across kinds."""
+        captured = {}
+
+        async def mock_hook(data, user_api_key_dict, response):
+            captured["texts"] = [
+                b["text"] for b in response["output"]["message"]["content"]
+            ]
+            mapping = {"<PERSON_1>": "Alice", "<ORG_2>": "Acme"}
+            for block in response["output"]["message"]["content"]:
+                text = block["text"]
+                for token, value in mapping.items():
+                    text = text.replace(token, value)
+                block["text"] = text
+            return response
+
+        stream_bytes = _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"text": "Hi <PERSON_1>"}},
+        ) + _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 1, "delta": {"reasoningContent": {"text": "works at <ORG_2>"}}},
+        )
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(mock_hook),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        assert "Hi <PERSON_1>" in captured["texts"]
+        assert "works at <ORG_2>" in captured["texts"]
+        deltas = self._decode_deltas(result)
+        assert deltas[0]["text"] == "Hi Alice"
+        assert deltas[1]["reasoningContent"]["text"] == "works at Acme"
+
+    @pytest.mark.asyncio
+    async def test_reasoning_signature_only_frame_left_unmodified(self):
+        """A reasoning delta carrying only a signature has no guardrailable text; it must be forwarded untouched and the guardrail must not run."""
+        stream_bytes = _build_event_stream_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"reasoningContent": {"signature": "sig"}}},
+        )
+        hook_spy = AsyncMock()
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(hook_spy),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        hook_spy.assert_not_called()
+        assert result is stream_bytes

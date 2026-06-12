@@ -160,6 +160,40 @@ def _write_back_texts(
         container[key] = guardrailed_texts[idx]
 
 
+_DeltaHolder = Tuple[Any, Any, Union[str, int]]
+
+
+def _collect_stream_delta_text_holders(delta: Any) -> List[_DeltaHolder]:
+    """
+    Collect the user-visible text strings a Bedrock Converse ``contentBlockDelta``
+    can carry, matching the coverage of the non-streaming output handler.
+
+    Each holder is ``(group_key, container, key)`` where ``container[key]`` is the
+    text. ``group_key`` ties together fragments that belong to the same logical
+    stream (e.g. a single mask token split across frames) so they are
+    concatenated before guardrailing and redistributed afterwards. Structural
+    values such as reasoning signatures, redacted reasoning and citation sources
+    are left out so they are never rewritten.
+    """
+    holders: List[_DeltaHolder] = []
+    if not isinstance(delta, dict):
+        return holders
+    if isinstance(delta.get("text"), str):
+        holders.append(("text", delta, "text"))
+    tool_use = delta.get("toolUse")
+    if isinstance(tool_use, dict) and isinstance(tool_use.get("input"), str):
+        holders.append(("tool", tool_use, "input"))
+    reasoning = delta.get("reasoningContent")
+    if isinstance(reasoning, dict) and isinstance(reasoning.get("text"), str):
+        holders.append(("reasoning", reasoning, "text"))
+    citations = delta.get("citationsContent")
+    if isinstance(citations, dict):
+        for index, cited in enumerate(citations.get("content") or []):
+            if isinstance(cited, dict) and isinstance(cited.get("text"), str):
+                holders.append((("citation", index), cited, "text"))
+    return holders
+
+
 class BedrockPassthroughGuardrailHandler(BaseTranslation):
     @staticmethod
     async def de_anonymize_event_stream(  # noqa: PLR0915
@@ -175,7 +209,6 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         from botocore.eventstream import crc32 as esm_crc32
 
         frames: list[dict] = []
-        text_delta_indices: list[int] = []
         offset = 0
 
         while offset + 16 <= len(body_bytes):
@@ -192,38 +225,49 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 event_type = msg.headers.get(":event-type")
                 payload_bytes = msg.payload
             except Exception:
-                frames.append({"raw": frame_raw, "is_text_delta": False, "text": None})
+                frames.append({"raw": frame_raw, "texts": []})
                 continue
 
-            text: Optional[str] = None
-            is_text_delta = False
+            texts: List[Tuple[Any, str]] = []
             if event_type == "contentBlockDelta":
                 try:
                     payload_dict = _json.loads(payload_bytes)
-                    delta = payload_dict.get("delta", {})
-                    if isinstance(delta, dict) and "text" in delta:
-                        text = delta["text"]
-                        is_text_delta = True
+                    texts = [
+                        (group_key, container[key])
+                        for group_key, container, key in _collect_stream_delta_text_holders(
+                            payload_dict.get("delta")
+                        )
+                    ]
                 except Exception:
                     pass
 
-            if is_text_delta:
-                text_delta_indices.append(len(frames))
-            frames.append(
-                {"raw": frame_raw, "is_text_delta": is_text_delta, "text": text}
-            )
+            frames.append({"raw": frame_raw, "texts": texts})
 
         trailing_bytes = body_bytes[offset:]
 
-        if not text_delta_indices:
+        group_order: List[Any] = []
+        group_members: dict[Any, list[Tuple[int, int]]] = {}
+        group_texts: dict[Any, list[str]] = {}
+        for frame_idx, frame in enumerate(frames):
+            for local_idx, (group_key, text) in enumerate(frame["texts"]):
+                if group_key not in group_members:
+                    group_members[group_key] = []
+                    group_texts[group_key] = []
+                    group_order.append(group_key)
+                group_members[group_key].append((frame_idx, local_idx))
+                group_texts[group_key].append(text)
+
+        active_groups = [gk for gk in group_order if "".join(group_texts[gk])]
+        if not active_groups:
             return body_bytes
 
-        full_text = "".join(frames[i]["text"] for i in text_delta_indices)  # type: ignore[misc]
         synthetic_response: dict = {
             "output": {
                 "message": {
                     "role": "assistant",
-                    "content": [{"text": full_text}],
+                    "content": [
+                        {"text": "".join(group_texts[gk])} for gk in active_groups
+                    ],
                 }
             },
             "stopReason": "end_turn",
@@ -244,32 +288,35 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             return body_bytes
 
         try:
-            de_anonymized_text: str = processed["output"]["message"]["content"][0]["text"]  # type: ignore[index]
+            processed_blocks = processed["output"]["message"]["content"]  # type: ignore[index]
+            de_anonymized_texts = [
+                processed_blocks[i]["text"] for i in range(len(active_groups))
+            ]
         except (KeyError, IndexError, TypeError):
             return body_bytes
 
-        orig_lengths = [len(frames[i]["text"] or "") for i in text_delta_indices]  # type: ignore[misc]
-        total_orig = sum(orig_lengths) or 1
-        de_anon_len = len(de_anonymized_text)
-        chunk_texts: list[str] = []
-        pos = 0
-        for k, orig_len in enumerate(orig_lengths):
-            if k == len(orig_lengths) - 1:
-                chunk_texts.append(de_anonymized_text[pos:])
-            else:
-                end = pos + round(de_anon_len * orig_len / total_orig)
-                chunk_texts.append(de_anonymized_text[pos:end])
-                pos = end
-        text_chunk_map: dict[int, str] = dict(zip(text_delta_indices, chunk_texts))
+        new_text_map: dict[Tuple[int, int], str] = {}
+        for group_key, de_anonymized_text in zip(active_groups, de_anonymized_texts):
+            members = group_members[group_key]
+            orig_texts = group_texts[group_key]
+            total_orig = sum(len(t) for t in orig_texts) or 1
+            de_anon_len = len(de_anonymized_text)
+            pos = 0
+            for k, member in enumerate(members):
+                if k == len(members) - 1:
+                    new_text_map[member] = de_anonymized_text[pos:]
+                else:
+                    end = pos + round(de_anon_len * len(orig_texts[k]) / total_orig)
+                    new_text_map[member] = de_anonymized_text[pos:end]
+                    pos = end
 
         result_parts: list[bytes] = []
 
         for frame_idx, frame in enumerate(frames):
-            if not frame["is_text_delta"]:
+            if not frame["texts"]:
                 result_parts.append(frame["raw"])
                 continue
 
-            new_text = text_chunk_map[frame_idx]
             frame_raw = frame["raw"]
             orig_total = struct.unpack("!I", frame_raw[0:4])[0]
             orig_hdrs_len = struct.unpack("!I", frame_raw[4:8])[0]
@@ -279,7 +326,12 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 payload_dict = _json.loads(
                     frame_raw[12 + orig_hdrs_len : orig_total - 4]
                 )
-                payload_dict["delta"]["text"] = new_text
+                for local_idx, (_, container, key) in enumerate(
+                    _collect_stream_delta_text_holders(payload_dict.get("delta"))
+                ):
+                    new_text = new_text_map.get((frame_idx, local_idx))
+                    if new_text is not None:
+                        container[key] = new_text
                 new_payload = _json.dumps(payload_dict, separators=(",", ":")).encode()
             except Exception:
                 result_parts.append(frame_raw)
