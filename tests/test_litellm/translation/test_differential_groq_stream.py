@@ -206,3 +206,55 @@ def test_falsy_error_value_is_served_like_v1(frozen_ambient) -> None:
         _chunk({}, finish="stop"),
     ]
     assert _norm(_v2_chunks(events)) == _norm(_v1_chunks(events))
+
+
+@pytest.mark.parametrize("key", ["reasoning", "reasoning_content"])
+def test_non_str_reasoning_is_loud_where_v1_raises(key: str, frozen_ambient) -> None:
+    """verifier-wave2b-beta F6: a non-str truthy reasoning value reaches
+    v1's wrapper epilogue, whose stream_chunk_builder ``"".join`` raises
+    TypeError -> APIError; the factory's _string_or_none quietly nulled it.
+    Null reasoning stays served (the reasoning_null parity row holds)."""
+    events = [
+        _chunk({"role": "assistant", **{key: 5}}),
+        _chunk({}, finish="stop"),
+    ]
+    result = parse_event(copy.deepcopy(events[0]))
+    assert result.is_error()
+    assert "is not a string" in result.error.summary
+    with pytest.raises(Exception):
+        _v1_chunks(events)
+
+
+def test_null_reasoning_still_serves(frozen_ambient) -> None:
+    """The F6 pre-step must not widen: null reasoning serves identically
+    (the verifier's reasoning-null parity probe)."""
+    events = [
+        _chunk({"role": "assistant", "content": "", "reasoning": None}),
+        _chunk({"content": "hi"}),
+        _chunk({}, finish="stop"),
+    ]
+    assert _norm(_v2_chunks(events)) == _norm(_v1_chunks(events))
+
+
+def test_non_str_refusal_nulling_handoff_to_the_factory_fix(frozen_ambient) -> None:
+    """INTEGRATOR-FLIP (wave-2b-beta F6 handoff — sibling merge): a non-str
+    ``refusal`` is nulled by the SHARED factory's _string_or_none
+    (openai_compat/httpx_chunk.py) while v1 FORWARDS it on the wire — both
+    serve, bodies differ. That file is the alpha fix round's concurrent
+    edit (verifier-wave2b-alpha F1, same machinery), so this branch does
+    NOT touch it; this row GUARDS THE CURRENT (divergent) behavior so the
+    sibling-merge integrator flips the assertions to v1 parity (refusal
+    forwarded verbatim) when the factory fix lands. See the merge notes in
+    ~/sprint/reports/wave2b-beta-port.md (Fix round section)."""
+    events = [
+        _chunk({"role": "assistant", "refusal": 7, "content": "x"}),
+        _chunk({}, finish="stop"),
+    ]
+    v1 = _v1_chunks(events)
+    v2 = _v2_chunks(events)
+    assert (
+        v1[0]["choices"][0]["delta"]["refusal"] == 7
+    ), "v1 stopped forwarding the non-str refusal; re-decide the handoff"
+    # CURRENT factory behavior — the integrator flips this to == 7 with the
+    # alpha httpx_chunk fix:
+    assert v2[0]["choices"][0]["delta"]["refusal"] is None

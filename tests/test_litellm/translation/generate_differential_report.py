@@ -1285,6 +1285,8 @@ def _sagemaker_chat_rows(lines: list) -> int:
 def _groq_rows(lines: list) -> int:
     """wave-2b-beta: groq (httpx path; bare wire model + service_tier
     clamp; the json_schema fork rows)."""
+    import copy
+
     import pytest
 
     from . import test_differential_groq_request as req
@@ -1432,6 +1434,44 @@ def _groq_rows(lines: list) -> int:
     lines.append(
         f"- {'FALLBACK (v1 raises MidStreamFallbackError)' if loud else 'DIVERGENT'}:"
         " error chunk (loud on both sides — the truthy-value check)"
+    )
+    for key in ("reasoning", "reasoning_content"):
+        bad = stream._chunk({"role": "assistant", key: 5})
+        result = stream.parse_event(copy.deepcopy(bad))
+        ok = result.is_error() and "is not a string" in result.error.summary
+        if ok:
+            try:
+                stream._v1_chunks([bad, stream._chunk({}, finish="stop")])
+                ok = False
+            except Exception:
+                pass
+        failures += 0 if ok else 1
+        lines.append(
+            f"- {'FALLBACK (v1 raises APIError)' if ok else 'DIVERGENT'}:"
+            f" non-str delta {key} (the F6 groq-local pre-step; the wrapper"
+            " epilogue join TypeErrors in v1)"
+        )
+    refusal_events = [
+        stream._chunk({"role": "assistant", "refusal": 7, "content": "x"}),
+        stream._chunk({}, finish="stop"),
+    ]
+    v1 = stream._v1_chunks(refusal_events)
+    v2 = stream._v2_chunks(refusal_events)
+    handoff = (
+        v1[0]["choices"][0]["delta"]["refusal"] == 7
+        and v2[0]["choices"][0]["delta"]["refusal"] is None
+    )
+    failures += 0 if handoff else 1
+    lines.append(
+        (
+            "- INTEGRATOR-FLIP HANDOFF (current behavior guarded): "
+            if handoff
+            else "- DIVERGENT: "
+        )
+        + "non-str refusal — v1 forwards 7, the SHARED httpx_chunk factory"
+        " nulls it; the fix belongs to the alpha fix round's concurrent"
+        " httpx_chunk edit (verifier-wave2b-alpha F1) — the sibling-merge"
+        " integrator flips this row and the gate test to v1 parity"
     )
     return failures
 
