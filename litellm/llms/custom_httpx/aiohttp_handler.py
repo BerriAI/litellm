@@ -160,7 +160,7 @@ class _SSRFGuardResolver(AbstractResolver):
                 "port": info[4][1] if len(info[4]) > 1 else port,
                 "family": info[0],
                 "proto": info[2],
-                "flags": 0,
+                "flags": socket.AI_NUMERICHOST | socket.AI_NUMERICSERV,
             }
             for info in infos
         ]
@@ -212,8 +212,7 @@ class _SSRFGuardTransport(httpx.HTTPTransport):
                 try:
                     infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
                 except socket.gaierror:
-                    # DNS failed — let httpcore propagate the error naturally.
-                    return super().handle_request(request)
+                    raise
 
                 for info in infos:
                     raw_ip = info[4][0]
@@ -239,7 +238,14 @@ class _SSRFGuardTransport(httpx.HTTPTransport):
                     headers = [
                         (k, v) for k, v in request.headers.raw if k.lower() != b"host"
                     ]
-                    headers.append((b"host", host.encode("utf-8")))
+                    default_port = 443 if request.url.scheme == "https" else 80
+                    _port = request.url.port
+                    host_header = (
+                        f"{host}:{_port}"
+                        if _port is not None and _port != default_port
+                        else host
+                    )
+                    headers.append((b"host", host_header.encode("utf-8")))
                     extensions = {**request.extensions, "sni_hostname": host}
                     request = httpx.Request(
                         method=request.method,

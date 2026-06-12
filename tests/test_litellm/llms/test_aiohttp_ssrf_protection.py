@@ -497,21 +497,16 @@ class TestSSRFGuardTransport:
         # Original hostname preserved for TLS SNI so cert validation passes
         assert forwarded.extensions.get("sni_hostname") == "api.openai.com"
 
-    def test_transport_dns_failure_passes_through(self):
-        """DNS failure is not treated as a block — httpcore propagates the error."""
+    def test_transport_dns_failure_raises(self):
+        """DNS failure raises gaierror (fail-closed) to prevent bypass via transient failure."""
         import socket as _socket
 
         transport = _SSRFGuardTransport()
         request = httpx.Request("POST", "https://nonexistent.invalid/v1")
-        mock_response = Mock(spec=httpx.Response)
 
         with patch("socket.getaddrinfo", side_effect=_socket.gaierror("DNS fail")):
-            with patch.object(
-                httpx.HTTPTransport, "handle_request", return_value=mock_response
-            ):
-                result = transport.handle_request(request)
-
-        assert result is mock_response
+            with pytest.raises(_socket.gaierror):
+                transport.handle_request(request)
 
     def test_transport_public_ip_literal_allowed(self):
         """Public IP-literal URLs are allowed and bypass DNS (no resolution needed)."""
