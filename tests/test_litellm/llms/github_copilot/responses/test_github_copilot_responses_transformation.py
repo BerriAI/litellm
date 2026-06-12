@@ -585,3 +585,221 @@ class TestGithubCopilotResponsesAPIRouting:
             provider=LlmProviders.GITHUB_COPILOT,
         )
         assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+
+class TestGithubCopilotReasoningStreamItemIdNormalization:
+    """GitHub Copilot's native /responses stream tags every reasoning-summary
+    event with a different item_id (and the reasoning output_item.added /
+    output_item.done ids also differ). Strict clients (Vercel ai-sdk) key
+    reasoning state by item_id and crash when a summary delta references an
+    unregistered id. The config normalizes every reasoning event in an
+    output_index group to the id from its output_item.added."""
+
+    def _config(self):
+        with patch(
+            "litellm.llms.github_copilot.responses.transformation.Authenticator"
+        ):
+            return GithubCopilotResponsesAPIConfig()
+
+    def _transform(self, config, chunk):
+        return config.transform_streaming_response(
+            model="github_copilot/gpt-5.5",
+            parsed_chunk=chunk,
+            logging_obj=MagicMock(),
+        )
+
+    def test_summary_events_normalized_to_output_item_added_id(self):
+        config = self._config()
+
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"id": "stable_rs_id", "type": "reasoning"},
+            },
+        )
+
+        summary_chunks = [
+            {
+                "type": "response.reasoning_summary_part.added",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_part_added",
+                "part": {"type": "summary_text", "text": ""},
+            },
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_delta_1",
+                "delta": "Hello",
+            },
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_delta_2",
+                "delta": " world",
+            },
+            {
+                "type": "response.reasoning_summary_text.done",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_text_done",
+                "text": "Hello world",
+            },
+            {
+                "type": "response.reasoning_summary_part.done",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_part_done",
+                "part": {"type": "summary_text", "text": "Hello world"},
+            },
+        ]
+        for chunk in summary_chunks:
+            event = self._transform(config, chunk)
+            assert event.item_id == "stable_rs_id"
+
+    def test_reasoning_output_item_done_normalized_to_added_id(self):
+        config = self._config()
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"id": "stable_rs_id", "type": "reasoning"},
+            },
+        )
+        event = self._transform(
+            config,
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "id": "different_done_id",
+                    "type": "reasoning",
+                    "encrypted_content": "ENC",
+                },
+            },
+        )
+        assert event.item.id == "stable_rs_id"
+
+    def test_interleaved_message_item_does_not_corrupt_mapping(self):
+        config = self._config()
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"id": "stable_rs_id", "type": "reasoning"},
+            },
+        )
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 1,
+                "item": {"id": "msg_id", "type": "message"},
+            },
+        )
+        event = self._transform(
+            config,
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_delta",
+                "delta": "x",
+            },
+        )
+        assert event.item_id == "stable_rs_id"
+
+    def test_event_without_registered_item_passes_through_unchanged(self):
+        config = self._config()
+        event = self._transform(
+            config,
+            {
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "item_id": "msg_native_id",
+                "delta": "hi",
+            },
+        )
+        assert event.item_id == "msg_native_id"
+
+    def test_message_text_events_normalized_to_output_item_added_id(self):
+        config = self._config()
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"id": "stable_msg_id", "type": "message"},
+            },
+        )
+        for chunk in [
+            {
+                "type": "response.content_part.added",
+                "output_index": 0,
+                "content_index": 0,
+                "item_id": "bad_cp_added",
+                "part": {"type": "output_text", "text": ""},
+            },
+            {
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "item_id": "bad_text_delta",
+                "delta": "Paris",
+            },
+            {
+                "type": "response.output_text.done",
+                "output_index": 0,
+                "content_index": 0,
+                "item_id": "bad_text_done",
+                "text": "Paris",
+            },
+        ]:
+            event = self._transform(config, chunk)
+            assert event.item_id == "stable_msg_id"
+
+    def test_event_without_output_index_passes_through_unchanged(self):
+        config = self._config()
+        event = self._transform(
+            config,
+            {
+                "type": "response.completed",
+                "response": {"id": "resp_1", "status": "completed", "output": []},
+            },
+        )
+        assert event.type == "response.completed"
+
+    def test_normalization_continues_after_a_terminal_event(self):
+        config = self._config()
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"id": "stable_rs_id", "type": "reasoning"},
+            },
+        )
+        self._transform(
+            config,
+            {
+                "type": "response.completed",
+                "response": {"id": "resp_1", "status": "completed", "output": []},
+            },
+        )
+        event = self._transform(
+            config,
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_delta",
+                "delta": "x",
+            },
+        )
+        assert event.item_id == "stable_rs_id"
