@@ -155,6 +155,43 @@ def test_usage_tail_seam_contract(provider: str, frozen_ambient) -> None:
         assert v1[-1]["usage"][key] == v2[-1]["usage"][key]
 
 
+_ERROR_CHUNK_STREAM = [
+    _chunk({"role": "assistant", "content": ""}),
+    {
+        "id": "cmpl-h1",
+        "object": "chat.completion.chunk",
+        "created": 1718000000,
+        "model": "wire-stream-model",
+        "error": {"message": "upstream exploded", "code": 502},
+    },
+    _chunk({"content": "after"}),
+    _chunk({}, finish="stop"),
+]
+
+
+@pytest.mark.parametrize("provider", BASE_HANDLER_PROVIDERS)
+def test_error_chunk_divergence_two_sided(provider: str, frozen_ambient) -> None:
+    """The family's ONE deliberate behavioral divergence, both halves
+    asserted in-process (critic-wave1b M1 / verifier-wave1b F4): a
+    mid-stream ``{"error": {...}}`` chunk is SILENTLY SWALLOWED by v1's
+    base handler (the emitted chunk sequence carries no error surface
+    anywhere), while v2's parse_line surfaces a LOUD typed boundary error
+    naming the chunk. Fail-closed on a failure path only: flag-on cannot
+    lose data (v2 is louder, not quieter). If the v1 half fails, the base
+    handler learned to raise (the groq/cometapi shape — upstream
+    convergence): re-decide the divergence and update the report row in
+    the same commit. The report carries this as a named PINNED DIVERGENCE
+    row."""
+    v1 = replay_v1_sse_lines(provider, _ERROR_CHUNK_STREAM)
+    assert "error" not in json.dumps(v1), v1  # swallowed: no error surface
+    assert [c["choices"][0]["delta"].get("content") for c in v1[:2]] == ["", "after"]
+    lines = [f"data: {json.dumps(e)}" for e in copy.deepcopy(_ERROR_CHUNK_STREAM)]
+    folded = fold_lines(lines, parse_line, initial_state(STREAM_MODEL, dialect="xai"))
+    assert folded.is_error()
+    assert "provider stream error" in folded.error.summary, folded.error.summary
+    assert "upstream exploded" in folded.error.summary
+
+
 @pytest.mark.parametrize("provider", BASE_HANDLER_PROVIDERS)
 def test_iterator_is_the_base_openai_handler(provider: str) -> None:
     """The family's one-dialect claim: every config streams through the

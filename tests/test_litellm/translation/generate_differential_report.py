@@ -522,6 +522,44 @@ def _compat_httpx_rows(lines: list) -> int:
             " chunk through; the streaming seam owns v1's synthesized final"
             " chunk)"
         )
+    import json as _json
+
+    from litellm.translation.engine.stream import fold_lines as _fold_lines
+    from litellm.translation.inbound.openai_chat.stream import (
+        initial_state as _initial_state,
+    )
+    from litellm.translation.providers.compat_httpx.stream import (
+        parse_line as _httpx_parse_line,
+    )
+
+    error_events = stream._ERROR_CHUNK_STREAM
+    v1_swallow = corpus.replay_v1_sse_lines("heroku", error_events)
+    error_lines = [f"data: {_json.dumps(e)}" for e in error_events]
+    v2_loud = _fold_lines(
+        error_lines,
+        _httpx_parse_line,
+        _initial_state(stream.STREAM_MODEL, dialect="xai"),
+    )
+    divergence_pinned = (
+        "error" not in _json.dumps(v1_swallow)
+        and v2_loud.is_error()
+        and "provider stream error" in v2_loud.error.summary
+    )
+    failures += 0 if divergence_pinned else 1
+    lines.append(
+        (
+            "- PINNED DIVERGENCE (fail-closed on a failure path): "
+            if divergence_pinned
+            else "- DIVERGENT: "
+        )
+        + "mid-stream {'error': ...} chunks — v1's BASE handler silently"
+        " swallows them (no error surface in the emitted sequence; asserted"
+        " in-process for all nine base-handler members), v2's family parser"
+        " surfaces a LOUD typed boundary error naming the chunk"
+        " (test_error_chunk_divergence_two_sided; cometapi differs: its v1"
+        " handler RAISES and its policy row mirrors the raise — see the"
+        " cometapi stream rows below)"
+    )
     return failures
 
 
