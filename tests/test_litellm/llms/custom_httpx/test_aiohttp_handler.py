@@ -11,6 +11,7 @@ sys.path.insert(
 
 from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 class TestBaseLLMAIOHTTPHandler:
@@ -395,6 +396,17 @@ class TestBaseLLMAIOHTTPHandler:
         result = handler._get_or_create_transport()
 
         assert result is mock_transport
+
+    def test_get_or_create_transport_creation_failure_returns_none(self):
+        """If _create_aiohttp_transport raises, _get_or_create_transport returns None."""
+        handler = BaseLLMAIOHTTPHandler()
+        with patch.object(
+            AsyncHTTPHandler,
+            "_create_aiohttp_transport",
+            side_effect=RuntimeError("transport init failed"),
+        ):
+            result = handler._get_or_create_transport()
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_close_with_owned_transport(self):

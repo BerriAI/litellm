@@ -194,6 +194,10 @@ class TestAssertNotPrivateIpLiteral:
         with pytest.raises(ValueError, match="private/reserved"):
             _assert_not_private_ip_literal("http://[::ffff:10.0.0.1]/internal")
 
+    def test_no_hostname_is_allowed(self):
+        # URLs with no parseable hostname (e.g. opaque URIs) pass through
+        _assert_not_private_ip_literal("not-a-url")
+
     def test_flag_disables_check(self):
         litellm.allow_requests_to_internal_ips = True
         try:
@@ -680,6 +684,17 @@ class TestSSRFSafeClientCachingAndSSL:
                 cache.delete_cache("ssrf_safe_httpx_client")
             except Exception:
                 pass
+
+    def test_creates_cache_when_absent(self):
+        """If in_memory_llm_clients_cache is None, a new LLMClientCache is created."""
+        original = getattr(litellm, "in_memory_llm_clients_cache", None)
+        try:
+            litellm.in_memory_llm_clients_cache = None
+            client = _get_ssrf_safe_sync_client()
+            assert client is not None
+            assert litellm.in_memory_llm_clients_cache is not None
+        finally:
+            litellm.in_memory_llm_clients_cache = original
 
     def test_client_is_cached_across_calls(self):
         """Two consecutive calls return the same HTTPHandler instance."""
