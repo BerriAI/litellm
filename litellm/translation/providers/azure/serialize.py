@@ -23,8 +23,8 @@ from expression import Error, Result
 from ...deps import TranslationDeps
 from ...errors import TranslationError
 from ...ir import Body, ChatRequest
-from ..openai_compat import serialize_request as openai_compat_serialize_request
 from ..openai_compat import params as openai_params
+from ..openai_compat import serialize_request as openai_compat_serialize_request
 from . import params as p
 
 _SerializeResult = Result[Body, TranslationError]

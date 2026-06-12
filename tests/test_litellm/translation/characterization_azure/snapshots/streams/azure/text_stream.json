@@ -1,0 +1,143 @@
+[
+  {
+    "choices": [
+      {
+        "content_filter_results": {},
+        "delta": {
+          "audio": null,
+          "content": "",
+          "function_call": null,
+          "refusal": null,
+          "role": "assistant",
+          "tool_calls": null
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-CharAzStreamText0001",
+    "model": "gpt-4.1-2025-04-14",
+    "moderation": null,
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "service_tier": null,
+    "system_fingerprint": "fp_char_0001"
+  },
+  {
+    "choices": [
+      {
+        "content_filter_results": {
+          "hate": {
+            "filtered": false,
+            "severity": "safe"
+          },
+          "self_harm": {
+            "filtered": false,
+            "severity": "safe"
+          },
+          "sexual": {
+            "filtered": false,
+            "severity": "safe"
+          },
+          "violence": {
+            "filtered": false,
+            "severity": "safe"
+          }
+        },
+        "delta": {
+          "audio": null,
+          "content": "Paris is the",
+          "function_call": null,
+          "provider_specific_fields": null,
+          "refusal": null,
+          "role": null,
+          "tool_calls": null
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-CharAzStreamText0001",
+    "model": "gpt-4.1-2025-04-14",
+    "moderation": null,
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "service_tier": null,
+    "system_fingerprint": "fp_char_0001"
+  },
+  {
+    "choices": [
+      {
+        "content_filter_results": {
+          "hate": {
+            "filtered": false,
+            "severity": "safe"
+          },
+          "self_harm": {
+            "filtered": false,
+            "severity": "safe"
+          },
+          "sexual": {
+            "filtered": false,
+            "severity": "safe"
+          },
+          "violence": {
+            "filtered": false,
+            "severity": "safe"
+          }
+        },
+        "delta": {
+          "audio": null,
+          "content": " capital of France.",
+          "function_call": null,
+          "provider_specific_fields": null,
+          "refusal": null,
+          "role": null,
+          "tool_calls": null
+        },
+        "finish_reason": null,
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "citations": null,
+    "created": 1718064000,
+    "id": "chatcmpl-CharAzStreamText0001",
+    "model": "gpt-4.1-2025-04-14",
+    "moderation": null,
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "service_tier": null,
+    "system_fingerprint": "fp_char_0001"
+  },
+  {
+    "choices": [
+      {
+        "delta": {
+          "audio": null,
+          "content": null,
+          "function_call": null,
+          "role": null,
+          "tool_calls": null
+        },
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null
+      }
+    ],
+    "created": 1718064000,
+    "id": "chatcmpl-CharAzStreamText0001",
+    "model": "gpt-4.1-2025-04-14",
+    "moderation": null,
+    "object": "chat.completion.chunk",
+    "provider_specific_fields": null,
+    "service_tier": null,
+    "system_fingerprint": "fp_char_0001"
+  }
+]

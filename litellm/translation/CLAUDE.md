@@ -62,20 +62,40 @@ translation/
 │   │   │                #   response body IS anthropic wire format)
 │   │   └── stream.py    # re-export of anthropic parse_event (invoke stream
 │   │                    #   = anthropic events over AWS framing)
-│   └── openai_compat/   # the same-family hub serializer (GPT first consumer)
-│       ├── guard.py     # raw-shape fidelity guard run BEFORE parse: shapes
-│       │                #   the IR cannot round-trip losslessly (string stop,
-│       │                #   message name, image detail, max-tokens key split,
-│       │                #   tool-arg spacing) fall back to v1 as typed errors
-│       ├── serialize.py # v1's five-touch passthrough body assembly
-│       ├── messages.py  # IR -> openai wire messages (inverse of inbound)
-│       ├── params.py    # o-series/gpt-5 family gates (fail closed until
-│       │                #   their param families are ported), user gate
-│       ├── response.py  # mirrors convert_to_model_response_object (the LIVE
-│       │                #   normalizer; transform_response is dead on the SDK
-│       │                #   path); rides the outbound body on ChatResponse.wire
-│       └── stream.py    # SSE chunk -> wire_chunk events normalized to the
-│                        #   SDK-dump shape; the openai chunk dialect folds them
+│   ├── openai_compat/   # the same-family hub serializer (GPT first consumer)
+│   │   ├── guard.py     # raw-shape fidelity guard run BEFORE parse: shapes
+│   │   │                #   the IR cannot round-trip losslessly (string stop,
+│   │   │                #   message name, image detail, max-tokens key split,
+│   │   │                #   tool-arg spacing) fall back to v1 as typed errors
+│   │   ├── serialize.py # v1's five-touch passthrough body assembly
+│   │   ├── messages.py  # IR -> openai wire messages (inverse of inbound)
+│   │   ├── params.py    # o-series/gpt-5 family gates (fail closed until
+│   │   │                #   their param families are ported), user gate
+│   │   ├── response.py  # mirrors convert_to_model_response_object (the LIVE
+│   │   │                #   normalizer; transform_response is dead on the SDK
+│   │   │                #   path); rides the outbound body on ChatResponse.wire
+│   │   └── stream.py    # SSE chunk -> wire_chunk events normalized to the
+│   │                    #   SDK-dump shape; the openai chunk dialect folds them
+│   ├── azure/           # openai_compat + azure gates ONLY:
+│   │   ├── guard.py     # openai guard + cache_control (azure never strips
+│   │   │                #   it) + explicit stream:false (key reaches the wire)
+│   │   ├── params.py    # api-version gates (tool_choice, response_format
+│   │   │                #   json-tool strategy), o/gpt-5 detection on
+│   │   │                #   base_model-or-model (deps.api_version/base_model)
+│   │   ├── serialize.py # azure gates then the openai_compat body verbatim
+│   │   ├── response.py  # re-export of openai parse_response (same live
+│   │   │                #   normalizer; json_mode requests fail closed)
+│   │   └── stream.py    # openai parser + per-chunk model re-attach and the
+│   │                    #   SDK service_tier default; "azure" chunk dialect
+│   └── azure_ai/        # the Foundry override set + the Claude route:
+│       ├── guard.py     # azure guard + the text-only content-list flatten
+│       ├── serialize.py # azure_ai gates (grok, model-map tool_choice) then
+│       │                #   the openai_compat body
+│       ├── response.py  # openai parser + the azure_ai/{model} rename
+│       ├── stream.py    # re-export of the azure parser ("azure" dialect)
+│       └── claude.py    # anthropic serializer/parsers re-exported; NO
+│                        #   response-format model spoof (v1 maps with the
+│                        #   real model); billing-header blocks fail closed
 └── engine/
     ├── pipeline.py # prepare (pure, drives the fallback decision) -> send;
     │               #   per-provider serializer/parser/dialect tables; the
@@ -192,12 +212,17 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to four providers out — `anthropic`, `bedrock_converse`,
-`bedrock_invoke`, `openai_compat` — request, response, and stream
-translation, differential-green (anthropic: 46-shape corpus + responses +
-stream replays; bedrock: the characterization corpus per route + quirk
-corpus; openai: 17-shape request corpus + 17 typed-fallback rows + response
-and SDK-chunk stream replays), fail-closed everywhere else, with
+OpenAI-chat-in to seven providers out — `anthropic`, `bedrock_converse`,
+`bedrock_invoke`, `openai_compat`, `azure`, `azure_ai`,
+`azure_ai_anthropic` — request, response, and stream translation,
+differential-green (anthropic: 46-shape corpus + responses + stream replays;
+bedrock: the characterization corpus per route + quirk corpus; openai:
+17-shape request corpus + 17 typed-fallback rows + response and SDK-chunk
+stream replays; azure: 19-shape request corpus + the vendored
+characterization corpus second gate + content-filter response/stream rows
+with the azure dialect's per-chunk model re-read; azure_ai: the Foundry
+override-set and no-spoof Claude-route corpora), fail-closed everywhere
+else, with
 non-streaming flag-gated seams live in `completion()` for the anthropic and
 bedrock routes (the openai seam fork is integrator scope and NOT wired).
 Deliberate bedrock fallback surfaces (each names the v1 path): non-Claude
@@ -217,9 +242,20 @@ non-function tool_calls), the `user` param (model-list gated in v1),
 (v1 downloads http pdf file_ids in-transform), and `http://` image URLs. On
 streams, the trailing `choices: []` usage chunk passes through verbatim and
 the wrapper's synthesized final usage chunk stays a seam/envelope concern.
+Deliberate azure fallback surfaces (each names the v1 path): cache_control
+anywhere (azure forwards it verbatim), explicit `stream: false`, the
+api-version gates (tool_choice pre-2023-12, `required` on 2024-05,
+response_format pre-2024-08 or on gpt-3.5/gpt-35 — v1's synthetic json-tool
+strategy and its json_mode response conversion are unported, so json_mode
+requests never reach v2), o-series/gpt-5 on `base_model or model`, and for
+azure_ai: text-only content lists (v1 flattens them), model-map-gated
+tool_choice, grok models, and `x-anthropic-billing-header` system blocks on
+the Claude route. None of the azure family fast-paths; the api-version
+URL/query, deployment SDK client, api-key-vs-AD-token auth and the
+`.../anthropic/v1/messages` rewrite are envelope (seam scope, unwired here).
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
-`completions`); the other providers (vertex, azure); the same-family fast
+`completions`); the other providers (vertex); the same-family fast
 path (waits on the opaque-body relay). To add a provider: write
 `providers/<name>/`, register it in `engine/pipeline._SERIALIZERS` /
 `_RESPONSE_PARSERS` / `_RESPONSE_DIALECTS` (plus `_RAW_GUARDS` when the

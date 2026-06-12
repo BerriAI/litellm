@@ -55,9 +55,7 @@ def _carries_cache_control(value: object, depth: int) -> bool:
         mapping = cast(Mapping[str, object], value)
         if "cache_control" in mapping:
             return True
-        return any(
-            _carries_cache_control(item, depth + 1) for item in mapping.values()
-        )
+        return any(_carries_cache_control(item, depth + 1) for item in mapping.values())
     if isinstance(value, Sequence) and not isinstance(value, str):
         return any(
             _carries_cache_control(item, depth + 1)

@@ -1,4 +1,4 @@
-# Translation v2 differential report (anthropic + bedrock + openai)
+# Translation v2 differential report (anthropic + bedrock + openai + azure)
 
 v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
 explained FALLBACK that v1 serves) for a provider's flag to turn on.
@@ -6,7 +6,7 @@ Bedrock rows additionally pin the characterization-corpus snapshot, so
 each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: c1fee272a0
+- commit: 76f801fb21
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -128,6 +128,107 @@ each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - IDENTICAL: text_no_leading_role
 - IDENTICAL: tools
 - SEAM CONTRACT: usage tail (v2 passes the wire choices=[] usage chunk through; v1's wrapper synthesizes its final usage chunk from it, which is the streaming seam's envelope to reproduce)
+
+## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)
+
+- IDENTICAL: deployment_with_base_model
+- IDENTICAL: gpt5_chat_is_plain_azure
+- IDENTICAL: image_base64
+- IDENTICAL: image_url_string_to_object
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: multiturn_stop_list_stream
+- IDENTICAL: parallel_tool_calls_false
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema_strict
+- IDENTICAL: response_format_on_gpt4_deployment
+- IDENTICAL: system_and_sampling
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: text
+- IDENTICAL: tool_call_roundtrip
+- IDENTICAL: tool_choice_required_current_api
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tool_choice_unparseable_api_version_passthrough
+- IDENTICAL: tools_auto
+- IDENTICAL: tools_strict
+- FALLBACK (v1 serves it): cache_control_in_messages (cache_control inside messages)
+- FALLBACK (v1 serves it): cache_control_in_tools (cache_control inside tools)
+- FALLBACK (v1 serves it): explicit_stream_false (explicit stream: false)
+- FALLBACK (v1 serves it): gpt5_model (AzureOpenAIGPT5Config)
+- FALLBACK (v1 serves it): gpt5_series_prefix (AzureOpenAIGPT5Config)
+- FALLBACK (v1 serves it): o_series_substring_deployment (AzureOpenAIO1Config)
+- FALLBACK (v1 serves it): o_series_via_base_model (AzureOpenAIO1Config)
+- FALLBACK (v1 serves it): reasoning_effort_plain_azure (reasoning_effort)
+- FALLBACK (v1 serves it): response_format_gpt35 (json-tool strategy)
+- FALLBACK (v1 serves it): response_format_gpt_3_5_normalized (json-tool strategy)
+- FALLBACK (v1 serves it): response_format_pre_2024_08_api (response_format needs api_version)
+- FALLBACK (v1 serves it): shared_guard_string_stop (string-form stop)
+- FALLBACK (v1 serves it): tool_choice_pre_2023_12_api (tool_choice needs api_version)
+- FALLBACK (v1 serves it): tool_choice_required_2024_05_api (tool_choice='required' is unsupported)
+- FALLBACK (v1 serves it): user_param (user param)
+
+## azure: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON)
+
+- FALLBACK (v1 serves it): cache_control_messages (list-form system content)
+- FALLBACK (v1 serves it): cache_control_tools (cache_control inside tools)
+- IDENTICAL: image_base64
+- IDENTICAL: image_url
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: multi_turn
+- FALLBACK (v1 serves it): params_sampling (user param)
+- FALLBACK (v1 serves it): pdf_base64 (messages)
+- IDENTICAL: plain_text
+- IDENTICAL: response_format_json_object
+- IDENTICAL: response_format_json_schema
+- IDENTICAL: system_prompt
+- IDENTICAL: tools_basic
+- IDENTICAL: tools_forced_choice
+- IDENTICAL: tools_parallel
+- IDENTICAL: tools_streamed_args_roundtrip
+
+## azure: responses (v1 convert_to_model_response_object with azure.py's args vs v2)
+
+- IDENTICAL: content_and_prompt_filter_results
+- IDENTICAL: tool_calls_rewrites_stop
+- IDENTICAL: corpus text_basic
+- IDENTICAL: corpus tool_calls
+- IDENTICAL: azure_ai model rename (v1 preset + convert re-prefix)
+
+## azure: streams (v1 CustomStreamWrapper('azure') over SDK chunks vs v2 azure dialect)
+
+- IDENTICAL: model_reread_from_chunks
+- IDENTICAL: text_with_filter_results
+- IDENTICAL: tools_with_filter_results
+- IDENTICAL: corpus text_stream
+- IDENTICAL: corpus tool_stream
+
+## azure_ai: request bodies (v1 AzureAIStudioConfig chain vs v2)
+
+- IDENTICAL: image_content_list_not_flattened
+- IDENTICAL: max_completion_tokens
+- IDENTICAL: response_format_json_schema
+- IDENTICAL: stream_true
+- IDENTICAL: system_and_sampling
+- IDENTICAL: text
+- IDENTICAL: tool_call_roundtrip
+- IDENTICAL: tools_without_tool_choice
+- FALLBACK (v1 serves it): cache_control_forwarded (cache_control inside tools)
+- FALLBACK (v1 serves it): grok_model (XAIChatConfig)
+- FALLBACK (v1 serves it): o_series_name (OpenAIOSeriesConfig)
+- FALLBACK (v1 serves it): text_only_content_list_flatten (flattens it to a string)
+- FALLBACK (v1 serves it): tool_choice_model_map_gated (tool_choice on azure_ai is model-map gated)
+- FALLBACK (v1 serves it): user_param (user param)
+
+## azure_ai_anthropic: request bodies (v1 AzureAnthropicConfig chain vs v2, no model spoof)
+
+- IDENTICAL: response_format_json_tool_model
+- IDENTICAL: response_format_output_format_model
+- IDENTICAL: system_and_sampling
+- IDENTICAL: text
+- IDENTICAL: thinking_enabled
+- IDENTICAL: tool_roundtrip
+- IDENTICAL: tools
+- FALLBACK (v1 serves it): billing_header_system_block (x-anthropic-billing-header)
+- FALLBACK (v1 serves it): non_claude_model (Claude models only)
 
 ## bedrock_converse: request bodies (characterization snapshot == v1-at-HEAD == v2, canonical JSON)
 

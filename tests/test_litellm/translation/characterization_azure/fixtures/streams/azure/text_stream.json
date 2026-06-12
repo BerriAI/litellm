@@ -1,0 +1,94 @@
+[
+  {
+    "id": "",
+    "object": "chat.completion.chunk",
+    "created": 0,
+    "model": "",
+    "choices": [],
+    "prompt_filter_results": [
+      {
+        "prompt_index": 0,
+        "content_filter_results": {
+          "hate": {"filtered": false, "severity": "safe"},
+          "self_harm": {"filtered": false, "severity": "safe"},
+          "sexual": {"filtered": false, "severity": "safe"},
+          "violence": {"filtered": false, "severity": "safe"}
+        }
+      }
+    ]
+  },
+  {
+    "id": "chatcmpl-CharAzStreamText0001",
+    "object": "chat.completion.chunk",
+    "created": 1748044800,
+    "model": "gpt-4.1-2025-04-14",
+    "system_fingerprint": "fp_char_0001",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {"role": "assistant", "content": "", "refusal": null},
+        "logprobs": null,
+        "finish_reason": null,
+        "content_filter_results": {}
+      }
+    ]
+  },
+  {
+    "id": "chatcmpl-CharAzStreamText0001",
+    "object": "chat.completion.chunk",
+    "created": 1748044800,
+    "model": "gpt-4.1-2025-04-14",
+    "system_fingerprint": "fp_char_0001",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {"content": "Paris is the"},
+        "logprobs": null,
+        "finish_reason": null,
+        "content_filter_results": {
+          "hate": {"filtered": false, "severity": "safe"},
+          "self_harm": {"filtered": false, "severity": "safe"},
+          "sexual": {"filtered": false, "severity": "safe"},
+          "violence": {"filtered": false, "severity": "safe"}
+        }
+      }
+    ]
+  },
+  {
+    "id": "chatcmpl-CharAzStreamText0001",
+    "object": "chat.completion.chunk",
+    "created": 1748044800,
+    "model": "gpt-4.1-2025-04-14",
+    "system_fingerprint": "fp_char_0001",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {"content": " capital of France."},
+        "logprobs": null,
+        "finish_reason": null,
+        "content_filter_results": {
+          "hate": {"filtered": false, "severity": "safe"},
+          "self_harm": {"filtered": false, "severity": "safe"},
+          "sexual": {"filtered": false, "severity": "safe"},
+          "violence": {"filtered": false, "severity": "safe"}
+        }
+      }
+    ]
+  },
+  {
+    "id": "chatcmpl-CharAzStreamText0001",
+    "object": "chat.completion.chunk",
+    "created": 1748044800,
+    "model": "gpt-4.1-2025-04-14",
+    "system_fingerprint": "fp_char_0001",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {},
+        "logprobs": null,
+        "finish_reason": "stop",
+        "content_filter_results": {}
+      }
+    ]
+  }
+]
