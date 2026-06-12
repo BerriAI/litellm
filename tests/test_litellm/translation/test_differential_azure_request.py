@@ -150,8 +150,10 @@ CORPUS = {
         },
     ),
     "tool_choice_unparseable_api_version_passthrough": (
-        # v1 splits the api_version on "-" and passes tool_choice through when
-        # there are fewer than three segments; deps.api_version=None mirrors it
+        # v1 splits the api_version on "-" and passes tool_choice through
+        # when there are fewer than three segments; the LITERAL empty string
+        # pins that STRING branch (None is reserved for "seam never wired
+        # the field" and falls back instead, critic-azure M2)
         {
             "model": MODEL,
             "tools": [_WEATHER_TOOL],
@@ -284,6 +286,31 @@ EXPECTED_FALLBACKS = {
         DEFAULT_API_VERSION,
         "o1-mini",
         "AzureOpenAIO1Config",
+    ),
+    "tool_choice_with_unwired_api_version": (
+        # api_version=None means the seam never threaded the field; v1
+        # ALWAYS resolves a string before map_openai_params, so the gate
+        # must fall back loudly instead of silently passing tool_choice
+        # through (critic-azure M2)
+        {
+            "model": MODEL,
+            "tools": [_WEATHER_TOOL],
+            "tool_choice": "required",
+            "messages": [{"role": "user", "content": "Weather in Paris?"}],
+        },
+        None,
+        None,
+        "not wired",
+    ),
+    "response_format_with_unwired_api_version": (
+        {
+            "model": MODEL,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": "json please"}],
+        },
+        None,
+        None,
+        "not wired",
     ),
     "o_series_empty_base_model_falls_to_deployment": (
         # base_model: "" (a one-character YAML slip) must behave like v1's
@@ -473,10 +500,13 @@ def _v1_body(case: dict, api_version: str, base_model) -> dict:
 
 
 def _v2_body(case: dict, api_version, base_model):
+    # api_version passes VERBATIM: "" must reach the gates as v1's
+    # unparseable-string branch, never normalized to the None sentinel
+    # (critic-azure M2 / verifier-azure's structural-blindness note)
     return translate_chat_request(
         copy.deepcopy(case),
         "azure",
-        build_real_deps(api_version=api_version or None, base_model=base_model),
+        build_real_deps(api_version=api_version, base_model=base_model),
     )
 
 

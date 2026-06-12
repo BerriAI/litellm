@@ -58,10 +58,17 @@ def unsupported_model_family(model: str, deps: TranslationDeps) -> str | None:
     return None
 
 
-def _api_version_parts(deps: TranslationDeps) -> tuple[str, str, str] | None:
+_API_VERSION_UNWIRED = (
+    "azure api_version is not wired into TranslationDeps; v1 always resolves "
+    "a string through the default chain (utils.py:4865-4875), so None is a "
+    "seam wiring bug, not v1's unparseable-string passthrough"
+)
+
+
+def _api_version_parts(api_version: str) -> tuple[str, str, str] | None:
     """v1 splits the api_version on ``-`` and treats fewer than three
     segments as unparseable (every gate then passes through)."""
-    parts = (deps.api_version or "").split("-")
+    parts = api_version.split("-")
     if len(parts) < 3:
         return None
     return parts[0], parts[1], parts[2]
@@ -73,7 +80,9 @@ def unsupported_tool_choice(request: ChatRequest, deps: TranslationDeps) -> str 
             pass
         case _:
             return None
-    parts = _api_version_parts(deps)
+    if deps.api_version is None:
+        return _API_VERSION_UNWIRED
+    parts = _api_version_parts(deps.api_version)
     if parts is None:
         return None
     year, month, day = parts
@@ -119,7 +128,9 @@ def unsupported_response_format(
             f"response_format on {detected} takes v1's synthetic json-tool "
             "strategy (json_mode), unported (az gpt_transformation.py:220-242)"
         )
-    parts = _api_version_parts(deps)
+    if deps.api_version is None:
+        return _API_VERSION_UNWIRED
+    parts = _api_version_parts(deps.api_version)
     if parts is None:
         return None
     try:
