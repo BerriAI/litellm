@@ -527,6 +527,7 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
         self._tool_index = 0
         self._tool_id = ""
         self._tool_name = ""
+        self._input_tokens = 0
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         if "choices" in chunk:
@@ -577,7 +578,20 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
     def _parse_anthropic_chunk(self, chunk: dict) -> GenericStreamingChunk:
         event_type = chunk.get("type", "")
 
-        if event_type == "content_block_delta":
+        if event_type == "message_start":
+            message = chunk.get("message", {})
+            usage_data = message.get("usage", {})
+            self._input_tokens = usage_data.get("input_tokens", 0)
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
+
+        elif event_type == "content_block_delta":
             delta = chunk.get("delta", {})
             delta_type = delta.get("type", "")
 
@@ -639,9 +653,9 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
                 "stop_sequence": "stop",
             }
             usage = None
-            if usage_data:
-                input_t = usage_data.get("input_tokens", 0)
+            if usage_data or self._input_tokens:
                 output_t = usage_data.get("output_tokens", 0)
+                input_t = self._input_tokens or usage_data.get("input_tokens", 0)
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=input_t,
                     completion_tokens=output_t,
