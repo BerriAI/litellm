@@ -157,10 +157,12 @@ rules:
       - pattern: import aiohttp
       - pattern: from aiohttp import $X
       - pattern: from aiohttp.$M import $X
-      - pattern: import urllib
+      # urllib.parse is pure string manipulation and stays allowed; the
+      # client is urllib.request (semgrep's `import urllib.request` pattern
+      # also matches the from-import forms, and a bare `import urllib`
+      # pattern would match every submodule import including parse).
       - pattern: import urllib.request
-      - pattern: from urllib import $X
-      - pattern: from urllib.$M import $X
+      - pattern: from urllib import request
       - pattern: import socket
       - pattern: from socket import $X
     metadata:
