@@ -136,9 +136,10 @@ def _parse_tool(tool: ToolIn) -> Result[ToolDef, TranslationError]:
                 "tool defer_loading/allowed_callers/input_examples; v1 handles them"
             )
         )
-    cache = cache_of(tool.cache_control)
-    if cache.is_none():
-        cache = cache_of(tool.function.cache_control)
+    outer_cache = cache_of(tool.cache_control)
+    cache = (
+        outer_cache if outer_cache.is_some() else cache_of(tool.function.cache_control)
+    )
     match _parse_tool_parameters(tool.function.parameters):
         case Result(tag="ok", ok=parameters):
             return Ok(

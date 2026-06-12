@@ -161,9 +161,8 @@ def _thinking_delta_body(
             converse_block: dict[str, PlainJson] = {
                 "type": "thinking",
                 "thinking": thinking,
+                **({"signature": signature} if signature is not None else {}),
             }
-            if signature is not None:
-                converse_block = {**converse_block, "signature": signature}
             return {
                 "content": "",
                 "reasoning_content": thinking,

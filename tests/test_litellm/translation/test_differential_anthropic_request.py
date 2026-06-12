@@ -326,7 +326,11 @@ CORPUS = {
         "model": CURRENT,
         "max_tokens": 64,
         "messages": [
-            {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}},
+            {
+                "role": "system",
+                "content": "sys",
+                "cache_control": {"type": "ephemeral"},
+            },
             {"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}},
         ],
     },
@@ -420,7 +424,11 @@ CORPUS = {
                     "title": "Answer",
                     "type": "object",
                     "properties": {
-                        "capital": {"type": "string", "minLength": 2, "title": "Capital"}
+                        "capital": {
+                            "type": "string",
+                            "minLength": 2,
+                            "title": "Capital",
+                        }
                     },
                     "required": ["capital"],
                 },

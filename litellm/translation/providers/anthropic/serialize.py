@@ -188,13 +188,13 @@ def _tool_choice_json(
 ) -> PlainJson | None:
     """v1 ``_map_tool_choice`` plus the request-level name forward map."""
     parallel: bool | None = request.parallel_tool_calls.default_value(None)
-    choice_json: dict[str, PlainJson] | None = None
-    is_none_choice = False
+    choice_json: dict[str, PlainJson] | None
+    is_none_choice: bool
     match request.tool_choice:
         case Option(tag="some", some=choice):
             choice_json, is_none_choice = _choice_base(choice, name_forward)
         case _:
-            choice_json = None
+            choice_json, is_none_choice = None, False
     if parallel is None:
         return choice_json
     if is_none_choice:
@@ -263,13 +263,16 @@ def _output_format_fields(
         )
     # v1 pops top-level $defs/definitions before filtering (they only exist to
     # back $refs, which we just proved absent).
-    if isinstance(schema, dict):
-        schema = {
+    without_defs = (
+        {
             key: value
             for key, value in schema.items()
             if key not in ("$defs", "definitions")
         }
-    filtered = filter_output_schema(copy.deepcopy(schema))
+        if isinstance(schema, dict)
+        else schema
+    )
+    filtered = filter_output_schema(copy.deepcopy(without_defs))
     return Ok((None, None, {"type": "json_schema", "schema": filtered}, True))
 
 
@@ -293,7 +296,9 @@ def _json_tool_fields(
         )
     schema = copy.deepcopy(response_format.json_schema.schema.value)
     tool = response_format_tool(schema)
-    forced_choice: PlainJson | None = None
-    if not p.thinking_signaled(request):
-        forced_choice = {"name": "json_tool_call", "type": "tool"}
+    forced_choice: PlainJson | None = (
+        None
+        if p.thinking_signaled(request)
+        else {"name": "json_tool_call", "type": "tool"}
+    )
     return Ok((tool, forced_choice, None, True))

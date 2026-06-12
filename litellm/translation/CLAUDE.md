@@ -119,6 +119,17 @@ corpus shapes in the same commit.
   would have caught audit F2). A local build-then-freeze accumulator that never
   escapes its scope may carry an inline `# nosemgrep: <rule-id>` plus a
   justification; keep these rare and obvious.
+- Single assignment: every name binds once per scope, enforced by the AST test
+  `tests/test_litellm/translation/test_single_assignment_contract.py` (runs in
+  `make lint-translation` and CI's test-unit-misc; no suppression mechanism).
+  Mutually exclusive branches (if/elif/else, match cases, except arms) may each
+  bind the same name once, a branch ending in return/raise/continue/break does
+  not leak its bindings, and a for/while body counts as one loop generation so
+  `state, out = step(state, event)` folds stay legal. Instead of
+  build-by-rebinding, write one literal with conditional spreads
+  (`{**base, **({"k": v} if cond else {})}`) or bind each branch's value once
+  under a declared-then-assigned name (`x: T` followed by one `x = ...` per
+  match arm).
 - Exhaustiveness pattern (the only Expression-compatible form pyright strict
   proves): match on the union's `Literal` tag with one arm per case and
   `assert_never(x.tag)` AFTER the match. A `case never:` capture arm is flagged

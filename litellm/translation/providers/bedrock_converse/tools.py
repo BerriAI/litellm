@@ -82,9 +82,14 @@ def _tool_spec(index: int, tool: ToolDef) -> PlainJson | TranslationError:
     }
 
 
-def _input_schema_json(parameters: PlainJson) -> PlainJson | TranslationError:
-    if parameters is None:
-        parameters = {"type": "object", "properties": {}}
+def _empty_object_schema() -> PlainJson:
+    return {"type": "object", "properties": {}}
+
+
+def _input_schema_json(raw_parameters: PlainJson) -> PlainJson | TranslationError:
+    parameters = (
+        raw_parameters if raw_parameters is not None else _empty_object_schema()
+    )
     if not isinstance(parameters, dict):
         return TranslationError.of_unsupported(
             "non-object tool parameters; v1 handles them"

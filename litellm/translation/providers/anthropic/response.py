@@ -152,16 +152,11 @@ def parse_usage(raw: PlainJson) -> ResponseUsage | TranslationError:
     if not isinstance(raw, dict):
         return _boundary("response 'usage' is not an object")
     creation = raw.get("cache_creation")
-    details: Option[CacheCreationDetails] = Nothing
-    if isinstance(creation, dict):
-        five = creation.get("ephemeral_5m_input_tokens")
-        hour = creation.get("ephemeral_1h_input_tokens")
-        details = Some(
-            CacheCreationDetails(
-                five_minute=Some(five) if isinstance(five, int) else Nothing,
-                one_hour=Some(hour) if isinstance(hour, int) else Nothing,
-            )
-        )
+    details = (
+        Some(_cache_creation_details(creation))
+        if isinstance(creation, dict)
+        else Nothing
+    )
     return ResponseUsage(
         input_tokens=_int_of(raw.get("input_tokens")),
         output_tokens=_int_of(raw.get("output_tokens")),
@@ -169,6 +164,15 @@ def parse_usage(raw: PlainJson) -> ResponseUsage | TranslationError:
         cache_read_input_tokens=_int_of(raw.get("cache_read_input_tokens")),
         cache_creation=details,
         total_tokens=Nothing,
+    )
+
+
+def _cache_creation_details(creation: dict[str, PlainJson]) -> CacheCreationDetails:
+    five = creation.get("ephemeral_5m_input_tokens")
+    hour = creation.get("ephemeral_1h_input_tokens")
+    return CacheCreationDetails(
+        five_minute=Some(five) if isinstance(five, int) else Nothing,
+        one_hour=Some(hour) if isinstance(hour, int) else Nothing,
     )
 
 
@@ -207,9 +211,11 @@ def _resolve_json_tool(response: ChatResponse, request: ChatRequest) -> ChatResp
     arguments = json_calls[0].arguments.value
     if arguments is None:
         return response
-    payload: PlainJson = arguments
-    if isinstance(arguments, dict) and arguments.get("values") is not None:
-        payload = arguments["values"]
+    payload: PlainJson = (
+        arguments["values"]
+        if isinstance(arguments, dict) and arguments.get("values") is not None
+        else arguments
+    )
     # v1 replaces the whole message with the JSON content (any text or
     # thinking blocks in the raw response are discarded with it).
     kept = Block.of_seq(

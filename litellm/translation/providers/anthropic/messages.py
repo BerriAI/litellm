@@ -90,9 +90,12 @@ def _block(block: ContentBlock, name_forward: Mapping[str, str]) -> PlainJson:
             base: dict[str, PlainJson] = {
                 "type": "thinking",
                 "thinking": thinking.thinking,
+                **(
+                    {"signature": thinking.signature.some}
+                    if thinking.signature is not Nothing
+                    else {}
+                ),
             }
-            if thinking.signature is not Nothing:
-                base = {**base, "signature": thinking.signature.some}
             return _with_cache(base, thinking.cache)
         case "redacted_thinking":
             return {
@@ -103,9 +106,11 @@ def _block(block: ContentBlock, name_forward: Mapping[str, str]) -> PlainJson:
 
 
 def _text_json(text: Text, placeholder: bool) -> PlainJson:
-    value = text.text
-    if placeholder and (not value or not value.strip()):
-        value = _EMPTY_TEXT_PLACEHOLDER
+    value = (
+        _EMPTY_TEXT_PLACEHOLDER
+        if placeholder and (not text.text or not text.text.strip())
+        else text.text
+    )
     return _with_cache({"type": "text", "text": value}, text.cache)
 
 

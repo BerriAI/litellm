@@ -106,12 +106,13 @@ def _assemble(
     messages = serialize_messages(request.messages)
     if isinstance(messages, TranslationError):
         return Error(messages)
-    body: Body = {"messages": messages, "inferenceConfig": inference_config}
-    if additional:
-        body = {**body, "additionalModelRequestFields": additional}
     system = _system_json(request.system, request.model)
-    if system is not None:
-        body = {**body, "system": system}
+    body: Body = {
+        "messages": messages,
+        "inferenceConfig": inference_config,
+        **({"additionalModelRequestFields": additional} if additional else {}),
+        **({"system": system} if system is not None else {}),
+    }
     return _with_tool_config(body, request, tools, tool_choice)
 
 
@@ -126,22 +127,26 @@ def _with_tool_config(
     tool_blocks = serialize_tools(tools, request.model)
     if isinstance(tool_blocks, TranslationError):
         return Error(tool_blocks)
-    tool_config: dict[str, PlainJson] = {"tools": tool_blocks}
-    if tool_choice is not None:
-        tool_config = {**tool_config, "toolChoice": tool_choice}
+    tool_config: dict[str, PlainJson] = {
+        "tools": tool_blocks,
+        **({"toolChoice": tool_choice} if tool_choice is not None else {}),
+    }
     return Ok({**body, "toolConfig": tool_config})
 
 
 def _inference_config(
     request: ChatRequest, deps: TranslationDeps, thinking_json: PlainJson | None
 ) -> Result[dict[str, PlainJson], TranslationError]:
-    config: dict[str, PlainJson] = {}
     max_tokens = p.max_tokens_json(request, thinking_json)
-    if max_tokens is not None:
-        config = {**config, "maxTokens": max_tokens}
-    if len(request.params.stop) > 0:
+    config: dict[str, PlainJson] = {
+        **({"maxTokens": max_tokens} if max_tokens is not None else {}),
         # converse keeps whitespace-only entries (drift item 7).
-        config = {**config, "stopSequences": list(request.params.stop)}
+        **(
+            {"stopSequences": list(request.params.stop)}
+            if len(request.params.stop) > 0
+            else {}
+        ),
+    }
     for param, key, value_opt in (
         ("temperature", "temperature", request.params.temperature),
         ("top_p", "topP", request.params.top_p),
@@ -164,32 +169,36 @@ def _inference_config(
 def _additional_fields(
     request: ChatRequest, deps: TranslationDeps, thinking_json: PlainJson | None
 ) -> Result[dict[str, PlainJson], TranslationError]:
-    fields: dict[str, PlainJson] = {"stream": request.stream}
-    if thinking_json is not None:
-        fields = {**fields, "thinking": thinking_json}
+    top_k_field: dict[str, PlainJson]
     match request.params.top_k:
         case Option(tag="some", some=top_k):
             match anthropic_params.gate_sampling_param(
                 request.model, "top_k", top_k, deps
             ):
                 case Result(tag="ok", ok=Option(tag="some", some=kept)):
-                    fields = {**fields, "top_k": kept}
+                    top_k_field = {"top_k": kept}
                 case Result(tag="ok", ok=_):
-                    pass
+                    top_k_field = {}
                 case Result(error=err):
                     return Error(err)
         case _:
-            pass
+            top_k_field = {}
+    parallel_field: dict[str, PlainJson]
     match request.parallel_tool_calls:
-        case Option(tag="some", some=parallel):
-            if p.is_claude_4_5_plus(request.model):
-                fields = {
-                    **fields,
-                    "tool_choice": {"disable_parallel_tool_use": not parallel},
-                }
+        case Option(tag="some", some=parallel) if p.is_claude_4_5_plus(request.model):
+            parallel_field = {
+                "tool_choice": {"disable_parallel_tool_use": not parallel}
+            }
         case _:
-            pass
-    return Ok(fields)
+            parallel_field = {}
+    return Ok(
+        {
+            "stream": request.stream,
+            **({"thinking": thinking_json} if thinking_json is not None else {}),
+            **top_k_field,
+            **parallel_field,
+        }
+    )
 
 
 def _system_json(system: Block[SystemText], model: str) -> PlainJson | None:
@@ -248,9 +257,11 @@ def _response_format_tool(
     tool = response_format_tool(response_format.json_schema)
     if isinstance(tool, TranslationError):
         return Error(tool)
-    forced: dict[str, PlainJson] | None = None
-    if not anthropic_params.thinking_signaled(request):
-        forced = {"tool": {"name": "json_tool_call"}}
+    forced: dict[str, PlainJson] | None = (
+        None
+        if anthropic_params.thinking_signaled(request)
+        else {"tool": {"name": "json_tool_call"}}
+    )
     return Ok((tool, forced))
 
 
@@ -260,16 +271,15 @@ def _tool_choice_json(
     thinking_json: PlainJson | None,
     rf_choice: dict[str, PlainJson] | None,
 ) -> Result[dict[str, PlainJson] | None, TranslationError]:
-    choice_json: dict[str, PlainJson] | None = rf_choice
-    if choice_json is None:
-        match request.tool_choice:
-            case Option(tag="some", some=choice):
-                mapped = _map_tool_choice(choice, deps)
-                if isinstance(mapped, TranslationError):
-                    return Error(mapped)
-                choice_json = mapped
-            case _:
-                choice_json = None
+    choice_json: dict[str, PlainJson] | None
+    match rf_choice, request.tool_choice:
+        case None, Option(tag="some", some=choice):
+            mapped = _map_tool_choice(choice, deps)
+            if isinstance(mapped, TranslationError):
+                return Error(mapped)
+            choice_json = mapped
+        case _:
+            choice_json = rf_choice
     if (
         choice_json is not None
         and p.thinking_enabled_json(thinking_json)

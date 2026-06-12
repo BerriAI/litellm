@@ -191,10 +191,8 @@ def _finish_event(event: dict[str, PlainJson]) -> _EventResult:
     finish: FinishReason = (
         FINISH_MAP.get(stop_reason, "stop") if isinstance(stop_reason, str) else "stop"
     )
-    output_tokens = 0
-    if isinstance(usage, dict):
-        raw = usage.get("output_tokens")
-        output_tokens = int(raw) if isinstance(raw, (int, float)) else 0
+    raw = usage.get("output_tokens") if isinstance(usage, dict) else None
+    output_tokens = int(raw) if isinstance(raw, (int, float)) else 0
     return Ok(
         StreamEvent.of_finish(StreamFinish(finish=finish, output_tokens=output_tokens))
     )

@@ -37,13 +37,15 @@ def serialize_response(
 ) -> Body:
     text = "".join(block.text.text for block in response.content if block.tag == "text")
     thinking_blocks = _thinking_blocks(response.content)
-    reasoning: str | None = None
-    if thinking_blocks is not None:
-        reasoning = "".join(
+    reasoning = (
+        "".join(
             block.thinking.thinking
             for block in response.content
             if block.tag == "thinking"
         )
+        if thinking_blocks is not None
+        else None
+    )
     message = (
         _anthropic_message(response, text, thinking_blocks, reasoning)
         if dialect == "anthropic"
@@ -100,34 +102,46 @@ def _converse_message(
     """v1's converse ``_transform_response`` builds the message dict key by
     key: content always a string, the reasoning trio only when reasoning
     blocks exist, ``tool_calls`` only when present."""
-    message: dict[str, PlainJson] = {"role": "assistant", "content": text}
-    if thinking_blocks is not None:
-        message = {
-            **message,
+    reasoning_keys: dict[str, PlainJson] = (
+        {
             "provider_specific_fields": {
                 "reasoningContentBlocks": _raw_reasoning_blocks(response.content)
             },
             "reasoning_content": reasoning,
             "thinking_blocks": thinking_blocks,
         }
+        if thinking_blocks is not None
+        else {}
+    )
     tool_calls = _tool_calls(response.content)
-    if tool_calls is not None:
-        message = {**message, "tool_calls": tool_calls}
-    return message
+    tool_call_keys: dict[str, PlainJson] = (
+        {"tool_calls": tool_calls} if tool_calls is not None else {}
+    )
+    return {
+        "role": "assistant",
+        "content": text,
+        **reasoning_keys,
+        **tool_call_keys,
+    }
 
 
 def _raw_reasoning_blocks(content: Block[ContentBlock]) -> PlainJson:
     blocks: list[PlainJson] = []
     for block in content:
         if block.tag == "thinking":
-            text_block: dict[str, PlainJson] = {"text": block.thinking.thinking}
+            signature_key: dict[str, PlainJson]
             match block.thinking.signature:
                 case Option(tag="some", some=signature):
-                    text_block = {**text_block, "signature": signature}
+                    signature_key = {"signature": signature}
                 case _:
-                    pass
+                    signature_key = {}
             blocks.append(  # nosemgrep: translation-no-mutation
-                {"reasoningText": text_block}
+                {
+                    "reasoningText": {
+                        "text": block.thinking.thinking,
+                        **signature_key,
+                    }
+                }
             )
         elif block.tag == "redacted_thinking":
             blocks.append(  # nosemgrep: translation-no-mutation
@@ -225,7 +239,7 @@ def _usage_json(
     completion_tokens = usage.output_tokens
     estimated = deps.count_response_tokens(reasoning) if reasoning else 0
     reasoning_tokens = min(estimated, completion_tokens)
-    creation_details: PlainJson = None
+    creation_details: PlainJson
     match usage.cache_creation:
         case Option(tag="some", some=details):
             creation_details = {

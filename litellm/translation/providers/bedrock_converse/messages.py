@@ -44,11 +44,14 @@ def serialize_messages(
 ) -> list[PlainJson] | TranslationError:
     turns: list[_Turn] = []
     for message in messages:
-        blocks = _content_blocks(message)
-        if isinstance(blocks, TranslationError):
-            return blocks
-        if message.role == "assistant":
-            blocks = _sort_assistant(_dedupe("toolUse", blocks))
+        rendered = _content_blocks(message)
+        if isinstance(rendered, TranslationError):
+            return rendered
+        blocks = (
+            _sort_assistant(_dedupe("toolUse", rendered))
+            if message.role == "assistant"
+            else rendered
+        )
         if not blocks:
             continue
         if turns and turns[-1][0] == message.role:
@@ -164,12 +167,13 @@ def _tool_use_json(tool_use: ToolUse) -> list[PlainJson]:
 
 def _tool_result_json(tool_result: ToolResult) -> list[PlainJson]:
     content: list[PlainJson]
-    cached = tool_result.cache.is_some()
+    cached: bool
     if tool_result.content.tag == "text":
         content = [{"text": tool_result.content.text}]
+        cached = tool_result.cache.is_some()
     else:
         content = [{"text": part.text} for part in tool_result.content.parts]
-        cached = cached or any(
+        cached = tool_result.cache.is_some() or any(
             part.cache.is_some() for part in tool_result.content.parts
         )
     block: PlainJson = {

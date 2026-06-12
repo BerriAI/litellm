@@ -196,7 +196,9 @@ def _v1_chunks(lines: list) -> list:
     params = {k: v for k, v in _REQUEST.items() if k not in ("model", "messages")}
     optional = config.map_openai_params(dict(params), {}, MODEL, drop_params=False)
     litellm_params: dict = {}
-    config.transform_request(MODEL, [dict(m) for m in _REQUEST["messages"]], optional, litellm_params, {})
+    config.transform_request(
+        MODEL, [dict(m) for m in _REQUEST["messages"]], optional, litellm_params, {}
+    )
     reverse_map = litellm_params.get("_anthropic_tool_name_map") or {}
 
     iterator = ModelResponseIterator(

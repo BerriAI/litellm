@@ -192,13 +192,15 @@ def _resolve_json_tool(response: ChatResponse, request: ChatRequest) -> ChatResp
     if not json_calls or len(json_calls) != len(tool_uses):
         return response
     arguments = json_calls[0].arguments.value
-    payload: PlainJson = arguments
-    if (
-        isinstance(arguments, dict)
-        and len(arguments) == 1
-        and "properties" in arguments
-    ):
-        payload = arguments["properties"]
+    payload: PlainJson = (
+        arguments["properties"]
+        if (
+            isinstance(arguments, dict)
+            and len(arguments) == 1
+            and "properties" in arguments
+        )
+        else arguments
+    )
     kept = [
         block
         for block in response.content
