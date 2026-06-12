@@ -327,6 +327,44 @@ def test_supported_list_mirror_over_model_map() -> None:
         assert capable == ("thinking" in supported), model
 
 
+def test_cache_control_substrings_mirror_v1_enum() -> None:
+    """critic-wave2b-alpha MAJOR-2: CACHE_CONTROL_MODEL_SUBSTRINGS hand-copies
+    v1's CacheControlSupportedModels enum, and drift here is byte-DIVERGENT
+    served traffic, not a safe fallback — if v1's enum grows a substring, v1
+    keeps cache_control and moves message-level markers while v2 keeps serving
+    the recursive-strip body for that model. This mirror makes the drift a
+    test failure instead of corpus luck (the grok-M4 registry-fact pattern
+    every other hand-copied table on this branch already follows)."""
+    from litellm.llms.openrouter.chat.transformation import (
+        CacheControlSupportedModels,
+    )
+
+    from litellm.translation.providers.openrouter.params import (
+        CACHE_CONTROL_MODEL_SUBSTRINGS,
+        supports_cache_control_in_content,
+    )
+
+    from ._own_module_corpus import provider_config
+
+    assert set(CACHE_CONTROL_MODEL_SUBSTRINGS) == {
+        member.value.lower() for member in CacheControlSupportedModels
+    }
+    # the lower-casing fact the table mirrors: v1 lowercases the MODEL and
+    # substring-matches the enum values verbatim, so those values must already
+    # be lower-case for v2's lowered match to be the same predicate
+    assert all(
+        member.value == member.value.lower() for member in CacheControlSupportedModels
+    )
+    # live predicate check against v1's own gate, per enum member (mixed-case
+    # model ids exercise the lowering on both sides)
+    config = provider_config("openrouter", MODEL)
+    for member in CacheControlSupportedModels:
+        for probe in (f"vendor/{member.value.upper()}-x", MODEL, "mistral-large"):
+            assert supports_cache_control_in_content(
+                probe
+            ) == config._supports_cache_control_in_content(probe), (member, probe)
+
+
 def test_registration_facts() -> None:
     assert "openrouter" in pipeline._SERIALIZERS
     assert "openrouter" in pipeline._RESPONSE_PARSERS
