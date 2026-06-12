@@ -4892,9 +4892,12 @@ class ProxyConfig:
         combined_id_list = []
 
         ## BASE CASES ##
-        # if llm_router is None or db_models is empty, return 0
-        if llm_router is None or len(db_models) == 0:
+        if llm_router is None:
             return 0
+        # NOTE: db_models may be legitimately empty when all DB models have been deleted.
+        # Do NOT short-circuit on len(db_models) == 0 — we must still evict any
+        # DB-sourced deployments that are no longer in the DB. The caller
+        # (_update_llm_router) already guards against None (transient fetch failure).
 
         ## DB MODELS ##
         for m in db_models:
@@ -5044,6 +5047,15 @@ class ProxyConfig:
             )
 
         try:
+            # new_models is None when _get_models_from_db failed (transient DB error).
+            # Skip the update entirely so we don't evict valid deployments.
+            if new_models is None:
+                verbose_proxy_logger.warning(
+                    "_update_llm_router: DB model fetch returned None (transient failure). "
+                    "Skipping router update to preserve existing deployments."
+                )
+                return
+
             models_list: list = new_models if isinstance(new_models, list) else []
             if llm_router is None and master_key is not None:
                 verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
@@ -5746,18 +5758,25 @@ class ProxyConfig:
         # Check if the object type is in the list (supports both str and enum values)
         return any(str(obj) == object_type_str for obj in supported_db_objects)
 
-    async def _get_models_from_db(self, prisma_client: PrismaClient) -> list:
+    async def _get_models_from_db(self, prisma_client: PrismaClient) -> Optional[list]:
+        """
+        Fetch all model deployments from the DB.
+
+        Returns:
+        - list: the rows (may be empty if no models exist)
+        - None: signals a DB fetch *failure* — callers must not treat this
+          as "all models deleted" and must not evict existing router deployments.
+        """
         try:
             new_models = await ModelRepository(prisma_client).table.find_many()
+            return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {}".format(
                     str(e)
                 )
             )
-            new_models = []
-
-        return new_models
+            return None
 
     async def add_deployment(
         self,
