@@ -9,8 +9,8 @@
  *   - navigation specs that assert per-page URLs (tests/navigation/sidebar.spec.ts)
  *
  * Keep this in lockstep with MIGRATED_PAGES in src/utils/migratedPages.ts.
- * Pending (add as each PR lands): the leaf-pages batch
- * (caching, cost-tracking, logs, transform-request, ui-theme).
+ * Pending (add as each PR lands): admin-panel, logging-and-alerts,
+ * model-hub-table, and usage (#30268).
  */
 export const MIGRATED_E2E_PAGES: Record<string, string> = {
   api_ref: "api-reference",
@@ -30,6 +30,11 @@ export const MIGRATED_E2E_PAGES: Record<string, string> = {
   prompts: "prompts",
   "tool-policies": "tool-policies",
   skills: "skills",
+  caching: "caching",
+  "cost-tracking": "cost-tracking",
+  "transform-request": "transform-request",
+  "ui-theme": "ui-theme",
+  logs: "logs",
 };
 
 export const MIGRATED_E2E_SEGMENTS: string[] = [...new Set(Object.values(MIGRATED_E2E_PAGES))];
