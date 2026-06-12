@@ -19,6 +19,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+import litellm
 from litellm.integrations.opentelemetry import (
     OpenTelemetry,
     OpenTelemetryConfig,
@@ -5599,6 +5600,48 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                 self.assertTrue(
                     expected.issubset(keys),
                     f"{metric_name} dropped {expected - keys} by default",
+                )
+                self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, keys)
+
+    def test_proxy_callback_settings_attributes_applied_without_kwarg(self):
+        """Regression for the proxy path: the OpenTelemetry logger is usually
+        built without the attributes kwarg, while the proxy stores the filter
+        under litellm.callback_settings['otel']['attributes']. The logger must
+        resolve it from there, otherwise metrics ship at full cardinality (the
+        bug the live proxy surfaced; unit construction with the kwarg hid it)."""
+        previous = litellm.callback_settings
+        litellm.callback_settings = {
+            "otel": {"attributes": {"exclude_list": list(self.HIGH_CARDINALITY_KEYS)}}
+        }
+        try:
+            metric_reader = InMemoryMetricReader()
+            meter_provider = MeterProvider(metric_readers=[metric_reader])
+            tracer_provider = TracerProvider()
+            tracer_provider.add_span_processor(
+                SimpleSpanProcessor(InMemorySpanExporter())
+            )
+            otel = OpenTelemetry(
+                config=OpenTelemetryConfig(exporter="console", enable_metrics=True),
+                tracer_provider=tracer_provider,
+                meter_provider=meter_provider,
+            )
+            otel.tracer = tracer_provider.get_tracer(__name__)
+            kwargs, response_obj = self._load_fixtures()
+            start = datetime.utcnow()
+            otel._handle_success(
+                kwargs, response_obj, start, start + timedelta(seconds=1)
+            )
+        finally:
+            litellm.callback_settings = previous
+
+        excluded = set(self.HIGH_CARDINALITY_KEYS)
+        for metric_name in (self.DURATION_METRIC, self.TOKEN_METRIC):
+            keysets = self._keysets(metric_reader, metric_name)
+            self.assertTrue(keysets, f"{metric_name} was not recorded")
+            for keys in keysets:
+                self.assertTrue(
+                    excluded.isdisjoint(keys),
+                    f"{metric_name} leaked {excluded & keys} via callback_settings",
                 )
                 self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, keys)
 

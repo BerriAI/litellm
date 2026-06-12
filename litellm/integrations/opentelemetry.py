@@ -313,6 +313,18 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             config.attributes = _build_metric_attribute_filter(
                 metric_attributes_override
             )
+        elif config.attributes is None and callback_name in (None, "otel"):
+            # The proxy frequently builds this logger without forwarding the
+            # callback_settings.otel.attributes kwarg, so read it from the global
+            # where the proxy stores that exact block.
+            otel_settings = (litellm.callback_settings or {}).get("otel") or {}
+            proxy_attributes = (
+                otel_settings.get("attributes")
+                if isinstance(otel_settings, dict)
+                else None
+            )
+            if proxy_attributes is not None:
+                config.attributes = _build_metric_attribute_filter(proxy_attributes)
 
         self.config = config
         (
