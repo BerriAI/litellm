@@ -444,7 +444,7 @@
       "count": 1
     }
   },
-  "src/components/MemoryView/MemoryView.tsx": {
+  "src/app/(dashboard)/memory/components/MemoryView.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { Form, Input, Modal, Typography } from "antd";
-import type { MemoryRow } from "../networking";
+import type { MemoryRow } from "@/components/networking";
 
 const { Text } = Typography;
 

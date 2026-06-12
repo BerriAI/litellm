@@ -12,9 +12,9 @@ import {
   ReloadOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
-import { MemoryRow, createMemory, deleteMemory, fetchMemoryList, updateMemory } from "../networking";
+import { MemoryRow, createMemory, deleteMemory, fetchMemoryList, updateMemory } from "@/components/networking";
 import { MemoryEditModal } from "./MemoryEditModal";
-import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 
 const { Text, Paragraph, Title } = Typography;
 

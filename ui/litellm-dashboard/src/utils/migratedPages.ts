@@ -18,6 +18,11 @@ export const MIGRATED_PAGES: Record<string, string> = {
   budgets: "budgets",
   workflows: "workflows",
   "guardrails-monitor": "guardrails-monitor",
+  "mcp-servers": "mcp-servers",
+  "search-tools": "search-tools",
+  "tag-management": "tag-management",
+  "vector-stores": "vector-stores",
+  memory: "memory",
 };
 
 function uiBase(): string {

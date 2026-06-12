@@ -14,7 +14,6 @@ import GeneralSettings from "@/components/general_settings";
 import GuardrailsPanel from "@/components/guardrails";
 import PoliciesPanel from "@/components/policies";
 import { Team } from "@/components/key_team_helpers/key_list";
-import { MCPServers } from "@/components/mcp_tools";
 import ModelHubTable from "@/components/AIHub/ModelHubTable";
 import { Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components/networking";
 import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
@@ -24,17 +23,13 @@ import Organizations, { fetchOrganizations } from "@/components/organizations";
 import PassThroughSettings from "@/components/pass_through_settings";
 import PromptsPanel from "@/components/prompts";
 import PublicModelHub from "@/components/public_model_hub";
-import { SearchTools } from "@/components/SearchTools";
 import Settings from "@/components/settings";
 import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
-import TagManagement from "@/components/tag_management";
 import TransformRequestPanel from "@/components/transform_request";
 import UIThemeSettings from "@/components/ui_theme_settings";
 import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
-import VectorStoreManagement from "@/components/vector_store_management";
 import ToolPoliciesView from "@/components/ToolPoliciesView";
-import { MemoryView } from "@/components/MemoryView";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { useAuth } from "@/contexts/AuthContext";
@@ -433,20 +428,10 @@ function CreateKeyPageContent() {
               accessToken={accessToken}
               premiumUser={premiumUser}
             />
-          ) : page == "mcp-servers" ? (
-            <MCPServers accessToken={accessToken} userRole={userRole} userID={userID} />
-          ) : page == "search-tools" ? (
-            <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
-          ) : page == "tag-management" ? (
-            <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
           ) : page == "skills" || page == "claude-code-plugins" ? (
             <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
-          ) : page == "vector-stores" ? (
-            <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
           ) : page == "tool-policies" ? (
             <ToolPoliciesView accessToken={accessToken} userRole={userRole} />
-          ) : page == "memory" ? (
-            <MemoryView accessToken={accessToken} userID={userID} userRole={userRole} />
           ) : page == "new_usage" ? (
             <NewUsagePage teams={(teams as Team[]) ?? []} organizations={(organizations as Organization[]) ?? []} />
           ) : (
