@@ -4,7 +4,7 @@ import { CodeOutlined } from "@ant-design/icons";
 import { Button as TremorButton, Text } from "@tremor/react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
-import NotificationsManager from "../../molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
 interface PromptCodeSnippetsProps {
   promptId: string;

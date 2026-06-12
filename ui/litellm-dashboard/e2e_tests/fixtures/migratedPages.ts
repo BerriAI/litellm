@@ -10,8 +10,7 @@
  *
  * Keep this in lockstep with MIGRATED_PAGES in src/utils/migratedPages.ts.
  * Pending (add as each PR lands): the leaf-pages batch
- * (caching, cost-tracking, guardrails, logs, policies, prompts, skills,
- * tool-policies, transform-request, ui-theme).
+ * (caching, cost-tracking, logs, transform-request, ui-theme).
  */
 export const MIGRATED_E2E_PAGES: Record<string, string> = {
   api_ref: "api-reference",
@@ -26,6 +25,11 @@ export const MIGRATED_E2E_PAGES: Record<string, string> = {
   "tag-management": "tag-management",
   "vector-stores": "vector-stores",
   memory: "memory",
+  policies: "policies",
+  guardrails: "guardrails",
+  prompts: "prompts",
+  "tool-policies": "tool-policies",
+  skills: "skills",
 };
 
 export const MIGRATED_E2E_SEGMENTS: string[] = [...new Set(Object.values(MIGRATED_E2E_PAGES))];

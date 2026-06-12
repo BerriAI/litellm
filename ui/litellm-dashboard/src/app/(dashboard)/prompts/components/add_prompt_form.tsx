@@ -3,8 +3,8 @@ import { Modal, Form, Select, Upload, Button, Divider } from "antd";
 import { TextInput } from "@tremor/react";
 import { UploadOutlined } from "@ant-design/icons";
 import type { UploadFile, UploadProps } from "antd";
-import { convertPromptFileToJson, createPromptCall } from "../networking";
-import NotificationsManager from "../molecules/notifications_manager";
+import { convertPromptFileToJson, createPromptCall } from "@/components/networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
 const { Option } = Select;
 

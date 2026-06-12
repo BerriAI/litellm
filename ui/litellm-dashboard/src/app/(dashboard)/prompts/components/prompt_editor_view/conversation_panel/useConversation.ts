@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from "react";
-import NotificationsManager from "../../../molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import { Message } from "./types";
 import { convertToDotPrompt, extractVariables } from "../utils";
-import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "../../../networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 
 export const useConversation = (prompt: any, accessToken: string | null) => {
   const [isLoading, setIsLoading] = useState(false);

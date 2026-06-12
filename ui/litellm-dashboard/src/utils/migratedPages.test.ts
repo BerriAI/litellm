@@ -75,6 +75,19 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES["vector-stores"]).toBe("vector-stores");
     expect(MIGRATED_PAGES.memory).toBe("memory");
   });
+
+  it("maps the policies, guardrails, prompts, tool-policies, and skills ids to their routes", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.policies).toBe("policies");
+    expect(MIGRATED_PAGES.guardrails).toBe("guardrails");
+    expect(MIGRATED_PAGES.prompts).toBe("prompts");
+    expect(MIGRATED_PAGES["tool-policies"]).toBe("tool-policies");
+    expect(MIGRATED_PAGES.skills).toBe("skills");
+    // Old bookmarks used ?page=claude-code-plugins for the same panel.
+    expect(MIGRATED_PAGES["claude-code-plugins"]).toBe("skills");
+  });
 });
 
 describe("dev server (NODE_ENV=development)", () => {
@@ -128,6 +141,9 @@ describe("legacyKeyForPathname", () => {
     // Resolves to the sidebar key api_ref, not the hyphenated alias, so highlighting works.
     expect(legacyKeyForPathname("/ui/api-reference")).toBe("api_ref");
     expect(legacyKeyForPathname("/ui/api-reference/")).toBe("api_ref");
+    // Same for skills: the claude-code-plugins alias maps to the same segment,
+    // and first-match-wins iteration must keep returning the sidebar key.
+    expect(legacyKeyForPathname("/ui/skills")).toBe("skills");
   });
 
   it("returns null for a not-yet-migrated path", async () => {
