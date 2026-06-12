@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import datetime
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -2301,6 +2301,77 @@ class TestHandleLLMApiExceptionDictDetail:
         exc = ValueError("Something broke")
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.code == "500"
+
+
+class TestHandleLLMApiExceptionRetryAfter:
+    """RouterRateLimitError cooldown_time must surface as a retry-after header."""
+
+    async def _invoke(self, exc: Exception, callback_headers: Optional[dict] = None):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value=callback_headers or {}
+        )
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException as raised:
+            return raised
+        raise AssertionError("ProxyException was not raised")
+
+    async def test_handle_llm_api_exception_sets_retry_after_from_cooldown_time(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=42.3,
+            enable_pre_call_checks=False,
+            cooldown_list=[],
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.headers["retry-after"] == "43"
+        assert proxy_exc.code == "429"
+
+    async def test_handle_llm_api_exception_skips_retry_after_when_cooldown_is_zero(
+        self,
+    ):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=0,
+            enable_pre_call_checks=False,
+            cooldown_list=[],
+        )
+        proxy_exc = await self._invoke(exc)
+        assert "retry-after" not in proxy_exc.headers
+
+    async def test_handle_llm_api_exception_no_retry_after_for_plain_exception(self):
+        proxy_exc = await self._invoke(ValueError("some other failure"))
+        assert "retry-after" not in proxy_exc.headers
+
+    async def test_handle_llm_api_exception_retry_after_survives_callback_headers(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=42.3,
+            enable_pre_call_checks=False,
+            cooldown_list=[],
+        )
+        proxy_exc = await self._invoke(
+            exc, callback_headers={"retry-after": "", "x-custom": "1"}
+        )
+        assert proxy_exc.headers["retry-after"] == "43"
+        assert proxy_exc.headers["x-custom"] == "1"
 
 
 class TestAsyncStreamingDataGeneratorFastPath:

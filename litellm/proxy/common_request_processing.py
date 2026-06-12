@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import time
 import traceback
 from datetime import datetime
@@ -49,6 +50,7 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import ServerToolUse
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
@@ -1889,6 +1891,10 @@ class ProxyBaseLLMRequestProcessing:
                     e,
                 )
 
+    def _apply_router_cooldown_retry_after(self, headers: dict, e: Exception) -> None:
+        if isinstance(e, RouterRateLimitError) and e.cooldown_time > 0:
+            headers["retry-after"] = str(math.ceil(e.cooldown_time))
+
     async def _handle_llm_api_exception(
         self,
         e: Exception,
@@ -1967,6 +1973,8 @@ class ProxyBaseLLMRequestProcessing:
                 headers.update(callback_headers)
         except Exception:
             pass
+
+        self._apply_router_cooldown_retry_after(headers, e)
 
         if isinstance(e, HTTPException):
             raw_detail = getattr(e, "detail", str(e))
