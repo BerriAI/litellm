@@ -198,6 +198,96 @@ async def test_audio_speech_router(mode):
     assert test_logger.standard_logging_object["model_group"] == "tts"
 
 
+@pytest.mark.asyncio
+async def test_aspeech_fallbacks_on_deployment_failure():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tts-main",
+                "litellm_params": {"model": "openai/tts-1", "api_key": "fake-key"},
+            },
+            {
+                "model_name": "tts-backup",
+                "litellm_params": {"model": "openai/tts-1-hd", "api_key": "fake-key"},
+            },
+        ],
+        fallbacks=[{"tts-main": ["tts-backup"]}],
+        num_retries=0,
+    )
+
+    called_models = []
+
+    async def mock_aspeech(*args, **kwargs):
+        called_models.append(kwargs["model"])
+        if kwargs["model"] == "openai/tts-1":
+            raise litellm.InternalServerError(
+                message="deployment down",
+                llm_provider="openai",
+                model="tts-1",
+            )
+        return MagicMock()
+
+    with patch("litellm.aspeech", side_effect=mock_aspeech):
+        response = await router.aspeech(
+            model="tts-main",
+            input="the quick brown fox jumped over the lazy dogs",
+            voice="alloy",
+        )
+
+    assert response is not None
+    assert called_models == ["openai/tts-1", "openai/tts-1-hd"]
+
+
+@pytest.mark.asyncio
+async def test_aspeech_success_returns_response():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tts",
+                "litellm_params": {"model": "openai/tts-1", "api_key": "fake-key"},
+            },
+        ]
+    )
+
+    mock_response = MagicMock()
+    with patch("litellm.aspeech", return_value=mock_response) as mock_aspeech:
+        response = await router.aspeech(
+            model="tts",
+            input="the quick brown fox jumped over the lazy dogs",
+            voice="alloy",
+        )
+
+    assert response is mock_response
+    mock_aspeech.assert_called_once()
+    assert mock_aspeech.call_args.kwargs["model"] == "openai/tts-1"
+
+
+@pytest.mark.asyncio
+async def test_aspeech_sets_deployment_metadata():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tts",
+                "litellm_params": {"model": "openai/tts-1", "api_key": "fake-key"},
+            },
+        ]
+    )
+
+    mock_response = MagicMock()
+    with patch("litellm.aspeech", return_value=mock_response) as mock_aspeech:
+        response = await router._aspeech(
+            model="tts",
+            input="the quick brown fox jumped over the lazy dogs",
+            voice="alloy",
+        )
+
+    assert response is mock_response
+    metadata = mock_aspeech.call_args.kwargs["metadata"]
+    assert metadata["deployment"] == "openai/tts-1"
+    assert metadata["deployment_model_name"] == "tts"
+    assert metadata["model_info"]["id"] is not None
+
+
 @pytest.mark.asyncio()
 async def test_rerank_endpoint(model_list):
     from litellm.types.utils import RerankResponse

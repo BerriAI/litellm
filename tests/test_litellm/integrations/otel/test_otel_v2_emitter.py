@@ -57,6 +57,42 @@ def _engine(legacy_compat=True):
     return SpanEmitter(tracer, cfg), exporter
 
 
+def test_llm_call_span_cost_breakdown():
+    engine, exporter = _engine()
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _payload(
+            cost_breakdown={
+                "input_cost": 0.004,
+                "output_cost": 0.006,
+                "cache_read_cost": 0.001,
+                "total_cost": 0.011,
+            }
+        )
+    )
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    a = span.attributes
+    # The rolled-up total stays sourced from response_cost.
+    assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
+    # Per-component breakdown now rides the span.
+    assert a[f"{LiteLLM.COST_PREFIX}input"] == 0.004
+    assert a[f"{LiteLLM.COST_PREFIX}output"] == 0.006
+    assert a[f"{LiteLLM.COST_PREFIX}cache_read"] == 0.001
+    # Unreported components are omitted, not zero-filled.
+    assert f"{LiteLLM.COST_PREFIX}margin_total_amount" not in a
+
+
+def test_tracer_scope_carries_litellm_version():
+    from litellm._version import version as litellm_version
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    provider, exporter = providers.in_memory_provider(cfg)
+    tracer = providers.get_tracer(provider, "litellm-test")
+    tracer.start_span("probe").end()
+    (span,) = exporter.get_finished_spans()
+    assert span.instrumentation_scope.version == litellm_version
+
+
 def test_llm_call_span_golden():
     engine, exporter = _engine()
     data = LLMCallSpanData.from_standard_logging_payload(_payload())

@@ -29,6 +29,7 @@ from litellm.integrations.otel.plumbing.metrics import (
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
     LLMCallSpanData,
+    LLMCost,
     LLMRequestParams,
     LLMUsage,
     ProxyRequestSpanData,
@@ -222,6 +223,97 @@ def test_genai_mapper_all_request_params():
     assert attrs[GenAI.REQUEST_STOP_SEQUENCES] == ["STOP"]
     assert attrs[GenAI.REQUEST_SEED] == 42
     assert attrs["server.port"] == 443
+
+
+def test_genai_mapper_cost_breakdown():
+    from litellm.integrations.otel.model.semconv import LiteLLM
+
+    data = LLMCallSpanData(
+        operation=GenAIOperation.CHAT,
+        provider="anthropic",
+        request_model="claude-sonnet-4-6",
+        response_model=None,
+        response_id=None,
+        request_params=LLMRequestParams(),
+        usage=LLMUsage(),
+        finish_reasons=(),
+        error=None,
+        response_cost=0.012,
+        server=None,
+        identity=RequestIdentity(call_id=None),
+        cost=LLMCost(
+            input=0.004,
+            output=0.006,
+            cache_read=0.001,
+            cache_creation=0.0,
+            tool_usage=0.0005,
+            original=0.013,
+            discount_amount=0.001,
+            discount_percent=0.077,
+            margin_total_amount=0.0,
+            # margin_fixed_amount / margin_percent left unset on purpose
+        ),
+    )
+    attrs = GenAIMapper().map(data)
+    assert attrs[f"{LiteLLM.COST_PREFIX}total"] == 0.012
+    assert attrs[f"{LiteLLM.COST_PREFIX}input"] == 0.004
+    assert attrs[f"{LiteLLM.COST_PREFIX}output"] == 0.006
+    assert attrs[f"{LiteLLM.COST_PREFIX}cache_read"] == 0.001
+    assert attrs[f"{LiteLLM.COST_PREFIX}cache_creation"] == 0.0
+    assert attrs[f"{LiteLLM.COST_PREFIX}tool_usage"] == 0.0005
+    assert attrs[f"{LiteLLM.COST_PREFIX}original"] == 0.013
+    assert attrs[f"{LiteLLM.COST_PREFIX}discount_amount"] == 0.001
+    assert attrs[f"{LiteLLM.COST_PREFIX}discount_percent"] == 0.077
+    assert attrs[f"{LiteLLM.COST_PREFIX}margin_total_amount"] == 0.0
+    # Components the source did not report are omitted, not zero-filled.
+    assert f"{LiteLLM.COST_PREFIX}margin_fixed_amount" not in attrs
+    assert f"{LiteLLM.COST_PREFIX}margin_percent" not in attrs
+
+
+def test_genai_mapper_cost_breakdown_absent():
+    # No cost_breakdown → only the rolled-up total (from response_cost) emits.
+    from litellm.integrations.otel.model.semconv import LiteLLM
+
+    attrs = GenAIMapper().map(_full_llm_call())
+    assert attrs[f"{LiteLLM.COST_PREFIX}total"] == 0.002
+    assert not any(
+        k.startswith(LiteLLM.COST_PREFIX) and k != f"{LiteLLM.COST_PREFIX}total"
+        for k in attrs
+    )
+
+
+def test_llm_cost_from_breakdown_maps_costbreakdown_keys():
+    cost = LLMCost.from_breakdown(
+        {
+            "input_cost": 0.004,
+            "output_cost": 0.006,
+            "cache_read_cost": 0.001,
+            "cache_creation_cost": 0.002,
+            "tool_usage_cost": 0.0005,
+            "original_cost": 0.013,
+            "discount_amount": 0.001,
+            "discount_percent": 0.077,
+            "margin_fixed_amount": 0.0,
+            "margin_percent": 0.1,
+            "margin_total_amount": 0.0011,
+            "total_cost": 0.012,  # carried on response_cost, not LLMCost
+        }
+    )
+    assert cost.input == 0.004
+    assert cost.output == 0.006
+    assert cost.cache_read == 0.001
+    assert cost.cache_creation == 0.002
+    assert cost.tool_usage == 0.0005
+    assert cost.original == 0.013
+    assert cost.discount_amount == 0.001
+    assert cost.discount_percent == 0.077
+    assert cost.margin_fixed_amount == 0.0
+    assert cost.margin_percent == 0.1
+    assert cost.margin_total_amount == 0.0011
+
+
+def test_llm_cost_from_breakdown_none_is_empty():
+    assert LLMCost.from_breakdown(None) == LLMCost()
 
 
 def test_genai_mapper_guardrail_and_service():

@@ -223,6 +223,7 @@ LLM_CONFIG_NAMES = (
     "GenAIHubOrchestrationConfig",
     "VoyageEmbeddingConfig",
     "VoyageContextualEmbeddingConfig",
+    "VoyageMultimodalEmbeddingConfig",
     "InfinityEmbeddingConfig",
     "PerplexityEmbeddingConfig",
     "AzureAIStudioConfig",
@@ -902,6 +903,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "VoyageContextualEmbeddingConfig": (
         ".llms.voyage.embedding.transformation_contextual",
         "VoyageContextualEmbeddingConfig",
+    ),
+    "VoyageMultimodalEmbeddingConfig": (
+        ".llms.voyage.embedding.transformation_multimodal",
+        "VoyageMultimodalEmbeddingConfig",
     ),
     "InfinityEmbeddingConfig": (
         ".llms.infinity.embedding.transformation",

@@ -1609,7 +1609,8 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
         patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
         patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
+            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object",
+            new_callable=AsyncMock,
         ) as mock_cache_team,
     ):
         mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
@@ -1618,7 +1619,7 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
         mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
             return_value=updated_team
         )
-        mock_cache_team.return_value = None
+        mock_prisma_client.db.execute_raw = AsyncMock(return_value=None)
 
         if endpoint_name == "team_model_add":
             await team_model_add(

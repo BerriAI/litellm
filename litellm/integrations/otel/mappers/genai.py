@@ -63,6 +63,20 @@ class GenAIMapper:
         # routing) onto the boundary-born LLM span — stamp it directly here.
         LiteLLM.PROVIDER_MODEL: lambda d: d.identity.provider_model or None,
         f"{LiteLLM.COST_PREFIX}total": lambda d: d.response_cost,
+        # Per-component cost breakdown (from the StandardLoggingPayload
+        # ``cost_breakdown``). Each component is omitted when the source didn't
+        # report it, so spans stay sparse rather than carrying zeros.
+        f"{LiteLLM.COST_PREFIX}input": lambda d: d.cost.input,
+        f"{LiteLLM.COST_PREFIX}output": lambda d: d.cost.output,
+        f"{LiteLLM.COST_PREFIX}cache_read": lambda d: d.cost.cache_read,
+        f"{LiteLLM.COST_PREFIX}cache_creation": lambda d: d.cost.cache_creation,
+        f"{LiteLLM.COST_PREFIX}tool_usage": lambda d: d.cost.tool_usage,
+        f"{LiteLLM.COST_PREFIX}original": lambda d: d.cost.original,
+        f"{LiteLLM.COST_PREFIX}discount_amount": lambda d: d.cost.discount_amount,
+        f"{LiteLLM.COST_PREFIX}discount_percent": lambda d: d.cost.discount_percent,
+        f"{LiteLLM.COST_PREFIX}margin_fixed_amount": lambda d: d.cost.margin_fixed_amount,
+        f"{LiteLLM.COST_PREFIX}margin_percent": lambda d: d.cost.margin_percent,
+        f"{LiteLLM.COST_PREFIX}margin_total_amount": lambda d: d.cost.margin_total_amount,
         LiteLLM.REQUEST_STREAMING: lambda d: d.is_streaming,
     }
 
