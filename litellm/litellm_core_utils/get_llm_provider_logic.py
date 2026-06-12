@@ -634,16 +634,11 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base, api_key
         )
     elif custom_llm_provider == "bedrock_mantle":
-        mantle_region = (
-            getattr(litellm_params, "aws_region_name", None)
-            if litellm_params is not None
-            else None
-        )
         (
             api_base,
             dynamic_api_key,
         ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
-            api_base, api_key, aws_region_name=mantle_region
+            api_base, api_key, litellm_params=litellm_params
         )
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1

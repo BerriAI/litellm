@@ -14,6 +14,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.router import GenericLiteLLMParams
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
@@ -37,10 +38,10 @@ class BedrockMantleChatConfig(OpenAILikeChatConfig):
         self,
         api_base: Optional[str],
         api_key: Optional[str],
-        aws_region_name: Optional[str] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         region = (
-            aws_region_name
+            (litellm_params.aws_region_name if litellm_params else None)
             or get_secret_str("BEDROCK_MANTLE_REGION")
             or get_secret_str("AWS_REGION")
             or BEDROCK_MANTLE_DEFAULT_REGION

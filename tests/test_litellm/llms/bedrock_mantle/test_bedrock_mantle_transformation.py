@@ -64,11 +64,13 @@ class TestBedrockMantleConfig:
         assert api_base == "https://bedrock-mantle.ap-northeast-1.api.aws/v1"
 
     def test_aws_region_name_param_overrides_env(self, monkeypatch):
+        from litellm.types.router import GenericLiteLLMParams
+
         monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-west-2")
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         cfg = BedrockMantleChatConfig()
         api_base, _ = cfg._get_openai_compatible_provider_info(
-            None, None, aws_region_name="us-east-2"
+            None, None, litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2")
         )
         assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
 
