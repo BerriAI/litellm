@@ -347,7 +347,9 @@ async def create_file(  # noqa: PLR0915
         target_model_names_list = file_params.target_model_names
         model_param = file_params.model
 
-        validate_managed_files_requirement(target_model_names=target_model_names_list)
+        validate_managed_files_requirement(
+            target_model_names=target_model_names_list, model=model_param
+        )
 
         # Prepare the data for forwarding
 

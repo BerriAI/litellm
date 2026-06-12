@@ -1988,6 +1988,50 @@ def test_require_managed_files_allows_managed_file_upload(
     mock_acreate_file.assert_not_called()
 
 
+def test_require_managed_files_rejects_model_param_bypass(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """
+    Supplying model alongside target_model_names must not bypass managed files:
+    route_create_file would otherwise take the model branch and call
+    litellm.acreate_file directly instead of the managed-files hook.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    monkeypatch.setattr("litellm.require_managed_files", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+
+    mock_acreate_file = mocker.patch("litellm.acreate_file", new=mocker.AsyncMock())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("test.txt", b"abc", "text/plain")},
+            data={
+                "purpose": "user_data",
+                "target_model_names": "gpt-3.5-turbo",
+                "model": "gpt-3.5-turbo",
+            },
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        monkeypatch.setattr("litellm.require_managed_files", False)
+
+    assert response.status_code == 400, response.text
+    error_message = response.json()["error"]["message"]
+    assert error_message.startswith("model is not allowed")
+    mock_acreate_file.assert_not_called()
+
+
 def test_require_managed_files_accepts_target_model_names_bracket_form(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
