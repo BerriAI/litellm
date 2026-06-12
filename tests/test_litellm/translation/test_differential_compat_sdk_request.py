@@ -607,6 +607,8 @@ def test_registered_providers_have_differential_coverage() -> None:
         "azure_ai",  # test_differential_azure_ai_request + azure stream/response
         "azure_ai_anthropic",  # test_differential_azure_ai_request (Claude route)
         "xai",  # test_differential_xai_*
+        # wave-2b-alpha own-module providers
+        "deepseek",  # test_differential_deepseek_{request,response,stream}
     }
     assert providers == dedicated_gates | set(SPECS) | set(HTTPX_SPECS)
 

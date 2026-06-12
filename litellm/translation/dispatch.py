@@ -110,6 +110,11 @@ Provider = Literal[
     "deepinfra",
     "moonshot",
     "cometapi",
+    # wave-2b-alpha own-module providers (providers/<name> packages, each
+    # with dedicated differential gates; APPEND-ONLY, one line per provider
+    # in its own commit). All are httpx-path dedicated elifs. deepseek keeps
+    # the bare wire model (no seam preset — the xai R4 rule).
+    "deepseek",
 ]
 
 NeverPortProvider = Literal[

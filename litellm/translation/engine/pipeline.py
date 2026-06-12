@@ -58,6 +58,11 @@ from ..providers.compat_httpx import PARSERS as compat_httpx_parsers
 from ..providers.compat_httpx import SERIALIZERS as compat_httpx_serializers
 from ..providers.compat_sdk import GUARDS as compat_sdk_guards
 from ..providers.compat_sdk import SERIALIZERS as compat_sdk_serializers
+from ..providers.deepseek import parse_response as deepseek_parse_response
+from ..providers.deepseek import serialize_request as deepseek_serialize_request
+from ..providers.deepseek import (
+    unsupported_request_shapes as deepseek_unsupported_request_shapes,
+)
 from ..providers.google_genai import parse_response as google_parse_response
 from ..providers.google_genai import (
     serialize_request_studio as google_serialize_request_studio,
@@ -114,6 +119,9 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         # compat_httpx family (wave-1b): the dedicated-elif shims; same
         # splice convention, second family variant (no seam model preset).
         **compat_httpx_serializers,
+        # wave-2b-alpha own-module providers (per-provider rows: these are
+        # NOT family members; each package owns its serializer).
+        "deepseek": deepseek_serialize_request,
     }
 )
 
@@ -144,6 +152,10 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # lemonade request-model prefixes, which are parser scope (the
         # family's PARSERS table carries the per-provider truth).
         **compat_httpx_parsers,
+        # wave-2b-alpha own-module providers. deepseek: the base GPT
+        # transform_response is live on its httpx elif -> the shared openai
+        # parser with NO seam preset (bare wire model, the xai R4 rule).
+        "deepseek": deepseek_parse_response,
     }
 )
 
@@ -172,6 +184,10 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # policy for the rest — selected by the stream gates/future
         # streaming seam, not this outbound-body table)
         **{provider: _OPENAI_DIALECT for provider in compat_httpx_serializers},
+        # wave-2b-alpha own-module providers: httpx path, wire-derived
+        # outbound bodies (per-provider stream truth lives in each package's
+        # stream.py, composed from the shared httpx_chunk factory).
+        "deepseek": _OPENAI_DIALECT,
     }
 )
 
@@ -195,6 +211,9 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         # the shared guard for everyone else)
         **compat_sdk_guards,
         **compat_httpx_guards,
+        # wave-2b-alpha own-module providers (same-family wire formats; each
+        # guard composes the shared openai guard with its provider arms).
+        "deepseek": deepseek_unsupported_request_shapes,
     }
 )
 

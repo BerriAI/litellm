@@ -325,6 +325,26 @@ translation/
 │   │                    #   two-sided-pinned + a named report row; v1's
 │   │                    #   cometapi handler RAISES instead — its policy
 │   │                    #   row mirrors that raise)
+│   ├── deepseek/        # wave-2b-alpha own module (httpx dedicated elif
+│   │   │                #   main.py:1942, transforms LIVE, bare wire model)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   │                #   (full message-name fallback: nothing strips)
+│   │   ├── params.py    # base list + thinking/reasoning_effort
+│   │   │                #   (UNCONDITIONAL, every deepseek model);
+│   │   │                #   non-text content lists and thinking-mode
+│   │   │                #   assistant history fall back (v1's lossy
+│   │   │                #   flatten / _fill_reasoning_content rewrites)
+│   │   ├── serialize.py # openai_compat body + the compat_sdk flatten
+│   │   │                #   delta (imported, never copied) + the thinking
+│   │   │                #   rewrite ({"type":"enabled"} only:
+│   │   │                #   budget_tokens discarded, reasoning_effort
+│   │   │                #   rewritten in and its key never on the wire,
+│   │   │                #   a present non-enabled dict shadows it)
+│   │   ├── response.py  # shared openai parser re-export (no v1 override;
+│   │   │                #   NO deepseek/ prefix — the xai R4 shape)
+│   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
+│   │                    #   OpenAIChatCompletionStreamingHandler) +
+│   │                    #   make_parse_line; "xai" chunk dialect
 │   └── xai/             # Grok over openai_compat (httpx path: NO model
 │       │                #   prefix anywhere, transform_response is LIVE):
 │       ├── guard.py     # web_search_options (v1's Responses-bridge reroute
@@ -484,7 +504,7 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to sixty-five providers out — `anthropic`,
+OpenAI-chat-in to sixty-six providers out — `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
@@ -498,9 +518,10 @@ route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `poe`, `chutes`, `assemblyai`, `charity_engine`, `neosantara`,
 `tensormesh`, `parasail`), and the nine wave-1b compat_httpx providers
 (`heroku`, `bedrock_mantle`, `minimax`, `compactifai`, `amazon_nova`,
-`datarobot`, `gradient_ai`, `ovhcloud`, `lemonade`), and the five wave-2a
+`datarobot`, `gradient_ai`, `ovhcloud`, `lemonade`), the five wave-2a
 providers (`perplexity`, `sambanova`, `deepinfra`, `moonshot` on the SDK
-path, `cometapi` on the httpx path) — request, response, and stream
+path, `cometapi` on the httpx path), and the wave-2b-alpha own modules
+(`deepseek`) — request, response, and stream
 translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk
@@ -698,6 +719,30 @@ rows, the xai R4 shape), must route streams through
 compat_httpx.LINE_PARSERS["cometapi"] with the "xai" chunk dialect at the
 SSE line seam (NOT the SDK wrapper arm), and inherits the
 synthesized-final-usage contract from the openai/xai ports.
+Deliberate wave-2b-alpha (deepseek) fallback surfaces (each names the v1
+path): non-text content lists (v1's ALWAYS-on flatten drops non-text
+parts and skips the base image transforms — v1 serves its lossy flatten);
+assistant history in thinking mode on supports_reasoning("deepseek/{m}")
+models (v1's _fill_reasoning_content patches every assistant message
+missing reasoning_content with provider_specific_fields promotion or a
+single-space placeholder — v1 serves its rewrite; the fill is INERT on
+non-reasoning models like deepseek-chat, where the same shape SERVES,
+pinned both ways); top_k (the wire-proven extra_body merge — pinned by a
+mock-transport completion() row per the wave-2b wire-prove rule); user
+(model-list gated, v1 silently drops); explicit stream:false (guard arm);
+and the family guard/parse fallbacks (web_search_options is SERVED by
+v1's base list at HEAD — a dossier drift fact — and falls back at the
+inbound boundary like every parse-level unknown). The thinking rewrite
+itself is SERVED, never a fallback: {"type":"enabled"} verbatim-only with
+budget_tokens discarded, reasoning_effort != "none" rewritten to it (the
+key never reaches the wire), a present non-enabled thinking dict shadows
+reasoning_effort entirely — all pinned by IDENTICAL rows. deepseek fork
+obligations (when the integrator wires it): NO model preset (fresh
+ModelResponse, bare wire model — the xai R4 rule, pinned by the no-prefix
+response rows), streams fold providers/deepseek.parse_line with the "xai"
+chunk dialect at the SSE line seam, and the error-chunk PINNED DIVERGENCE
+(v1's base handler swallows; v2 is loud) extends to deepseek exactly like
+the compat_httpx family.
 Streaming-seam obligations carried from wave 2a (verifier-wave2a W1/W2 —
 no impact while streaming stays on v1, pinned by
 `test_reasoning_stream_seam_obligation_canary`): the SDK family's openai
