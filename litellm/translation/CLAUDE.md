@@ -148,6 +148,38 @@ translation/
 │   │   └── claude.py    # anthropic serializer/parsers re-exported; NO
 │   │                    #   response-format model spoof (v1 maps with the
 │   │                    #   real model); billing-header blocks fail closed
+│   ├── compat_sdk/      # the wave-1a SDK-path openai-compat family in ONE
+│   │   │                #   subpackage (the google_genai "one family,
+│   │   │                #   parameterized" precedent): together_ai,
+│   │   │                #   cerebras, nvidia_nim, lm_studio, llamafile,
+│   │   │                #   lambda_ai, nebius, novita, wandb,
+│   │   │                #   featherless_ai, nscale, hyperbolic, volcengine.
+│   │   │                #   All ride v1's big openai elif into the SDK, so
+│   │   │                #   the body is openai_compat.assemble_body after
+│   │   │                #   per-provider gates; the response parser is
+│   │   │                #   openai_compat's verbatim (same live normalizer)
+│   │   │                #   and the {provider}/{wire_model} re-prefix is
+│   │   │                #   the SEAM's preset arm, never parser scope;
+│   │   │                #   streams are the "openai" chunk dialect (pinned
+│   │   │                #   per provider by wrapper replays). baseten is
+│   │   │                #   DELIBERATELY ABSENT: its streams ride a
+│   │   │                #   dedicated legacy wrapper branch
+│   │   │                #   (handle_baseten_chunk), so it stays a typed v1
+│   │   │                #   fallback (canary-pinned).
+│   │   ├── params.py    # per-provider supported-list truths as pure gates
+│   │   │                #   (v1 RAISES-unless-drop_params on anything off
+│   │   │                #   the list); capability gates read deps over the
+│   │   │                #   LOAD-BEARING {provider}/{model} map keys
+│   │   │                #   (together_ai function calling, cerebras
+│   │   │                #   reasoning); nvidia_nim's static per-model table
+│   │   ├── serialize.py # frozen CompatProfile per provider (mct rename /
+│   │   │                #   user emission / together's rf-text drop /
+│   │   │                #   cerebras reasoning_effort) -> gates ->
+│   │   │                #   openai_compat assemble_body -> deltas
+│   │   └── guard.py     # explicit stream:false (the SDK serializes the
+│   │                    #   key; absent-vs-false is lost in the IR), then
+│   │                    #   the shared openai guard with the full
+│   │                    #   message-name fallback (nobody here strips names)
 │   └── xai/             # Grok over openai_compat (httpx path: NO model
 │       │                #   prefix anywhere, transform_response is LIVE):
 │       ├── guard.py     # web_search_options (v1's Responses-bridge reroute
@@ -300,10 +332,13 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to eleven providers out — `anthropic`, `bedrock_converse`,
-`bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini route), `gemini`
-(AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
-`azure_ai_anthropic`, `xai` — request, response, and stream translation,
+OpenAI-chat-in to twenty-four providers out — `anthropic`,
+`bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
+route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
+`azure_ai_anthropic`, `xai`, and the thirteen wave-1a compat_sdk providers
+(`together_ai`, `cerebras`, `nvidia_nim`, `lm_studio`, `llamafile`,
+`lambda_ai`, `nebius`, `novita`, `wandb`, `featherless_ai`, `nscale`,
+`hyperbolic`, `volcengine`) — request, response, and stream translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk
 corpora; openai: 17-shape request corpus + 17 typed-fallback rows +
@@ -314,7 +349,12 @@ azure_ai: the Foundry override-set and no-spoof Claude-route corpora;
 xai: a 21-shape generated characterization corpus — provenance v1
 in-process at HEAD, zero recorded vendor fixtures exist — two-sided over
 `tests/test_litellm/translation/characterization_xai/` plus 7 rows pinning
-v1's UnsupportedParamsError raises and the line-seam stream replays),
+v1's UnsupportedParamsError raises and the line-seam stream replays;
+compat_sdk: per-provider generated corpora vs v1 in-process at HEAD
+(`test_differential_compat_sdk_{request,response,stream}.py` over
+`_compat_sdk_corpus.py` — served rows, UnsupportedParamsError raise rows,
+preset-model re-prefix response rows, per-provider wrapper stream replays,
+and supported-list mirror drift gates over every model-map row)),
 fail-closed everywhere else, with non-streaming flag-gated seams live in
 `completion()` for the anthropic, bedrock, and google routes (the
 openai/azure seam forks are integrator scope and NOT wired; the google
@@ -389,7 +429,39 @@ definitions with `strict` keys below the function level (v1 deletes every
 depth), the openai guard's raw shapes, and the parse-level unknowns v1
 passes through for grok (presence/frequency penalties on supported
 families, seed, logprobs, top_logprobs, logit_bias, n, stream_options,
-web_search_options). The xai completion() fork is NOT wired (integrator
+web_search_options).
+Deliberate compat_sdk (wave-1a) fallback surfaces (each names the v1
+path): every IR-carried param a provider's supported list excludes — v1's
+`_check_valid_arg` raises UnsupportedParamsError or drops under
+drop_params, so the typed fallback serves v1's own behavior
+(max_completion_tokens on nscale/hyperbolic — both rename arms are dead
+code behind the list gate; tools/tool_choice/response_format on
+featherless_ai, on volcengine (response_format only), on together_ai
+models without the supports_function_calling map flag, and on
+nvidia_nim's reduced static-table models; parallel_tool_calls on
+cerebras/featherless_ai/nscale/hyperbolic/volcengine; reasoning_effort
+everywhere except capability-flagged cerebras models; response_format on
+base-list providers when the model is literally named gpt-4 /
+gpt-3.5-turbo-16k); `user` wherever a provider's own list doesn't carry
+it (v1's base list gates it on openai model-list membership and silently
+drops it otherwise — only cerebras and hyperbolic emit it);
+volcengine `thinking` (v1 packs the verbatim dict into extra_body for the
+SDK to merge top-level); lm_studio's bare-`schema` response_format wrap
+(non-canonical inbound shape, parse rejects it); explicit `stream: false`
+(the SDK serializes the key; absent-vs-false is lost in the IR); the
+openai guard's raw shapes with the FULL message-name fallback (no config
+here strips names); and the parse-level unknowns (seed, penalties,
+logprobs, n, logit_bias, stream_options, ...) regardless of whether a
+given provider's list serves or raises on them. The compat_sdk
+completion() forks are NOT wired (integrator scope, like openai/azure/
+xai); when they land, the seam must pre-set
+`ModelResponse(model=f"{provider}/{model}")` exactly like openai.py:
+676-677 so `_to_model_response_openai`'s re-prefix arm reproduces
+cdr:699-710 (pinned per provider by the preset-model differential rows),
+and baseten must NEVER be added to the family without resolving its
+dedicated legacy wrapper stream branch (handle_baseten_chunk — the
+test_baseten_drop_canary evidence).
+The xai completion() fork is NOT wired (integrator
 scope, like openai/azure); when it lands these are HARD OBLIGATIONS, not
 notes: the in-package `use_xai_oauth` guard arm is defense-in-depth ONLY
 and unreachable through `_raw_openai_body` (use_xai_oauth is a litellm

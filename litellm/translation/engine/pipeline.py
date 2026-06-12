@@ -53,6 +53,24 @@ from ..providers.bedrock_invoke import parse_response as bedrock_invoke_parse_re
 from ..providers.bedrock_invoke import (
     serialize_request as bedrock_invoke_serialize_request,
 )
+from ..providers.compat_sdk import (
+    cerebras_serialize_request,
+    featherless_ai_serialize_request,
+    hyperbolic_serialize_request,
+    lambda_ai_serialize_request,
+    llamafile_serialize_request,
+    lm_studio_serialize_request,
+    nebius_serialize_request,
+    novita_serialize_request,
+    nscale_serialize_request,
+    nvidia_nim_serialize_request,
+    together_ai_serialize_request,
+    volcengine_serialize_request,
+    wandb_serialize_request,
+)
+from ..providers.compat_sdk import (
+    unsupported_request_shapes as compat_sdk_unsupported_request_shapes,
+)
 from ..providers.google_genai import parse_response as google_parse_response
 from ..providers.google_genai import (
     serialize_request_studio as google_serialize_request_studio,
@@ -101,6 +119,19 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "azure_ai": azure_ai_serialize_request,
         "azure_ai_anthropic": azure_ai_claude_serialize_request,
         "xai": xai_serialize_request,
+        "together_ai": together_ai_serialize_request,
+        "cerebras": cerebras_serialize_request,
+        "nvidia_nim": nvidia_nim_serialize_request,
+        "lm_studio": lm_studio_serialize_request,
+        "llamafile": llamafile_serialize_request,
+        "lambda_ai": lambda_ai_serialize_request,
+        "nebius": nebius_serialize_request,
+        "novita": novita_serialize_request,
+        "wandb": wandb_serialize_request,
+        "featherless_ai": featherless_ai_serialize_request,
+        "nscale": nscale_serialize_request,
+        "hyperbolic": hyperbolic_serialize_request,
+        "volcengine": volcengine_serialize_request,
     }
 )
 
@@ -117,6 +148,23 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         "azure_ai": azure_ai_parse_response,
         "azure_ai_anthropic": azure_ai_claude_parse_response,
         "xai": xai_parse_response,
+        # compat_sdk family: the live v1 normalizer is the same
+        # convert_to_model_response_object the openai parser mirrors; the
+        # {provider}/{wire_model} re-prefix is the seam's preset arm
+        # (_to_model_response_openai), not parser scope.
+        "together_ai": openai_compat_parse_response,
+        "cerebras": openai_compat_parse_response,
+        "nvidia_nim": openai_compat_parse_response,
+        "lm_studio": openai_compat_parse_response,
+        "llamafile": openai_compat_parse_response,
+        "lambda_ai": openai_compat_parse_response,
+        "nebius": openai_compat_parse_response,
+        "novita": openai_compat_parse_response,
+        "wandb": openai_compat_parse_response,
+        "featherless_ai": openai_compat_parse_response,
+        "nscale": openai_compat_parse_response,
+        "hyperbolic": openai_compat_parse_response,
+        "volcengine": openai_compat_parse_response,
     }
 )
 
@@ -133,6 +181,21 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         "azure_ai": "openai",
         "azure_ai_anthropic": "anthropic",  # genuine anthropic wire format
         "xai": "openai",  # httpx path, same normalized wire-body ride
+        # compat_sdk family: SDK path, default openai wrapper arm (the
+        # per-provider stream replays pin that no dedicated branch fires)
+        "together_ai": "openai",
+        "cerebras": "openai",
+        "nvidia_nim": "openai",
+        "lm_studio": "openai",
+        "llamafile": "openai",
+        "lambda_ai": "openai",
+        "nebius": "openai",
+        "novita": "openai",
+        "wandb": "openai",
+        "featherless_ai": "openai",
+        "nscale": "openai",
+        "hyperbolic": "openai",
+        "volcengine": "openai",
     }
 )
 
@@ -151,6 +214,19 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         "vertex_ai": google_unsupported_request_shapes,
         "gemini": google_unsupported_request_shapes,
         "xai": xai_unsupported_request_shapes,
+        "together_ai": compat_sdk_unsupported_request_shapes,
+        "cerebras": compat_sdk_unsupported_request_shapes,
+        "nvidia_nim": compat_sdk_unsupported_request_shapes,
+        "lm_studio": compat_sdk_unsupported_request_shapes,
+        "llamafile": compat_sdk_unsupported_request_shapes,
+        "lambda_ai": compat_sdk_unsupported_request_shapes,
+        "nebius": compat_sdk_unsupported_request_shapes,
+        "novita": compat_sdk_unsupported_request_shapes,
+        "wandb": compat_sdk_unsupported_request_shapes,
+        "featherless_ai": compat_sdk_unsupported_request_shapes,
+        "nscale": compat_sdk_unsupported_request_shapes,
+        "hyperbolic": compat_sdk_unsupported_request_shapes,
+        "volcengine": compat_sdk_unsupported_request_shapes,
     }
 )
 
