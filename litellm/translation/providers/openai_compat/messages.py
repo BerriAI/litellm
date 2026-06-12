@@ -116,7 +116,12 @@ def _assistant_message(message: Message) -> list[PlainJson] | TranslationError:
                     "type": "function",
                     "function": {
                         "name": block.tool_use.name,
-                        "arguments": json.dumps(block.tool_use.arguments.value),
+                        # same-family passthrough: replayed histories carry
+                        # the verbatim wire bytes (compact spacing, blanks);
+                        # the re-dump only covers non-wire origins
+                        "arguments": block.tool_use.arguments_raw.default_value(
+                            json.dumps(block.tool_use.arguments.value)
+                        ),
                     },
                 }
             )

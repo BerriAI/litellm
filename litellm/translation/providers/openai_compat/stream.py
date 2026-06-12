@@ -43,6 +43,7 @@ _ENVELOPE_KEYS = frozenset(
     }
 )
 
+
 def parse_line(line: str) -> _EventResult:
     stripped = line.strip()
     if not stripped.startswith("data:"):

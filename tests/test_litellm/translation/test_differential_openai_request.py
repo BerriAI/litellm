@@ -59,8 +59,6 @@ def _assistant_tool_call(call_id, city, name="get_weather"):
             {
                 "id": call_id,
                 "type": "function",
-                # json.dumps default spacing: the only argument form the IR
-                # re-dumps byte-identically (the guard rejects the rest)
                 "function": {"name": name, "arguments": json.dumps({"city": city})},
             }
         ],
@@ -145,6 +143,61 @@ CORPUS = {
             {"role": "user", "content": "Weather in Paris?"},
             _assistant_tool_call("call_1", "Paris"),
             {"role": "tool", "tool_call_id": "call_1", "content": "Sunny, 20C"},
+        ],
+    },
+    "tool_call_compact_arguments_roundtrip": {
+        # real OpenAI responses carry compact argument JSON; the IR rides the
+        # verbatim wire bytes (ToolUse.arguments_raw), so the dominant
+        # replayed-history shape is served byte-identically, not fallback
+        "model": MODEL,
+        "tools": [_WEATHER_TOOL],
+        "messages": [
+            {"role": "user", "content": "w?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city":"Paris"}',
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+        ],
+    },
+    "tool_call_odd_spacing_and_blank_arguments_roundtrip": {
+        # arbitrary spacing and blank argument strings ride through verbatim
+        # (v1 forwards the original messages untouched)
+        "model": MODEL,
+        "tools": [_WEATHER_TOOL],
+        "messages": [
+            {"role": "user", "content": "w?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{ "city" :  "Paris" }',
+                        },
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+            {"role": "tool", "tool_call_id": "call_2", "content": "ok"},
         ],
     },
     "image_url_string_to_object": {
@@ -308,30 +361,6 @@ EXPECTED_FALLBACKS = {
             ],
         },
         "image_url detail/format",
-    ),
-    "tool_call_compact_arguments": (
-        {
-            "model": MODEL,
-            "messages": [
-                {"role": "user", "content": "w?"},
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {
-                                "name": "get_weather",
-                                "arguments": '{"city":"Paris"}',
-                            },
-                        }
-                    ],
-                },
-                {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
-            ],
-        },
-        "non-canonical JSON spacing",
     ),
     "single_text_content_list": (
         {

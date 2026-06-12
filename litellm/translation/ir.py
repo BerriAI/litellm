@@ -137,6 +137,12 @@ class ToolUse:
     name: str
     arguments: JsonBlob
     cache: Option[CacheControl]
+    arguments_raw: Option[str] = Nothing
+    """The verbatim wire argument string when the block came from an
+    openai-format tool_call (replayed histories): same-family serializers
+    re-emit these bytes so real compact-spaced (or blank) arguments
+    round-trip byte-faithfully instead of falling back over re-dump
+    spacing. Cross-family serializers use the parsed ``arguments``."""
 
 
 @tagged_union(frozen=True)

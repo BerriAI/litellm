@@ -71,8 +71,10 @@ translation/
 │   ├── openai_compat/   # the same-family hub serializer (GPT first consumer)
 │   │   ├── guard.py     # raw-shape fidelity guard run BEFORE parse: shapes
 │   │   │                #   the IR cannot round-trip losslessly (string stop,
-│   │   │                #   message name, image detail, max-tokens key split,
-│   │   │                #   tool-arg spacing) fall back to v1 as typed errors
+│   │   │                #   message name, image detail, max-tokens key
+│   │   │                #   split) fall back to v1 as typed errors; tool
+│   │   │                #   argument strings ride ToolUse.arguments_raw
+│   │   │                #   verbatim, so spacing never falls back
 │   │   ├── serialize.py # v1's five-touch passthrough body assembly
 │   │   ├── messages.py  # IR -> openai wire messages (inverse of inbound)
 │   │   ├── params.py    # o-series/gpt-5 family gates (fail closed until
@@ -293,8 +295,10 @@ surfaces: o-series and gpt-5 model families (their param-rewrite configs are
 unported), every raw shape the IR cannot round-trip byte-identically (the
 guard's list: string stop, both max-tokens keys, message `name`, image
 `detail`/`format`, consecutive same-role turns, single-text content lists,
-empty tools/stop lists, non-canonical tool-argument JSON spacing, null/
-non-function tool_calls), the `user` param (model-list gated in v1),
+empty tools/stop lists, null/non-function tool_calls — tool ARGUMENT
+strings themselves ride verbatim via ToolUse.arguments_raw, so real
+compact-spaced replayed histories are served), the `user` param
+(model-list gated in v1),
 `response_format` on gpt-4/gpt-3.5-turbo-16k, `stream_options`, file blocks
 (v1 downloads http pdf file_ids in-transform), and `http://` image URLs. On
 streams, the trailing `choices: []` usage chunk passes through verbatim and

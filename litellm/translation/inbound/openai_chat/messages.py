@@ -321,6 +321,11 @@ def _tool_use(call: ToolCallIn) -> ContentBlock | TranslationError:
             name=function.name,
             arguments=arguments,
             cache=cache_of(call.cache_control),
+            arguments_raw=(
+                Some(function.arguments)
+                if isinstance(function.arguments, str)
+                else Nothing
+            ),
         )
     )
 

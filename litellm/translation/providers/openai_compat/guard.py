@@ -4,7 +4,7 @@ v1's OpenAI request transform is a near-passthrough (five touches), so byte
 parity through the IR is only possible for shapes the shared inbound parse
 round-trips losslessly. The parse normalizes wire forms v1 forwards verbatim
 (string-vs-list content, message ``name``, image ``detail``, the
-max-tokens-key split, tool-call argument spacing, empty-list-vs-absent), so
+max-tokens-key split, empty-list-vs-absent), so
 requests carrying them return a typed error here and the seam serves them
 through v1 unchanged. Runs over the UNTRUSTED raw body BEFORE parse; every
 check is structural and conservative: a guard can only widen the fallback
@@ -13,7 +13,6 @@ surface, never change a served body.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from typing import cast
 
@@ -191,8 +190,8 @@ def _tool_calls_reason(tool_calls: object) -> str | None:
         arguments = function.get("arguments") if function is not None else None
         if not isinstance(arguments, str):
             return "tool_call without string arguments (the IR re-dumps a {} default)"
-        if _non_canonical_json(arguments):
-            return "tool_call arguments with non-canonical JSON spacing (re-dump would move bytes)"
+        # string arguments need no spacing check: the IR carries the verbatim
+        # wire bytes (ToolUse.arguments_raw) and the serializer re-emits them
     return None
 
 
@@ -203,13 +202,3 @@ def _tool_reason(entry: _Raw) -> str | None:
     if _as_seq(content) is not None:
         return "list-form tool content (string-vs-list form is lost in the IR)"
     return None
-
-
-def _non_canonical_json(arguments: str) -> bool:
-    if not arguments.strip():
-        return True  # the IR maps blank arguments to {}; v1 keeps the blank string
-    try:
-        parsed: object = json.loads(arguments)
-    except ValueError:
-        return False  # malformed arguments fail closed in parse, with their own reason
-    return json.dumps(parsed) != arguments
