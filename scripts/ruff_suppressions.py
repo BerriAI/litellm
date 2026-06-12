@@ -96,6 +96,11 @@ def cmd_update() -> None:
     )
 
 
+def _print_regressions(regressions: list) -> None:
+    for path, code, before, after in regressions:
+        print(f"  {path}: {code} {before} -> {after} (+{after - before})")
+
+
 def cmd_check() -> None:
     if not BASELINE_PATH.exists():
         raise SystemExit(
@@ -106,12 +111,16 @@ def cmd_check() -> None:
         print(
             f"OK: {result.current} strict-rule violations (baseline {result.baseline}, ceiling {result.ceiling}, headroom {result.ceiling - result.current})"
         )
+        if result.regressions:
+            print(
+                f"warning: {len(result.regressions)} per-file regression(s) absorbed by slack (offset by fixes elsewhere):"
+            )
+            _print_regressions(result.regressions)
         return
     print(
         f"FAIL: {result.current} strict-rule violations exceeds ceiling {result.ceiling} (baseline {result.baseline} + {SLACK_RATIO:.1%} slack = {result.slack})"
     )
-    for path, code, before, after in result.regressions:
-        print(f"  {path}: {code} {before} -> {after} (+{after - before})")
+    _print_regressions(result.regressions)
     print(
         "Fix the new violations, add `# noqa: <CODE>` on a justified line, or re-baseline with `make lint-suppressions-update`."
     )

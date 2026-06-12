@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,24 @@ def test_brand_new_file_counts_and_is_reported():
     assert result.baseline == 0
     assert result.ceiling == 0
     assert result.regressions == [("new.py", "ANN001", 0, 2)]
+
+
+def test_passing_check_still_surfaces_per_file_drift(monkeypatch, tmp_path, capsys):
+    baseline_file = tmp_path / "baseline.json"
+    baseline_file.write_text(json.dumps({"a.py": {"ANN001": 5}, "b.py": {"C901": 3}}))
+    monkeypatch.setattr(ruff_suppressions, "BASELINE_PATH", baseline_file)
+    monkeypatch.setattr(
+        ruff_suppressions,
+        "current_counts",
+        lambda: {"a.py": {"ANN001": 2}, "b.py": {"C901": 6}},
+    )
+
+    ruff_suppressions.cmd_check()
+
+    out = capsys.readouterr().out
+    assert out.startswith("OK:")
+    assert "warning:" in out
+    assert "b.py: C901 3 -> 6" in out
 
 
 @pytest.mark.parametrize(
