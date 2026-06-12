@@ -31,6 +31,7 @@ def serialize_messages(request: ChatRequest) -> list[PlainJson] | TranslationErr
         )
         if isinstance(emitted, TranslationError):
             return emitted
+        # local build-then-freeze accumulator; never escapes this function
         out.extend(emitted)  # nosemgrep: translation-no-mutation
     return out
 
@@ -41,7 +42,9 @@ def _user_messages(message: Message) -> list[PlainJson] | TranslationError:
     image_count = 0
     for block in message.content:
         if block.tag == "tool_result":
-            _flush_user(out, parts, image_count)
+            # local build-then-freeze accumulators; never escape this function
+            flushed = _user_message(parts, image_count)
+            out.extend(flushed)  # nosemgrep: translation-no-mutation
             parts = []
             image_count = 0
             out.append(  # nosemgrep: translation-no-mutation
@@ -58,21 +61,18 @@ def _user_messages(message: Message) -> list[PlainJson] | TranslationError:
             return TranslationError.of_unsupported(
                 f"{block.tag} block in a user turn has no OpenAI wire form; v1 handles it"
             )
-    _flush_user(out, parts, image_count)
-    return out
+    return [*out, *_user_message(parts, image_count)]
 
 
-def _flush_user(out: list[PlainJson], parts: list[PlainJson], image_count: int) -> None:
+def _user_message(parts: list[PlainJson], image_count: int) -> list[PlainJson]:
+    """Pure flush: the pending content parts as zero or one user message."""
     if not parts:
-        return
+        return []
     if len(parts) == 1 and image_count == 0:
         only = parts[0]
         text = only.get("text") if isinstance(only, dict) else None
-        out.append(  # nosemgrep: translation-no-mutation
-            {"role": "user", "content": text}
-        )
-        return
-    out.append({"role": "user", "content": parts})  # nosemgrep: translation-no-mutation
+        return [{"role": "user", "content": text}]
+    return [{"role": "user", "content": parts}]
 
 
 def _image_part(image: Image) -> PlainJson:
@@ -105,6 +105,8 @@ def _assistant_message(message: Message) -> list[PlainJson] | TranslationError:
     texts: list[str] = []
     tool_calls: list[PlainJson] = []
     for block in message.content:
+        # texts/tool_calls are local build-then-freeze accumulators; they
+        # never escape this function
         if block.tag == "text":
             texts.append(block.text.text)  # nosemgrep: translation-no-mutation
         elif block.tag == "tool_use":
