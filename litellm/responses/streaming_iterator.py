@@ -1538,6 +1538,7 @@ class ResponsesWebSocketStreaming:
             "response.content_part.done",
             "response.output_item.done",
             "response.function_call_arguments.done",
+            "response.reasoning_summary_text.done",
         }
     )
 

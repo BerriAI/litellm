@@ -1687,6 +1687,65 @@ class TestNativeWebSocketGuardrailMasking:
         )
         assert "alice@example.com" not in sent_payload
 
+    @pytest.mark.asyncio
+    async def test_backend_to_client_suppresses_reasoning_summary_text_done(self):
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        guardrail = _FakeWSGuardrail()
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps(
+                    {
+                        "type": "response.reasoning_summary_text.done",
+                        "text": "contact alice@example.com",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "output": [
+                                {
+                                    "content": [
+                                        {
+                                            "type": "output_text",
+                                            "text": "done",
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                    }
+                ),
+                Exception("stop"),
+            ]
+        )
+        logging_obj = MagicMock()
+        logging_obj.async_success_handler = AsyncMock()
+
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={},
+            output_guardrail_callbacks=[guardrail],
+        )
+
+        await handler.backend_to_client()
+
+        # The reasoning-summary done event carries the full reasoning text before
+        # response.completed arrives; it must be suppressed so unmasked PII never
+        # reaches the client.
+        websocket.send_text.assert_awaited_once()
+        sent_payload = websocket.send_text.await_args[0][0]
+        assert json.loads(sent_payload)["type"] == "response.completed"
+        assert "alice@example.com" not in sent_payload
+
 
 class TestWebSocketChunkTypes:
     """Test handling of different chunk types from streaming responses"""
