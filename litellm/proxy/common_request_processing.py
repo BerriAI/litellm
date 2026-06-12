@@ -131,7 +131,7 @@ async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None
     for task in pending_tasks:
         try:
             await task
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, Exception):
             pass
 
 
