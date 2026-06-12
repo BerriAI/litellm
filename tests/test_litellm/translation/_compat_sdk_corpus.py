@@ -27,11 +27,16 @@ _Case = dict[str, object]
 
 
 class CompatSpec(NamedTuple):
-    """One row per surviving wave-1a provider: the corpus model, which
-    optional surfaces the provider serves (drives generated
-    corpus/raise/fallback rows), and how max_completion_tokens behaves in
-    v1 ("rename" -> max_tokens, "verbatim" -> passes through, "raise" ->
-    outside the supported list)."""
+    """One row per compat_sdk family provider (wave 1a + wave 2a): the
+    corpus model, which optional surfaces the provider serves (drives
+    generated corpus/raise/fallback rows), and how max_completion_tokens
+    behaves in v1 ("rename" -> max_tokens, "verbatim" -> passes through,
+    "raise" -> outside the supported list). The wave-2a append-only fields:
+    ``stop`` (perplexity raises on it), ``specific_tool_choice`` (deepinfra
+    raises on every tool_choice outside {auto, none}), and ``path`` —
+    "httpx" members (cometapi) share the request profile but NOT the SDK
+    preset/re-prefix response rows nor the wrapper-default stream rows;
+    their gates live in dedicated test files (the xai shape)."""
 
     model: str
     tools: bool
@@ -39,6 +44,9 @@ class CompatSpec(NamedTuple):
     parallel_tool_calls: bool
     user: bool
     mct: Literal["rename", "verbatim", "raise"]
+    stop: bool = True
+    specific_tool_choice: bool = True
+    path: Literal["sdk", "httpx"] = "sdk"
 
 
 SPECS: Mapping[str, CompatSpec] = MappingProxyType(
@@ -147,10 +155,56 @@ SPECS: Mapping[str, CompatSpec] = MappingProxyType(
             user=False,
             mct="rename",
         ),
+        # wave-2a rows
+        "perplexity": CompatSpec(
+            model="sonar",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="verbatim",  # no map override; verified at HEAD
+            stop=False,  # outside perplexity's reduced list -> raises
+        ),
+        "sambanova": CompatSpec(
+            model="Meta-Llama-3.3-70B-Instruct",  # map: supports_function_calling
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="rename",
+        ),
+        "deepinfra": CompatSpec(
+            model="meta-llama/Meta-Llama-3-8B-Instruct",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+            specific_tool_choice=False,  # v1 raises outside {auto, none}
+        ),
+        "moonshot": CompatSpec(
+            model="moonshot-v1-8k",  # non-reasoning: the temp-clamp arm
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="rename",
+        ),
+        "cometapi": CompatSpec(
+            model="gpt-4o-mini",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="verbatim",  # map is super() over the base list
+            path="httpx",  # main.py:2547 elif; NO model preset, line-seam streams
+        ),
     }
 )
 
 PROVIDERS = tuple(sorted(SPECS))
+SDK_PROVIDERS = tuple(p for p in PROVIDERS if SPECS[p].path == "sdk")
+HTTPX_PROVIDERS = tuple(p for p in PROVIDERS if SPECS[p].path == "httpx")
 
 WEATHER_TOOL = {
     "type": "function",
@@ -213,13 +267,18 @@ def corpus_for(provider: str) -> dict[str, _Case]:
             ],
         },
         "stream_true": {"model": model, "stream": True, "messages": user_msg},
-        "stop_list": {"model": model, "stop": ["END", "STOP"], "messages": user_msg},
         "temperature_int_stays_int": {
             "model": model,
             "temperature": 1,
             "messages": user_msg,
         },
     }
+    if spec.stop:
+        cases["stop_list"] = {
+            "model": model,
+            "stop": ["END", "STOP"],
+            "messages": user_msg,
+        }
     if spec.mct in ("rename", "verbatim"):
         cases["max_completion_tokens"] = {
             "model": model,
@@ -233,12 +292,16 @@ def corpus_for(provider: str) -> dict[str, _Case]:
             "tool_choice": "auto",
             "messages": [{"role": "user", "content": "Weather in Paris?"}],
         }
-        cases["tool_choice_specific"] = {
-            "model": model,
-            "tools": [WEATHER_TOOL],
-            "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
-            "messages": [{"role": "user", "content": "Weather in Paris?"}],
-        }
+        if spec.specific_tool_choice:
+            cases["tool_choice_specific"] = {
+                "model": model,
+                "tools": [WEATHER_TOOL],
+                "tool_choice": {
+                    "type": "function",
+                    "function": {"name": "get_weather"},
+                },
+                "messages": [{"role": "user", "content": "Weather in Paris?"}],
+            }
         cases["tool_call_compact_roundtrip"] = {
             "model": model,
             "tools": [WEATHER_TOOL],

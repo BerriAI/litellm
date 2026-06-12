@@ -57,6 +57,12 @@ for _p in PROVIDERS:
             {"model": _m(_p), "max_completion_tokens": 128, "messages": _USER},
             "max_completion_tokens",
         )
+    if not _spec.stop:
+        V1_RAISES[f"{_p}:stop"] = (
+            _p,
+            {"model": _m(_p), "stop": ["END"], "messages": _USER},
+            "stop",
+        )
     if not _spec.tools:
         V1_RAISES[f"{_p}:tools"] = (
             _p,
@@ -155,6 +161,68 @@ V1_RAISES.update(
                 "messages": _USER,
             },
             "outside v1's supported set",
+        ),
+        # ------------------------------------------------------------------
+        # wave-2a raise rows (each raise re-verified in-process at HEAD)
+        # ------------------------------------------------------------------
+        "perplexity:tool_choice": (
+            "perplexity",
+            {"model": "sonar", "tool_choice": "auto", "messages": _USER},
+            "tool_choice",
+        ),
+        "sambanova:tools_on_non_fc_model": (
+            "sambanova",
+            {"model": "DeepSeek-R1", "tools": _TOOLS, "messages": _USER},
+            "tools",
+        ),
+        "sambanova:tool_choice_on_non_fc_model": (
+            "sambanova",
+            {"model": "DeepSeek-R1", "tool_choice": "auto", "messages": _USER},
+            "tool_choice",
+        ),
+        "sambanova:parallel_on_non_fc_model": (
+            "sambanova",
+            {"model": "DeepSeek-R1", "parallel_tool_calls": False, "messages": _USER},
+            "parallel_tool_calls",
+        ),
+        "deepinfra:tool_choice_required": (
+            # v1's map has a CUSTOM raise for every tool_choice outside
+            # {auto, none} (deepinfra/chat/transformation.py:102-115)
+            "deepinfra",
+            {
+                "model": _m("deepinfra"),
+                "tools": _TOOLS,
+                "tool_choice": "required",
+                "messages": _USER,
+            },
+            "tool_choice",
+        ),
+        "deepinfra:tool_choice_specific": (
+            "deepinfra",
+            {
+                "model": _m("deepinfra"),
+                "tools": _TOOLS,
+                "tool_choice": {
+                    "type": "function",
+                    "function": {"name": "get_weather"},
+                },
+                "messages": _USER,
+            },
+            "tool_choice",
+        ),
+        "moonshot:tools_on_kimi_thinking_preview": (
+            "moonshot",
+            {"model": "kimi-thinking-preview", "tools": _TOOLS, "messages": _USER},
+            "kimi-thinking-preview",
+        ),
+        "moonshot:tool_choice_on_kimi_thinking_preview": (
+            "moonshot",
+            {
+                "model": "kimi-thinking-preview",
+                "tool_choice": "auto",
+                "messages": _USER,
+            },
+            "kimi-thinking-preview",
         ),
     }
 )
@@ -264,8 +332,134 @@ EXPECTED_FALLBACKS.update(
             },
             "response_format",
         ),
+        # ------------------------------------------------------------------
+        # wave-2a fallback rows where v1 SERVES the request
+        # ------------------------------------------------------------------
+        "perplexity:web_search_options": (
+            # outside the IR; v1 serves it on supports_web_search models
+            "perplexity",
+            {
+                "model": "sonar",
+                "web_search_options": {"search_context_size": "low"},
+                "messages": _USER,
+            },
+            "web_search_options",
+        ),
+        "sambanova:image_content_list": (
+            # v1's flatten DROPS the image (text survives) and never runs the
+            # base image transforms; v1 serves its lossy flatten
+            "sambanova",
+            {
+                "model": _m("sambanova"),
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "look"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "https://x/y.png"},
+                            },
+                        ],
+                    }
+                ],
+            },
+            "non-text content block",
+        ),
+        "sambanova:stream_options": (
+            # in v1's supported list but outside the IR (inbound fallback)
+            "sambanova",
+            {
+                "model": _m("sambanova"),
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "messages": _USER,
+            },
+            "stream_options",
+        ),
+        "deepinfra:tool_message_list_content": (
+            # v1's _transform_tool_message_content flattens list-form tool
+            # content (single text -> bare text, else json.dumps); the shared
+            # guard already falls back on the shape, v1 serves its flatten
+            "deepinfra",
+            {
+                "model": _m("deepinfra"),
+                "messages": [
+                    {"role": "user", "content": "w?"},
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "f", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_1",
+                        "content": [{"type": "text", "text": "20"}],
+                    },
+                ],
+            },
+            "list-form tool content",
+        ),
+        "moonshot:tool_choice_required": (
+            # v1 appends the synthetic user message and pops tool_choice;
+            # pinned as served-by-v1 in
+            # test_moonshot_required_tool_choice_served_by_v1
+            "moonshot",
+            {
+                "model": _m("moonshot"),
+                "tools": _TOOLS,
+                "tool_choice": "required",
+                "messages": _USER,
+            },
+            "synthetic user message",
+        ),
+        "moonshot:reasoning_model_tool_history": (
+            # fill_reasoning_content injects a single-space placeholder;
+            # pinned as served-by-v1 in
+            # test_moonshot_reasoning_fill_served_by_v1
+            "moonshot",
+            {
+                "model": "kimi-k2.5",
+                "messages": [
+                    {"role": "user", "content": "w?"},
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "f", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+                ],
+            },
+            "fill_reasoning_content",
+        ),
     }
 )
+
+# top_k for every wave-2a provider: v1 packs it into extra_body (the
+# provider-specific passthrough, verified in-process at HEAD for all five)
+# and the SDK/handler merges it top-level — v1 serves it, the crossing is
+# unported. NOTE for wave-1a follow-up: the same extra_body packing fires for
+# the wave-1a providers too, so their generic "silently drops it" top_k
+# reason (verifier-wave1a F6) is accurate only for the transform_request
+# output, not the wire; left untouched here (their pinned text).
+for _p in ("perplexity", "sambanova", "deepinfra", "moonshot", "cometapi"):
+    EXPECTED_FALLBACKS[f"{_p}:top_k_extra_body"] = (
+        _p,
+        {"model": _m(_p), "top_k": 3, "messages": _USER},
+        "extra_body",
+    )
 
 
 def _v2(provider: str, case: dict[str, object]):
@@ -374,6 +568,15 @@ _MIRROR_KEYS = (
 
 _RF_NAME_GATED = ("gpt-4", "gpt-3.5-turbo-16k")
 
+# Providers whose v1 supported list carries reasoning_effort behind a
+# model-map supports_reasoning read (capability key {provider}/{model});
+# everyone else must never list it.
+_REASONING_CAPABILITY_GATES = {
+    "cerebras": csp.supports_cerebras_reasoning,
+    "perplexity": csp.supports_perplexity_reasoning,
+    "deepinfra": csp.supports_deepinfra_reasoning,
+}
+
 
 def _base_family_allowed(model: str) -> frozenset[str]:
     allowed = csp._BASE_LIST
@@ -384,9 +587,9 @@ def _base_family_allowed(model: str) -> frozenset[str]:
 
 def _v2_allowed(provider: str, model: str, deps) -> frozenset[str]:
     """The per-model allowed set, re-derived from the SAME csp.ALLOWED table
-    serialization reads, with the three per-model narrowings the gates
-    apply (together capability fork, nvidia_nim static table, the base
-    list's gpt-4 name gate)."""
+    serialization reads, with the per-model narrowings the gates apply
+    (capability forks, nvidia_nim's static table, moonshot's
+    kimi-thinking-preview exclusion, the base list's gpt-4 name gate)."""
     if provider == "together_ai":
         allowed = (
             _base_family_allowed(model)
@@ -396,6 +599,26 @@ def _v2_allowed(provider: str, model: str, deps) -> frozenset[str]:
         return allowed
     if provider == "nvidia_nim":
         return csp.nvidia_nim_allowed(model)
+    if provider == "perplexity":
+        return (
+            csp._PERPLEXITY_LIST
+            if csp.supports_perplexity_reasoning(model, deps)
+            else csp._PERPLEXITY_LIST - {"reasoning_effort"}
+        )
+    if provider == "sambanova":
+        return (
+            csp._SAMBANOVA_LIST
+            if csp.supports_sambanova_tools(model, deps)
+            else csp._SAMBANOVA_LIST - csp._SAMBANOVA_FC_KEYS
+        )
+    if provider == "deepinfra":
+        return (
+            csp._DEEPINFRA_LIST
+            if csp.supports_deepinfra_reasoning(model, deps)
+            else csp._DEEPINFRA_LIST - {"reasoning_effort"}
+        )
+    if provider == "moonshot" and csp._MOONSHOT_THINKING_PREVIEW in model:
+        return _base_family_allowed(model) - frozenset({"tools", "tool_choice"})
     allowed = csp.ALLOWED[provider]
     if allowed == csp._BASE_LIST:
         return _base_family_allowed(model)
@@ -416,6 +639,9 @@ _SAMPLE_MODELS = {
     ),
     "lm_studio": ("qwen2.5-7b-instruct-1m", "gpt-4", "gpt-3.5-turbo-16k"),
     "llamafile": ("LLaMA_CPP", "gpt-4"),
+    # cometapi has no model-map rows at HEAD; fixed names cover the base
+    # list, the gpt-4 rf name gate, and a non-openai name
+    "cometapi": ("gpt-4o-mini", "gpt-4", "claude-sonnet-4-5"),
 }
 
 
@@ -452,10 +678,12 @@ def test_supported_list_mirrors_track_v1_at_head(provider: str) -> None:
             assert (key in allowed) == (key in supported), (provider, model, key)
         if SPECS[provider].user:
             assert "user" in supported, (provider, model)
-        if provider == "cerebras":
-            assert csp.supports_cerebras_reasoning(model, deps) == (
-                "reasoning_effort" in supported
-            ), model
+        reasoning_gate = _REASONING_CAPABILITY_GATES.get(provider)
+        if reasoning_gate is not None:
+            assert reasoning_gate(model, deps) == ("reasoning_effort" in supported), (
+                provider,
+                model,
+            )
         else:
             assert "reasoning_effort" not in supported, (provider, model)
 
@@ -558,3 +786,198 @@ def test_nvidia_gemma_arm_serves_its_reduced_list() -> None:
     result = _v2("nvidia_nim", case)
     assert result.is_ok(), result.error.summary
     assert _norm(result.ok) == _norm(run_v1_request_transform("nvidia_nim", case))
+
+
+# ---------------------------------------------------------------------------
+# wave-2a named gates: every VALUE rewrite pinned as an IDENTICAL row, every
+# v1-serves fallback pinned against v1's transform in-process.
+# ---------------------------------------------------------------------------
+
+
+def _identical(provider: str, case: dict) -> dict:
+    result = _v2(provider, case)
+    assert result.is_ok(), result.error.summary
+    v1 = run_v1_request_transform(provider, case)
+    assert _norm(result.ok) == _norm(v1)
+    return v1
+
+
+def test_perplexity_reasoning_effort_served_on_capable_model() -> None:
+    case = {"model": "sonar-reasoning", "reasoning_effort": "high", "messages": _USER}
+    v1 = _identical("perplexity", case)
+    assert v1.get("reasoning_effort") == "high"
+
+
+def test_deepinfra_reasoning_effort_served_on_capable_model() -> None:
+    case = {
+        "model": "deepseek-ai/DeepSeek-V3.1",
+        "reasoning_effort": "low",
+        "messages": _USER,
+    }
+    v1 = _identical("deepinfra", case)
+    assert v1.get("reasoning_effort") == "low"
+
+
+def test_deepinfra_tool_choice_auto_and_none_dropped_like_v1() -> None:
+    """v1's tool_choice map arm never copies the value: a served "auto" or
+    "none" silently vanishes from the wire (verified at HEAD); the
+    drop_tool_choice delta must reproduce the drop byte-identically."""
+    for value in ("auto", "none"):
+        case = {
+            "model": _m("deepinfra"),
+            "tools": _TOOLS,
+            "tool_choice": value,
+            "messages": _USER,
+        }
+        v1 = _identical("deepinfra", case)
+        assert "tool_choice" not in v1, value
+
+
+def test_deepinfra_zero_temperature_floor_matches_v1() -> None:
+    """temperature == 0 on exactly mistralai/Mistral-7B-Instruct-v0.1 is
+    bumped to MIN_NON_ZERO_TEMPERATURE (0 -> 0.0001 verified at HEAD);
+    every other model keeps the literal 0."""
+    floored = {
+        "model": "mistralai/Mistral-7B-Instruct-v0.1",
+        "temperature": 0,
+        "messages": _USER,
+    }
+    v1 = _identical("deepinfra", floored)
+    assert v1["temperature"] == 0.0001
+    kept = {"model": _m("deepinfra"), "temperature": 0, "messages": _USER}
+    v1_kept = _identical("deepinfra", kept)
+    assert v1_kept["temperature"] == 0
+
+
+def test_moonshot_temperature_laws_match_v1() -> None:
+    """The VALUE rewrites pinned as IDENTICAL rows (the wave-2a brief: pin
+    the rewrite, never fall back on it): >1 clamps to the literal int 1
+    (1.5 -> 1, 2 -> 1 verified), <=1 passes verbatim, and reasoning models
+    (model-map supports_reasoning) get the key POPPED entirely."""
+    clamped = _identical(
+        "moonshot", {"model": _m("moonshot"), "temperature": 1.5, "messages": _USER}
+    )
+    assert clamped["temperature"] == 1 and isinstance(clamped["temperature"], int)
+    clamped_two = _identical(
+        "moonshot", {"model": _m("moonshot"), "temperature": 2, "messages": _USER}
+    )
+    assert clamped_two["temperature"] == 1
+    verbatim = _identical(
+        "moonshot", {"model": _m("moonshot"), "temperature": 1.0, "messages": _USER}
+    )
+    assert verbatim["temperature"] == 1.0
+    popped = _identical(
+        "moonshot", {"model": "kimi-k2.5", "temperature": 0.7, "messages": _USER}
+    )
+    assert "temperature" not in popped
+
+
+def test_flatten_text_content_lists_match_v1() -> None:
+    """sambanova and moonshot flatten text-only content lists to one
+    concatenated string ("a"+"b" -> "ab", user AND assistant roles); a
+    multi-text list whose join is empty stays a LIST (v1's ``if texts:``)."""
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "c"}, {"type": "text", "text": "d"}],
+        },
+        {"role": "user", "content": "plain"},
+    ]
+    for provider in ("sambanova", "moonshot"):
+        v1 = _identical(provider, {"model": _m(provider), "messages": messages})
+        assert v1["messages"][0]["content"] == "ab", provider
+        assert v1["messages"][1]["content"] == "cd", provider
+    empty = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": ""}, {"type": "text", "text": ""}],
+        }
+    ]
+    for provider in ("sambanova", "moonshot"):
+        v1 = _identical(provider, {"model": _m(provider), "messages": empty})
+        assert isinstance(v1["messages"][0]["content"], list), provider
+
+
+def test_moonshot_multimodal_skip_matches_v1() -> None:
+    """One non-text part anywhere disables the flatten REQUEST-WIDE for
+    moonshot (v1's has_non_text scan): the text list in the same message
+    must ride through unflattened, byte-identical to v1."""
+    case = {
+        "model": _m("moonshot"),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "a"},
+                    {"type": "text", "text": "b"},
+                    {"type": "image_url", "image_url": {"url": "https://x/y.png"}},
+                ],
+            }
+        ],
+    }
+    v1 = _identical("moonshot", case)
+    assert isinstance(v1["messages"][0]["content"], list)
+    assert len(v1["messages"][0]["content"]) == 3
+
+
+def test_sambanova_lossy_image_flatten_served_by_v1() -> None:
+    """The fallback's v1 path, asserted in-process: v1 flattens a text+image
+    list to the text alone (the image is DROPPED — that loss is exactly why
+    v2 falls back instead of serving)."""
+    case = EXPECTED_FALLBACKS["sambanova:image_content_list"][1]
+    v1 = run_v1_request_transform("sambanova", copy.deepcopy(case))
+    assert v1["messages"][0]["content"] == "look"
+
+
+def test_moonshot_required_tool_choice_served_by_v1() -> None:
+    """The fallback's v1 path, asserted in-process: tool_choice="required"
+    appends the synthetic user message and pops the param."""
+    case = EXPECTED_FALLBACKS["moonshot:tool_choice_required"][1]
+    v1 = run_v1_request_transform("moonshot", copy.deepcopy(case))
+    assert "tool_choice" not in v1
+    assert v1["messages"][-1] == {
+        "role": "user",
+        "content": "Please select a tool to handle the current issue.",
+    }
+
+
+def test_moonshot_reasoning_fill_served_by_v1() -> None:
+    """The fallback's v1 path, asserted in-process: on reasoning models v1
+    injects reasoning_content " " into assistant tool-call history."""
+    case = EXPECTED_FALLBACKS["moonshot:reasoning_model_tool_history"][1]
+    v1 = run_v1_request_transform("moonshot", copy.deepcopy(case))
+    assert v1["messages"][1]["reasoning_content"] == " "
+
+
+def test_wave2a_capability_prefixes_are_load_bearing() -> None:
+    """The {provider}/ prefix reaches the model-map row; bare keys answer
+    False even for capable models (the xai drift-gate trap, re-pinned for
+    the wave-2a capability gates)."""
+    deps = build_real_deps()
+    assert csp.supports_perplexity_reasoning("sonar-reasoning", deps)
+    assert not deps.supports_capability("sonar-reasoning", "supports_reasoning")
+    assert not csp.supports_perplexity_reasoning("sonar", deps)
+    assert csp.supports_sambanova_tools("Meta-Llama-3.3-70B-Instruct", deps)
+    assert not deps.supports_capability(
+        "Meta-Llama-3.3-70B-Instruct", "supports_function_calling"
+    )
+    assert not csp.supports_sambanova_tools("DeepSeek-R1", deps)
+    assert csp.supports_deepinfra_reasoning("deepseek-ai/DeepSeek-V3.1", deps)
+    assert not deps.supports_capability(
+        "deepseek-ai/DeepSeek-V3.1", "supports_reasoning"
+    )
+    assert csp.supports_moonshot_reasoning("kimi-k2.5", deps)
+    assert not csp.supports_moonshot_reasoning("kimi-thinking-preview", deps)
+    assert not deps.supports_capability("kimi-k2.5", "supports_reasoning")
+    assert csp.supports_perplexity_reasoning(
+        "sonar-reasoning", deps
+    ) == litellm.supports_reasoning(
+        model="sonar-reasoning", custom_llm_provider="perplexity"
+    )
+    assert csp.supports_moonshot_reasoning(
+        "kimi-k2.5", deps
+    ) == litellm.supports_reasoning(model="kimi-k2.5", custom_llm_provider="moonshot")

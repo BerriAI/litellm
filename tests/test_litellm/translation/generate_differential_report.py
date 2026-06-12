@@ -323,7 +323,8 @@ def _compat_sdk_rows(lines: list) -> int:
     lines += [
         "",
         "## compat_sdk family: responses (v1 convert_to_model_response_object"
-        " with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm)",
+        " with the SDK-path {provider}/{model} preset vs v2 + seam re-prefix arm;"
+        " SDK-path members only — cometapi's no-prefix rows are below)",
         "",
     ]
     for provider, name in resp._rows():
@@ -334,10 +335,27 @@ def _compat_sdk_rows(lines: list) -> int:
         )
         failures += 0 if same else 1
         lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} {name}")
+    citations = resp._PERPLEXITY_CITATIONS_RESPONSE
+    preset = "perplexity/sonar"
+    v1_cite = resp._v1_model_response(citations, preset)
+    v2_cite = resp._v2_model_response("perplexity", citations, preset)
+    cite_ok = (
+        resp._norm(v2_cite) == resp._norm(v1_cite)
+        and v2_cite["citations"] == ["https://a.example"]
+        and v2_cite["choices"][0]["message"].get("annotations") is None
+        and "citation_tokens" not in v2_cite["usage"]
+    )
+    failures += 0 if cite_ok else 1
+    lines.append(
+        ("- IDENTICAL: " if cite_ok else "- DIVERGENT: ")
+        + "perplexity citations dormancy (transform_response's annotation/"
+        "citation-token enrichment is DEAD on the SDK path; citations/"
+        "search_results survive via cdr's unknown-key mirror only)"
+    )
     lines += [
         "",
         "## compat_sdk family: streams (v1 CustomStreamWrapper(provider) over"
-        " SDK chunks vs v2 openai dialect)",
+        " SDK chunks vs v2 openai dialect; SDK-path members only)",
         "",
     ]
     for provider, name in stream._rows():
@@ -347,7 +365,16 @@ def _compat_sdk_rows(lines: list) -> int:
         )
         failures += 0 if same else 1
         lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {provider} {name}")
-    for provider in corpus.PROVIDERS:
+    cite_stream_ok = stream._norm(
+        stream._v2_chunks(stream._CITATIONS_STREAM)
+    ) == stream._norm(stream._v1_chunks("perplexity", stream._CITATIONS_STREAM))
+    failures += 0 if cite_stream_ok else 1
+    lines.append(
+        ("- IDENTICAL: " if cite_stream_ok else "- DIVERGENT: ")
+        + "perplexity wire-carried citations (body value survives the seam's"
+        " citations preset; None preset where the wire carried none)"
+    )
+    for provider in corpus.SDK_PROVIDERS:
         v1 = stream._v1_chunks(
             provider, stream.USAGE_STREAM, stream_options={"include_usage": True}
         )
@@ -375,6 +402,63 @@ def _compat_sdk_rows(lines: list) -> int:
         " unregistered, typed v1 fallback; canary"
         " test_baseten_drop_canary pins the evidence)",
     ]
+    return failures
+
+
+def _cometapi_rows(lines: list) -> int:
+    from . import test_differential_cometapi_response as resp
+    from . import test_differential_cometapi_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## cometapi: responses (v1 CometAPIConfig.transform_response over"
+        " httpx — LIVE on the dedicated elif, main.py:2547 — vs v2 shared"
+        " openai parser with NO model preset; bare wire model, the xai R4 pin)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        v1 = resp._v1_model_response(raw)
+        v2 = resp._v2_model_response(raw)
+        same = (
+            resp._norm(v2) == resp._norm(v1)
+            and v2["model"] == raw["model"]
+            and not str(v2["model"]).startswith("cometapi/")
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name} (no prefix)")
+    lines += [
+        "",
+        "## cometapi: streams (v1 line-seam replay through"
+        " CometAPIChatCompletionStreamingHandler + CustomStreamWrapper"
+        "('cometapi') vs v2 cometapi parser + the shared xai chunk dialect)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        same = stream._norm(stream._v2_chunks(events)) == stream._norm(
+            stream._v1_chunks(events)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    v1 = stream._v1_chunks(stream.USAGE_STREAM, stream_options={"include_usage": True})
+    v2 = stream._v2_chunks(stream.USAGE_STREAM)
+    tail_ok = (
+        len(v1) == len(v2)
+        and stream._norm(v2[:-1]) == stream._norm(v1[: len(v2) - 1])
+        and v2[-1]["choices"] == []
+        and all(
+            v1[-1]["usage"][k] == v2[-1]["usage"][k]
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+    )
+    failures += 0 if tail_ok else 1
+    lines.append(
+        ("- SEAM CONTRACT: " if tail_ok else "- DIVERGENT: ")
+        + "usage tail (v2 passes the wire choices=[] usage chunk through;"
+        " the streaming seam owns v1's synthesized final chunk)"
+    )
     return failures
 
 
@@ -849,7 +933,7 @@ def main() -> None:
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the wave-1a compat_sdk family)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family: wave 1a + wave 2a)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -864,6 +948,7 @@ def main() -> None:
     failures += _openai_rows(lines)
     failures += _xai_rows(lines)
     failures += _compat_sdk_rows(lines)
+    failures += _cometapi_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)
