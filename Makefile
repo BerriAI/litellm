@@ -5,7 +5,7 @@
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
-	lint-strict-budget \
+	lint-strict-budget lint-strict-budget-update \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
@@ -25,7 +25,8 @@ help:
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-mypy          - Run MyPy type checking only"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
-	@echo "  make lint-strict-budget - Gate strict ruff rules this change introduces vs the base branch"
+	@echo "  make lint-strict-budget - Gate the codebase total of each strict ruff rule against its ceiling"
+	@echo "  make lint-strict-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -126,6 +127,9 @@ lint-black: format-check
 
 lint-strict-budget: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py
+
+lint-strict-budget-update: install-dev
+	$(UV_RUN) python scripts/ruff_strict_gate.py --update
 
 check-circular-imports: install-dev
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..

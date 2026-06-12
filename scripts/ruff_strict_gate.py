@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Drift-proof gate for the strict ruff rules in ruff-strict.toml.
+"""Total-count gate for the strict ruff rules in ruff-strict.toml.
 
-Runs ruff on the current tree, keeps only the violations that land on lines this
-change added relative to a base ref, and fails when a rule's count of new
-violations exceeds its allowance in ruff-strict-budget.json. Because the base is
-measured live, anything that merged into the base does not count against the
-change; only what this change introduces is gated.
+Each rule has a hard ceiling (baseline + slack) in ruff-strict-budget.json. The
+gate counts each rule across the whole tree and fails when a rule is both over
+its ceiling and higher than the base it merges into, so a change is blamed for
+the violations it adds, never for drift that already exists in the base.
 """
 
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
-from collections import defaultdict
+import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import NamedTuple
 
@@ -32,47 +33,32 @@ class Violation(NamedTuple):
     code: str
 
 
-class GateResult(NamedTuple):
-    ok: bool
-    by_rule: dict
-    breaches: dict
+class Breach(NamedTuple):
+    rule: str
+    total: int
+    cap: int
+    added: int
 
 
-def _run(cmd: list) -> str:
-    proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+def _run(cmd: list, cwd: Path = REPO_ROOT) -> str:
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if proc.returncode not in (0, 1):
         sys.stderr.write(proc.stderr)
         raise SystemExit(f"{cmd[0]} exited {proc.returncode}")
     return proc.stdout
 
 
-def parse_changed_lines(diff_text: str) -> dict:
-    changed: dict = defaultdict(set)
-    path = None
-    for line in diff_text.splitlines():
-        if line.startswith("+++ b/"):
-            path = line[6:]
-        elif path and (match := _HUNK.match(line)):
-            start = int(match.group(1))
-            count = int(match.group(2)) if match.group(2) is not None else 1
-            changed[path].update(range(start, start + count))
-    return changed
+def _ruff_json(cwd: Path, config: Path) -> list:
+    raw = _run(
+        ["ruff", "check", TARGET, "--config", str(config), "--output-format", "json"],
+        cwd=cwd,
+    )
+    return json.loads(raw or "[]")
 
 
 def head_violations() -> list:
-    raw = _run(
-        [
-            "ruff",
-            "check",
-            TARGET,
-            "--config",
-            str(STRICT_CONFIG),
-            "--output-format",
-            "json",
-        ]
-    )
     out = []
-    for item in json.loads(raw or "[]"):
+    for item in _ruff_json(REPO_ROOT, STRICT_CONFIG):
         name = Path(item["filename"])
         rel = (
             (name if name.is_absolute() else REPO_ROOT / name)
@@ -84,51 +70,92 @@ def head_violations() -> list:
     return out
 
 
+def count_by_rule(violations: list) -> dict:
+    return dict(Counter(v.code for v in violations))
+
+
+def base_counts(ref: str) -> dict:
+    parent = Path(tempfile.mkdtemp(prefix="ruff_base_"))
+    worktree = parent / "wt"
+    try:
+        _run(["git", "worktree", "add", "--detach", str(worktree), ref])
+        shutil.copy(STRICT_CONFIG, worktree / "ruff-strict.toml")
+        items = _ruff_json(worktree, worktree / "ruff-strict.toml")
+        return dict(Counter(item["code"] for item in items))
+    finally:
+        _run(["git", "worktree", "remove", "--force", str(worktree)])
+        shutil.rmtree(parent, ignore_errors=True)
+
+
+def evaluate(head: dict, base: dict, budget: dict) -> list:
+    breaches = []
+    for rule, spec in budget.items():
+        cap = spec["baseline"] + spec["slack"]
+        total = head.get(rule, 0)
+        if total > cap and total > base.get(rule, 0):
+            breaches.append(Breach(rule, total, cap, total - base.get(rule, 0)))
+    return sorted(breaches)
+
+
+def parse_changed_lines(diff_text: str) -> dict:
+    changed: dict = {}
+    path = None
+    for line in diff_text.splitlines():
+        if line.startswith("+++ b/"):
+            path = line[6:]
+        elif path and (match := _HUNK.match(line)):
+            start = int(match.group(1))
+            count = int(match.group(2)) if match.group(2) is not None else 1
+            changed.setdefault(path, set()).update(range(start, start + count))
+    return changed
+
+
 def introduced(violations: list, changed: dict) -> list:
     return [v for v in violations if v.line in changed.get(v.file, set())]
 
 
-def evaluate(introduced_violations: list, allowances: dict) -> GateResult:
-    by_rule: dict = defaultdict(int)
-    for violation in introduced_violations:
-        by_rule[violation.code] += 1
-    breaches = {
-        code: count
-        for code, count in by_rule.items()
-        if count > allowances.get(code, 0)
-    }
-    return GateResult(not breaches, dict(by_rule), breaches)
-
-
 def cmd_check(base: str) -> None:
-    allowances = json.loads(BUDGET_PATH.read_text())
+    budget = json.loads(BUDGET_PATH.read_text())
+    head = head_violations()
     base_point = _run(["git", "merge-base", base, "HEAD"]).strip() or base
-    diff = _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
-    new = introduced(head_violations(), parse_changed_lines(diff))
-    result = evaluate(new, allowances)
-    if result.ok:
-        print(
-            f"OK: this change introduces {sum(result.by_rule.values())} strict-rule violation(s), all within budget (base {base})"
-        )
+    breaches = evaluate(count_by_rule(head), base_counts(base_point), budget)
+    if not breaches:
+        print(f"OK: every strict rule is within its codebase ceiling (base {base})")
         return
-    print(
-        f"FAIL: this change introduces strict-rule violations over budget (base {base}):"
+    new = introduced(
+        head,
+        parse_changed_lines(
+            _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
+        ),
     )
-    for code, count in sorted(result.breaches.items()):
-        print(f"  {code}: +{count} (allowed {allowances.get(code, 0)})")
-    for violation in sorted(new):
-        if violation.code in result.breaches:
-            print(f"    {violation.file}:{violation.line} {violation.code}")
+    print(f"FAIL: strict-rule totals exceed their ceiling (base {base}):")
+    for breach in breaches:
+        print(
+            f"  {breach.rule}: total {breach.total} over cap {breach.cap} (this change added {breach.added})"
+        )
+        for violation in sorted(v for v in new if v.code == breach.rule):
+            print(f"    {violation.file}:{violation.line}")
     print(
-        "Type the new code, reduce complexity/arg count, or add `# noqa: <CODE>` on a justified line."
+        "Reduce the new violations or remove an equal number elsewhere; the ceiling is baseline + slack in ruff-strict-budget.json."
     )
     raise SystemExit(1)
+
+
+def cmd_update() -> None:
+    budget = json.loads(BUDGET_PATH.read_text())
+    head = count_by_rule(head_violations())
+    for rule in budget:
+        budget[rule]["baseline"] = head.get(rule, 0)
+    BUDGET_PATH.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
+    print("Re-captured per-rule baselines from the current tree")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default=DEFAULT_BASE)
-    cmd_check(parser.parse_args().base)
+    parser.add_argument("--update", action="store_true")
+    args = parser.parse_args()
+    cmd_update() if args.update else cmd_check(args.base)
 
 
 if __name__ == "__main__":
