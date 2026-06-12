@@ -20,7 +20,6 @@ from typing import (
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler

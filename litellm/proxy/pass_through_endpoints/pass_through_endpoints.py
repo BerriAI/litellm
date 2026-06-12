@@ -1582,7 +1582,7 @@ async def _parse_request_data_by_content_type(
     return query_params_data, custom_body_data, file_data, stream
 
 
-def create_pass_through_route(
+def create_pass_through_route(  # noqa: PLR0915
     endpoint,
     target: str,
     custom_headers: Optional[Mapping[str, Any]] = None,
