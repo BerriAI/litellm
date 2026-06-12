@@ -3260,6 +3260,8 @@ def get_optional_params_image_gen(
         "style": None,
         "user": None,
         "imageConfig": None,
+        "tools": None,
+        "web_search_options": None,
     }
 
     non_default_params = _get_non_default_params(
