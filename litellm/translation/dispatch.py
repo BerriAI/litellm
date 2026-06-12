@@ -31,6 +31,7 @@ Provider = Literal[
     "openai_compat",
     "gemini",
     "vertex_anthropic",
+    "xai",
 ]
 
 _SAME_FAMILY: frozenset[tuple[InboundSchema, Provider]] = frozenset(
@@ -40,6 +41,9 @@ _SAME_FAMILY: frozenset[tuple[InboundSchema, Provider]] = frozenset(
         ("anthropic_messages", "vertex_ai"),
         ("anthropic_messages", "vertex_anthropic"),
         ("openai_chat", "openai_compat"),
+        # xai is NOT same-family despite speaking openai-chat: v1's transform
+        # touches the body (tools strict strip, non-user message name strip),
+        # so a verbatim fast-path forward would diverge from v1.
     }
 )
 

@@ -76,6 +76,11 @@ from ..providers.vertex_anthropic import (
 from ..providers.vertex_anthropic import (
     serialize_request as vertex_anthropic_serialize_request,
 )
+from ..providers.xai import parse_response as xai_parse_response
+from ..providers.xai import serialize_request as xai_serialize_request
+from ..providers.xai import (
+    unsupported_request_shapes as xai_unsupported_request_shapes,
+)
 from .http import Endpoint, ExecuteError, HttpPort, ProviderHttpError
 
 _Serializer = Callable[[ChatRequest, TranslationDeps], Result[Body, TranslationError]]
@@ -95,6 +100,7 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "azure": azure_serialize_request,
         "azure_ai": azure_ai_serialize_request,
         "azure_ai_anthropic": azure_ai_claude_serialize_request,
+        "xai": xai_serialize_request,
     }
 )
 
@@ -110,6 +116,7 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         "azure": azure_parse_response,
         "azure_ai": azure_ai_parse_response,
         "azure_ai_anthropic": azure_ai_claude_parse_response,
+        "xai": xai_parse_response,
     }
 )
 
@@ -125,6 +132,7 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         "azure": "openai",  # same normalizer (convert_to_model_response_object)
         "azure_ai": "openai",
         "azure_ai_anthropic": "anthropic",  # genuine anthropic wire format
+        "xai": "openai",  # httpx path, same normalized wire-body ride
     }
 )
 
@@ -142,6 +150,7 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         "azure_ai": azure_ai_unsupported_request_shapes,
         "vertex_ai": google_unsupported_request_shapes,
         "gemini": google_unsupported_request_shapes,
+        "xai": xai_unsupported_request_shapes,
     }
 )
 
