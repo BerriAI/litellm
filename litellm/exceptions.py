@@ -10,6 +10,7 @@
 ## LiteLLM versions of the OpenAI Exception Types
 
 import enum
+import inspect
 from typing import Any, Dict, Optional, Union
 
 import httpx
@@ -117,6 +118,8 @@ _MINIMAL_ERROR_RESPONSE: Optional[httpx.Response] = None
 
 def _rebuild_exception(cls, message, llm_provider, model, extra_kwargs=None):
     """Reconstruct a litellm exception using keyword args to avoid arg-order issues."""
+    extra_kwargs = dict(extra_kwargs or {})
+    response_status_code = extra_kwargs.pop("response_status_code", 500)
     kwargs = {"message": message, "llm_provider": llm_provider, "model": model}
     if extra_kwargs:
         kwargs.update(extra_kwargs)
@@ -125,7 +128,7 @@ def _rebuild_exception(cls, message, llm_provider, model, extra_kwargs=None):
     except TypeError:
         # Some OpenAI base classes require a `response` arg
         response = httpx.Response(
-            status_code=extra_kwargs.get("status_code", 500) if extra_kwargs else 500,
+            status_code=response_status_code,
             request=httpx.Request("POST", "https://litellm.ai"),
         )
         kwargs["response"] = response
@@ -134,12 +137,12 @@ def _rebuild_exception(cls, message, llm_provider, model, extra_kwargs=None):
 
 def _exception_reduce(self):
     """Allow pickling across process boundaries (e.g. concurrent.futures)."""
-    import inspect
-
     extra = {}
     params = inspect.signature(type(self).__init__).parameters
     if "status_code" in params:
         extra["status_code"] = getattr(self, "status_code", 500)
+    if hasattr(self, "status_code"):
+        extra["response_status_code"] = getattr(self, "status_code", 500)
     if "request_data" in params:
         extra["request_data"] = getattr(self, "request_data", {})
     return (
@@ -278,7 +281,8 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.message = "litellm.BadRequestError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
-        self._raw_message = message
+        if not hasattr(self, "_raw_message"):
+            self._raw_message = message
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
@@ -729,7 +733,8 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         self.status_code = 503
         self.message = "litellm.ServiceUnavailableError: {}".format(message)
         self.llm_provider = llm_provider
-        self._raw_message = message
+        if not hasattr(self, "_raw_message"):
+            self._raw_message = message
         self.model = model
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
@@ -1119,6 +1124,8 @@ class InvalidRequestError(openai.BadRequestError):  # type: ignore
             message=self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
 
+    __reduce__ = _exception_reduce
+
 
 class MockException(openai.APIError):
     # used for testing
@@ -1144,6 +1151,8 @@ class MockException(openai.APIError):
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(self.message, request=request, body=None)  # type: ignore
+
+    __reduce__ = _exception_reduce
 
 
 class LiteLLMUnknownProvider(BadRequestError):
