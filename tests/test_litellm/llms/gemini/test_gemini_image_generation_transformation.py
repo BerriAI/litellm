@@ -259,6 +259,24 @@ def test_gemini_image_generation_dedupes_search_tools_from_tools_and_web_search_
     assert mapped["tools"] == [{"googleSearch": {}}]
 
 
+def test_gemini_image_generation_preserves_tool_config_side_effect():
+    config = GoogleImageGenConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={
+            "tools": [{"googleMaps": {"latitude": 37.7, "longitude": -122.4}}]
+        },
+        optional_params={},
+        model="gemini-3.1-flash-image-preview",
+        drop_params=False,
+    )
+
+    assert mapped["tools"] == [{"googleMaps": {}}]
+    assert mapped["toolConfig"] == {
+        "retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}
+    }
+
+
 def test_gemini_image_generation_usage_without_output_details_treats_output_as_image():
     config = GoogleImageGenConfig()
     raw_response = httpx.Response(

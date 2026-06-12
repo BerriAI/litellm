@@ -234,31 +234,26 @@ def map_gemini_image_tools_params(
     gemini_config = VertexGeminiConfig()
     result = dict(mapped_params)
     result.pop("web_search_options", None)
-    working_params = dict(result)
 
     tools_value = non_default_params.get("tools")
     if isinstance(tools_value, list) and tools_value:
         mapped_tools = gemini_config._map_function(
-            value=tools_value, optional_params=working_params
+            value=tools_value, optional_params=result
         )
-        working_params = gemini_config._add_tools_to_optional_params(
-            working_params, mapped_tools
-        )
+        result = gemini_config._add_tools_to_optional_params(result, mapped_tools)
 
     web_search_options = non_default_params.get("web_search_options")
-    existing_tools = working_params.get("tools")
+    existing_tools = result.get("tools")
     if isinstance(web_search_options, dict) and not (
         isinstance(existing_tools, list) and _has_gemini_search_tool(existing_tools)
     ):
         search_tool = gemini_config._map_web_search_options(web_search_options)
-        working_params = gemini_config._add_tools_to_optional_params(
-            working_params, [search_tool]
-        )
+        result = gemini_config._add_tools_to_optional_params(result, [search_tool])
 
-    gemini_config._drop_search_tools_mixed_with_functions(working_params)
+    gemini_config._drop_search_tools_mixed_with_functions(result)
 
-    if isinstance(working_params.get("tools"), list):
-        result["tools"] = _dedupe_gemini_search_tools(working_params["tools"])
+    if isinstance(result.get("tools"), list):
+        result["tools"] = _dedupe_gemini_search_tools(result["tools"])
 
     return result
 
