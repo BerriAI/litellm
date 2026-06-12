@@ -1203,6 +1203,64 @@ if MCP_AVAILABLE:
             )
         return None
 
+    async def _user_has_resolvable_oauth_token(
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> bool:
+        """Whether the caller already has a usable per-user OAuth2 token for this
+        server, decided WITHOUT performing a network refresh.
+
+        Used by the pre-flight 401 check on the initialize path. A stored token
+        that is still valid — or expired but holding a refresh_token — means we
+        must not fire the PKCE-triggering 401; the lazy list_tools / call_tool
+        path refreshes it. Triggering the refresh here would block initialize on
+        a token-endpoint round-trip and time out the MCP client. Fails open so a
+        transient lookup error neither 401s a legitimate caller nor stalls the
+        connection.
+        """
+        if server.auth_type != MCPAuth.oauth2:
+            return False
+        if user_api_key_auth is None:
+            return False
+        user_id = getattr(user_api_key_auth, "user_id", None)
+        server_id = getattr(server, "server_id", None)
+        if not user_id or not server_id:
+            return False
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                get_user_oauth_credential,
+                is_oauth_credential_expired,
+            )
+            from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (  # noqa: PLC0415
+                mcp_per_user_token_cache,
+            )
+
+            if await mcp_per_user_token_cache.get(user_id, server_id) is not None:
+                return True
+
+            from litellm.proxy.utils import (  # noqa: PLC0415
+                get_prisma_client_or_throw,
+            )
+
+            prisma_client = get_prisma_client_or_throw(
+                "Database not connected. Connect a database to use OAuth2 MCP tools."
+            )
+            cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
+            if not cred or not cred.get("access_token"):
+                return False
+            if not is_oauth_credential_expired(cred):
+                return True
+            return bool(cred.get("refresh_token"))
+        except Exception as e:
+            verbose_logger.warning(
+                "_user_has_resolvable_oauth_token: lookup failed for "
+                "user=%s server=%s: %s",
+                user_id,
+                server_id,
+                e,
+            )
+            return True
+
     async def _prefetch_oauth_creds_for_user(
         user_api_key_auth: Optional[UserAPIKeyAuth],
     ) -> Dict[str, Dict[str, Any]]:
@@ -3294,13 +3352,10 @@ if MCP_AVAILABLE:
                     # If no stored token exists, fail fast with 401 so clients can
                     # kick off PKCE/interactive OAuth flow immediately.
                     if server.needs_user_oauth_token:
-                        stored_oauth_headers = (
-                            await _get_user_oauth_extra_headers_from_db(
-                                server=server,
-                                user_api_key_auth=user_api_key_auth,
-                            )
-                        )
-                        if stored_oauth_headers:
+                        if await _user_has_resolvable_oauth_token(
+                            server=server,
+                            user_api_key_auth=user_api_key_auth,
+                        ):
                             continue
 
                     request = StarletteRequest(scope)
