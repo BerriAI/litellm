@@ -41,7 +41,7 @@ _TOOLS = [WEATHER_TOOL]
 
 
 def _m(provider: str) -> str:
-    return SPECS[provider]["model"]
+    return SPECS[provider].model
 
 
 # Rows where v1 RAISES UnsupportedParamsError (the supported-list gate); v2
@@ -51,19 +51,19 @@ def _m(provider: str) -> str:
 V1_RAISES = {}
 for _p in PROVIDERS:
     _spec = SPECS[_p]
-    if _spec["mct"] == "raise":
+    if _spec.mct == "raise":
         V1_RAISES[f"{_p}:max_completion_tokens"] = (
             _p,
             {"model": _m(_p), "max_completion_tokens": 128, "messages": _USER},
             "max_completion_tokens",
         )
-    if not _spec["tools"]:
+    if not _spec.tools:
         V1_RAISES[f"{_p}:tools"] = (
             _p,
             {"model": _m(_p), "tools": _TOOLS, "messages": _USER},
             "tools",
         )
-    if not _spec["response_format"]:
+    if not _spec.response_format:
         V1_RAISES[f"{_p}:response_format"] = (
             _p,
             {
@@ -73,7 +73,7 @@ for _p in PROVIDERS:
             },
             "response_format",
         )
-    if not _spec["parallel_tool_calls"]:
+    if not _spec.parallel_tool_calls:
         V1_RAISES[f"{_p}:parallel_tool_calls"] = (
             _p,
             {"model": _m(_p), "parallel_tool_calls": False, "messages": _USER},
@@ -231,7 +231,7 @@ for _p in PROVIDERS:
         {"model": _m(_p), "seed": 42, "messages": _USER},
         "seed",
     )
-    if not SPECS[_p]["user"]:
+    if not SPECS[_p].user:
         EXPECTED_FALLBACKS[f"{_p}:user_model_list_gate"] = (
             _p,
             {"model": _m(_p), "user": "u-1", "messages": _USER},
@@ -268,7 +268,7 @@ EXPECTED_FALLBACKS.update(
 )
 
 
-def _v2(provider: str, case: dict):
+def _v2(provider: str, case: dict[str, object]):
     return translate_chat_request(copy.deepcopy(case), provider, build_real_deps())
 
 
@@ -375,14 +375,14 @@ _MIRROR_KEYS = (
 _RF_NAME_GATED = ("gpt-4", "gpt-3.5-turbo-16k")
 
 
-def _base_family_allowed(model: str) -> frozenset:
+def _base_family_allowed(model: str) -> frozenset[str]:
     allowed = csp._BASE_LIST
     if model in _RF_NAME_GATED:
         return allowed - {"response_format"}
     return allowed
 
 
-def _v2_allowed(provider: str, model: str, deps) -> frozenset:
+def _v2_allowed(provider: str, model: str, deps) -> frozenset[str]:
     """The per-model allowed set, re-derived from the SAME csp.ALLOWED table
     serialization reads, with the three per-model narrowings the gates
     apply (together capability fork, nvidia_nim static table, the base
@@ -450,7 +450,7 @@ def test_supported_list_mirrors_track_v1_at_head(provider: str) -> None:
         )
         for key in _MIRROR_KEYS:
             assert (key in allowed) == (key in supported), (provider, model, key)
-        if SPECS[provider]["user"]:
+        if SPECS[provider].user:
             assert "user" in supported, (provider, model)
         if provider == "cerebras":
             assert csp.supports_cerebras_reasoning(model, deps) == (
@@ -483,9 +483,7 @@ def test_capability_prefix_is_load_bearing() -> None:
     ) == litellm.supports_reasoning(model="qwen-3-32b", custom_llm_provider="cerebras")
 
 
-@pytest.mark.parametrize(
-    "provider", [p for p in PROVIDERS if SPECS[p]["mct"] == "rename"]
-)
+@pytest.mark.parametrize("provider", [p for p in PROVIDERS if SPECS[p].mct == "rename"])
 def test_mct_rename_matches_v1(provider: str) -> None:
     """The renamed key must be exactly what v1's map emits (max_tokens), so
     the rename flag can never silently disagree with the v1 config."""
@@ -499,7 +497,7 @@ def test_mct_rename_matches_v1(provider: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "provider", [p for p in PROVIDERS if SPECS[p]["mct"] == "verbatim"]
+    "provider", [p for p in PROVIDERS if SPECS[p].mct == "verbatim"]
 )
 def test_mct_verbatim_matches_v1(provider: str) -> None:
     case = {"model": _m(provider), "max_completion_tokens": 33, "messages": _USER}
@@ -509,6 +507,20 @@ def test_mct_verbatim_matches_v1(provider: str) -> None:
     assert result.is_ok(), result.error.summary
     assert result.ok.get("max_completion_tokens") == 33
     assert "max_tokens" not in result.ok
+
+
+def test_top_k_fallback_reason_matches_v1_silent_drop() -> None:
+    """v1 silently drops top_k WITHOUT drop_params (it is not an OpenAI
+    param, so _check_valid_arg never sees it) — the fallback reason must say
+    so instead of claiming an UnsupportedParamsError raise (verifier-wave1a
+    F6). Pinned in-process: v1 serves the request with top_k gone."""
+    case = {"model": _m("lambda_ai"), "top_k": 3, "messages": _USER}
+    result = _v2("lambda_ai", case)
+    assert result.is_error()
+    assert "silently drops it" in result.error.summary, result.error.summary
+    assert "UnsupportedParamsError" not in result.error.summary
+    v1 = run_v1_request_transform("lambda_ai", case)
+    assert "top_k" not in v1
 
 
 def test_together_text_response_format_dropped_like_v1() -> None:

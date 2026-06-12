@@ -16,121 +16,139 @@ remap).
 """
 
 import copy
-from typing import Any, Dict
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Literal, NamedTuple
 
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_optional_params
 
-# One spec per surviving wave-1a provider: the corpus model, which optional
-# surfaces the provider serves (drives generated corpus/raise/fallback rows),
-# and how max_completion_tokens behaves in v1 ("rename" -> max_tokens,
-# "verbatim" -> passes through, "raise" -> outside the supported list).
-SPECS: Dict[str, Dict[str, Any]] = {
-    "together_ai": {
-        "model": "Qwen/Qwen2.5-72B-Instruct-Turbo",  # model-map: supports_function_calling
-        "tools": True,
-        "response_format": True,
-        "parallel_tool_calls": True,
-        "user": False,
-        "mct": "verbatim",
-    },
-    "cerebras": {
-        "model": "llama3.1-8b",
-        "tools": True,
-        "response_format": True,
-        "parallel_tool_calls": False,
-        "user": True,
-        "mct": "rename",
-    },
-    "nvidia_nim": {
-        "model": "meta/llama3-70b-instruct",  # the default-list arm
-        "tools": True,
-        "response_format": True,
-        "parallel_tool_calls": True,
-        "user": False,
-        "mct": "rename",
-    },
-    "lm_studio": {
-        "model": "qwen2.5-7b-instruct-1m",
-        "tools": True,
-        "response_format": True,
-        "parallel_tool_calls": True,
-        "user": False,
-        "mct": "verbatim",
-    },
-    "llamafile": {
-        "model": "LLaMA_CPP",
-        "tools": True,
-        "response_format": True,
-        "parallel_tool_calls": True,
-        "user": False,
-        "mct": "verbatim",
-    },
-    "lambda_ai": {
-        "model": "llama3.1-70b-instruct-fp8",
-        "tools": True,
-        "response_format": True,
-        "parallel_tool_calls": True,
-        "user": False,
-        "mct": "rename",
-    },
-    "nebius": {
-        "model": "meta-llama/Meta-Llama-3.1-70B-Instruct",
-        "tools": True,
-        "response_format": True,
-        "parallel_tool_calls": True,
-        "user": False,
-        "mct": "rename",
-    },
-    "novita": {
-        "model": "meta-llama/llama-3.1-8b-instruct",
-        "tools": True,
-        "response_format": True,
-        "parallel_tool_calls": True,
-        "user": False,
-        "mct": "verbatim",
-    },
-    "wandb": {
-        "model": "meta-llama/Llama-3.1-8B-Instruct",
-        "tools": True,
-        "response_format": True,
-        "parallel_tool_calls": True,
-        "user": False,
-        "mct": "rename",
-    },
-    "featherless_ai": {
-        "model": "featherless-ai/Qwerky-72B",
-        "tools": False,
-        "response_format": False,
-        "parallel_tool_calls": False,
-        "user": False,
-        "mct": "rename",
-    },
-    "nscale": {
-        "model": "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-        "tools": False,
-        "response_format": True,
-        "parallel_tool_calls": False,
-        "user": False,
-        "mct": "raise",
-    },
-    "hyperbolic": {
-        "model": "meta-llama/Meta-Llama-3-70B-Instruct",
-        "tools": True,
-        "response_format": True,
-        "parallel_tool_calls": False,
-        "user": True,
-        "mct": "raise",
-    },
-    "volcengine": {
-        "model": "doubao-pro-32k-241215",
-        "tools": True,
-        "response_format": False,
-        "parallel_tool_calls": False,
-        "user": False,
-        "mct": "rename",
-    },
-}
+_Case = dict[str, object]
+
+
+class CompatSpec(NamedTuple):
+    """One row per surviving wave-1a provider: the corpus model, which
+    optional surfaces the provider serves (drives generated
+    corpus/raise/fallback rows), and how max_completion_tokens behaves in
+    v1 ("rename" -> max_tokens, "verbatim" -> passes through, "raise" ->
+    outside the supported list)."""
+
+    model: str
+    tools: bool
+    response_format: bool
+    parallel_tool_calls: bool
+    user: bool
+    mct: Literal["rename", "verbatim", "raise"]
+
+
+SPECS: Mapping[str, CompatSpec] = MappingProxyType(
+    {
+        "together_ai": CompatSpec(
+            model="Qwen/Qwen2.5-72B-Instruct-Turbo",  # map: supports_function_calling
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="verbatim",
+        ),
+        "cerebras": CompatSpec(
+            model="llama3.1-8b",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=True,
+            mct="rename",
+        ),
+        "nvidia_nim": CompatSpec(
+            model="meta/llama3-70b-instruct",  # the default-list arm
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="rename",
+        ),
+        "lm_studio": CompatSpec(
+            model="qwen2.5-7b-instruct-1m",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="verbatim",
+        ),
+        "llamafile": CompatSpec(
+            model="LLaMA_CPP",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="verbatim",
+        ),
+        "lambda_ai": CompatSpec(
+            model="llama3.1-70b-instruct-fp8",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="rename",
+        ),
+        "nebius": CompatSpec(
+            model="meta-llama/Meta-Llama-3.1-70B-Instruct",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="rename",
+        ),
+        "novita": CompatSpec(
+            model="meta-llama/llama-3.1-8b-instruct",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="verbatim",
+        ),
+        "wandb": CompatSpec(
+            model="meta-llama/Llama-3.1-8B-Instruct",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=True,
+            user=False,
+            mct="rename",
+        ),
+        "featherless_ai": CompatSpec(
+            model="featherless-ai/Qwerky-72B",
+            tools=False,
+            response_format=False,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+        "nscale": CompatSpec(
+            model="meta-llama/Llama-4-Scout-17B-16E-Instruct",
+            tools=False,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=False,
+            mct="raise",
+        ),
+        "hyperbolic": CompatSpec(
+            model="meta-llama/Meta-Llama-3-70B-Instruct",
+            tools=True,
+            response_format=True,
+            parallel_tool_calls=False,
+            user=True,
+            mct="raise",
+        ),
+        "volcengine": CompatSpec(
+            model="doubao-pro-32k-241215",
+            tools=True,
+            response_format=False,
+            parallel_tool_calls=False,
+            user=False,
+            mct="rename",
+        ),
+    }
+)
 
 PROVIDERS = tuple(sorted(SPECS))
 
@@ -154,7 +172,7 @@ def provider_config(provider: str, model: str):
     )
 
 
-def run_v1_request_transform(provider: str, case: Dict[str, Any]) -> Dict[str, Any]:
+def run_v1_request_transform(provider: str, case: _Case) -> dict:
     request = copy.deepcopy(case)
     model = request.pop("model")
     messages = request.pop("messages")
@@ -176,13 +194,13 @@ def run_v1_request_transform(provider: str, case: Dict[str, Any]) -> Dict[str, A
     )
 
 
-def corpus_for(provider: str) -> Dict[str, Dict[str, Any]]:
+def corpus_for(provider: str) -> dict[str, _Case]:
     """The generated served corpus: every row here must be byte-identical
     (normalized JSON) between v1-in-process and v2."""
     spec = SPECS[provider]
-    model = spec["model"]
+    model = spec.model
     user_msg = [{"role": "user", "content": "Hello, world"}]
-    cases: Dict[str, Dict[str, Any]] = {
+    cases: dict[str, _Case] = {
         "text": {"model": model, "messages": user_msg},
         "system_and_sampling": {
             "model": model,
@@ -202,13 +220,13 @@ def corpus_for(provider: str) -> Dict[str, Dict[str, Any]]:
             "messages": user_msg,
         },
     }
-    if spec["mct"] in ("rename", "verbatim"):
+    if spec.mct in ("rename", "verbatim"):
         cases["max_completion_tokens"] = {
             "model": model,
             "max_completion_tokens": 128,
             "messages": user_msg,
         }
-    if spec["tools"]:
+    if spec.tools:
         cases["tools_auto"] = {
             "model": model,
             "tools": [WEATHER_TOOL],
@@ -243,7 +261,7 @@ def corpus_for(provider: str) -> Dict[str, Dict[str, Any]]:
                 {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
             ],
         }
-    if spec["response_format"]:
+    if spec.response_format:
         cases["response_format_json_object"] = {
             "model": model,
             "response_format": {"type": "json_object"},
@@ -266,13 +284,13 @@ def corpus_for(provider: str) -> Dict[str, Dict[str, Any]]:
             },
             "messages": user_msg,
         }
-    if spec["parallel_tool_calls"]:
+    if spec.parallel_tool_calls:
         cases["parallel_tool_calls_false"] = {
             "model": model,
             "tools": [WEATHER_TOOL],
             "parallel_tool_calls": False,
             "messages": [{"role": "user", "content": "Weather in Paris and Rome?"}],
         }
-    if spec["user"]:
+    if spec.user:
         cases["user_param"] = {"model": model, "user": "u-1", "messages": user_msg}
     return cases

@@ -91,6 +91,16 @@ def unsupported_against(
         note = notes.get(key)
         if note is not None:
             return note
+        if key == "top_k":
+            # top_k is not an OpenAI param: it never enters
+            # non_default_params, so _check_valid_arg never sees it and v1
+            # drops it WITHOUT drop_params (verified in-process at HEAD;
+            # verifier-wave1a F6).
+            return (
+                f"top_k on {provider}: not an OpenAI param; v1's "
+                "get_optional_params silently drops it (no raise, even "
+                "without drop_params)"
+            )
         return (
             f"{key} on {provider}: outside v1's supported list; "
             "get_optional_params raises UnsupportedParamsError "

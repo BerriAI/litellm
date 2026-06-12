@@ -22,6 +22,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 from ...errors import TranslationError
 from ..openai_compat import unsupported_request_shapes as openai_unsupported_shapes
+from ..openai_compat.guard import explicit_stream_false
 
 _Raw = Mapping[str, object]
 
@@ -30,6 +31,9 @@ def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
     shared = openai_unsupported_shapes(raw)
     if shared is not None:
         return shared
+    stream_false = explicit_stream_false(raw)
+    if stream_false is not None:
+        return stream_false
     reason = _azure_reason(raw)
     if reason is None:
         return None
@@ -37,8 +41,6 @@ def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
 
 
 def _azure_reason(raw: _Raw) -> str | None:
-    if "stream" in raw and raw.get("stream") is False:
-        return "explicit stream: false (azure keeps the key on the wire; absent-vs-false is lost in the IR)"
     for field in ("messages", "tools"):
         if _carries_cache_control(raw.get(field), 0):
             return (

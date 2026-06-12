@@ -328,7 +328,7 @@ def _compat_sdk_rows(lines: list) -> int:
     ]
     for provider, name in resp._rows():
         raw = resp._RESPONSES[name]
-        preset = f"{provider}/{corpus.SPECS[provider]['model']}"
+        preset = f"{provider}/{corpus.SPECS[provider].model}"
         same = resp._norm(resp._v2_model_response(provider, raw, preset)) == resp._norm(
             resp._v1_model_response(raw, preset)
         )

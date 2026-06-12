@@ -21,6 +21,20 @@ from ...errors import TranslationError
 _Raw = Mapping[str, object]
 
 
+def explicit_stream_false(raw: _Raw) -> TranslationError | None:
+    """The ONE explicit ``stream: false`` arm the azure / xai / compat_sdk
+    guards compose (critic-wave1a N2): those paths all serialize an
+    explicitly-sent ``false`` onto the wire while absent-vs-false is lost in
+    the IR. openai_compat itself deliberately does NOT run it -- the
+    gap-parity question is integrator scope (wave1a-port.md attack #2)."""
+    if raw.get("stream") is False:
+        return TranslationError.of_unsupported(
+            "explicit stream: false (this path keeps the key on the wire; "
+            "absent-vs-false is lost in the IR)"
+        )
+    return None
+
+
 def unsupported_request_shapes(
     raw: _Raw, *, name_fallback_user_only: bool = False
 ) -> TranslationError | None:

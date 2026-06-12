@@ -37,7 +37,7 @@ _RESPONSE_ROWS = (
 
 def _request_for(provider: str) -> dict:
     return {
-        "model": SPECS[provider]["model"],
+        "model": SPECS[provider].model,
         "messages": [{"role": "user", "content": "hi"}],
     }
 
@@ -74,7 +74,7 @@ def test_preset_reprefix_matches_v1(provider: str, name: str, frozen_ambient) ->
     """SDK-path preset: {provider}/{request model} in, {provider}/{wire
     model} out, byte-identical dumps both sides."""
     raw = _RESPONSES[name]
-    preset = f"{provider}/{SPECS[provider]['model']}"
+    preset = f"{provider}/{SPECS[provider].model}"
     v1 = _v1_model_response(raw, preset)
     v2 = _v2_model_response(provider, raw, preset)
     assert _norm(v2) == _norm(v1)
@@ -87,7 +87,7 @@ def test_preset_survives_when_wire_model_missing(provider: str, frozen_ambient) 
     """cdr's elif arm needs a non-None wire model; without one the preset
     {provider}/{request model} survives verbatim on both sides."""
     raw = {k: v for k, v in _RESPONSES["text"].items() if k != "model"}
-    preset = f"{provider}/{SPECS[provider]['model']}"
+    preset = f"{provider}/{SPECS[provider].model}"
     v1 = _v1_model_response(raw, preset)
     v2 = _v2_model_response(provider, raw, preset)
     assert _norm(v2) == _norm(v1)
