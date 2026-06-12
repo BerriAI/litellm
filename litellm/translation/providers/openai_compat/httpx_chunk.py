@@ -60,17 +60,25 @@ _DELTA_KEYS = (
 
 
 @dataclass(frozen=True)
+class StrictEnvelope:
+    """Envelope keys whose ABSENCE is loud (v1 chunk_parsers that subscript
+    the chunk raise KeyError) PLUS the reason naming that v1 raise — one
+    value, so a strict envelope can never ship without its v1-raise naming
+    (critic-longtail NIT-3: the pair was a docstring-only contract)."""
+
+    keys: tuple[str, ...]
+    reason: Callable[[Sequence[str]], str]
+
+
+@dataclass(frozen=True)
 class HttpxChunkPolicy:
     reasoning: ReasoningMode
     error_on_key_presence: bool = False
     """True mirrors a v1 ``if "error" in chunk:`` raise (cometapi); False
     mirrors the value check (xai's ``get("error") is not None``)."""
-    required_keys: tuple[str, ...] = ()
-    """Envelope keys whose ABSENCE is loud (v1 chunk_parsers that subscript
-    the chunk raise KeyError); empty for parsers that ``.get`` everything."""
-    missing_keys_reason: Callable[[Sequence[str]], str] | None = None
-    """Names the v1 raise for a required-keys miss; must be set whenever
-    ``required_keys`` is non-empty."""
+    strict_envelope: StrictEnvelope | None = None
+    """The required-keys envelope with its v1-raise naming (cometapi); None
+    for parsers that ``.get`` everything."""
     fold_usage: Callable[[PlainJson], PlainJson | TranslationError] | None = None
     """Per-chunk usage rewrite (the xai reasoning fold); None passes a dict
     usage through verbatim. Either way usage is attached ONLY to the
@@ -88,15 +96,12 @@ def _envelope_error(
     )
     if error_present:
         return _boundary(f"provider stream error: {event.get('error')!r}")
-    missing = [key for key in policy.required_keys if key not in event]
+    if policy.strict_envelope is None:
+        return None
+    missing = [key for key in policy.strict_envelope.keys if key not in event]
     if not missing:
         return None
-    reason = (
-        policy.missing_keys_reason(missing)
-        if policy.missing_keys_reason is not None
-        else f"stream chunk missing {missing!r}"
-    )
-    return _boundary(reason)
+    return _boundary(policy.strict_envelope.reason(missing))
 
 
 def make_parse_event(policy: HttpxChunkPolicy) -> ParseEvent:

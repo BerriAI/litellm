@@ -43,7 +43,11 @@ from expression import Result
 
 from ...errors import TranslationError
 from ...ir import StreamEvent
-from ..openai_compat.httpx_chunk import HttpxChunkPolicy, make_parse_event
+from ..openai_compat.httpx_chunk import (
+    HttpxChunkPolicy,
+    StrictEnvelope,
+    make_parse_event,
+)
 from ..openai_compat.stream import make_parse_line
 from .params import CompatHttpxProvider
 
@@ -64,8 +68,10 @@ cometapi_parse_event = make_parse_event(
     HttpxChunkPolicy(
         reasoning="copy_both",
         error_on_key_presence=True,
-        required_keys=("id", "created", "model", "choices"),
-        missing_keys_reason=_cometapi_missing_keys_reason,
+        strict_envelope=StrictEnvelope(
+            keys=("id", "created", "model", "choices"),
+            reason=_cometapi_missing_keys_reason,
+        ),
     )
 )
 cometapi_parse_line = make_parse_line(cometapi_parse_event)
