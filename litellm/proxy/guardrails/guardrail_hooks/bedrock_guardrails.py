@@ -164,6 +164,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if messages is None:
             return bedrock_request
         for message in messages:
+            if (
+                self.experimental_use_latest_role_message_only
+                and message.get("role") != "user"
+            ):
+                continue
             message_text_content: Optional[List[str]] = self.get_content_for_message(
                 message=message
             )
@@ -1555,7 +1560,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             filter_result = self._prepare_guardrail_messages_for_role(
                 messages=request_messages
             )
-            filtered_messages = filter_result.payload_messages or mock_messages
+            filtered_messages = filter_result.payload_messages
+            if filtered_messages is None:
+                if self.experimental_use_latest_role_message_only:
+                    filtered_messages = None
+                else:
+                    filtered_messages = mock_messages
 
             # Bedrock will throw an error if there is no text to process
             if filtered_messages:
