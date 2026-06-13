@@ -16,7 +16,7 @@ Requires:
 
 import json
 import os
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -43,6 +43,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         aws_profile_name: Optional[str] = None,
         aws_web_identity_token: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
+        replica_regions: Optional[List[str]] = None,
         **kwargs,
     ):
         BaseSecretManager.__init__(self, **kwargs)
@@ -56,6 +57,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         self.aws_profile_name = aws_profile_name
         self.aws_web_identity_token = aws_web_identity_token
         self.aws_sts_endpoint = aws_sts_endpoint
+        self.replica_regions: List[str] = replica_regions or []
 
     @classmethod
     def validate_environment(cls):
@@ -109,6 +111,9 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                     ),
                     "aws_sts_endpoint": getattr(
                         key_management_settings, "aws_sts_endpoint", None
+                    ),
+                    "replica_regions": getattr(
+                        key_management_settings, "replica_regions", None
                     ),
                 }
                 # Remove None values
@@ -307,6 +312,82 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             action="CreateSecret",
             secret_name=secret_name,
             secret_value=secret_value,
+            optional_params=optional_params,
+            request_data=data,
+        )
+
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager,
+            params={"timeout": timeout},
+        )
+
+        try:
+            response = await async_client.post(
+                url=endpoint_url, headers=headers, data=body.decode("utf-8")
+            )
+            response.raise_for_status()
+            create_response = response.json()
+        except httpx.HTTPStatusError as err:
+            raise ValueError(f"HTTP error occurred: {err.response.text}")
+        except httpx.TimeoutException:
+            raise ValueError("Timeout error occurred")
+
+        if self.replica_regions:
+            try:
+                await self.async_replicate_secret(
+                    secret_name=secret_name,
+                    replica_regions=self.replica_regions,
+                    optional_params=optional_params,
+                    timeout=timeout,
+                )
+                verbose_logger.debug(
+                    "Replicated secret '%s' to regions: %s",
+                    secret_name,
+                    self.replica_regions,
+                )
+            except Exception as replication_err:
+                verbose_logger.warning(
+                    "Failed to replicate secret '%s' to regions %s: %s — key was created successfully.",
+                    secret_name,
+                    self.replica_regions,
+                    str(replication_err),
+                )
+
+        return create_response
+
+    async def async_replicate_secret(
+        self,
+        secret_name: str,
+        replica_regions: List[str],
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> dict:
+        """
+        Replicate a secret to additional AWS regions using ReplicateSecretToRegions.
+
+        Called after a successful CreateSecret when replica_regions is configured.
+        Replication is best-effort — callers should not depend on this for correctness.
+
+        Args:
+            secret_name: Name or ARN of the secret to replicate
+            replica_regions: List of target AWS region names, e.g. ["us-west-2"]
+            optional_params: Additional AWS parameters
+            timeout: Request timeout
+
+        Returns:
+            dict: AWS response, or {} if replica_regions is empty
+        """
+        if not replica_regions:
+            return {}
+
+        data: Dict[str, Any] = {
+            "SecretId": secret_name,
+            "AddReplicaRegions": [{"Region": r} for r in replica_regions],
+        }
+
+        endpoint_url, headers, body = self._prepare_request(
+            action="ReplicateSecretToRegions",
+            secret_name=secret_name,
             optional_params=optional_params,
             request_data=data,
         )
