@@ -6,6 +6,7 @@
 #
 # Format: <file> | <grep_pattern_that_proves_patch_is_present> | <human_description>
 
+Dockerfile            | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM); this is the Dockerfile litellm-build-push.yml deploys (Scorecard PinnedDependenciesID)
 backend/Dockerfile    | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
 gateway/Dockerfile    | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
 migrations/Dockerfile | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
