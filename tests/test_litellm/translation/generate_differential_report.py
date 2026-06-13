@@ -2702,12 +2702,327 @@ def _google_stream_rows(lines: list) -> int:
     return failures
 
 
+def _ollama_chat_rows(lines: list) -> int:
+    import json as _json
+
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import test_differential_ollama_chat_request as req
+    from . import test_differential_ollama_chat_response as resp
+
+    failures = 0
+    lines += [
+        "",
+        "## ollama_chat: request bodies (v1 get_optional_params('ollama_chat')"
+        " + the LIVE OllamaChatConfig.transform_request — dedicated elif, the"
+        " {model, messages, options, stream} NDJSON body with the message"
+        " munge whitelist, the think-tag thinking-extract quirk and the"
+        " always-on stream key — vs v2 providers/ollama_chat)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, reason = req.V1_RAISES[name]
+        result = req._v2(case)
+        try:
+            req.run_v1_request_transform(case)
+            raised = False
+        except UnsupportedParamsError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req.V1_SERVES_FALLBACKS):
+        case, reason = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req.V1_RAISES_RAW):
+        case, reason = req.V1_RAISES_RAW[name]
+        result = req._v2(case)
+        try:
+            req.run_v1_request_transform(case)
+            raised = False
+        except _json.JSONDecodeError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises json.JSONDecodeError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## ollama_chat: responses (v1's OWN transform_response mutating a"
+        " pre-allocated ModelResponse — the ollama_chat/{REQUEST model} prefix,"
+        " the thinking remap / think-tag split, tool-arg restringify — vs v2"
+        " parser + the openai construction arm; the wire carries no id so the"
+        " ambient chatcmpl id is kept)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        same = resp._norm(resp._v2_model_response(raw)) == resp._norm(
+            resp._v1_model_response(raw)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(resp._LOUD):
+        raw, fragment = resp._LOUD[name]
+        result = resp._v2_parse(raw)
+        try:
+            resp._v1_model_response(raw)
+            raised = False
+        except Exception:
+            raised = True
+        ok = result.is_error() and fragment in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({fragment})")
+    for name in sorted(resp._V1_SERVES_FALLBACKS):
+        raw, fragment = resp._V1_SERVES_FALLBACKS[name]
+        result = resp._v2_parse(raw)
+        ok = result.is_error() and fragment in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({fragment})")
+    lines += [
+        "",
+        "ollama_chat streams ride a dedicated inbound NDJSON dialect"
+        " (inbound/openai_chat: the ollama_chat ChunkDialect + ollama_fold);"
+        " like every other provider, streaming stays on v1 until the streaming"
+        " seam lands, so there is no stream differential row here yet.",
+    ]
+    return failures
+
+
+def _github_copilot_rows(lines: list) -> int:
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import test_differential_github_copilot_request as req
+    from . import test_differential_github_copilot_response as resp
+
+    failures = 0
+    lines += [
+        "",
+        "## github_copilot: request bodies (v1 get_optional_params"
+        " ('github_copilot') + the LIVE GithubCopilotConfig.transform_request"
+        " — the SDK-path big openai elif, openai_compat assembly with the"
+        " system->assistant role rewrite gated by"
+        " litellm.disable_copilot_system_to_assistant — vs v2"
+        " providers/github_copilot; probed with a seeded fake token dir, no"
+        " live OAuth)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, reason = req.V1_RAISES[name]
+        result = req._v2(case)
+        try:
+            req.run_v1_request_transform(case)
+            raised = False
+        except UnsupportedParamsError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req.V1_SERVES_FALLBACKS):
+        case, reason = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## github_copilot: responses (v1's SDK-path"
+        " convert_to_model_response_object over the github_copilot/{model}"
+        " preset — the config's transform_response is DEAD on this path — vs"
+        " v2 the shared openai parser + the seam re-prefix; construction arm"
+        " openai)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSE_ROWS):
+        raw = resp._RESPONSES[name]
+        same = resp._norm(resp._v2_model_response(raw, resp._PRESET)) == resp._norm(
+            resp._v1_model_response(raw, resp._PRESET)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "github_copilot has no custom stream iterator in v1 (SDK chunks ride"
+        " the default openai dialect); streaming stays on v1 until the"
+        " streaming seam lands, so there is no stream differential row here"
+        " yet. The codex family (gpt-5.3-codex / gpt-5.1-codex-max) bridges to"
+        " the Responses API above the chat seam and stays v1 by absence"
+        " (canary in the request gate).",
+    ]
+    return failures
+
+
+def _databricks_rows(lines: list) -> int:
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import test_differential_databricks_request as req
+    from . import test_differential_databricks_response as resp
+    from . import test_differential_databricks_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## databricks: request bodies (v1 get_optional_params('databricks') +"
+        " the LIVE DatabricksConfig.transform_request — the {model, messages,"
+        " stream} body, mct->max_tokens, the claude-substring tool round-trip"
+        " (drops strict/$schema) and the thinking max-bump — vs v2"
+        " providers/databricks; every shared shape on BOTH the claude and"
+        " non-claude arms of the \"claude\" in model fork)",
+        "",
+    ]
+    for name in sorted(req._SHARED_CASES):
+        for model in (req.CLAUDE, req.NONCLAUDE):
+            case = {"model": model, **req._SHARED_CASES[name]}
+            result = req._v2(case)
+            same = result.is_ok() and req._norm(result.ok) == req._norm(
+                req.run_v1_request_transform(case)
+            )
+            failures += 0 if same else 1
+            arm = "claude" if model == req.CLAUDE else "nonclaude"
+            lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name} ({arm})")
+    for name in sorted(req._NONCLAUDE_ONLY_CASES):
+        case = {"model": req.NONCLAUDE, **req._NONCLAUDE_ONLY_CASES[name]}
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req._CLAUDE_ONLY_CASES):
+        case = {"model": req.CLAUDE, **req._CLAUDE_ONLY_CASES[name]}
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req._V1_RAISES):
+        case, reason = req._V1_RAISES[name]
+        result = req._v2(case)
+        try:
+            req.run_v1_request_transform(case)
+            raised = False
+        except UnsupportedParamsError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req._V1_RAISES_RAW):
+        case, reason = req._V1_RAISES_RAW[name]
+        result = req._v2(case)
+        try:
+            req.run_v1_request_transform(case)
+            raised = False
+        except KeyError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises raw KeyError, DB-R3)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req._V1_SERVES_FALLBACKS):
+        case, reason = req._V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## databricks: responses (v1's transform_response — content-list"
+        " flatten, reasoning/summary -> reasoning_content + thinking_blocks,"
+        " citations -> provider_specific_fields with supported_text, the"
+        " databricks/{wire model} prefix; a missing required key is a RAW"
+        " KeyError — vs v2 the parser + openai construction arm)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        same = resp._norm(resp._v2_model_response(raw)) == resp._norm(
+            resp._v1_model_response(raw)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(resp._LOUD):
+        raw, fragment = resp._LOUD[name]
+        result = resp._v2_parse(raw)
+        try:
+            resp._v1_model_response(raw)
+            raised = False
+        except KeyError:
+            raised = True
+        ok = result.is_error() and fragment in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises raw KeyError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({fragment})")
+    lines += [
+        "",
+        "## databricks: streams (v1 DatabricksChatResponseIterator — ONE body"
+        " per wire chunk, the wire usage DROPPED ENTIRELY (DB-R5), the json_mode"
+        " json_tool_call->content byte-reformat (DB-R8) — vs v2 the databricks"
+        " chunk dialect; the non-JSON/empty line seam is a PINNED DIVERGENCE)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        v1 = stream._v1_chunks(events)
+        v2 = stream._v2_bodies(events)
+        same = len(v1) == len(v2) and all(
+            stream._norm_delta(stream._v1_delta(a)) == stream._norm_delta(
+                stream._v2_delta(b)
+            )
+            for a, b in zip(v1, v2)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(stream._PINNED_DIVERGENCES):
+        raw_lines, fragment = stream._PINNED_DIVERGENCES[name]
+        from litellm.translation.engine.stream import fold_lines
+        from litellm.translation.inbound.openai_chat.stream import initial_state
+
+        folded = fold_lines(
+            list(raw_lines),
+            stream.parse_line,
+            initial_state(stream.MODEL, dialect="databricks"),
+        )
+        ok = folded.is_error() and fragment in folded.error.summary
+        failures += 0 if ok else 1
+        label = "PINNED DIVERGENCE (v1 swallows, v2 loud)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({fragment})")
+    return failures
+
+
 def main() -> None:
     _freeze_ambient()
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules + the wave-3 ollama_chat, github_copilot, and databricks own modules)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -2730,6 +3045,9 @@ def main() -> None:
     failures += _watsonx_rows(lines)
     failures += _sagemaker_chat_rows(lines)
     failures += _groq_rows(lines)
+    failures += _ollama_chat_rows(lines)
+    failures += _github_copilot_rows(lines)
+    failures += _databricks_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

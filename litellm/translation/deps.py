@@ -76,3 +76,10 @@ class TranslationDeps:
     """The deployment-space alternative to ``watsonx_project_id`` (same
     resolution chain, WATSONX_DEPLOYMENT_SPACE_ID/... env); v1 only injects
     it when the project id is absent."""
+    disable_copilot_system_to_assistant: bool = False
+    """wave-3 github_copilot: the ``litellm.disable_copilot_system_to_assistant``
+    global (default False) read once at the seam. When False (default) v1's
+    ``GithubCopilotConfig._transform_messages`` rewrites every system message's
+    role to ``assistant``; when True the messages ride unchanged. It is a plain
+    litellm module global, not a ``litellm.constants`` leaf, so it enters here
+    as a value like every other ambient flag."""

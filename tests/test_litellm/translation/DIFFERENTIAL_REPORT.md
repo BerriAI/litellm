@@ -1,4 +1,4 @@
-# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules)
+# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules + the wave-3 ollama_chat, github_copilot, and databricks own modules)
 
 v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
 explained FALLBACK that v1 serves) for a provider's flag to turn on.
@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: 76bb3a6a77
+- commit: 3b267ec2e2
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -2420,6 +2420,192 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 raises APIError): non-str delta reasoning_content (the F6 groq-local pre-step; the wrapper epilogue join TypeErrors in v1)
 - IDENTICAL: non-str refusal forwarded VERBATIM (the wave-2b-beta F6 INTEGRATOR-FLIP handoff, discharged at the sibling merge: the shared httpx_chunk factory used to null what v1 forwards; the refusal-on-finish half is the failure-counted PINNED DIVERGENCE row below)
 - PINNED DIVERGENCE (fail-closed where v1 serves the lossy finish): refusal-on-finish: groq's v1 wrapper silently DROPS a refusal value riding the finish chunk and serves the lossy finish; v2 takes the loud finish-chunk fallback for any value type (test_refusal_on_finish_chunk_is_loud_where_v1_drops_it; critic-wave2b-final MAJOR-2 made the gate-pinned divergence a failure-counted report row)
+
+## ollama_chat: request bodies (v1 get_optional_params('ollama_chat') + the LIVE OllamaChatConfig.transform_request — dedicated elif, the {model, messages, options, stream} NDJSON body with the message munge whitelist, the think-tag thinking-extract quirk and the always-on stream key — vs v2 providers/ollama_chat)
+
+- IDENTICAL: assistant_think_tags_full_content_plus_thinking
+- IDENTICAL: empty_assistant_content_rides
+- IDENTICAL: image_data_url_stripped_to_base64
+- IDENTICAL: image_http_url_verbatim
+- IDENTICAL: mct_to_num_predict
+- IDENTICAL: message_name_dropped_every_role
+- IDENTICAL: multi_text_list_flattens
+- IDENTICAL: plain
+- IDENTICAL: reasoning_effort_gptoss_verbatim
+- IDENTICAL: reasoning_effort_low_to_think_true
+- IDENTICAL: reasoning_effort_minimal_to_think_false
+- IDENTICAL: reasoning_effort_none_string_to_think_false
+- IDENTICAL: rf_json_object
+- IDENTICAL: rf_json_schema_bare_schema
+- IDENTICAL: rf_text_dropped
+- IDENTICAL: sampling
+- IDENTICAL: stream_false
+- IDENTICAL: stream_true
+- IDENTICAL: system_rides_in_messages
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: tool_choice_popped
+- IDENTICAL: tool_roundtrip_id_type_dropped
+- IDENTICAL: tools_strict_rides
+- IDENTICAL: tools_verbatim
+- IDENTICAL: top_k_options_passthrough
+- IDENTICAL: user_think_tags_same_quirk
+- FALLBACK (v1 raises UnsupportedParamsError): logprobs (logprobs)
+- FALLBACK (v1 raises UnsupportedParamsError): n (n)
+- FALLBACK (v1 raises UnsupportedParamsError): parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises UnsupportedParamsError): presence_penalty (presence_penalty)
+- FALLBACK (v1 raises UnsupportedParamsError): thinking (thinking)
+- FALLBACK (v1 serves it): assistant_reasoning_content_to_thinking (reasoning_content)
+- FALLBACK (v1 serves it): both_max_tokens_keys (max_tokens)
+- FALLBACK (v1 serves it): consecutive_user_turns (consecutive)
+- FALLBACK (v1 serves it): frequency_penalty_to_repeat_penalty (frequency_penalty)
+- FALLBACK (v1 serves it): function_name_near_dormant_synth_arm (function_name)
+- FALLBACK (v1 serves it): functions_to_tools_verbatim (functions)
+- FALLBACK (v1 serves it): keep_alive_passthrough (keep_alive)
+- FALLBACK (v1 serves it): mid_conversation_system (system)
+- FALLBACK (v1 serves it): mirostat_native_passthrough (mirostat)
+- FALLBACK (v1 serves it): seed_parse_level (seed)
+- FALLBACK (v1 serves it): string_stop_rides_verbatim (stop)
+- FALLBACK (v1 serves it): tool_cache_control_verbatim (cache_control)
+- FALLBACK (v1 serves it): user_silent_drop (user)
+- FALLBACK (v1 raises json.JSONDecodeError): blank_tool_arguments_json_decode_error (JSON repair)
+
+## ollama_chat: responses (v1's OWN transform_response mutating a pre-allocated ModelResponse — the ollama_chat/{REQUEST model} prefix, the thinking remap / think-tag split, tool-arg restringify — vs v2 parser + the openai construction arm; the wire carries no id so the ambient chatcmpl id is kept)
+
+- IDENTICAL: done_reason_length
+- IDENTICAL: done_reason_missing_defaults_stop
+- IDENTICAL: done_reason_unknown_maps_stop
+- IDENTICAL: extra_message_key_rides
+- IDENTICAL: extra_top_level_key_dropped
+- IDENTICAL: plain
+- IDENTICAL: think_tags_split_remainder
+- IDENTICAL: think_tags_unclosed_verbatim
+- IDENTICAL: thinking_field_to_reasoning_content
+- IDENTICAL: tool_calls_dict_args_restringified
+- IDENTICAL: tool_calls_force_finish_over_done_reason
+- IDENTICAL: tool_calls_str_args_verbatim
+- IDENTICAL: tool_calls_wire_id_kept
+- IDENTICAL: wire_model_ignored
+- FALLBACK (v1 raises): content_key_missing (missing or null)
+- FALLBACK (v1 raises): missing_message (message)
+- FALLBACK (v1 raises): non_object_body (not an object)
+- FALLBACK (v1 raises): non_str_content (not a string)
+- FALLBACK (v1 raises): null_content_eager_token_counter (token_counter)
+- FALLBACK (v1 raises): null_content_with_thinking (missing or null)
+- FALLBACK (v1 raises): null_message (message)
+- FALLBACK (v1 raises): tool_call_missing_function (function)
+- FALLBACK (v1 raises): tool_call_non_object_entry (not an object)
+- FALLBACK (v1 raises): unhashable_done_reason (unhashable)
+- FALLBACK (v1 serves it): function_call_done_reason_outside_ir (function_call)
+- FALLBACK (v1 serves it): missing_eval_count_token_counter (token_counter)
+- FALLBACK (v1 serves it): missing_prompt_eval_count_token_counter (token_counter)
+
+ollama_chat streams ride a dedicated inbound NDJSON dialect (inbound/openai_chat: the ollama_chat ChunkDialect + ollama_fold); like every other provider, streaming stays on v1 until the streaming seam lands, so there is no stream differential row here yet.
+
+## github_copilot: request bodies (v1 get_optional_params ('github_copilot') + the LIVE GithubCopilotConfig.transform_request — the SDK-path big openai elif, openai_compat assembly with the system->assistant role rewrite gated by litellm.disable_copilot_system_to_assistant — vs v2 providers/github_copilot; probed with a seeded fake token dir, no live OAuth)
+
+- IDENTICAL: claude_plain_serves
+- IDENTICAL: mct_verbatim_no_rename
+- IDENTICAL: plain
+- IDENTICAL: response_format_json_schema
+- IDENTICAL: sampling
+- IDENTICAL: stream_true
+- IDENTICAL: system_to_assistant
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): claude_reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): claude_thinking (thinking)
+- FALLBACK (v1 raises UnsupportedParamsError): gpt5_temperature_not_one (gpt-5)
+- FALLBACK (v1 serves it): explicit_stream_false (stream)
+- FALLBACK (v1 serves it): message_name_forwarded (name)
+- FALLBACK (v1 serves it): n_parse_level (field)
+- FALLBACK (v1 serves it): seed_parse_level (seed)
+- FALLBACK (v1 serves it): string_stop (stop)
+- FALLBACK (v1 serves it): top_k_not_a_chat_param (top_k)
+- FALLBACK (v1 serves it): user_claude_dropped_by_v1 (user)
+- FALLBACK (v1 serves it): user_gpt4o_served_by_v1 (user)
+
+## github_copilot: responses (v1's SDK-path convert_to_model_response_object over the github_copilot/{model} preset — the config's transform_response is DEAD on this path — vs v2 the shared openai parser + the seam re-prefix; construction arm openai)
+
+- IDENTICAL: cached_and_reasoning_usage_details
+- IDENTICAL: text
+- IDENTICAL: tool_calls_rewrites_stop
+
+github_copilot has no custom stream iterator in v1 (SDK chunks ride the default openai dialect); streaming stays on v1 until the streaming seam lands, so there is no stream differential row here yet. The codex family (gpt-5.3-codex / gpt-5.1-codex-max) bridges to the Responses API above the chat seam and stays v1 by absence (canary in the request gate).
+
+## databricks: request bodies (v1 get_optional_params('databricks') + the LIVE DatabricksConfig.transform_request — the {model, messages, stream} body, mct->max_tokens, the claude-substring tool round-trip (drops strict/$schema) and the thinking max-bump — vs v2 providers/databricks; every shared shape on BOTH the claude and non-claude arms of the "claude" in model fork)
+
+- IDENTICAL: max_tokens_verbatim (claude)
+- IDENTICAL: max_tokens_verbatim (nonclaude)
+- IDENTICAL: mct_to_max_tokens (claude)
+- IDENTICAL: mct_to_max_tokens (nonclaude)
+- IDENTICAL: plain (claude)
+- IDENTICAL: plain (nonclaude)
+- IDENTICAL: sampling (claude)
+- IDENTICAL: sampling (nonclaude)
+- IDENTICAL: stream_false_always_present (claude)
+- IDENTICAL: stream_false_always_present (nonclaude)
+- IDENTICAL: stream_true (claude)
+- IDENTICAL: stream_true (nonclaude)
+- IDENTICAL: thinking_budget_bumps_max_tokens (claude)
+- IDENTICAL: thinking_budget_bumps_max_tokens (nonclaude)
+- IDENTICAL: thinking_budget_with_caller_max_tokens_no_bump (claude)
+- IDENTICAL: thinking_budget_with_caller_max_tokens_no_bump (nonclaude)
+- IDENTICAL: thinking_no_budget_no_bump (claude)
+- IDENTICAL: thinking_no_budget_no_bump (nonclaude)
+- IDENTICAL: tool_choice_auto (claude)
+- IDENTICAL: tool_choice_auto (nonclaude)
+- IDENTICAL: tool_choice_required (claude)
+- IDENTICAL: tool_choice_required (nonclaude)
+- IDENTICAL: tool_choice_specific (claude)
+- IDENTICAL: tool_choice_specific (nonclaude)
+- IDENTICAL: top_k_top_level (claude)
+- IDENTICAL: top_k_top_level (nonclaude)
+- IDENTICAL: reasoning_effort_with_max_tokens_nonclaude
+- IDENTICAL: response_format_json_object_nonclaude
+- IDENTICAL: response_format_json_schema_nonclaude
+- IDENTICAL: tools_verbatim_nonclaude
+- IDENTICAL: tools_roundtrip_drops_strict_and_schema_claude
+- FALLBACK (v1 raises UnsupportedParamsError): parallel_tool_calls (parallel_tool_calls)
+- FALLBACK (v1 raises raw KeyError, DB-R3): nonclaude_reasoning_effort_without_max_tokens_keyerror (reasoning_effort)
+- FALLBACK (v1 serves it): claude_reasoning_effort_thinking_machinery (reasoning_effort)
+- FALLBACK (v1 serves it): claude_response_format_json_object_silently_dropped (response_format)
+- FALLBACK (v1 serves it): claude_response_format_json_schema_machinery (response_format)
+- FALLBACK (v1 serves it): n_parse_level_unknown (not yet supported by translation v2: n)
+- FALLBACK (v1 serves it): user_silent_drop (user)
+
+## databricks: responses (v1's transform_response — content-list flatten, reasoning/summary -> reasoning_content + thinking_blocks, citations -> provider_specific_fields with supported_text, the databricks/{wire model} prefix; a missing required key is a RAW KeyError — vs v2 the parser + openai construction arm)
+
+- IDENTICAL: citations_lift_with_supported_text
+- IDENTICAL: content_list_flattens
+- IDENTICAL: finish_length
+- IDENTICAL: finish_unknown_maps_stop
+- IDENTICAL: plain
+- IDENTICAL: reasoning_summary_missing_signature
+- IDENTICAL: reasoning_summary_to_reasoning_content
+- IDENTICAL: tool_calls_verbatim
+- IDENTICAL: unknown_top_level_key_dropped
+- IDENTICAL: wire_model_prefixed
+- FALLBACK (v1 raises raw KeyError): choice_missing_finish_reason (finish_reason)
+- FALLBACK (v1 raises raw KeyError): choice_missing_message (message)
+- FALLBACK (v1 raises raw KeyError): missing_choices (choices)
+- FALLBACK (v1 raises raw KeyError): missing_created (created)
+- FALLBACK (v1 raises raw KeyError): missing_id (id)
+- FALLBACK (v1 raises raw KeyError): missing_usage (usage)
+
+## databricks: streams (v1 DatabricksChatResponseIterator — ONE body per wire chunk, the wire usage DROPPED ENTIRELY (DB-R5), the json_mode json_tool_call->content byte-reformat (DB-R8) — vs v2 the databricks chunk dialect; the non-JSON/empty line seam is a PINNED DIVERGENCE)
+
+- IDENTICAL: citations_lift
+- IDENTICAL: content
+- IDENTICAL: content_list_flattens
+- IDENTICAL: reasoning_summary
+- IDENTICAL: reasoning_summary_missing_signature
+- IDENTICAL: tool_call
+- IDENTICAL: tool_call_empty_args_blanked
+- IDENTICAL: usage_chunk_dropped
+- PINNED DIVERGENCE (v1 swallows, v2 loud): empty_line (empty)
+- PINNED DIVERGENCE (v1 swallows, v2 loud): non_json_line (non-JSON)
 
 ## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)
 

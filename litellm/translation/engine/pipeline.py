@@ -64,6 +64,11 @@ from ..providers.compat_httpx import SERIALIZERS as compat_httpx_serializers
 from ..providers.compat_httpx.response import ResponseStyle
 from ..providers.compat_sdk import GUARDS as compat_sdk_guards
 from ..providers.compat_sdk import SERIALIZERS as compat_sdk_serializers
+from ..providers.databricks import parse_response as databricks_parse_response
+from ..providers.databricks import serialize_request as databricks_serialize_request
+from ..providers.databricks import (
+    unsupported_request_shapes as databricks_unsupported_request_shapes,
+)
 from ..providers.deepseek import parse_response as deepseek_parse_response
 from ..providers.deepseek import serialize_request as deepseek_serialize_request
 from ..providers.deepseek import (
@@ -73,6 +78,15 @@ from ..providers.fireworks_ai import parse_response as fireworks_parse_response
 from ..providers.fireworks_ai import serialize_request as fireworks_serialize_request
 from ..providers.fireworks_ai import (
     unsupported_request_shapes as fireworks_unsupported_request_shapes,
+)
+from ..providers.github_copilot import (
+    parse_response as github_copilot_parse_response,
+)
+from ..providers.github_copilot import (
+    serialize_request as github_copilot_serialize_request,
+)
+from ..providers.github_copilot import (
+    unsupported_request_shapes as github_copilot_unsupported_request_shapes,
 )
 from ..providers.google_genai import parse_response as google_parse_response
 from ..providers.google_genai import (
@@ -103,6 +117,11 @@ from ..providers.mistral import parse_response as mistral_parse_response
 from ..providers.mistral import serialize_request as mistral_serialize_request
 from ..providers.mistral import (
     unsupported_request_shapes as mistral_unsupported_request_shapes,
+)
+from ..providers.ollama_chat import parse_response as ollama_chat_parse_response
+from ..providers.ollama_chat import serialize_request as ollama_chat_serialize_request
+from ..providers.ollama_chat import (
+    unsupported_request_shapes as ollama_chat_unsupported_request_shapes,
 )
 from ..providers.openai_compat import parse_response as openai_compat_parse_response
 from ..providers.openai_compat import (
@@ -190,6 +209,15 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         "watsonx": watsonx_serialize_request,
         "sagemaker_chat": sagemaker_chat_serialize_request,
         "groq": groq_serialize_request,
+        # wave-3: ollama_chat (the NDJSON /api/chat wire — its own body
+        # assembly over the shared message inverse).
+        "ollama_chat": ollama_chat_serialize_request,
+        # wave-3: github_copilot (SDK path — openai_compat assemble_body +
+        # the system->assistant rewrite gated by the ambient disable flag).
+        "github_copilot": github_copilot_serialize_request,
+        # wave-3: databricks (openai-shaped wire + the claude-substring fork
+        # over tools/response_format/reasoning_effort; its own body assembly).
+        "databricks": databricks_serialize_request,
     }
 )
 
@@ -259,6 +287,24 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # service_tier clamp (bare wire model; construction arm
         # "openai_like" — the direct ModelResponse(**json) style).
         "groq": groq_parse_response,
+        # wave-3: the ollama_chat parser builds the normalized body itself
+        # (ollama-native wire; the ollama_chat/{REQUEST model} prefix is
+        # parser scope) and rides it on ChatResponse.wire; seam construction
+        # arm "openai" (fresh-ModelResponse mutation, the cohere shape).
+        "ollama_chat": ollama_chat_parse_response,
+        # wave-3: github_copilot — the SDK-path LIVE normalizer is
+        # convert_to_model_response_object (the config's transform_response is
+        # dead there); the shared openai parser verbatim, with the
+        # github_copilot/{wire_model} re-prefix as the seam's preset arm
+        # (construction arm "openai", NOT parser scope — the compat_sdk shape).
+        "github_copilot": github_copilot_parse_response,
+        # wave-3: the databricks parser builds the normalized body itself
+        # (block-list flatten, reasoning/citation extraction, unknown-keys
+        # drop) with the databricks/{wire model} prefix INSIDE the parser, and
+        # rides it on ChatResponse.wire; seam construction arm "openai" (fresh
+        # ModelResponse mutation, the cohere/ollama_chat shape). A malformed
+        # body raises a raw KeyError in v1 — pinned as a fallback row.
+        "databricks": databricks_parse_response,
     }
 )
 
@@ -303,6 +349,21 @@ OWN_MODULE_RESPONSE_STYLES: Mapping[Provider, ResponseStyle] = MappingProxyType(
         "sagemaker_chat": "openai",
         "watsonx": "openai_like",
         "groq": "openai_like",
+        # wave-3: ollama_chat mutates a fresh ModelResponse (ambient
+        # chatcmpl id kept, created re-stamped to the same ambient value) —
+        # the cdr arm; wrong-arm pin in its response gate (the cohere
+        # no-id template: "openai_like" mints a fresh envelope id).
+        "ollama_chat": "openai",
+        # wave-3: github_copilot rides the SDK-path cdr normalizer with the
+        # seam re-prefix (the compat_sdk shape) — construction arm "openai";
+        # wrong-arm pin in its response gate (the cohere no-id template).
+        "github_copilot": "openai",
+        # wave-3: databricks mutates a fresh ModelResponse (the wire's own
+        # id/created copied, model = databricks/{wire}, unknown keys dropped)
+        # — the cdr arm; wrong-arm pin in its response gate (the fireworks/
+        # snowflake template: a verbatim wire index 5 the openai_like arm
+        # keeps and the cdr arm enumerate-rewrites to 0).
+        "databricks": "openai",
     }
 )
 
@@ -362,6 +423,20 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # dict path) over the groq line parser; seam construction arm
         # "openai_like".
         "groq": _OPENAI_DIALECT,
+        # wave-3: ollama_chat — openai outbound body (the parser rides the
+        # normalized body on wire); the chunk-fold dialect is "ollama_chat"
+        # (its own NDJSON arm — selected by the stream gates/future
+        # streaming seam, not this outbound-body table).
+        "ollama_chat": _OPENAI_DIALECT,
+        # wave-3: github_copilot — SDK path, default openai wrapper arm (no
+        # custom iterator exists in the provider; chunks ride the openai
+        # dialect exactly like the compat_sdk family).
+        "github_copilot": _OPENAI_DIALECT,
+        # wave-3: databricks — openai outbound body (the parser rides the
+        # normalized body on wire); the chunk-fold dialect is "databricks"
+        # (its own arm — usage DROPPED, json_mode byte-reformat — selected by
+        # the stream gates/future streaming seam, not this outbound-body table).
+        "databricks": _OPENAI_DIALECT,
     }
 )
 
@@ -412,6 +487,20 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         # groq: explicit stream:false + the shared openai guard (full name
         # fallback).
         "groq": groq_unsupported_request_shapes,
+        # wave-3: ollama_chat — the shared openai guard with
+        # skip_name_fallback (v1's munge whitelist drops every message
+        # name); NO stream:false arm (the body always carries stream).
+        "ollama_chat": ollama_chat_unsupported_request_shapes,
+        # wave-3: github_copilot — explicit stream:false (SDK serializes the
+        # key) + the shared openai guard with the FULL message-name fallback
+        # (the base transform forwards names; the system->assistant rewrite
+        # preserves them and the IR cannot carry name).
+        "github_copilot": github_copilot_unsupported_request_shapes,
+        # wave-3: databricks — the cache_control move arm + the whitespace-only
+        # content arm + the shared openai guard with name_fallback_user_only
+        # (v1 strips assistant/tool names == the IR drop, keeps user names);
+        # NO stream:false arm (the body always carries stream, default false).
+        "databricks": databricks_unsupported_request_shapes,
     }
 )
 
