@@ -1,9 +1,7 @@
-import json
 import os
 import sys
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -11,7 +9,6 @@ sys.path.insert(
 
 
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
-
 
 # --------------------------------------------------------------------------- #
 # get_bedrock_response_stream_shape lazy-load tests                           #
@@ -24,8 +21,10 @@ def _reset_bedrock_response_stream_shape_cache():
     import litellm.llms.bedrock.common_utils as mod
 
     mod.get_bedrock_response_stream_shape.cache_clear()
+    mod._get_local_model_cost_map.cache_clear()
     yield
     mod.get_bedrock_response_stream_shape.cache_clear()
+    mod._get_local_model_cost_map.cache_clear()
 
 
 def test_bedrock_response_stream_shape_lazy_loads_once():
@@ -222,3 +221,45 @@ def test_context_window_suffix_stripped_for_cost_lookup():
         get_bedrock_base_model("anthropic.claude-3-5-sonnet-20241022-v2:0:51k")
         == "anthropic.claude-3-5-sonnet-20241022-v2:0"
     )
+
+
+def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch):
+    import litellm.llms.bedrock.common_utils as mod
+
+    calls = []
+
+    def fake_get_model_info(model, custom_llm_provider=None):
+        calls.append((model, custom_llm_provider))
+        return {"bedrock_output_config_effort_ceiling": "max"}
+
+    monkeypatch.setattr(mod, "_get_model_info", fake_get_model_info)
+    output_config = {"effort": "xhigh"}
+
+    mod.normalize_bedrock_opus_output_config_effort(
+        model="custom-bedrock-alias-without-opus-pattern",
+        output_config=output_config,
+    )
+
+    assert output_config == {"effort": "max"}
+    assert calls == [("custom-bedrock-alias-without-opus-pattern", "bedrock")]
+
+
+@pytest.mark.parametrize(
+    "model,expected_ceiling",
+    [
+        ("anthropic.claude-opus-4-5-20251101-v1:0", "high"),
+        ("anthropic.claude-opus-4-6-v1", "max"),
+        ("anthropic.claude-opus-4-7", "xhigh"),
+        ("us.anthropic.claude-opus-4-5-20251101-v1:0", "high"),
+        ("us.anthropic.claude-opus-4-6-v1", "max"),
+        ("us.anthropic.claude-opus-4-7", "xhigh"),
+    ],
+)
+def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(
+    model, expected_ceiling
+):
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    model_info = GetModelCostMap.load_local_model_cost_map()[model]
+
+    assert model_info["bedrock_output_config_effort_ceiling"] == expected_ceiling

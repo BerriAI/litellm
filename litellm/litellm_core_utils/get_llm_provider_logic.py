@@ -1,4 +1,5 @@
-from typing import Optional, Tuple
+import re
+from typing import Optional, Tuple, cast
 from urllib.parse import urlparse
 
 import litellm
@@ -6,7 +7,7 @@ from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
-from ..types.router import LiteLLM_Params
+from ..types.router import GenericLiteLLMParams, LiteLLM_Params
 
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
@@ -69,6 +70,25 @@ def _is_azure_claude_model(model: str) -> bool:
         return "claude" in model_lower or model_lower.startswith("claude")
     except Exception:
         return False
+
+
+_CLAUDE_PATTERN = re.compile(r"^claude-[a-z]+-\d+-\d+(?:-\d{8})?$", re.IGNORECASE)
+
+
+def _matches_claude_model_pattern(model: str) -> bool:
+    """
+    Check if a model string matches the Claude model naming pattern.
+
+    Matches patterns like:
+    - claude-opus-4-7
+    - claude-sonnet-4-6
+    - claude-haiku-4-5
+    - claude-opus-5-1-20270101 (with optional date suffix)
+
+    This allows future Claude models to be routed to the Anthropic provider
+    without requiring updates to model_prices_and_context_window.json.
+    """
+    return _CLAUDE_PATTERN.match(model) is not None
 
 
 def handle_cohere_chat_model_custom_llm_provider(
@@ -139,7 +159,7 @@ def get_llm_provider(  # noqa: PLR0915
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
-    litellm_params: Optional[LiteLLM_Params] = None,
+    litellm_params: Optional[GenericLiteLLMParams] = None,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
@@ -158,7 +178,7 @@ def get_llm_provider(  # noqa: PLR0915
             )
 
         if litellm.LiteLLMProxyChatConfig._should_use_litellm_proxy_by_default(
-            litellm_params=litellm_params
+            litellm_params=cast(Optional[LiteLLM_Params], litellm_params)
         ):
             return litellm.LiteLLMProxyChatConfig.litellm_proxy_get_custom_llm_provider_info(
                 model=model, api_base=api_base, api_key=api_key
@@ -166,12 +186,10 @@ def get_llm_provider(  # noqa: PLR0915
 
         ## IF LITELLM PARAMS GIVEN ##
         if litellm_params:
-            assert (
-                custom_llm_provider is None and api_base is None and api_key is None
-            ), "Either pass in litellm_params or the custom_llm_provider/api_base/api_key. Otherwise, these values will be overriden."
-            custom_llm_provider = litellm_params.custom_llm_provider
-            api_base = litellm_params.api_base
-            api_key = litellm_params.api_key
+            if custom_llm_provider is None and api_base is None and api_key is None:
+                custom_llm_provider = litellm_params.custom_llm_provider
+                api_base = litellm_params.api_base
+                api_key = litellm_params.api_key
 
         dynamic_api_key = None
         # check if llm provider provided
@@ -215,6 +233,7 @@ def get_llm_provider(  # noqa: PLR0915
                 api_base=api_base,
                 api_key=api_key,
                 dynamic_api_key=dynamic_api_key,
+                litellm_params=litellm_params,
             )
 
         # check if llm provider part of model name
@@ -230,6 +249,7 @@ def get_llm_provider(  # noqa: PLR0915
                 api_base=api_base,
                 api_key=api_key,
                 dynamic_api_key=dynamic_api_key,
+                litellm_params=litellm_params,
             )
         elif model.split("/", 1)[0] in litellm.provider_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -353,6 +373,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.lambda.ai/v1":
                         custom_llm_provider = "lambda_ai"
                         dynamic_api_key = get_secret_str("LAMBDA_API_KEY")
+                    elif endpoint == "https://api.inceptionlabs.ai/v1":
+                        custom_llm_provider = "inception"
+                        dynamic_api_key = get_secret_str("INCEPTION_API_KEY")
                     elif endpoint == "https://api.hyperbolic.xyz/v1":
                         custom_llm_provider = "hyperbolic"
                         dynamic_api_key = get_secret_str("HYPERBOLIC_API_KEY")
@@ -398,6 +421,9 @@ def get_llm_provider(  # noqa: PLR0915
                 custom_llm_provider = "anthropic_text"
             else:
                 custom_llm_provider = "anthropic"
+        ## anthropic - pattern-based matching for future Claude models
+        elif _matches_claude_model_pattern(model):
+            custom_llm_provider = "anthropic"
         ## cohere
         elif model in litellm.cohere_models or model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"
@@ -544,6 +570,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
     api_base: Optional[str],
     api_key: Optional[str],
     dynamic_api_key: Optional[str],
+    litellm_params: Optional[GenericLiteLLMParams] = None,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Returns:
@@ -611,7 +638,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
-            api_base, api_key
+            api_base, api_key, litellm_params=litellm_params
         )
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
@@ -633,6 +660,11 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or get_secret_str("NVIDIA_RIVA_API_KEY")
             or get_secret_str("NVIDIA_NIM_API_KEY")
         )
+    elif custom_llm_provider == "soniox":
+        api_base = (
+            api_base or get_secret_str("SONIOX_API_BASE") or "https://api.soniox.com"
+        )
+        dynamic_api_key = api_key or get_secret_str("SONIOX_API_KEY")
     elif custom_llm_provider == "cerebras":
         api_base = (
             api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
@@ -929,6 +961,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.LambdaAIChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "inception":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.InceptionChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "hyperbolic":

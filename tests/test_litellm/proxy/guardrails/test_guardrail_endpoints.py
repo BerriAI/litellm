@@ -1149,6 +1149,13 @@ async def test_apply_guardrail_not_found(mocker):
         "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
     )
 
+    mock_proxy_logging = mocker.Mock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+
     # Create request
     request = ApplyGuardrailRequest(
         guardrail_name="non-existent-guardrail", text="Test input text"
@@ -1159,7 +1166,11 @@ async def test_apply_guardrail_not_found(mocker):
 
     # Call endpoint and expect ProxyException
     with pytest.raises(ProxyException) as exc_info:
-        await apply_guardrail(request=request, user_api_key_dict=mock_user_auth)
+        await apply_guardrail(
+            fastapi_request=mocker.Mock(),
+            request=request,
+            user_api_key_dict=mock_user_auth,
+        )
 
     # Verify error details
     assert str(exc_info.value.code) == "404"
@@ -1186,6 +1197,25 @@ async def test_apply_guardrail_execution_error(mocker):
         "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
     )
 
+    mock_logging_obj = mocker.Mock()
+    mock_logging_obj.async_failure_handler = AsyncMock()
+    mock_logging_obj.model_call_details = {}
+    mock_processor = mocker.Mock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=({"guardrail_name": "test-guardrail"}, mock_logging_obj)
+    )
+    mocker.patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+        return_value=mock_processor,
+    )
+    mock_proxy_logging = mocker.Mock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+    mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
+
     # Create request
     request = ApplyGuardrailRequest(
         guardrail_name="test-guardrail", text="Test input text with forbidden content"
@@ -1196,10 +1226,68 @@ async def test_apply_guardrail_execution_error(mocker):
 
     # Call endpoint and expect ProxyException
     with pytest.raises(ProxyException) as exc_info:
-        await apply_guardrail(request=request, user_api_key_dict=mock_user_auth)
+        await apply_guardrail(
+            fastapi_request=mocker.Mock(),
+            request=request,
+            user_api_key_dict=mock_user_auth,
+        )
 
     # Verify error is properly handled
     assert "Bedrock guardrail failed" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_invokes_logging_pipeline(mocker):
+    mock_guardrail = mocker.Mock()
+    mock_guardrail.apply_guardrail = AsyncMock(return_value={"texts": ["masked"]})
+
+    mock_registry = mocker.Mock()
+    mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
+    )
+
+    mock_logging_obj = mocker.Mock()
+    mock_logging_obj.async_success_handler = AsyncMock()
+    mock_logging_obj.model_call_details = {}
+    mock_processor = mocker.Mock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=({"guardrail_name": "test-guardrail"}, mock_logging_obj)
+    )
+    mocker.patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+        return_value=mock_processor,
+    )
+
+    mock_proxy_logging = mocker.Mock()
+    mock_proxy_logging.post_call_success_hook = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+    mock_executor = mocker.Mock()
+    mocker.patch(
+        "litellm.litellm_core_utils.thread_pool_executor.executor", mock_executor
+    )
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail", text="hello@example.com"
+    )
+    response = await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    assert response.response_text == "masked"
+    mock_processor.common_processing_pre_call_logic.assert_awaited_once()
+    mock_proxy_logging.post_call_success_hook.assert_awaited_once()
+    mock_logging_obj.async_success_handler.assert_awaited_once()
+    assert mock_logging_obj.call_type == "pass_through_endpoint"
+    mock_executor.submit.assert_called_once()
+    assert mock_logging_obj.async_success_handler.await_args.kwargs["result"] == {
+        "response": {"response_text": "masked"}
+    }
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,42 @@
+{
+  "title": "LiteLLM on GCP (Cloud Run)",
+  "name": "litellm-gcp",
+  "description": "Deploys the LiteLLM proxy on GCP: Cloud Run gateway/backend/UI, Cloud SQL with a read replica, Memorystore Redis, a GCS bucket, Secret Manager entries, and an external HTTPS load balancer. Takes ~20-25 minutes on the first apply.",
+  "duration": 25,
+  "documentation_link": "https://github.com/BerriAI/litellm/blob/main/terraform/litellm/gcp/README.md",
+  "collect_project": true,
+  "collect_region": true,
+  "region_type": "run",
+  "region_default": "us-central1",
+  "collect_zone": false,
+  "custom_settings": [
+    {
+      "name": "tenant",
+      "description": "Tenant slug used as the prefix for every GCP resource the stack creates (e.g. 'acme' produces 'acme-litellm-<env>-gateway'). 1-21 lowercase chars starting with a letter",
+      "default": "acme",
+      "validation": "^[a-z][a-z0-9-]{0,20}$"
+    },
+    {
+      "name": "env",
+      "description": "Environment suffix appended to every resource name (e.g. 'stage', 'prod', 'dev'). 1-9 lowercase chars starting with a letter",
+      "default": "stage",
+      "validation": "^[a-z][a-z0-9-]{0,8}$"
+    },
+    {
+      "name": "image_tag",
+      "description": "Tag for the four litellm-* images (gateway, backend, ui, migrations). Bump together when bumping LiteLLM",
+      "default": "v1.86.0-dev"
+    },
+    {
+      "name": "image_registry",
+      "description": "Artifact Registry path prefix for the four litellm-* images. Format: <region>-docker.pkg.dev/<project>/litellm/berriai, pointing at the remote repo you created above. Substitute BOTH REGION and PROJECT_ID in the default to match the AR repo you just created (REGION must match the region you picked above). The ghcr.io/berriai default in the module does NOT work; Cloud Run rejects ghcr.io URIs at apply time",
+      "default": "REGION-docker.pkg.dev/PROJECT_ID/litellm/berriai"
+    },
+    {
+      "name": "allow_plaintext_lb",
+      "description": "Skip TLS on the load balancer (HTTP-only). Set true for trial/dev. For production, leave false and add lb_domains to terraform.tfvars after the first apply",
+      "default": "true",
+      "options": ["true", "false"]
+    }
+  ]
+}

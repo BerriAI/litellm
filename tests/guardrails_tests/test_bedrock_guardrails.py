@@ -20,7 +20,7 @@ async def test_bedrock_guardrails_pii_masking():
     mock_user_api_key_dict = UserAPIKeyAuth()
 
     guardrail = BedrockGuardrail(
-        guardrailIdentifier="zgkmukebruil",
+        guardrailIdentifier="wf0hkdb5x07f",
         guardrailVersion="DRAFT",
     )
 
@@ -60,7 +60,7 @@ async def test_bedrock_guardrails_pii_masking_content_list():
     mock_user_api_key_dict = UserAPIKeyAuth()
 
     guardrail = BedrockGuardrail(
-        guardrailIdentifier="zgkmukebruil",
+        guardrailIdentifier="wf0hkdb5x07f",
         guardrailVersion="DRAFT",
     )
 
@@ -115,7 +115,7 @@ async def test_bedrock_guardrails_block_messages_api():
     mock_user_api_key_dict = UserAPIKeyAuth()
 
     guardrail = BedrockGuardrail(
-        guardrailIdentifier="4w3d1di3snt5",
+        guardrailIdentifier="ff6ujrregl1q",
         guardrailVersion="DRAFT",
     )
 
@@ -166,7 +166,7 @@ async def test_bedrock_guardrails_block_responses_api():
     mock_user_api_key_dict = UserAPIKeyAuth()
 
     guardrail = BedrockGuardrail(
-        guardrailIdentifier="4w3d1di3snt5",
+        guardrailIdentifier="ff6ujrregl1q",
         guardrailVersion="DRAFT",
     )
 
@@ -211,7 +211,7 @@ async def test_bedrock_guardrails_with_streaming():
         )
 
         guardrail = BedrockGuardrail(
-            guardrailIdentifier="4w3d1di3snt5",
+            guardrailIdentifier="ff6ujrregl1q",
             guardrailVersion="DRAFT",
             supported_event_hooks=[GuardrailEventHooks.post_call],
             guardrail_name="bedrock-post-guard",
@@ -255,7 +255,7 @@ async def test_bedrock_guardrails_with_streaming_no_violation():
     )
 
     guardrail = BedrockGuardrail(
-        guardrailIdentifier="4w3d1di3snt5",
+        guardrailIdentifier="ff6ujrregl1q",
         guardrailVersion="DRAFT",
         supported_event_hooks=[GuardrailEventHooks.post_call],
         guardrail_name="bedrock-post-guard",
@@ -299,7 +299,7 @@ async def test_bedrock_guardrails_streaming_request_body_mock():
 
     # Create the guardrail
     guardrail = BedrockGuardrail(
-        guardrailIdentifier="zgkmukebruil",
+        guardrailIdentifier="wf0hkdb5x07f",
         guardrailVersion="DRAFT",
         supported_event_hooks=[GuardrailEventHooks.post_call],
         guardrail_name="bedrock-post-guard",
@@ -382,7 +382,7 @@ async def test_bedrock_guardrail_aws_param_persistence():
     from litellm.types.guardrails import GuardrailEventHooks
 
     guardrail = BedrockGuardrail(
-        guardrailIdentifier="zgkmukebruil",
+        guardrailIdentifier="wf0hkdb5x07f",
         guardrailVersion="DRAFT",
         aws_access_key_id="test-access-key",
         aws_secret_access_key="test-secret-key",
@@ -1160,7 +1160,10 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
         output_call = bedrock_calls[0]
         assert output_call["source"] == "OUTPUT"
         assert output_call["response"] is not None
-        assert output_call["messages"] is None  # OUTPUT calls don't need messages
+        # OUTPUT forwards the request messages so contextual grounding can pull
+        # grounding_source/query blocks from them even on streamed responses. A
+        # plain-text (non-grounding) request still yields the single-block payload.
+        assert output_call["messages"] == request_data["messages"]
 
         # Verify that the response content was masked
         # The streaming chunks should now contain the masked content

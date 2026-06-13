@@ -259,6 +259,41 @@ class TestCacheSettingsManager:
         mock_proxy_config._init_cache.assert_not_called()
         mock_proxy_config.switch_on_llm_response_caching.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_init_cache_settings_in_db_retries_on_transport_error(self):
+        """`CacheSettingsManager.init_cache_settings_in_db` self-heals across one
+        ClientNotConnectedError via call_with_db_reconnect_retry."""
+        import prisma
+
+        invocations: list = []
+
+        async def _flaky_find_unique(**kwargs):
+            invocations.append(None)
+            if len(invocations) == 1:
+                raise prisma.errors.ClientNotConnectedError()
+            return None  # No config → function returns early after retry.
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(
+            side_effect=_flaky_find_unique
+        )
+        mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+        mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+        mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+        mock_proxy_config = MagicMock()
+
+        await CacheSettingsManager.init_cache_settings_in_db(
+            prisma_client=mock_prisma_client, proxy_config=mock_proxy_config
+        )
+
+        assert len(invocations) == 2
+        mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+        reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
+        assert (
+            reconnect_kwargs["reason"]
+            == "init_cache_settings_in_db_lookup_failure"
+        )
+
 
 # ── Audit-log emission for /cache/settings ────────────────────────────────────
 

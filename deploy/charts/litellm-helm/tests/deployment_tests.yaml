@@ -377,3 +377,28 @@ tests:
           content:
             name: sidecar-tpl
             image: "ghcr.io/berriai/litellm-database:test"
+  - it: should support tpl in podAnnotations
+    template: deployment.yaml
+    set:
+      image:
+        repository: ghcr.io/berriai/litellm-database
+        tag: test
+      # Mirrors the real-world scenario this feature unblocks:
+      # user disables the built-in ConfigMap (and its built-in checksum/config
+      # annotation) and re-implements checksum/config themselves via tpl.
+      proxyConfigMap:
+        create: false
+      podAnnotations:
+        checksum/config: "{{ .Values.image.tag }}"
+        example.com/some-key: "{{ .Values.image.repository }}"
+        example.com/literal: "plain-string-value"
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/config"]
+          value: "test"
+      - equal:
+          path: spec.template.metadata.annotations["example.com/some-key"]
+          value: "ghcr.io/berriai/litellm-database"
+      - equal:
+          path: spec.template.metadata.annotations["example.com/literal"]
+          value: "plain-string-value"

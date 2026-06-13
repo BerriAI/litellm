@@ -76,7 +76,7 @@ class TestAgentCoreAcceptHeader:
         with patch.object(client, "post", return_value=MagicMock()) as mock_post:
             try:
                 litellm.completion(
-                    model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/test_runtime",
+                    model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_runtime",
                     messages=[{"role": "user", "content": "test"}],
                     api_key="test-jwt-token",
                     client=client,
@@ -281,7 +281,7 @@ class TestAgentCoreStreamingJsonFallback:
 
         with patch.object(client, "post", return_value=mock_response):
             response = litellm.completion(
-                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/test_agent",
+                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                 messages=[{"role": "user", "content": "test"}],
                 stream=True,
                 client=client,
@@ -318,7 +318,7 @@ class TestAgentCoreStreamingJsonFallback:
             client, "post", new_callable=AsyncMock, return_value=mock_response
         ):
             response = await litellm.acompletion(
-                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/test_agent",
+                model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                 messages=[{"role": "user", "content": "test"}],
                 stream=True,
                 client=client,
@@ -353,7 +353,7 @@ class TestAgentCoreStreamingJsonFallback:
                 Exception, match="Failed to read/parse JSON response body"
             ):
                 litellm.completion(
-                    model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/test_agent",
+                    model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                     messages=[{"role": "user", "content": "test"}],
                     stream=True,
                     client=client,
@@ -383,7 +383,7 @@ class TestAgentCoreStreamingJsonFallback:
                 Exception, match="Failed to read/parse JSON response body"
             ):
                 await litellm.acompletion(
-                    model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/test_agent",
+                    model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                     messages=[{"role": "user", "content": "test"}],
                     stream=True,
                     client=client,
