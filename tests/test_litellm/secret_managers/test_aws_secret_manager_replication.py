@@ -209,6 +209,7 @@ def test_load_aws_secret_manager_passes_replica_regions():
     """load_aws_secret_manager must forward replica_regions from key_management_settings."""
     import litellm
 
+    original = litellm.secret_manager_client
     settings = MagicMock()
     settings.aws_region_name = "us-east-1"
     settings.aws_role_name = None
@@ -219,10 +220,13 @@ def test_load_aws_secret_manager_passes_replica_regions():
     settings.aws_sts_endpoint = None
     settings.replica_regions = ["us-west-2", "eu-west-1"]
 
-    AWSSecretsManagerV2.load_aws_secret_manager(
-        use_aws_secret_manager=True,
-        key_management_settings=settings,
-    )
+    try:
+        AWSSecretsManagerV2.load_aws_secret_manager(
+            use_aws_secret_manager=True,
+            key_management_settings=settings,
+        )
 
-    assert isinstance(litellm.secret_manager_client, AWSSecretsManagerV2)
-    assert litellm.secret_manager_client.replica_regions == ["us-west-2", "eu-west-1"]
+        assert isinstance(litellm.secret_manager_client, AWSSecretsManagerV2)
+        assert litellm.secret_manager_client.replica_regions == ["us-west-2", "eu-west-1"]
+    finally:
+        litellm.secret_manager_client = original
