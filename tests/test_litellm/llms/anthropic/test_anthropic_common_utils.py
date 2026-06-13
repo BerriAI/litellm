@@ -1525,3 +1525,83 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
+
+
+def test_normalize_mid_system_passthrough_on_supported_model():
+    from litellm.llms.anthropic.common_utils import (
+        normalize_system_messages_for_anthropic,
+    )
+
+    messages = [
+        {"role": "user", "content": "Hi"},
+        {"role": "system", "content": "Now be a pirate."},
+    ]
+    new_messages, hoisted = normalize_system_messages_for_anthropic(
+        messages, model="claude-opus-4-8", custom_llm_provider="anthropic"
+    )
+    # supported model: mid system stays in place, nothing hoisted
+    assert new_messages == messages
+    assert hoisted == []
+
+
+def test_normalize_mid_system_demoted_on_unsupported_model():
+    from litellm.llms.anthropic.common_utils import (
+        normalize_system_messages_for_anthropic,
+    )
+
+    messages = [
+        {"role": "user", "content": "Hi"},
+        {"role": "system", "content": "Now be a pirate."},
+    ]
+    new_messages, hoisted = normalize_system_messages_for_anthropic(
+        messages, model="claude-opus-4-7", custom_llm_provider="anthropic"
+    )
+    # unsupported model: mid system removed and hoisted
+    assert new_messages == [{"role": "user", "content": "Hi"}]
+    assert hoisted == [{"type": "text", "text": "Now be a pirate."}]
+
+
+def test_normalize_mid_system_cache_control_preserved_on_demote():
+    from litellm.llms.anthropic.common_utils import (
+        normalize_system_messages_for_anthropic,
+    )
+
+    messages = [
+        {"role": "user", "content": "Hi"},
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Be a pirate.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+    new_messages, hoisted = normalize_system_messages_for_anthropic(
+        messages, model="claude-opus-4-7", custom_llm_provider="anthropic"
+    )
+    assert hoisted == [
+        {
+            "type": "text",
+            "text": "Be a pirate.",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def test_normalize_empty_system_dropped():
+    from litellm.llms.anthropic.common_utils import (
+        normalize_system_messages_for_anthropic,
+    )
+
+    messages = [
+        {"role": "system", "content": "   "},
+        {"role": "user", "content": "Hi"},
+    ]
+    new_messages, hoisted = normalize_system_messages_for_anthropic(
+        messages, model="claude-opus-4-8", custom_llm_provider="anthropic"
+    )
+    assert new_messages == [{"role": "user", "content": "Hi"}]
+    assert hoisted == []
