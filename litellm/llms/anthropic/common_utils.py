@@ -293,7 +293,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         for prefix in (
             "bedrock/converse/",
             "bedrock/invoke/",
+            "bedrock/mantle/",
             "bedrock/",
+            "converse/",
+            "invoke/",
+            "mantle/",
             "vertex_ai/",
         ):
             if model.startswith(prefix):
@@ -945,7 +949,6 @@ def _system_content_to_blocks(content: Any) -> List[Dict[str, Any]]:
 def normalize_system_messages_for_anthropic(
     messages: List[Any],
     model: str,
-    custom_llm_provider: Optional[str],
 ) -> Tuple[List[Any], List[Dict[str, Any]]]:
     """Normalize ``role: "system"`` entries inside the Anthropic messages array.
 

@@ -1392,7 +1392,7 @@ def test_normalize_leading_system_is_hoisted():
         {"role": "user", "content": "How are you?"},
     ]
     new_messages, hoisted = normalize_system_messages_for_anthropic(
-        messages, model="claude-opus-4-8", custom_llm_provider="anthropic"
+        messages, model="claude-opus-4-8"
     )
     assert all(m["role"] != "system" for m in new_messages)
     assert new_messages == [{"role": "user", "content": "How are you?"}]
@@ -1411,7 +1411,7 @@ def test_normalize_multiple_leading_system_preserves_order():
         {"role": "user", "content": "Hi"},
     ]
     new_messages, hoisted = normalize_system_messages_for_anthropic(
-        messages, model="claude-opus-4-8", custom_llm_provider="anthropic"
+        messages, model="claude-opus-4-8"
     )
     assert new_messages == [{"role": "user", "content": "Hi"}]
     assert hoisted == [
@@ -1527,6 +1527,32 @@ class TestClaudeOpus48AdaptiveThinking:
         assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
 
 
+def test_supports_mid_conversation_system_resolves_through_route_prefixes(
+    local_model_cost_map,
+):
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    K = "supports_mid_conversation_system"
+    # all of these are the post-get_llm_provider shapes for opus-4-8 -> must be True
+    for m in [
+        "invoke/us.anthropic.claude-opus-4-8",
+        "converse/us.anthropic.claude-opus-4-8",
+        "mantle/anthropic.claude-opus-4-8",
+        "mantle/us.anthropic.claude-opus-4-8",
+        "us.anthropic.claude-opus-4-8",
+        "claude-opus-4-8",
+    ]:
+        assert AnthropicModelInfo._supports_model_capability(m, K) is True, m
+    # negatives -> must be False
+    for m in [
+        "invoke/us.anthropic.claude-opus-4-7",
+        "mantle/anthropic.claude-opus-4-7",
+        "claude-opus-4-7",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    ]:
+        assert AnthropicModelInfo._supports_model_capability(m, K) is False, m
+
+
 def test_normalize_mid_system_passthrough_on_supported_model(local_model_cost_map):
     from litellm.llms.anthropic.common_utils import (
         normalize_system_messages_for_anthropic,
@@ -1537,7 +1563,7 @@ def test_normalize_mid_system_passthrough_on_supported_model(local_model_cost_ma
         {"role": "system", "content": "Now be a pirate."},
     ]
     new_messages, hoisted = normalize_system_messages_for_anthropic(
-        messages, model="claude-opus-4-8", custom_llm_provider="anthropic"
+        messages, model="claude-opus-4-8"
     )
     # supported model: mid system stays in place, nothing hoisted
     assert new_messages == messages
@@ -1554,7 +1580,7 @@ def test_normalize_mid_system_demoted_on_unsupported_model():
         {"role": "system", "content": "Now be a pirate."},
     ]
     new_messages, hoisted = normalize_system_messages_for_anthropic(
-        messages, model="claude-opus-4-7", custom_llm_provider="anthropic"
+        messages, model="claude-opus-4-7"
     )
     # unsupported model: mid system removed and hoisted
     assert new_messages == [{"role": "user", "content": "Hi"}]
@@ -1580,7 +1606,7 @@ def test_normalize_mid_system_cache_control_preserved_on_demote():
         },
     ]
     new_messages, hoisted = normalize_system_messages_for_anthropic(
-        messages, model="claude-opus-4-7", custom_llm_provider="anthropic"
+        messages, model="claude-opus-4-7"
     )
     assert hoisted == [
         {
@@ -1601,7 +1627,7 @@ def test_normalize_empty_system_dropped():
         {"role": "user", "content": "Hi"},
     ]
     new_messages, hoisted = normalize_system_messages_for_anthropic(
-        messages, model="claude-opus-4-8", custom_llm_provider="anthropic"
+        messages, model="claude-opus-4-8"
     )
     assert new_messages == [{"role": "user", "content": "Hi"}]
     assert hoisted == []

@@ -429,7 +429,7 @@ def anthropic_messages_handler(
     )
 
     messages, _hoisted_system_blocks = normalize_system_messages_for_anthropic(
-        messages, model=model, custom_llm_provider=custom_llm_provider
+        messages, model=model
     )
     if _hoisted_system_blocks:
         if system is None:

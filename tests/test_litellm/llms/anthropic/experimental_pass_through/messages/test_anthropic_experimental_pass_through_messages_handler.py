@@ -758,3 +758,17 @@ def test_handler_passes_through_mid_system_on_supported_model_for_invoke(
     )
     assert any(m.get("role") == "system" for m in msgs)
     assert not opt.get("system")
+
+
+def test_handler_passes_through_mid_system_on_supported_model_for_mantle(
+    local_model_cost_map,
+):
+    opt, msgs = _capture_base_llm_call(
+        "bedrock/mantle/anthropic.claude-opus-4-8",
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "system", "content": "Be a pirate."},
+        ],
+    )
+    assert any(m.get("role") == "system" for m in msgs)
+    assert not opt.get("system")
