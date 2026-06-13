@@ -122,6 +122,34 @@ async def test_blocks_injection_in_tool_definition():
         await g.apply_guardrail(inputs, {}, "request")
 
 
+@pytest.mark.asyncio
+async def test_blocks_injection_in_legacy_functions():
+    """Injection in the legacy OpenAI `functions` request field must not bypass."""
+    g = _make()
+    request_data = {
+        "functions": [{"name": "lookup", "description": ATTACK, "parameters": {}}]
+    }
+    with pytest.raises(HTTPException):
+        await g.apply_guardrail({"texts": [BENIGN]}, request_data, "request")
+
+
+def test_get_guard_lazy_loads_and_caches(monkeypatch: pytest.MonkeyPatch):
+    """_get_guard imports the optional package, builds Guard(preset=...), and caches."""
+    import sys
+
+    fake_module = MagicMock()
+    fake_guard = MagicMock()
+    fake_module.Guard.return_value = fake_guard
+    monkeypatch.setitem(sys.modules, "bastion_prompt_protection", fake_module)
+
+    g = BastionGuardrail(guardrail_name="bastion", preset="tiny")
+    assert g._guard is None
+    assert g._get_guard() is fake_guard
+    fake_module.Guard.assert_called_once_with(preset="tiny")
+    assert g._get_guard() is fake_guard  # cached — no second construction
+    fake_module.Guard.assert_called_once()
+
+
 def test_initialize_guardrail_registers_callback(monkeypatch: pytest.MonkeyPatch):
     """initialize_guardrail builds the instance and registers it as a callback."""
     import litellm

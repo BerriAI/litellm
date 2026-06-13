@@ -54,10 +54,13 @@ def _function_texts(fn: object, fields: tuple[str, ...]) -> list[str]:
     return out
 
 
-def _collect_screenable_texts(inputs: GenericGuardrailAPIInputs) -> list[str]:
-    """Everything to screen: message text **plus** tool-call arguments and tool
-    definitions. Injection can hide in a tool-call's ``arguments`` or a tool's
-    ``description`` / ``parameters`` — not just message content — so those are
+def _collect_screenable_texts(
+    inputs: GenericGuardrailAPIInputs, request_data: dict
+) -> list[str]:
+    """Everything to screen: message text **plus** tool-call arguments, tool
+    definitions, and the legacy OpenAI ``functions`` field. Injection can hide in
+    a tool-call's ``arguments``, a tool's ``description`` / ``parameters``, or a
+    legacy function definition — not just message content — so those are
     serialized into the screened set rather than passing through unchecked.
     """
     texts: list[str] = [t for t in (inputs.get("texts") or []) if isinstance(t, str)]
@@ -77,6 +80,12 @@ def _collect_screenable_texts(inputs: GenericGuardrailAPIInputs) -> list[str]:
         )
         if call_fn is not None:
             texts.extend(_function_texts(call_fn, ("name", "arguments")))
+    # Legacy OpenAI `functions` request field (deprecated but still forwarded).
+    legacy_functions = (
+        request_data.get("functions") if isinstance(request_data, dict) else None
+    )
+    for func in legacy_functions or []:
+        texts.extend(_function_texts(func, ("name", "description", "parameters")))
     return texts
 
 
@@ -144,7 +153,7 @@ class BastionGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        texts = _collect_screenable_texts(inputs)
+        texts = _collect_screenable_texts(inputs, request_data)
         if not texts:
             return inputs
 
