@@ -215,9 +215,9 @@ curl -X POST http://localhost:4000/v1/chat/completions \
 ## How It Works
 
 1. When a request comes in, LiteLLM generates embeddings for the input message
-2. It compares these embeddings against the utterances defined in your routes
-3. If a route's similarity score exceeds the threshold, the request is routed to that model
-4. If no route matches, the request goes to the default model
+2. It compares these embeddings against **all** utterances defined across **all** your routes simultaneously
+3. It identifies the route with the **highest similarity score**. If that score exceeds the route's defined threshold, the request is routed to that model. *(Because the router selects the global maximum score rather than stopping at the first match, the order of routes in your configuration does not affect which route is selected.)*
+4. If no route's maximum score meets its threshold, the request goes to the default model
 
 ---
 
