@@ -12011,3 +12011,119 @@ async def test_info_key_fn_includes_model_max_budget_usage(monkeypatch):
     )
 
 
+@pytest.mark.asyncio
+async def test_info_key_fn_no_model_max_budget_skips_usage(monkeypatch):
+    """Keys with no model_max_budget should not include model_max_budget_usage."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    test_key_token = "hashed_token_no_budget"
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = test_key_token
+    mock_key_info.object_permission_id = None
+    mock_key_info.user_id = "user-y"
+    mock_key_info.team_id = None
+    mock_key_info.litellm_budget_table = None
+    mock_key_info.model_dump.return_value = {
+        "token": test_key_token,
+        "model_max_budget": {},
+        "user_id": "user-y",
+        "team_id": None,
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+
+    mock_limiter = MagicMock()
+    mock_limiter.get_current_period_spend = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter", mock_limiter
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-test-no-budget",
+    )
+
+    result = await info_key_fn(
+        key="sk-test-no-budget",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert "model_max_budget_usage" not in result["info"]
+    mock_limiter.get_current_period_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_v2_includes_model_max_budget_usage(monkeypatch):
+    """/v2/key/info should include model_max_budget_usage for keys with per-model budgets."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import KeyRequest, LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        info_key_fn_v2,
+    )
+
+    test_key_token = "hashed_token_v2_test"
+    model_max_budget = {"gpt-4o": {"budget_limit": 1.00, "time_period": "7d"}}
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_key = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key.token = test_key_token
+    mock_key.user_id = "user-v2"
+    mock_key.team_id = None
+    mock_key.model_dump.return_value = {
+        "token": test_key_token,
+        "model_max_budget": model_max_budget,
+        "user_id": "user-v2",
+        "team_id": None,
+    }
+    mock_key.dict.return_value = mock_key.model_dump.return_value
+
+    mock_prisma_client.get_data = AsyncMock(return_value=[mock_key])
+
+    mock_limiter = MagicMock()
+    mock_limiter.get_current_period_spend = AsyncMock(
+        return_value={
+            "gpt-4o": {"current_spend": 0.55, "budget_limit": 1.00, "time_period": "7d"}
+        }
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter", mock_limiter
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin",
+    )
+
+    result = await info_key_fn_v2(
+        data=KeyRequest(keys=[test_key_token]),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert len(result["info"]) == 1
+    key_info = result["info"][0]
+    assert "model_max_budget_usage" in key_info
+    usage = key_info["model_max_budget_usage"]
+    assert usage["gpt-4o"]["current_spend"] == 0.55
+    assert usage["gpt-4o"]["budget_limit"] == 1.00
+    assert usage["gpt-4o"]["time_period"] == "7d"
+    mock_limiter.get_current_period_spend.assert_awaited_once_with(
+        user_api_key_hash=test_key_token,
+        model_max_budget=model_max_budget,
+    )
+
+
