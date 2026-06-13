@@ -47,13 +47,22 @@ translation/
 │       │                #   seen-tool-calls stop->tool_calls rewrite ride
 │       │                #   StreamState); the ollama_chat dialect splits one
 │       │                #   NDJSON wire chunk into delta + finish + usage
-│       │                #   bodies (started/finished_reasoning ride
-│       │                #   StreamState; the pure body builders live in
-│       │                #   ollama_fold.py to keep this file under the cap)
-│       └── ollama_fold.py # the ollama NDJSON wire fold: the two-flag
-│                        #   think-tag machine (only the tag-bearing chunk is
-│                        #   reasoning — v1's truncation bug) + the delta/
-│                        #   finish/usage body builders, pure over primitives
+│       │                #   bodies, the databricks dialect folds ONE chunk ->
+│       │                #   ONE body (usage dropped, DB-R5) — both keep their
+│       │                #   pure body builders in *_fold.py siblings.
+│       │                #   HEADROOM: this file is at 711/720 — the NEXT
+│       │                #   inbound dialect arm MUST extract its fold to a new
+│       │                #   sibling *_fold.py (the ollama/databricks
+│       │                #   precedent), never grow stream.py past the cap
+│       ├── ollama_fold.py # the ollama NDJSON wire fold: the two-flag
+│       │                #   think-tag machine (only the tag-bearing chunk is
+│       │                #   reasoning — v1's truncation bug) + the delta/
+│       │                #   finish/usage body builders, pure over primitives
+│       └── databricks_fold.py # the databricks chunk fold: content-list
+│                        #   flatten, reasoning/summary -> reasoning_content +
+│                        #   thinking_blocks, citations lift, {} -> "" args,
+│                        #   the stateful json_mode json_tool_call -> content
+│                        #   byte-reformat (DB-R8); usage never carried (DB-R5)
 ├── providers/      # one subpackage per wire format. Pure, no I/O
 │   ├── anthropic/
 │   │   ├── serialize.py # body assembly in v1 transform_request order

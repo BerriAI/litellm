@@ -131,7 +131,15 @@ STREAMS = {
         _chunk({}, finish="tool_calls"),
     ],
     "usage_chunk_dropped": [
-        _chunk({"role": "assistant", "content": "x"}),
+        # usage rides BOTH a content-bearing chunk AND the finish chunk: v1
+        # drops it from EVERY emitted body (DB-R5), so a usage-leak regression
+        # at either fold layer (parse_event or _step_databricks) must surface
+        # here. A usage-bearing CONTENT chunk is the discriminator the
+        # finish-only case missed (critic-wave3 MAJOR-1).
+        {
+            **_chunk({"role": "assistant", "content": "x"}),
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        },
         {
             **_chunk({}, finish="stop"),
             "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
@@ -230,20 +238,28 @@ def test_v2_stream_delta_matches_v1(name: str) -> None:
 @pytest.mark.parametrize("name", sorted(STREAMS))
 def test_one_body_per_wire_chunk_no_usage_tail(name: str) -> None:
     """DB-R5: v1 yields exactly one out-chunk per wire chunk and NEVER attaches
-    usage (even the usage-bearing wire chunk produces a usage-less body)."""
+    usage. Assert the body carries NO usage KEY (not merely a None value), so a
+    regression that copies the wire usage dict into the body is caught even
+    when the source chunk's usage is a real dict."""
     events = STREAMS[name]
     v2 = _v2_bodies(events)
     assert len(v2) == len(events)
     for body in v2:
-        assert body.get("usage") is None
+        assert "usage" not in body or body["usage"] is None
 
 
 def test_usage_is_dropped_entirely_both_sides() -> None:
+    """The usage_chunk_dropped stream carries usage on a CONTENT chunk AND the
+    finish chunk; v1 drops it from every emitted body and so must v2. The
+    content-chunk usage is the discriminator: a fold that copied
+    payload usage would surface a non-None usage dict here (critic-wave3
+    MAJOR-1 — mutation-verified to flip)."""
     events = STREAMS["usage_chunk_dropped"]
     v1 = _v1_chunks(events)
     v2 = _v2_bodies(events)
     for v1_chunk in v1:
-        assert getattr(v1_chunk, "usage", None) is None or v1_chunk.get("usage") is None
+        assert getattr(v1_chunk, "usage", None) is None
+    assert any(event.get("usage") for event in events), "corpus must carry wire usage"
     for body in v2:
         assert body.get("usage") is None
 
