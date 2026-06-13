@@ -2,6 +2,7 @@ import inspect
 import os
 import sys
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel
@@ -276,7 +277,7 @@ class TestOllamaChatConfigResponseFormat:
         assert result["messages"][0]["images"][1] == "image2data..."
 
     def test_transform_request_image_url_as_string(self):
-        """Test handling of image_url as direct string (edge case)"""
+        """Remote image_url strings are downloaded and base64-encoded for Ollama (#30313)."""
         config = OllamaChatConfig()
 
         # Test message with image_url as string (edge case from extract_images_from_message)
@@ -296,18 +297,22 @@ class TestOllamaChatConfigResponseFormat:
             ],
         )
 
-        result = config.transform_request(
-            model="llama2",
-            messages=messages,
-            optional_params={},
-            litellm_params={},
-            headers={},
-        )
+        with patch(
+            "litellm.litellm_core_utils.prompt_templates.image_handling.convert_url_to_base64",
+            return_value="data:image/jpeg;base64,ZmV0Y2hlZA==",
+        ):
+            result = config.transform_request(
+                model="llama2",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
 
-        # Verify image URL was extracted
+        # Verify the remote image URL was fetched and encoded to pure base64
         assert "images" in result["messages"][0]
         assert len(result["messages"][0]["images"]) == 1
-        assert result["messages"][0]["images"][0] == "https://example.com/image.jpg"
+        assert result["messages"][0]["images"][0] == "ZmV0Y2hlZA=="
 
     def test_transform_request_no_images_no_images_key(self):
         """Test that messages without images don't have images key"""
