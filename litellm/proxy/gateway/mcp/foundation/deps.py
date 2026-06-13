@@ -53,7 +53,7 @@ class FakeClock:
         return FakeClock(_now=self._now + timedelta(seconds=seconds))
 
 
-@dataclass(frozen=True)
+@dataclass
 class FakeCache:
     _store: dict[str, str] = field(default_factory=dict[str, str])
 
