@@ -16,6 +16,7 @@ from tests.test_litellm.proxy.guardrails.guardrail_hooks._cisco_ai_defense_test_
     _mcp_result_text,
     _mock_inspect_response,
     _patch_inspection_post,
+    _redact_response,
     _safe_response,
     _violation_response,
     datetime,
@@ -500,6 +501,68 @@ class TestCiscoAIDefenseRedactListShape:
             structured_content = dict(content)["structuredContent"]
             assert structured_content == {"result": "[REDACTED tool output]"}
             assert "123-45-6789" not in json.dumps(structured_content)
+
+
+class TestCiscoAIDefenseMcpInputRedactionFallback:
+    """``sanitized_text``-only redaction of structured MCP arguments."""
+
+    @pytest.mark.asyncio
+    async def test_single_string_arg_is_rewritten(self):
+        g = _make_guardrail(inspection_type="mcp", event_hook="pre_mcp_call")
+        data = _mcp_request(
+            name="search", args={"query": "my SSN is 123-45-6789", "limit": 10}
+        )
+        cisco = _redact_response(sanitized_text="my SSN is [REDACTED]", url=MCP_URL)
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco)):
+            result = await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type="mcp_call",
+            )
+        assert result == data
+        assert data["mcp_arguments"]["query"] == "my SSN is [REDACTED]"
+        assert data["mcp_arguments"]["limit"] == 10
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_multi_string_args_block_instead_of_leaking(self):
+        g = _make_guardrail(
+            inspection_type="mcp",
+            event_hook="pre_mcp_call",
+            on_flagged_action="block",
+        )
+        original = {"query": "PII data", "filter": "sensitive term", "limit": 10}
+        data = _mcp_request(name="search", args=dict(original))
+        cisco = _redact_response(sanitized_text="[REDACTED]", url=MCP_URL)
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco)):
+            with pytest.raises(HTTPException):
+                await g.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=DualCache(),
+                    data=data,
+                    call_type="mcp_call",
+                )
+        assert data["mcp_arguments"] == original
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_multi_string_args_not_partially_redacted_in_monitor(self):
+        g = _make_guardrail(
+            inspection_type="mcp",
+            event_hook="pre_mcp_call",
+            on_flagged_action="monitor",
+        )
+        original = {"query": "PII data", "filter": "sensitive term"}
+        data = _mcp_request(name="search", args=dict(original))
+        cisco = _redact_response(sanitized_text="[REDACTED]", url=MCP_URL)
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco)):
+            result = await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type="mcp_call",
+            )
+        assert result == data
+        assert data["mcp_arguments"] == original
 
 
 class TestCiscoAIDefenseMCPBlockingContract:

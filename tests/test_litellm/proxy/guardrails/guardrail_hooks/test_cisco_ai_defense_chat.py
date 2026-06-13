@@ -2452,6 +2452,8 @@ class TestCiscoAIDefenseActionOnlyVerdict:
             ("Allow", "allow"),
             ("redacted", "redact"),
             ("safe", "allow"),
+            ("quarantine", "block"),
+            ("some_future_verdict", "block"),
         ],
     )
     def test_action_normalization(self, action, expected_action):

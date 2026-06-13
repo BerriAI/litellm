@@ -1089,16 +1089,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         sanitized_text = self._extract_sanitized_text(verdict)
         sanitized_messages = self._extract_sanitized_messages(verdict)
         sanitized_mcp_arguments = self._extract_sanitized_mcp_arguments(verdict)
-        self._stash_verdict_on_request(
-            request_data=request_data,
-            surface=surface,
-            direction=direction,
-            is_safe=is_safe,
-            classifications=classifications,
-            severity=severity,
-            rules=rules,
-            event_id=event_id,
-        )
 
         action_raw = verdict.get("action")
         if isinstance(action_raw, str) and action_raw.strip():
@@ -1405,7 +1395,11 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             return _ACTION_REDACT
         if normalized in {"allow", "allowed", "safe", "ok"}:
             return _ACTION_ALLOW
-        return normalized
+        verbose_proxy_logger.warning(
+            "Cisco AI Defense guardrail: unrecognized action %r treated as block",
+            raw_action,
+        )
+        return _ACTION_BLOCK
 
     @staticmethod
     def _extract_sanitized_text(
@@ -1515,16 +1509,22 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 request_data["arguments"] = sanitized_mcp_arguments
             return True
         if sanitized_text:
+            applied = False
             for args_path in (
                 request_data.get("mcp_arguments"),
                 request_data.get("arguments"),
                 (request_data.get("params") or {}).get("arguments"),
             ):
-                if isinstance(args_path, dict):
-                    for key, value in list(args_path.items()):
-                        if isinstance(value, str):
-                            args_path[key] = sanitized_text
-                            return True
+                if not isinstance(args_path, dict):
+                    continue
+                string_keys = [
+                    key for key, value in args_path.items() if isinstance(value, str)
+                ]
+                if len(string_keys) != 1:
+                    continue
+                args_path[string_keys[0]] = sanitized_text
+                applied = True
+            return applied
         return False
 
     def _redact_chat_input(
