@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Tuple
+import asyncio
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pytest
-from fastapi import FastAPI, Security
+from fastapi import FastAPI, Request, Security
+from fastapi.security import SecurityScopes
 from fastapi.testclient import TestClient
 
 from litellm.proxy.auth_v2.authenticators import (
     APIKeyAuthenticator,
+    Carrier,
+    CredentialLocation,
     HttpAuthenticator,
     JWTVerifier,
 )
@@ -16,10 +20,16 @@ from litellm.proxy.auth_v2.config import (
     AuthConfig,
     HttpBasicConfig,
 )
-from litellm.proxy.auth_v2 import OIDCProviderConfig
-from litellm.proxy.auth_v2.models import AuthMethod, Principal, PrincipalType
-from litellm.proxy.auth_v2.rbac import RBACEngine, Role
-from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
+from litellm.proxy.auth_v2 import OIDCProviderConfig, errors
+from litellm.proxy.auth_v2.models import (
+    AuthMethod,
+    Credential,
+    Principal,
+    PrincipalType,
+    SecuritySchemeType,
+)
+from litellm.proxy.auth_v2.authorization import RBACEngine, Role
+from litellm.proxy.auth_v2.resolvers.utils import hash_api_key
 from litellm.proxy.auth_v2.security import AuthSecurity
 
 from auth_v2_helpers import TEST_AUDIENCE, TEST_ISSUER, FakeJwksClient
@@ -41,9 +51,37 @@ def _principal(subject: str, *, scopes=None, roles=None) -> Principal:
     )
 
 
+class _FakeResolver:
+    """Resolver double for the security-layer tests.
+
+    These tests inject fully-formed Principals (arbitrary scopes/roles) keyed by
+    API key, which the production DbIdentityStore cannot express; DbIdentityStore
+    has its own coverage in test_resolver.py. An API-key credential is looked up
+    by its raw-key claim; anything else echoes the credential's subject. Returns a
+    fresh Principal per the IdentityResolver contract.
+    """
+
+    def __init__(self, by_key: Dict[str, Principal]) -> None:
+        self._by_key = by_key
+
+    async def resolve(self, credential: Credential) -> Principal:
+        raw = credential.claims.get("_raw_api_key")
+        if isinstance(raw, str):
+            principal = self._by_key.get(hash_api_key(raw))
+            if principal is None:
+                raise errors.invalid_token()
+            return principal.model_copy()
+        return Principal(
+            principal_type=PrincipalType.HUMAN,
+            subject=credential.subject,
+            auth_method=credential.method,
+            scopes=list(credential.scopes),
+        )
+
+
 def _build_app(
     public_key: Any, *, rbac: RBACEngine = None
-) -> Tuple[FastAPI, InMemoryIdentityStore]:
+) -> Tuple[FastAPI, _FakeResolver]:
     verifier = JWTVerifier(
         OIDCProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
         jwks_client=FakeJwksClient(public_key),
@@ -52,25 +90,25 @@ def _build_app(
         APIKeyAuthenticator(ApiKeySchemeConfig()),
         HttpAuthenticator(HttpBasicConfig(), [verifier]),
     ]
-    resolver = InMemoryIdentityStore(
-        api_keys={
-            _hash_api_key(ADMIN_KEY): _principal(
+    resolver = _FakeResolver(
+        {
+            hash_api_key(ADMIN_KEY): _principal(
                 "admin-principal", scopes=["models:read"], roles=[Role.ORG_ADMIN]
             ),
-            _hash_api_key(READER_KEY): _principal(
+            hash_api_key(READER_KEY): _principal(
                 "reader-principal", scopes=["models:read"]
             ),
-            _hash_api_key(NOSCOPE_KEY): _principal("noscope-principal"),
-            _hash_api_key(PLATFORM_ADMIN_KEY): _principal(
+            hash_api_key(NOSCOPE_KEY): _principal("noscope-principal"),
+            hash_api_key(PLATFORM_ADMIN_KEY): _principal(
                 "platform-admin-principal", roles=[Role.PLATFORM_ADMIN]
             ),
-            _hash_api_key(PLATFORM_VIEWER_KEY): _principal(
+            hash_api_key(PLATFORM_VIEWER_KEY): _principal(
                 "platform-viewer-principal", roles=[Role.PLATFORM_VIEWER]
             ),
         }
     )
     auth = AuthSecurity(
-        AuthConfig(), resolver, rbac=rbac, authenticators=authenticators
+        AuthConfig(), resolver, authorizer=rbac, authenticators=authenticators
     )
 
     app = FastAPI()
@@ -273,3 +311,165 @@ def test_injected_rbac_engine_overrides_default_policy(rsa_keypair, tmp_path):
         ).status_code
         == 403
     )
+
+
+# --------------------------------------------------------------------------- #
+# Carrier dispatch: only authenticators whose credential is present are run
+# --------------------------------------------------------------------------- #
+
+
+def _request(headers=None, cookies=None, tls=None) -> Request:
+    raw = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
+    if cookies:
+        cookie = "; ".join(f"{name}={value}" for name, value in cookies.items())
+        raw.append((b"cookie", cookie.encode()))
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "query_string": b"",
+        "headers": raw,
+        "client": ("1.2.3.4", 0),
+    }
+    if tls is not None:
+        scope["extensions"] = {"tls": tls}
+    return Request(scope)
+
+
+class _SpyAuthenticator:
+    def __init__(self, carriers, subject):
+        self._carriers = tuple(carriers)
+        self._subject = subject
+        self.calls = 0
+
+    async def authenticate(self, request: Request) -> Optional[Credential]:
+        self.calls += 1
+        return Credential(
+            scheme=SecuritySchemeType.API_KEY,
+            method=AuthMethod.API_KEY,
+            subject=self._subject,
+        )
+
+    def carriers(self) -> Sequence[Carrier]:
+        return self._carriers
+
+    def challenge(self) -> str:
+        return "spy"
+
+
+def _auth(authenticators: List[_SpyAuthenticator]) -> AuthSecurity:
+    return AuthSecurity(AuthConfig(), _FakeResolver({}), authenticators=authenticators)
+
+
+_BEARER = Carrier(CredentialLocation.AUTHORIZATION_SCHEME, "bearer")
+_API_HEADER = Carrier(CredentialLocation.HEADER, "x-litellm-api-key")
+_COOKIE = Carrier(CredentialLocation.COOKIE, "litellm_session")
+
+
+def test_dispatch_runs_only_the_matching_authenticator():
+    # the bearer authenticator is earlier in order, but the request carries only
+    # an api key: dispatch must select the api-key authenticator and never touch
+    # the bearer one
+    bearer = _SpyAuthenticator([_BEARER], "bearer-subject")
+    api_key = _SpyAuthenticator([_API_HEADER], "api-subject")
+    auth = _auth([bearer, api_key])
+
+    request = _request(headers={"x-litellm-api-key": "sk-x"})
+    principal = asyncio.run(auth.principal(SecurityScopes(scopes=[]), request))
+
+    assert principal.subject == "api-subject"
+    assert api_key.calls == 1
+    assert bearer.calls == 0
+
+
+def test_first_claiming_authenticator_owns_a_shared_carrier():
+    # bearer is read by several schemes; the earliest in scheme_order owns it and
+    # is the only one ever consulted
+    first = _SpyAuthenticator([_BEARER], "first")
+    second = _SpyAuthenticator([_BEARER], "second")
+    auth = _auth([first, second])
+
+    request = _request(headers={"authorization": "Bearer abc"})
+    principal = asyncio.run(auth.principal(SecurityScopes(scopes=[]), request))
+
+    assert principal.subject == "first"
+    assert first.calls == 1
+    assert second.calls == 0
+
+
+def test_untrusted_forwarded_cert_does_not_shadow_session():
+    # a spoofed client-cert header from an untrusted peer must not be selected;
+    # dispatch falls through to the valid session cookie
+    cert = _SpyAuthenticator(
+        [
+            Carrier(
+                CredentialLocation.CLIENT_CERTIFICATE,
+                "x-forwarded-client-cert",
+                ("9.9.9.9/32",),
+            )
+        ],
+        "cert",
+    )
+    session = _SpyAuthenticator([_COOKIE], "session")
+    auth = _auth([cert, session])
+
+    request = _request(
+        headers={"x-forwarded-client-cert": "CN=svc"},
+        cookies={"litellm_session": "sid"},
+    )
+    principal = asyncio.run(auth.principal(SecurityScopes(scopes=[]), request))
+
+    assert principal.subject == "session"
+    assert cert.calls == 0
+    assert session.calls == 1
+
+
+def test_no_matching_carrier_is_unauthenticated():
+    api_key = _SpyAuthenticator([_API_HEADER], "api-subject")
+    auth = _auth([api_key])
+
+    with pytest.raises(Exception) as exc_info:
+        asyncio.run(auth.principal(SecurityScopes(scopes=[]), _request()))
+
+    assert getattr(exc_info.value, "status_code", None) == 401
+    assert api_key.calls == 0
+
+
+def test_authorization_scheme_carrier_discriminates_bearer_from_basic():
+    request = _request(headers={"authorization": "Bearer abc"})
+    assert _BEARER.present(request) is True
+    assert (
+        Carrier(CredentialLocation.AUTHORIZATION_SCHEME, "basic").present(request)
+        is False
+    )
+
+
+def test_header_carrier_requires_nonempty_value():
+    assert _API_HEADER.present(_request(headers={"x-litellm-api-key": "sk"})) is True
+    assert _API_HEADER.present(_request()) is False
+
+
+def test_cookie_carrier_detects_named_cookie():
+    assert _COOKIE.present(_request(cookies={"litellm_session": "sid"})) is True
+    assert _COOKIE.present(_request(cookies={"other": "x"})) is False
+
+
+def test_client_certificate_carrier_is_trusted_proxy_aware():
+    direct = Carrier(CredentialLocation.CLIENT_CERTIFICATE, "x-forwarded-client-cert")
+    assert direct.present(_request(tls={"client_cert_name": "CN=svc"})) is True
+
+    # request client ip is 1.2.3.4; only a matching trusted CIDR accepts the header
+    trusted = Carrier(
+        CredentialLocation.CLIENT_CERTIFICATE,
+        "x-forwarded-client-cert",
+        ("1.2.3.4/32",),
+    )
+    untrusted = Carrier(
+        CredentialLocation.CLIENT_CERTIFICATE,
+        "x-forwarded-client-cert",
+        ("9.9.9.9/32",),
+    )
+    header = {"x-forwarded-client-cert": "CN=svc"}
+    assert trusted.present(_request(headers=header)) is True
+    assert untrusted.present(_request(headers=header)) is False
+    assert trusted.present(_request()) is False

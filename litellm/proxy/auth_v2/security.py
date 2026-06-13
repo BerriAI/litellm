@@ -1,5 +1,5 @@
 import os
-from typing import Annotated, Callable, List, Optional
+from typing import Annotated, Callable, Dict, List, Optional
 
 from fastapi import Request, Security
 from fastapi.security import SecurityScopes
@@ -9,6 +9,7 @@ from litellm.proxy.auth_v2 import errors
 from litellm.proxy.auth_v2.authenticators import (
     Authenticator,
     BasicAuthVerifier,
+    Carrier,
     build_authenticators,
 )
 from litellm.proxy.auth_v2.config import AuthConfig
@@ -54,12 +55,8 @@ def _open_session_store(
 
 
 def _combined_challenge(authenticators: List[Authenticator]) -> str:
-    seen: List[str] = []
-    for authenticator in authenticators:
-        challenge = authenticator.challenge()
-        if challenge and challenge not in seen:
-            seen.append(challenge)
-    return ", ".join(seen)
+    challenges = (authenticator.challenge() for authenticator in authenticators)
+    return ", ".join(dict.fromkeys(c for c in challenges if c))
 
 
 class AuthSecurity:
@@ -102,23 +99,31 @@ class AuthSecurity:
         )
         chain.append(SessionAuthenticator(config.session.cookie, self.session_store))
         self.authenticators = chain
+        self._by_carrier: Dict[Carrier, Authenticator] = {}
+        for authenticator in chain:
+            for carrier in authenticator.carriers():
+                self._by_carrier.setdefault(carrier, authenticator)
+
+    def _authenticator_for(self, request: Request) -> Optional[Authenticator]:
+        """The single authenticator whose credential the request carries, by scheme_order."""
+        return next(
+            (a for carrier, a in self._by_carrier.items() if carrier.present(request)),
+            None,
+        )
 
     async def principal(
         self, security_scopes: SecurityScopes, request: Request
     ) -> Principal:
         """Resolve the caller to a Principal, enforcing scheme OR and required scopes."""
-        credential = None
-        for authenticator in self.authenticators:
-            credential = await authenticator.authenticate(request)
-            if credential is not None:
-                break
+        authenticator = self._authenticator_for(request)
+        if authenticator is None:
+            raise errors.unauthenticated(_combined_challenge(self.authenticators))
+        credential = await authenticator.authenticate(request)
         if credential is None:
             raise errors.unauthenticated(_combined_challenge(self.authenticators))
 
-        resolved = await self.resolver.resolve(credential)
-        principal = resolved.model_copy(
-            update={"network": resolve_network_context(request, self.config.network)}
-        )
+        principal = await self.resolver.resolve(credential)
+        principal.network = resolve_network_context(request, self.config.network)
         if not principal.has_required_scopes(security_scopes):
             raise errors.insufficient_scope()
         return principal

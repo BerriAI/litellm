@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from fastapi import Request
 
@@ -11,8 +11,15 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.proxy.auth_v2 import errors
 from litellm.proxy.auth_v2.config import OAuth2IntrospectionConfig
 from litellm.proxy.auth_v2.models import AuthMethod, Credential, SecuritySchemeType
-from litellm.proxy.auth_v2.authenticators.base import Authenticator
-from litellm.proxy.auth_v2.authenticators.types import IntrospectionClient, IntrospectionClientFactory
+from litellm.proxy.auth_v2.authenticators.base import (
+    Authenticator,
+    Carrier,
+    CredentialLocation,
+)
+from litellm.proxy.auth_v2.authenticators.types import (
+    IntrospectionClient,
+    IntrospectionClientFactory,
+)
 from litellm.proxy.auth_v2.authenticators.utils import (
     JWTVerifier,
     authenticate_bearer_jwt,
@@ -57,7 +64,9 @@ class OAuth2Authenticator(Authenticator):
     async def _introspect(self, token: str) -> Credential:
         config = self._introspection
         assert config is not None
-        basic = base64.b64encode(f"{config.client_id}:{config.client_secret.get_secret_value()}".encode()).decode()
+        basic = base64.b64encode(
+            f"{config.client_id}:{config.client_secret.get_secret_value()}".encode()
+        ).decode()
         client = self._client_factory()
         response = await client.post(
             str(config.introspection_endpoint),
@@ -89,6 +98,9 @@ class OAuth2Authenticator(Authenticator):
             claims=claims,
             subject_token=token,
         )
+
+    def carriers(self) -> Sequence[Carrier]:
+        return (Carrier(CredentialLocation.AUTHORIZATION_SCHEME, "bearer"),)
 
     def challenge(self) -> str:
         return errors.bearer_challenge()

@@ -3,7 +3,6 @@ from litellm.proxy.auth_v2.resolvers.base import (
     IdentityStore,
     ProvisioningStore,
 )
-from litellm.proxy.auth_v2.resolvers.memory import InMemoryIdentityStore
 
 # DbIdentityStore is intentionally not re-exported here: it pulls in the v1
 # proxy DB machinery (auth_checks, repositories). Import it directly from
@@ -13,5 +12,4 @@ __all__ = [
     "IdentityResolver",
     "ProvisioningStore",
     "IdentityStore",
-    "InMemoryIdentityStore",
 ]

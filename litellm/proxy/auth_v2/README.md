@@ -37,19 +37,20 @@ Security(auth.require_permission(obj,act))-> the above, plus a Casbin permission
 `require_roles` and `require_permission` both depend on `principal`, so the steps below
 always run first.
 
-1. Authenticate. `AuthSecurity.principal` walks the authenticator chain in
-   `config.scheme_order` and takes the first one that returns a `Credential` (scheme OR,
-   not AND). The chain always ends with the session-cookie authenticator. If every
-   authenticator declines, it raises `401` with a combined `WWW-Authenticate` challenge
-   built from each scheme.
+1. Authenticate. Each authenticator advertises the carrier it reads (an `Authorization`
+   scheme, a header, the session cookie, or a client certificate), and
+   `AuthSecurity.principal` routes the request to the single authenticator whose carrier
+   is present, breaking ties on a shared carrier (the bearer schemes) by `config.scheme_order`.
+   If no carrier matches, or the selected authenticator rejects the credential, it raises
+   `401` with a combined `WWW-Authenticate` challenge built from each scheme.
 
-2. Resolve identity. The winning `Credential` is handed to the configured
-   `IdentityResolver`. The DB resolver looks the subject up in the proxy's Prisma tables
-   (key object, user, teams, org) and builds the `Principal`. A blocked key or unknown
-   subject raises `401`/`403` here, before any route logic runs.
+2. Resolve identity. The verified `Credential` is handed to the configured
+   `IdentityResolver`, which builds the `Principal`. The DB resolver looks the subject up in
+   the proxy's Prisma tables (key object, user, teams, org). A blocked key or unknown subject
+   raises `401`/`403` here, before any route logic runs.
 
 3. Attach network context. The client IP and host are resolved (trusted-proxy aware, see
-   `network.py`) and copied onto the principal.
+   `network.py`) and set on the principal.
 
 4. Enforce scopes. The scopes declared on the `Security()` dependency must be a subset of
    the principal's scopes (`principal.has_required_scopes`). A miss raises `403`
@@ -67,11 +68,11 @@ The resolved `Principal` is then injected into the route handler.
 
 ```
 request
-  -> authenticators (scheme_order, first match wins)   [401 if none]
-  -> resolver.resolve(credential) -> Principal          [401/403 on bad/blocked identity]
-  -> resolve_network_context
-  -> principal.has_required_scopes(scopes)              [403 insufficient_scope]
-  -> require_roles / require_permission (optional)      [403 forbidden_*]
+  -> authenticator dispatch (carrier match, scheme_order tiebreak)   [401 if none]
+  -> resolver.resolve(credential) -> Principal                       [401/403 on bad/blocked identity]
+  -> principal.network = resolve_network_context(...)
+  -> principal.has_required_scopes(scopes)                           [403 insufficient_scope]
+  -> require_roles / require_permission (optional)                   [403 forbidden_*]
   -> route handler(principal)
 ```
 
@@ -81,9 +82,9 @@ request
 built once at the composition root.
 
 `authenticators/` holds one authenticator per scheme behind the `Authenticator` protocol
-(`authenticate -> Optional[Credential]`, plus a `challenge`). `build_authenticators`
-constructs and orders them from `AuthConfig`. JWT verification for OIDC/OAuth2 is shared
-via `JWTVerifier`.
+(`authenticate -> Optional[Credential]`, a `challenge`, and `carriers` so `security.py` can
+dispatch to it by where its credential lives). `build_authenticators` constructs and orders
+them from `AuthConfig`. JWT verification for OIDC/OAuth2 is shared via `JWTVerifier`.
 
 `resolvers/` holds the `IdentityResolver` / `IdentityStore` protocols and their
 implementations (`DbIdentityStore` against Prisma, an in-memory store for tests). The

@@ -13,7 +13,7 @@ from litellm.proxy.auth_v2.models import (
     TeamRole,
     UserIdentity,
 )
-from litellm.proxy.auth_v2.rbac import Role
+from litellm.proxy.auth_v2.authorization import Role
 
 
 def _credential() -> Credential:

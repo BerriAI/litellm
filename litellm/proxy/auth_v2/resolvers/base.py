@@ -10,7 +10,17 @@ from litellm.proxy.auth_v2.models import Credential, Principal
 
 @runtime_checkable
 class IdentityResolver(Protocol):
-    async def resolve(self, credential: Credential) -> Principal: ...
+    async def resolve(self, credential: Credential) -> Principal:
+        """Resolve a verified credential to a Principal.
+
+        Must return a freshly constructed Principal, never a cached or shared
+        instance. The caller stamps request-scoped state (the network context)
+        onto the returned object, so handing back a shared one would leak that
+        state across concurrent requests for the same identity. Cache the
+        underlying identity lookups (as the DB resolver does), not the assembled
+        Principal.
+        """
+        ...
 
 
 @runtime_checkable

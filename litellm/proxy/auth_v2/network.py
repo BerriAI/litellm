@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
-from typing import List, Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 from fastapi import Request
 
@@ -17,7 +17,7 @@ def _is_valid_ip(value: str) -> bool:
         return False
 
 
-def _ip_in_cidrs(ip: Optional[str], cidrs: List[str]) -> bool:
+def ip_in_cidrs(ip: Optional[str], cidrs: Sequence[str]) -> bool:
     if not ip or not _is_valid_ip(ip):
         return False
     address = ipaddress.ip_address(ip)
@@ -30,23 +30,25 @@ def _ip_in_cidrs(ip: Optional[str], cidrs: List[str]) -> bool:
     return False
 
 
-def ip_in_trusted_proxies(ip: Optional[str], config: TrustedProxyConfig) -> bool:
-    return _ip_in_cidrs(ip, config.trusted_proxy_cidrs)
-
-
-def resolve_client_ip(request: Request, config: TrustedProxyConfig) -> Tuple[Optional[str], bool]:
+def resolve_client_ip(
+    request: Request, config: TrustedProxyConfig
+) -> Tuple[Optional[str], bool]:
     peer = request.client.host if request.client else None
-    if not config.use_forwarded_for or not _ip_in_cidrs(peer, config.trusted_proxy_cidrs):
+    if not config.use_forwarded_for or not ip_in_cidrs(
+        peer, config.trusted_proxy_cidrs
+    ):
         return peer, False
     forwarded = request.headers.get("x-forwarded-for", "")
     hops = [h.strip() for h in forwarded.split(",") if h.strip()]
     for hop in reversed(hops):
-        if not _ip_in_cidrs(hop, config.trusted_proxy_cidrs) and _is_valid_ip(hop):
+        if not ip_in_cidrs(hop, config.trusted_proxy_cidrs) and _is_valid_ip(hop):
             return hop, True
     return peer, True
 
 
-def resolve_network_context(request: Request, config: TrustedProxyConfig) -> NetworkContext:
+def resolve_network_context(
+    request: Request, config: TrustedProxyConfig
+) -> NetworkContext:
     ip, via_proxy = resolve_client_ip(request, config)
     return NetworkContext(
         client_ip=ip,

@@ -4,23 +4,32 @@ import base64
 import binascii
 import hashlib
 import secrets
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from fastapi import Request
 
 from litellm.proxy.auth_v2 import errors
 from litellm.proxy.auth_v2.config import HttpBasicConfig
 from litellm.proxy.auth_v2.models import AuthMethod, Credential, SecuritySchemeType
-from litellm.proxy.auth_v2.authenticators.base import Authenticator
+from litellm.proxy.auth_v2.authenticators.base import (
+    Authenticator,
+    Carrier,
+    CredentialLocation,
+)
 from litellm.proxy.auth_v2.authenticators.types import BasicAuthVerifier
-from litellm.proxy.auth_v2.authenticators.utils import JWTVerifier, authenticate_bearer_jwt
+from litellm.proxy.auth_v2.authenticators.utils import (
+    JWTVerifier,
+    authenticate_bearer_jwt,
+)
 
 _PBKDF2_ITERATIONS = 600_000
 
 
 def hash_basic_password(password: str, salt: Optional[str] = None) -> str:
     salt = salt or secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), _PBKDF2_ITERATIONS).hex()
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), bytes.fromhex(salt), _PBKDF2_ITERATIONS
+    ).hex()
     return f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${salt}${digest}"
 
 
@@ -42,7 +51,9 @@ class HttpAuthenticator(Authenticator):
         scheme, _, value = header.partition(" ")
         scheme_lower = scheme.lower()
         if scheme_lower == "bearer" and value:
-            return await authenticate_bearer_jwt(value, self._verifiers, SecuritySchemeType.HTTP, AuthMethod.BEARER_JWT)
+            return await authenticate_bearer_jwt(
+                value, self._verifiers, SecuritySchemeType.HTTP, AuthMethod.BEARER_JWT
+            )
         if scheme_lower == "basic" and self._basic.enabled and value:
             return self._verify_basic(value)
         return None
@@ -66,6 +77,12 @@ class HttpAuthenticator(Authenticator):
             method=AuthMethod.HTTP_BASIC,
             subject=username,
         )
+
+    def carriers(self) -> Sequence[Carrier]:
+        schemes = [Carrier(CredentialLocation.AUTHORIZATION_SCHEME, "bearer")]
+        if self._basic.enabled:
+            schemes.append(Carrier(CredentialLocation.AUTHORIZATION_SCHEME, "basic"))
+        return tuple(schemes)
 
     def challenge(self) -> str:
         bearer = errors.bearer_challenge()

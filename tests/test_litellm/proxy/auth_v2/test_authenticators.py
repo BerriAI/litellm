@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import base64
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+import hashlib
+import hmac
+from typing import Any, Dict
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from litellm.proxy.auth_v2.authenticators import (
     APIKeyAuthenticator,
     HttpAuthenticator,
-    InMemoryBasicAuthStore,
     JWTVerifier,
     MutualTLSAuthenticator,
     OAuth2Authenticator,
@@ -35,6 +36,30 @@ from auth_v2_helpers import (
     FakeJwksClient,
     make_request,
 )
+
+
+class _BasicAuthStore:
+    """A minimal in-memory BasicAuthVerifier injected into HttpAuthenticator.
+
+    Verifies passwords against the pbkdf2_sha256$iterations$salt$digest format
+    produced by the production hash_basic_password helper."""
+
+    def __init__(self, credentials: Dict[str, str]) -> None:
+        self._credentials = credentials
+
+    def verify(self, username: str, password: str) -> bool:
+        stored = self._credentials.get(username)
+        if stored is None:
+            return False
+        try:
+            _algorithm, iterations, salt, expected = stored.split("$")
+            candidate = hashlib.pbkdf2_hmac(
+                "sha256", password.encode(), bytes.fromhex(salt), int(iterations)
+            ).hex()
+        except ValueError:
+            return False
+        return hmac.compare_digest(candidate, expected)
+
 
 # --------------------------------------------------------------------------- #
 # JWTVerifier: every RFC 7519 check must be enforced.
@@ -174,8 +199,8 @@ async def test_http_basic_disabled_ignores_basic_scheme(rsa_keypair):
     assert await auth.authenticate(request) is None
 
 
-def _basic_store() -> InMemoryBasicAuthStore:
-    return InMemoryBasicAuthStore({"alice": hash_basic_password("supersecret")})
+def _basic_store() -> _BasicAuthStore:
+    return _BasicAuthStore({"alice": hash_basic_password("supersecret")})
 
 
 async def test_http_basic_verifies_correct_credentials(rsa_keypair):
@@ -253,7 +278,7 @@ def test_hash_basic_password_is_salted_and_verifiable():
     assert "supersecret" not in first
     assert first != second  # random salt per call
 
-    store = InMemoryBasicAuthStore({"alice": first})
+    store = _BasicAuthStore({"alice": first})
     assert store.verify("alice", "supersecret")
     assert not store.verify("alice", "supersecre")
     assert not store.verify("unknown", "supersecret")
@@ -303,7 +328,7 @@ async def test_oauth2_no_bearer_returns_none(rsa_keypair):
     assert await _oauth2(public_key).authenticate(make_request()) is None
 
 
-def _introspecting_oauth2() -> OAuth2Authenticator:
+def _introspecting_oauth2(client_factory) -> OAuth2Authenticator:
     return OAuth2Authenticator(
         [],
         introspection=OAuth2IntrospectionConfig(
@@ -312,29 +337,26 @@ def _introspecting_oauth2() -> OAuth2Authenticator:
             client_secret="rs-secret",
             subject_field="sub",
         ),
+        client_factory=client_factory,
     )
 
 
-def _mock_introspection_post(status_code: int, body: dict) -> AsyncMock:
+def _introspection_client_factory(status_code: int, body: dict) -> MagicMock:
     response = MagicMock()
     response.status_code = status_code
     response.json.return_value = body
-    handler = MagicMock()
-    handler.post = AsyncMock(return_value=response)
-    factory = MagicMock(return_value=handler)
-    return factory
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+    return MagicMock(return_value=client)
 
 
 async def test_oauth2_opaque_token_introspects_active_to_credential():
-    factory = _mock_introspection_post(
+    factory = _introspection_client_factory(
         200,
         {"active": True, "sub": "svc-9", "scope": "models:read tools:run", "aud": "rs"},
     )
     request = make_request(headers={"authorization": "Bearer opaque-xyz"})
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", factory
-    ):
-        credential = await _introspecting_oauth2().authenticate(request)
+    credential = await _introspecting_oauth2(factory).authenticate(request)
 
     assert credential is not None
     assert credential.method == AuthMethod.OAUTH2_INTROSPECTION
@@ -342,33 +364,27 @@ async def test_oauth2_opaque_token_introspects_active_to_credential():
     assert credential.scopes == ["models:read", "tools:run"]
     assert credential.audience == ["rs"]
 
-    handler = factory.return_value
-    _, kwargs = handler.post.call_args
+    client = factory.return_value
+    _, kwargs = client.post.call_args
     assert kwargs["data"] == {"token": "opaque-xyz"}
     expected_basic = base64.b64encode(b"rs-client:rs-secret").decode()
     assert kwargs["headers"]["Authorization"] == f"Basic {expected_basic}"
-    assert handler.post.call_args.args[0] == "https://idp.example.com/introspect"
+    assert client.post.call_args.args[0] == "https://idp.example.com/introspect"
 
 
 async def test_oauth2_introspection_inactive_token_raises():
-    factory = _mock_introspection_post(200, {"active": False})
+    factory = _introspection_client_factory(200, {"active": False})
     request = make_request(headers={"authorization": "Bearer opaque-xyz"})
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", factory
-    ):
-        with pytest.raises(AuthError) as exc:
-            await _introspecting_oauth2().authenticate(request)
+    with pytest.raises(AuthError) as exc:
+        await _introspecting_oauth2(factory).authenticate(request)
     assert exc.value.status_code == 401
 
 
 async def test_oauth2_introspection_non_200_raises():
-    factory = _mock_introspection_post(500, {})
+    factory = _introspection_client_factory(500, {})
     request = make_request(headers={"authorization": "Bearer opaque-xyz"})
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", factory
-    ):
-        with pytest.raises(AuthError) as exc:
-            await _introspecting_oauth2().authenticate(request)
+    with pytest.raises(AuthError) as exc:
+        await _introspecting_oauth2(factory).authenticate(request)
     assert exc.value.status_code == 401
 
 
