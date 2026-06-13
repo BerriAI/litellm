@@ -135,6 +135,28 @@ class TestMaskedHTTPStatusError:
         # Content-Encoding must have been stripped from the rebuilt headers.
         assert "content-encoding" not in {k.lower() for k in masked.response.headers}
 
+    def test_handles_streaming_request_content(self):
+        """If request.content raises RequestNotRead (streaming/multipart body),
+        should fall back to b'' instead of crashing.
+
+        Regression: Azure image edit requests use streaming multipart bodies.
+        When the upstream returns 500, MaskedHTTPStatusError.__init__ accessed
+        request.content which raised httpx.RequestNotRead.
+        """
+        orig = _make_httpx_status_error()
+
+        with patch.object(
+            type(orig.request),
+            "content",
+            new_callable=lambda: property(
+                lambda self: (_ for _ in ()).throw(httpx.RequestNotRead())
+            ),
+        ):
+            masked = MaskedHTTPStatusError(orig)
+
+        assert masked.request.content == b""
+        assert masked.status_code == 400
+
 
 class TestSafeResponseHelpers:
     def test_safe_get_response_text_normal(self):
