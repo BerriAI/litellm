@@ -120,6 +120,13 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES["router-settings"]).toBe("router-settings");
   });
 
+  it("maps the users id to its route", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.users).toBe("users");
+  });
+
   it("maps the organizations id to its route", async () => {
     vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
     const { MIGRATED_PAGES } = await import("./migratedPages");

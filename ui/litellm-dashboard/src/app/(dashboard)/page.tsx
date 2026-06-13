@@ -13,7 +13,6 @@ import PassThroughSettings from "@/components/pass_through_settings";
 import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
 import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
-import ViewUserDashboard from "@/components/view_users";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   buildLoginUrlWithReturn,
@@ -318,16 +317,6 @@ function CreateKeyPageContent() {
               setModelData={setModelData}
               premiumUser={premiumUser}
               teams={teams}
-            />
-          ) : page == "users" ? (
-            <ViewUserDashboard
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              keys={keys}
-              teams={teams}
-              accessToken={accessToken}
-              setKeys={setKeys}
             />
           ) : page == "teams" ? (
             <OldTeams
