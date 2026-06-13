@@ -1382,6 +1382,44 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert data["messages"] == []
 
 
+def test_normalize_leading_system_is_hoisted():
+    from litellm.llms.anthropic.common_utils import (
+        normalize_system_messages_for_anthropic,
+    )
+
+    messages = [
+        {"role": "system", "content": "You are a pirate."},
+        {"role": "user", "content": "How are you?"},
+    ]
+    new_messages, hoisted = normalize_system_messages_for_anthropic(
+        messages, model="claude-opus-4-8", custom_llm_provider="anthropic"
+    )
+    assert all(m["role"] != "system" for m in new_messages)
+    assert new_messages == [{"role": "user", "content": "How are you?"}]
+    assert hoisted == [{"type": "text", "text": "You are a pirate."}]
+    assert messages[0] == {"role": "system", "content": "You are a pirate."}
+
+
+def test_normalize_multiple_leading_system_preserves_order():
+    from litellm.llms.anthropic.common_utils import (
+        normalize_system_messages_for_anthropic,
+    )
+
+    messages = [
+        {"role": "system", "content": "First."},
+        {"role": "system", "content": "Second."},
+        {"role": "user", "content": "Hi"},
+    ]
+    new_messages, hoisted = normalize_system_messages_for_anthropic(
+        messages, model="claude-opus-4-8", custom_llm_provider="anthropic"
+    )
+    assert new_messages == [{"role": "user", "content": "Hi"}]
+    assert hoisted == [
+        {"type": "text", "text": "First."},
+        {"type": "text", "text": "Second."},
+    ]
+
+
 @pytest.fixture
 def local_model_cost_map(monkeypatch):
     """Force the bundled backup cost map so detection doesn't depend on the
