@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import cast
 
 import pytest
 
@@ -19,8 +20,29 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import ModelInfo, ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
+
+
+def test_token_base_cost_sorts_tier_thresholds_numerically():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
+
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_90k_tokens": 5e-6,
+        "output_cost_per_token_above_90k_tokens": 7e-6,
+        "input_cost_per_token_above_128k_tokens": 9e-6,
+        "output_cost_per_token_above_128k_tokens": 11e-6,
+    }
+    usage = Usage(prompt_tokens=150_000, completion_tokens=10, total_tokens=150_010)
+
+    prompt_cost, completion_cost, *_ = _get_token_base_cost(
+        cast(ModelInfo, model_info), usage
+    )
+
+    assert prompt_cost == 9e-6
+    assert completion_cost == 11e-6
 
 
 def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):

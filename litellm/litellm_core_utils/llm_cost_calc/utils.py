@@ -255,8 +255,19 @@ def _get_token_base_cost(
         )
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
+    threshold_key_pairs = []
+    for key in threshold_keys:
+        try:
+            threshold_str_for_sort = key.split("_above_")[1].split("_tokens")[0]
+            threshold_for_sort = float(threshold_str_for_sort.replace("k", "")) * (
+                1000 if "k" in threshold_str_for_sort else 1
+            )
+            threshold_key_pairs.append((threshold_for_sort, key))
+        except (IndexError, ValueError):
+            continue
+
     threshold: Optional[float] = None
-    for key in sorted(threshold_keys, reverse=True):
+    for _, key in sorted(threshold_key_pairs, reverse=True):
         value = model_info.get(key)
         if value is not None:
             try:
