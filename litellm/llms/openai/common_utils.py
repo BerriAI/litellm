@@ -28,11 +28,12 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
-    HTTPHandler,
     _get_http2_limits,
+    _get_httpx_client,
     _should_enable_http2,
     _verify_http2_available,
     get_ssl_configuration,
@@ -229,9 +230,18 @@ class BaseOpenAILLM:
         ssl_config = get_ssl_configuration()
 
         # Respect the opt-in outbound HTTP/2 setting. A shared aiohttp session
-        # cannot speak HTTP/2, so it takes priority (AsyncHTTPHandler emits the
-        # warning in that path); here we just resolve http2 off when one is given.
-        http2_enabled = _should_enable_http2() and shared_session is None
+        # cannot speak HTTP/2, so it takes priority — fall back to HTTP/1.1 and
+        # warn (this builder calls the static _create_async_transport directly,
+        # so it must emit the warning itself rather than relying on
+        # AsyncHTTPHandler.create_client).
+        http2_enabled = _should_enable_http2()
+        if http2_enabled and shared_session is not None:
+            verbose_logger.warning(
+                "litellm: HTTP/2 is enabled but a shared aiohttp session was provided "
+                "for the OpenAI/Azure client. aiohttp cannot speak HTTP/2 — using the "
+                "shared session over HTTP/1.1 for this client."
+            )
+            http2_enabled = False
         http2_limits = _get_http2_limits() if http2_enabled else None
         if http2_enabled:
             _verify_http2_available()
@@ -269,15 +279,15 @@ class BaseOpenAILLM:
 
             return httpx.Client(transport=MockOpenAITransport())
 
+        # Respect the opt-in outbound HTTP/2 setting. Reuse the cached HTTPHandler
+        # client (via _get_httpx_client) so sync OpenAI calls share a single
+        # connection pool across requests; it centralizes the transport/limits/SSL
+        # wiring (incl. force_ipv4) and resolves SSL config internally.
+        if _should_enable_http2():
+            return _get_httpx_client().client
+
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration()
-
-        # Respect the opt-in outbound HTTP/2 setting. HTTPHandler centralizes the
-        # transport/limits/SSL wiring (incl. force_ipv4); it resolves SSL config
-        # internally, so we don't pass ssl_verify here (it only accepts bool|str).
-        if _should_enable_http2():
-            return HTTPHandler().client
-
         return httpx.Client(
             verify=ssl_config,
             follow_redirects=True,
