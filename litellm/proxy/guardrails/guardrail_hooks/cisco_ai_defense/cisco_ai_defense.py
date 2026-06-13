@@ -58,6 +58,7 @@ from litellm.types.utils import (
     LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
+    TextCompletionResponse,
 )
 
 from .cisco_ai_defense_mcp import _CiscoAIDefenseMcpMixin
@@ -1516,6 +1517,12 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         sanitized_messages: Optional[List[Dict[str, Any]]],
     ) -> bool:
         """Rewrite chat request input (``messages`` or ``input``)."""
+        if sanitized_messages and self._extract_tool_definition_text(request_data):
+            # We append one synthetic message carrying the tool/function
+            # definitions for inspection; Cisco echoes it back in
+            # ``sanitized_messages``, but it maps to no structured request
+            # field, so drop it before rewriting the real conversation.
+            sanitized_messages = sanitized_messages[:-1] or None
         uses_input = "input" in request_data and "messages" not in request_data
         has_instructions = request_data.get("instructions") is not None
         if has_instructions:
@@ -1637,6 +1644,13 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         if response_obj is None:
             return False
 
+        if isinstance(response_obj, TextCompletionResponse):
+            return self._redact_text_completion_choices(
+                getattr(response_obj, "choices", None) or [],
+                sanitized_text,
+                sanitized_messages,
+            )
+
         choices = getattr(response_obj, "choices", None)
         if isinstance(choices, list):
             return self._redact_model_response_choices(
@@ -1700,6 +1714,33 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 CiscoAIDefenseGuardrail._clear_tool_call_arguments(msg)
             return applied
         return False
+
+    @staticmethod
+    def _redact_text_completion_choices(
+        choices: list,
+        sanitized_text: Optional[str],
+        sanitized_messages: Optional[List[Dict[str, Any]]],
+    ) -> bool:
+        """Rewrite ``/v1/completions`` text choices after Cisco redaction."""
+        replacement = sanitized_text
+        if not replacement and sanitized_messages:
+            for message in sanitized_messages:
+                if not isinstance(message, dict):
+                    continue
+                text = CiscoAIDefenseGuardrail._normalize_message_content(
+                    message.get("content")
+                )
+                if text:
+                    replacement = text
+                    break
+        if not replacement:
+            return False
+        applied = False
+        for choice in choices:
+            if getattr(choice, "text", None):
+                choice.text = replacement
+                applied = True
+        return applied
 
     @classmethod
     def _redact_message_reasoning_fields(
@@ -2020,7 +2061,37 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             if prompt_text:
                 messages.append({"role": "user", "content": prompt_text})
 
+        tool_text = CiscoAIDefenseGuardrail._extract_tool_definition_text(data)
+        if tool_text:
+            messages.append({"role": "system", "content": tool_text})
+
         return messages
+
+    @staticmethod
+    def _extract_tool_definition_text(data: dict) -> str:
+        """Flatten request-side tool/function definitions into scannable text.
+
+        Tool definitions (names, descriptions, nested JSON-schema docs) are
+        forwarded to the model, so attacker-controlled text placed there must
+        be inspected too; otherwise it bypasses the guardrail by hiding in
+        ``tools[].function.description`` and similar metadata.
+        """
+        parts: List[str] = []
+        for key in ("tools", "functions"):
+            CiscoAIDefenseGuardrail._collect_strings(data.get(key), parts)
+        return " ".join(parts)
+
+    @staticmethod
+    def _collect_strings(value: object, out: List[str]) -> None:
+        if isinstance(value, str):
+            if value:
+                out.append(value)
+        elif isinstance(value, dict):
+            for item in value.values():
+                CiscoAIDefenseGuardrail._collect_strings(item, out)
+        elif isinstance(value, list):
+            for item in value:
+                CiscoAIDefenseGuardrail._collect_strings(item, out)
 
     @staticmethod
     def _flatten_responses_input(input_value: object) -> List[Dict[str, str]]:
@@ -2139,6 +2210,15 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 if parts:
                     result.append({"role": "assistant", "content": " ".join(parts)})
             return result
+
+        if isinstance(response, TextCompletionResponse):
+            text_parts: List[str] = []
+            for choice in getattr(response, "choices", None) or []:
+                text = getattr(choice, "text", None)
+                if isinstance(text, str) and text:
+                    text_parts.append(text)
+            joined = " ".join(text_parts)
+            return [{"role": "assistant", "content": joined}] if joined else []
 
         output_items = getattr(response, "output", None)
         if not isinstance(output_items, list):

@@ -16,7 +16,15 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
 )
+
+
+def _make_text_completion_response(text: str) -> TextCompletionResponse:
+    return TextCompletionResponse(
+        choices=[{"text": text, "index": 0, "finish_reason": "stop"}]
+    )
 
 
 def _make_model_response_with_content(content: str) -> ModelResponse:
@@ -321,6 +329,8 @@ __all__ = [
     "Response",
     "SimpleNamespace",
     "StreamingChoices",
+    "TextChoices",
+    "TextCompletionResponse",
     "UserAPIKeyAuth",
     "_aiter",
     "_chat_request_function_call_args",
@@ -329,6 +339,7 @@ __all__ = [
     "_make_guardrail",
     "_make_model_response_with_content",
     "_make_streaming_chunks",
+    "_make_text_completion_response",
     "_mcp_request",
     "_mcp_response",
     "_mcp_result_text",
