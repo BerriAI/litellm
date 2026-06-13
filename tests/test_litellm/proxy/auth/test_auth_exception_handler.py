@@ -145,9 +145,6 @@ async def test_handle_authentication_error_db_infra_error_returns_503(db_error):
             return_value=None,
         ),
         patch(
-            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
-        ),
-        patch(
             "litellm.proxy.proxy_server.general_settings",
             {"allow_requests_on_db_unavailable": False},
         ),
@@ -202,9 +199,6 @@ async def test_handle_authentication_error_prisma_engine_teardown_returns_503():
             return_value=None,
         ),
         patch(
-            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
-        ),
-        patch(
             "litellm.proxy.proxy_server.general_settings",
             {"allow_requests_on_db_unavailable": False},
         ),
@@ -250,9 +244,6 @@ async def test_handle_authentication_error_genuine_auth_failure_stays_401(auth_e
             "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
             new_callable=AsyncMock,
             return_value=None,
-        ),
-        patch(
-            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
         ),
         patch(
             "litellm.proxy.proxy_server.general_settings",

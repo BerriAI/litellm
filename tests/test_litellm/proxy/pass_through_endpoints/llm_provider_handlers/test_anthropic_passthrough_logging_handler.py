@@ -321,6 +321,7 @@ class TestAzureAnthropicCostCalculation:
         assert call_kwargs["model"] == "azure_ai/claude-sonnet-4-5_gb_20250929"
         assert call_kwargs["custom_llm_provider"] == "azure_ai"
 
+    @patch("litellm.completion_cost")
     def test_cost_calculation_resolves_unknown_model_from_litellm_params(
         self, mock_completion_cost
     ):
@@ -582,6 +583,7 @@ class TestAzureAnthropicCostCalculation:
             )
             == "claude-3-5-haiku-20241022"
         )
+
 
 class TestAnthropicBatchPassthroughCostTracking:
     """Test cases for Anthropic batch passthrough cost tracking functionality"""
