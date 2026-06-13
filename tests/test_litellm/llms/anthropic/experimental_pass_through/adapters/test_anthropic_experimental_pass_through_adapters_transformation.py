@@ -2679,3 +2679,38 @@ def test_translate_openai_response_to_anthropic_with_polyfill_both_compaction_an
     cm = result.get("context_management")
     assert cm is not None
     assert cm["applied_edits"][0]["type"] == "compact_20260112"
+
+
+def test_adapter_translates_in_array_system_to_openai_system_message():
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {"role": "user", "content": "Hi"},
+        {"role": "system", "content": "Now be a pirate."},
+    ]
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    system_msgs = [m for m in out if m.get("role") == "system"]
+    assert len(system_msgs) == 1
+    assert system_msgs[0]["content"] == "Now be a pirate."
+
+
+def test_adapter_translates_in_array_system_list_content():
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {"role": "user", "content": "Hi"},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Be a pirate."}],
+        },
+    ]
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    system_msgs = [m for m in out if m.get("role") == "system"]
+    assert len(system_msgs) == 1
+    assert system_msgs[0]["content"] == [{"type": "text", "text": "Be a pirate."}]

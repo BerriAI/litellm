@@ -393,6 +393,28 @@ class LiteLLMAnthropicMessagesAdapter:
             new_user_content_list: List[
                 Union[ChatCompletionTextObject, ChatCompletionImageObject]
             ] = []
+            if m["role"] == "system":
+                content = m.get("content", "")
+                if isinstance(content, str):
+                    if content.strip():
+                        new_messages.append(
+                            ChatCompletionSystemMessage(role="system", content=content)
+                        )
+                elif isinstance(content, list):
+                    text_blocks = [
+                        {"type": "text", "text": b["text"]}
+                        for b in content
+                        if isinstance(b, dict)
+                        and b.get("type") == "text"
+                        and (b.get("text") or "").strip()
+                    ]
+                    if text_blocks:
+                        new_messages.append(
+                            ChatCompletionSystemMessage(
+                                role="system", content=text_blocks
+                            )
+                        )
+                continue
             ## USER MESSAGE ##
             if m["role"] == "user":
                 ## translate user message
