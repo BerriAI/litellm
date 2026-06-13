@@ -165,3 +165,44 @@ def test_backfill_skips_when_canonical_lacks_field():
             "input_cost_per_audio_token" not in entry
             or entry["input_cost_per_audio_token"] is None
         ), "backfill must not copy None-valued fields from canonical"
+
+
+def test_backfill_cost_fields_from_canonical_direct_call():
+    """Direct unit test on the helper so the AST-based router coverage
+    gate (tests/code_coverage_tests/router_code_coverage.py) can see
+    ``_backfill_cost_fields_from_canonical`` being called by name. The
+    higher-level ``_build_router`` path invokes it via Router internals,
+    which the coverage gate cannot trace through indirection.
+    """
+    router = Router(model_list=[])
+
+    model_info_dict: dict = {
+        "id": "direct-unit-uuid",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 5e-6,
+    }
+    litellm_params: dict = {
+        "model": KNOWN_MODEL,
+        "custom_llm_provider": "anthropic",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 5e-6,
+    }
+
+    router._backfill_cost_fields_from_canonical(
+        model_info_dict=model_info_dict,
+        litellm_params=litellm_params,
+    )
+
+    canonical = litellm.model_cost[KNOWN_MODEL]
+    # User-supplied values preserved.
+    assert model_info_dict["input_cost_per_token"] == 1e-6
+    assert model_info_dict["output_cost_per_token"] == 5e-6
+    # Missing cache fields populated from canonical (when canonical has them).
+    for field in (
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+    ):
+        if field in canonical:
+            assert (
+                model_info_dict.get(field) == canonical[field]
+            ), f"{field} should have been backfilled from canonical entry"
