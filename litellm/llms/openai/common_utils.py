@@ -31,6 +31,10 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
+    HTTPHandler,
+    _get_http2_limits,
+    _should_enable_http2,
+    _verify_http2_available,
     get_ssl_configuration,
 )
 
@@ -224,7 +228,15 @@ class BaseOpenAILLM:
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration()
 
-        return httpx.AsyncClient(
+        # Respect the opt-in outbound HTTP/2 setting. A shared aiohttp session
+        # cannot speak HTTP/2, so it takes priority (AsyncHTTPHandler emits the
+        # warning in that path); here we just resolve http2 off when one is given.
+        http2_enabled = _should_enable_http2() and shared_session is None
+        http2_limits = _get_http2_limits() if http2_enabled else None
+        if http2_enabled:
+            _verify_http2_available()
+
+        client_kwargs: dict = dict(
             verify=ssl_config,
             transport=AsyncHTTPHandler._create_async_transport(
                 ssl_context=(
@@ -232,9 +244,20 @@ class BaseOpenAILLM:
                 ),
                 ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
                 shared_session=shared_session,
+                http2=http2_enabled,
+                limits=http2_limits,
             ),
             follow_redirects=True,
         )
+        if http2_enabled:
+            # Honored only when httpx builds its own transport (transport=None,
+            # i.e. no force_ipv4); ignored on the explicit-transport path which
+            # already carries http2/limits.
+            client_kwargs["http2"] = True
+            if http2_limits is not None:
+                client_kwargs["limits"] = http2_limits
+
+        return httpx.AsyncClient(**client_kwargs)
 
     @staticmethod
     def _get_sync_http_client() -> Optional[httpx.Client]:
@@ -248,6 +271,11 @@ class BaseOpenAILLM:
 
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration()
+
+        # Respect the opt-in outbound HTTP/2 setting. HTTPHandler centralizes the
+        # transport/limits wiring (incl. force_ipv4), so reuse its client.
+        if _should_enable_http2():
+            return HTTPHandler(ssl_verify=ssl_config).client
 
         return httpx.Client(
             verify=ssl_config,
