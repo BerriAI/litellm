@@ -91,6 +91,37 @@ async def test_skips_blank_strings():
     assert out["texts"] == ["", BENIGN]
 
 
+@pytest.mark.asyncio
+async def test_blocks_injection_in_tool_call_arguments():
+    """Injection hidden in a tool call's arguments must not bypass screening."""
+    g = _make()
+    inputs = {
+        "texts": [BENIGN],
+        "tool_calls": [
+            {"type": "function", "function": {"name": "lookup", "arguments": ATTACK}}
+        ],
+    }
+    with pytest.raises(HTTPException):
+        await g.apply_guardrail(inputs, {}, "request")
+
+
+@pytest.mark.asyncio
+async def test_blocks_injection_in_tool_definition():
+    """Injection hidden in a tool's description must not bypass screening."""
+    g = _make()
+    inputs = {
+        "texts": [BENIGN],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "lookup", "description": ATTACK, "parameters": {}},
+            }
+        ],
+    }
+    with pytest.raises(HTTPException):
+        await g.apply_guardrail(inputs, {}, "request")
+
+
 def test_initialize_guardrail_registers_callback(monkeypatch: pytest.MonkeyPatch):
     """initialize_guardrail builds the instance and registers it as a callback."""
     import litellm

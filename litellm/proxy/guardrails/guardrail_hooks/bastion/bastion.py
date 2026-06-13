@@ -12,6 +12,7 @@ AGPL exemption) is available at https://bastionsoft.com.
 """
 
 import asyncio
+import json
 from typing import (
     TYPE_CHECKING,
     Literal,
@@ -38,6 +39,45 @@ DEFAULT_VIOLATION_MESSAGE = (
     "I can't help with that request: it was flagged as a potential "
     "prompt-injection attempt and blocked."
 )
+
+
+def _function_texts(fn: object, fields: tuple[str, ...]) -> list[str]:
+    """Pull screenable strings out of a tool / tool-call ``function`` payload."""
+    out: list[str] = []
+    for field in fields:
+        value = fn.get(field) if isinstance(fn, dict) else getattr(fn, field, None)
+        if isinstance(value, str):
+            if value:
+                out.append(value)
+        elif value is not None:
+            out.append(json.dumps(value, default=str))
+    return out
+
+
+def _collect_screenable_texts(inputs: GenericGuardrailAPIInputs) -> list[str]:
+    """Everything to screen: message text **plus** tool-call arguments and tool
+    definitions. Injection can hide in a tool-call's ``arguments`` or a tool's
+    ``description`` / ``parameters`` — not just message content — so those are
+    serialized into the screened set rather than passing through unchecked.
+    """
+    texts: list[str] = [t for t in (inputs.get("texts") or []) if isinstance(t, str)]
+    for tool in inputs.get("tools") or []:
+        fn = (
+            tool.get("function")
+            if isinstance(tool, dict)
+            else getattr(tool, "function", None)
+        )
+        if fn is not None:
+            texts.extend(_function_texts(fn, ("name", "description", "parameters")))
+    for tool_call in inputs.get("tool_calls") or []:
+        call_fn = (
+            tool_call.get("function")
+            if isinstance(tool_call, dict)
+            else getattr(tool_call, "function", None)
+        )
+        if call_fn is not None:
+            texts.extend(_function_texts(call_fn, ("name", "arguments")))
+    return texts
 
 
 class BastionGuardrail(CustomGuardrail):
@@ -104,7 +144,7 @@ class BastionGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        texts = inputs.get("texts", [])
+        texts = _collect_screenable_texts(inputs)
         if not texts:
             return inputs
 
