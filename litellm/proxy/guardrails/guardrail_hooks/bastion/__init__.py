@@ -4,7 +4,7 @@ Discovered automatically by ``get_guardrail_initializer_from_hooks()`` via the
 ``guardrail_initializer_registry`` / ``guardrail_class_registry`` dicts below.
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Optional, Union, cast
 
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -24,8 +24,8 @@ def _get_param(
     litellm_params: "LitellmParams",
     guardrail: "Guardrail",
     key: str,
-    default: Any = None,
-) -> Any:
+    default: object = None,
+) -> object:
     """Read a param from LitellmParams, falling back to the raw guardrail dict."""
     value = getattr(litellm_params, key, default)
     if value is not None:
@@ -51,7 +51,9 @@ def initialize_guardrail(
 
     threshold_raw = _get_param(litellm_params, guardrail, "threshold")
     threshold: Optional[float] = (
-        float(threshold_raw) if threshold_raw is not None else None
+        float(cast("Union[str, float, int]", threshold_raw))
+        if threshold_raw is not None
+        else None
     )
 
     violation_message = cast(
@@ -65,7 +67,7 @@ def initialize_guardrail(
     # other guardrail initializers do) rather than via the raw-dict fallback.
     mode = getattr(litellm_params, "mode", None)
     event_hook = cast(
-        Optional[Union[str, List[str]]],
+        Optional[Union[str, list[str]]],
         mode if mode is not None else DEFAULT_EVENT_HOOKS,
     )
 

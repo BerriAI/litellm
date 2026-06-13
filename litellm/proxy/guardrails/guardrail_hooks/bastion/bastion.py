@@ -14,8 +14,6 @@ AGPL exemption) is available at https://bastionsoft.com.
 import asyncio
 from typing import (
     TYPE_CHECKING,
-    Any,
-    List,
     Literal,
     Optional,
     Union,
@@ -31,6 +29,8 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
+    from bastion_prompt_protection import Guard, GuardResult
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
@@ -49,11 +49,10 @@ class BastionGuardrail(CustomGuardrail):
         preset: str = "tiny",
         threshold: Optional[float] = None,
         violation_message: str = DEFAULT_VIOLATION_MESSAGE,
-        event_hook: Optional[Union[str, List[str]]] = None,
+        event_hook: Optional[Union[str, list[str]]] = None,
         default_on: bool = False,
-        **kwargs: Any,
     ) -> None:
-        _event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = (
+        _event_hook: Optional[Union[GuardrailEventHooks, list[GuardrailEventHooks]]] = (
             None
         )
         if event_hook is not None:
@@ -73,14 +72,13 @@ class BastionGuardrail(CustomGuardrail):
             ],
             event_hook=_event_hook or [GuardrailEventHooks.pre_call],
             default_on=default_on,
-            **kwargs,
         )
         self.preset = preset
         self.threshold = threshold
         self.violation_message = violation_message
-        self._guard: Any = None  # lazily constructed (loads the ONNX model)
+        self._guard: Optional["Guard"] = None  # lazily constructed (loads the model)
 
-    def _get_guard(self) -> Any:
+    def _get_guard(self) -> "Guard":
         if self._guard is None:
             try:
                 from bastion_prompt_protection import Guard
@@ -93,7 +91,7 @@ class BastionGuardrail(CustomGuardrail):
             self._guard = Guard(preset=self.preset)
         return self._guard
 
-    def _is_attack(self, result: Any) -> bool:
+    def _is_attack(self, result: "GuardResult") -> bool:
         if self.threshold is not None:
             return bool(result.risk >= self.threshold)
         return bool(result.is_attack)

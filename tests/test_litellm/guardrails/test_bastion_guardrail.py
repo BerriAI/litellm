@@ -5,6 +5,7 @@ import and no network/model access — so these tests are CI-safe and determinis
 A fake guard treats any text containing a chat-template token as an attack.
 """
 
+from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -33,8 +34,8 @@ def _fake_guard() -> MagicMock:
     return guard
 
 
-def _make(**kwargs) -> BastionGuardrail:
-    g = BastionGuardrail(guardrail_name="bastion", **kwargs)
+def _make(threshold: Optional[float] = None) -> BastionGuardrail:
+    g = BastionGuardrail(guardrail_name="bastion", threshold=threshold)
     g._guard = _fake_guard()  # inject the mock; _get_guard() is never reached
     return g
 
@@ -90,7 +91,7 @@ async def test_skips_blank_strings():
     assert out["texts"] == ["", BENIGN]
 
 
-def test_initialize_guardrail_registers_callback(monkeypatch):
+def test_initialize_guardrail_registers_callback(monkeypatch: pytest.MonkeyPatch):
     """initialize_guardrail builds the instance and registers it as a callback."""
     import litellm
     from litellm.proxy.guardrails.guardrail_hooks.bastion import initialize_guardrail
