@@ -63,7 +63,7 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 - Use tagged unions + match
 - No monster files or god objects
 - No file sprawl: deliberate file and folder structure
-- Standard over hand-rolled: use the official SDK or a library where one exists; where none does, follow the spec instead of inventing a local convention
+- Standard over hand-rolled: use the official SDK or a library where one exists; where none does, follow industry standards instead of inventing local conventions
 
 Follow conventional commits for commit names and PR titles
 
