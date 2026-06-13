@@ -117,6 +117,34 @@ class TestExtractImagesFromMessage:
         mock_convert.assert_called_once_with("https://example.com/image.png")
         assert result == ["ZmV0Y2hlZA=="]
 
+    def test_extract_from_message_falls_back_to_url_when_download_fails(self):
+        """If the remote download is disabled or fails, fall back to the URL.
+
+        This preserves the prior behavior (forwarding the URL) instead of introducing a new
+        hard failure for users who set ``MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0`` or whose image is
+        unreachable.
+        """
+        import litellm
+
+        message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/image.png"},
+                }
+            ],
+        }
+        with patch(
+            "litellm.litellm_core_utils.prompt_templates.image_handling.convert_url_to_base64",
+            side_effect=litellm.ImageFetchError(
+                message="boom", model="ollama", llm_provider="ollama"
+            ),
+        ):
+            result = extract_images_from_message(message)
+
+        assert result == ["https://example.com/image.png"]
+
     def test_extract_multiple_images(self):
         """Test extracting multiple images from a single message"""
         message = {

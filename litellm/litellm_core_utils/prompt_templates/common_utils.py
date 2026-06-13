@@ -1567,7 +1567,10 @@ def _extract_ollama_image_data(image_url: str) -> str:
             convert_url_to_base64,
         )
 
-        image_url = convert_url_to_base64(image_url)
+        try:
+            return _extract_base64_data(convert_url_to_base64(image_url))
+        except litellm.ImageFetchError:
+            return image_url
     return _extract_base64_data(image_url)
 
 
