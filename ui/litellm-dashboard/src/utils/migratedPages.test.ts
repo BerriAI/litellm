@@ -119,6 +119,13 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES.agents).toBe("agents");
     expect(MIGRATED_PAGES["router-settings"]).toBe("router-settings");
   });
+
+  it("maps the organizations id to its route", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.organizations).toBe("organizations");
+  });
 });
 
 describe("dev server (NODE_ENV=development)", () => {
