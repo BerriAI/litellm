@@ -846,7 +846,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     expect(mockSetToken).not.toHaveBeenCalled();
   });
 
-  it("does not show success when OBO token persistence fails after update", async () => {
+  it("warns but still refreshes the parent via onSuccess when OBO token persistence fails after update", async () => {
     mockOauth.tokenResponse = {
       access_token: "obo-tok",
       refresh_token: "obo-refresh",
@@ -879,7 +879,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
       "MCP Server updated, but failed to persist OAuth token: write failed",
     );
     expect(NotificationsManager.success).not.toHaveBeenCalledWith("MCP Server updated successfully");
-    expect(onSuccess).not.toHaveBeenCalled();
+    expect(onSuccess).toHaveBeenCalledWith(expect.objectContaining({ server_id: interactiveOAuthServer.server_id }));
   });
 
   it("persists the passthrough token to sessionStorage on save after authorize", async () => {

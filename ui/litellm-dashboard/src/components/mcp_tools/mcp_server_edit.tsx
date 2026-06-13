@@ -713,6 +713,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           NotificationsManager.fromBackend(
             "MCP Server updated, but failed to persist OAuth token" + (message ? `: ${message}` : ""),
           );
+          onSuccess(updated);
           return;
         }
       }
