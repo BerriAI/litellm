@@ -67,9 +67,13 @@ from litellm.types.utils import (
 from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
+from ..common_utils import (
+    BedrockError,
+    ModelResponseIterator,
+    get_bedrock_response_stream_shape,
+    get_bedrock_tool_name,
+)
 
-_response_stream_shape_cache = None
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
     max_size_in_memory=50, default_ttl=600
 )
@@ -193,7 +197,7 @@ async def make_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: Optional[int] = None,
 ):
     try:
         if client is None:
@@ -290,7 +294,7 @@ def make_sync_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: Optional[int] = None,
 ):
     try:
         if client is None:
@@ -786,7 +790,7 @@ class BedrockLLM(BaseAWSLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
-        stream_chunk_size = optional_params.pop("stream_chunk_size", 1024)
+        stream_chunk_size = optional_params.pop("stream_chunk_size", None)
 
         provider = self.get_bedrock_invoke_provider(model)
         modelId = self.get_bedrock_model_id(
@@ -1199,7 +1203,7 @@ class BedrockLLM(BaseAWSLLM):
         extra_headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
-        stream_chunk_size: int = 1024,
+        stream_chunk_size: Optional[int] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         transformed_request = (
             await litellm.AmazonAnthropicClaudeConfig().async_transform_request(
@@ -1346,7 +1350,7 @@ class BedrockLLM(BaseAWSLLM):
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
-        stream_chunk_size: int = 1024,
+        stream_chunk_size: Optional[int] = None,
     ) -> CustomStreamWrapper:
         # The call is not made here; instead, we prepare the necessary objects for the stream.
 
@@ -1389,20 +1393,6 @@ class BedrockLLM(BaseAWSLLM):
             if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
-
-
-def get_response_stream_shape():
-    global _response_stream_shape_cache
-    if _response_stream_shape_cache is None:
-        from botocore.loaders import Loader
-        from botocore.model import ServiceModel
-
-        loader = Loader()
-        bedrock_service_dict = loader.load_service_model("bedrock-runtime", "service-2")
-        bedrock_service_model = ServiceModel(bedrock_service_dict)
-        _response_stream_shape_cache = bedrock_service_model.shape_for("ResponseStream")
-
-    return _response_stream_shape_cache
 
 
 class AWSEventStreamDecoder:
@@ -1838,8 +1828,17 @@ class AWSEventStreamDecoder:
                     yield self._chunk_parser(chunk_data=_data)
 
     def _parse_message_from_event(self, event) -> Optional[str]:
+        response_stream_shape = get_bedrock_response_stream_shape()
+        if response_stream_shape is None:
+            raise BedrockError(
+                status_code=500,
+                message=(
+                    "Bedrock event-stream shape could not be loaded from botocore. "
+                    "Ensure botocore is correctly installed."
+                ),
+            )
         response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(response_dict, get_response_stream_shape())
+        parsed_response = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             decoded_body = response_dict["body"].decode()

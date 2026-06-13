@@ -1,6 +1,7 @@
 import asyncio
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
+import httpx
 from fastapi import HTTPException, status
 
 import litellm
@@ -46,6 +47,30 @@ def _is_a2a_agent_model(model_name: Any) -> bool:
     return isinstance(model_name, str) and model_name.startswith("a2a/")
 
 
+def _raise_if_model_fully_blocked(
+    llm_router: LitellmRouter, model_name: Any, team_id: Optional[str]
+) -> None:
+    if not isinstance(model_name, str) or not model_name:
+        return
+    if not isinstance(llm_router, litellm.Router):
+        return
+    deployments = (
+        llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
+    )
+    if llm_router._are_all_deployments_blocked(deployments):
+        raise litellm.PermissionDeniedError(
+            message="Model is blocked",
+            model=model_name,
+            llm_provider="",
+            response=httpx.Response(
+                status_code=403,
+                request=httpx.Request(
+                    method="POST", url="https://github.com/BerriAI/litellm"
+                ),
+            ),
+        )
+
+
 ROUTE_ENDPOINT_MAPPING = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
@@ -74,6 +99,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "avideo_extension": "/videos/extensions",
     "acreate_realtime_client_secret": "/realtime/client_secrets",
     "arealtime_calls": "/realtime/calls",
+    "acreate_realtime_transcription_session": "/realtime/transcription_sessions",
     "acreate_container": "/containers",
     "alist_containers": "/containers",
     "aretrieve_container": "/containers/{container_id}",
@@ -94,6 +120,12 @@ ROUTE_ENDPOINT_MAPPING = {
     "aget_interaction": "/interactions/{interaction_id}",
     "adelete_interaction": "/interactions/{interaction_id}",
     "acancel_interaction": "/interactions/{interaction_id}/cancel",
+    # Google Managed Agents API routes
+    "acreate_agent": "/v1beta/agents",
+    "alist_agents": "/v1beta/agents",
+    "aget_agent": "/v1beta/agents/{name}",
+    "adelete_agent": "/v1beta/agents/{name}",
+    "alist_agent_versions": "/v1beta/agents/{name}/versions",
     # OpenAI Evals API routes
     "acreate_eval": "/evals",
     "alist_evals": "/evals",
@@ -255,6 +287,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "_arealtime",  # private function for realtime API
         "acreate_realtime_client_secret",
         "arealtime_calls",
+        "acreate_realtime_transcription_session",
         "_aresponses_websocket",  # private function for responses WebSocket mode
         "aimage_edit",
         "agenerate_content",
@@ -311,6 +344,11 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "aget_interaction",
         "adelete_interaction",
         "acancel_interaction",
+        "acreate_agent",
+        "alist_agents",
+        "aget_agent",
+        "adelete_agent",
+        "alist_agent_versions",
         "asend_message",
         "call_mcp_tool",
         "acancel_batch",
@@ -400,6 +438,9 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         else:
             return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
+        _raise_if_model_fully_blocked(
+            llm_router=llm_router, model_name=data.get("model"), team_id=team_id
+        )
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
         if route_type in [
@@ -416,6 +457,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             "adelete_run",
             "acreate_realtime_client_secret",
             "arealtime_calls",
+            "acreate_realtime_transcription_session",
         ]:
             # If a model is provided, get its credentials from the router
             model = data.get("model")
@@ -430,7 +472,11 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                         deployment = llm_router.get_deployment_by_model_group_name(
                             model_group_name=model
                         )
-                        if deployment and deployment.litellm_params:
+                        if (
+                            deployment
+                            and deployment.litellm_params
+                            and not llm_router._is_deployment_blocked(deployment)
+                        ):
                             deployment_creds = deployment.litellm_params.model_dump(
                                 exclude_none=True
                             )
@@ -462,6 +508,15 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             "aget_interaction",
             "adelete_interaction",
             "acancel_interaction",
+        ]:
+            return getattr(llm_router, f"{route_type}")(**data)
+        # Managed Agents API: these don't need model routing
+        if route_type in [
+            "acreate_agent",
+            "alist_agents",
+            "aget_agent",
+            "adelete_agent",
+            "alist_agent_versions",
         ]:
             return getattr(llm_router, f"{route_type}")(**data)
         if route_type in [
@@ -529,6 +584,10 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                 "alist_input_items",
                 "avector_store_create",
                 "avector_store_search",
+                "avector_store_retrieve",
+                "avector_store_list",
+                "avector_store_update",
+                "avector_store_delete",
                 "avector_store_file_create",
                 "avector_store_file_list",
                 "avector_store_file_retrieve",

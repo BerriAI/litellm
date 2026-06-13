@@ -71,6 +71,110 @@ def test_proxy_only_error_false_for_other_error_type():
     )
 
 
+@pytest.mark.asyncio
+async def test_proxy_only_error_log_marks_no_upstream_llm_call():
+    """A proxy-gate error (auth/rate-limit) synthesizes a ``Logging`` object and
+    fires ``pre_call`` so the failure is logged — but it must tag the object with
+    ``LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL`` so tracing callbacks don't fabricate
+    an LLM-call span for a request that never reached a provider (root cause of the
+    misplaced gen-AI span on auth failure)."""
+    from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    captured = {}
+
+    def fake_pre_call(self, *args, **kwargs):
+        captured["flag"] = self.model_call_details.get(
+            LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+        )
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    orig_pre_call = Logging.pre_call
+    orig_async_failure = Logging.async_failure_handler
+    Logging.pre_call = fake_pre_call
+
+    async def _noop_async_failure(self, *args, **kwargs):
+        return None
+
+    Logging.async_failure_handler = _noop_async_failure
+    try:
+        await proxy_logging_obj._handle_logging_proxy_only_error(
+            request_data={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-bad", request_route="/v1/chat/completions"
+            ),
+            route="/v1/chat/completions",
+            original_exception=Exception("bad key"),
+        )
+    finally:
+        Logging.pre_call = orig_pre_call
+        Logging.async_failure_handler = orig_async_failure
+
+    assert captured.get("flag") is True
+
+
+@pytest.mark.asyncio
+async def test_proxy_only_error_log_keeps_litellm_metadata_in_litellm_params():
+    """Responses API requests carry guardrail info under ``litellm_metadata``
+    (not ``metadata``). It must land in litellm_params so
+    ``merge_litellm_metadata`` can surface ``guardrail_information`` in the
+    spend-log failure row, matching the chat completions path."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    captured = {}
+    guardrail_info = [{"guardrail_name": "test-guard", "guardrail_status": "blocked"}]
+
+    def fake_update_environment_variables(self, *args, **kwargs):
+        captured["litellm_params"] = kwargs.get("litellm_params")
+        captured["optional_params"] = kwargs.get("optional_params")
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    orig_update_env = Logging.update_environment_variables
+    orig_pre_call = Logging.pre_call
+    orig_async_failure = Logging.async_failure_handler
+
+    async def _noop_async_failure(self, *args, **kwargs):
+        return None
+
+    Logging.update_environment_variables = fake_update_environment_variables
+    Logging.pre_call = lambda self, *args, **kwargs: None
+    Logging.async_failure_handler = _noop_async_failure
+    try:
+        await proxy_logging_obj._handle_logging_proxy_only_error(
+            request_data={
+                "model": "gpt-4o",
+                "input": "blocked prompt",
+                "litellm_metadata": {
+                    "standard_logging_guardrail_information": guardrail_info
+                },
+            },
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-1234", request_route="/v1/responses"
+            ),
+            route="/v1/responses",
+            original_exception=HTTPException(status_code=400, detail="blocked"),
+        )
+    finally:
+        Logging.update_environment_variables = orig_update_env
+        Logging.pre_call = orig_pre_call
+        Logging.async_failure_handler = orig_async_failure
+
+    assert (
+        captured["litellm_params"]["litellm_metadata"][
+            "standard_logging_guardrail_information"
+        ]
+        == guardrail_info
+    )
+    assert "litellm_metadata" not in captured["optional_params"]
+
+
 def test_get_model_group_info_order():
     from litellm import Router
     from litellm.proxy.proxy_server import _get_model_group_info
@@ -264,3 +368,60 @@ def test_enrich_http_exception_callback_without_guardrail_name_noop():
     exc = HTTPException(status_code=400, detail={"error": "x"})
     _enrich_http_exception_with_guardrail_context(exc, StubCallback())
     assert exc.detail == {"error": "x"}
+
+
+class TestPostCallFailureHookLiftsFirstApiCallStartTime:
+    """post_call_failure_hook lifts first_api_call_start_time off the
+    logging object into request_data (an internal top-level key) before
+    the non-serialisable logging object is popped, so failure-path
+    callbacks (OTel preprocessing latency) can still read it. It must
+    never land in request_data["metadata"] (user request metadata,
+    echoed downstream and typed Dict[str, str] in batch objects).
+    """
+
+    async def _run(self, request_data):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []  # skip alerting branch
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_lifts_to_top_level_and_pops_logging_obj(self):
+        handoff = real_datetime.datetime(2026, 1, 1, 0, 0, 0)
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"first_api_call_start_time": handoff}
+        user_meta = {}
+        request_data = {
+            "litellm_logging_obj": logging_obj,
+            "metadata": user_meta,
+        }
+        await self._run(request_data)
+
+        assert request_data["first_api_call_start_time"] == handoff
+        assert "litellm_logging_obj" not in request_data
+        # user metadata is never touched
+        assert user_meta == {}
+        assert "first_api_call_start_time" not in request_data["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_no_logging_obj_is_noop(self):
+        request_data = {"metadata": {}}
+        await self._run(request_data)
+        assert "first_api_call_start_time" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_logging_obj_without_anchor_is_noop(self):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        request_data = {"litellm_logging_obj": logging_obj}
+        await self._run(request_data)
+        assert "first_api_call_start_time" not in request_data
+        assert "litellm_logging_obj" not in request_data

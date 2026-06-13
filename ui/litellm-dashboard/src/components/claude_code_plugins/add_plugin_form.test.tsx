@@ -24,17 +24,13 @@ describe("AddPluginForm", () => {
     renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
 
     expect(screen.getByText("GitHub URL")).toBeInTheDocument();
-    expect(
-      screen.getByPlaceholderText("https://github.com/org/repo/tree/main/my-skill")
-    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("https://github.com/org/repo/tree/main/my-skill")).toBeInTheDocument();
   });
 
   it("shows GitHub repo preview for a plain repo URL", async () => {
     renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
 
-    const urlInput = screen.getByPlaceholderText(
-      "https://github.com/org/repo/tree/main/my-skill"
-    );
+    const urlInput = screen.getByPlaceholderText("https://github.com/org/repo/tree/main/my-skill");
 
     await act(async () => {
       fireEvent.change(urlInput, {
@@ -50,9 +46,7 @@ describe("AddPluginForm", () => {
   it("shows git-subdir preview for a tree URL", async () => {
     renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
 
-    const urlInput = screen.getByPlaceholderText(
-      "https://github.com/org/repo/tree/main/my-skill"
-    );
+    const urlInput = screen.getByPlaceholderText("https://github.com/org/repo/tree/main/my-skill");
 
     await act(async () => {
       fireEvent.change(urlInput, {
@@ -70,9 +64,7 @@ describe("AddPluginForm", () => {
   it("auto-fills skill name from repo URL", async () => {
     renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
 
-    const urlInput = screen.getByPlaceholderText(
-      "https://github.com/org/repo/tree/main/my-skill"
-    );
+    const urlInput = screen.getByPlaceholderText("https://github.com/org/repo/tree/main/my-skill");
 
     await act(async () => {
       fireEvent.change(urlInput, {
@@ -92,9 +84,7 @@ describe("AddPluginForm", () => {
     const nameInput = screen.getByPlaceholderText("my-skill") as HTMLInputElement;
     fireEvent.change(nameInput, { target: { value: "existing-name" } });
 
-    const urlInput = screen.getByPlaceholderText(
-      "https://github.com/org/repo/tree/main/my-skill"
-    );
+    const urlInput = screen.getByPlaceholderText("https://github.com/org/repo/tree/main/my-skill");
 
     await act(async () => {
       fireEvent.change(urlInput, {

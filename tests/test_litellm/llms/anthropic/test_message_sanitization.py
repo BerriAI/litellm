@@ -339,6 +339,95 @@ class TestMessageSanitization:
         assert result[0]["role"] == "user"
         assert result[1]["role"] == "assistant"
 
+    def test_empty_string_content_sanitized_without_modify_params(self):
+        """
+        Regression: An empty user message ({"role": "user", "content": ""}) must
+        be rewritten to a non-empty placeholder *before* it reaches Anthropic,
+        even when litellm.modify_params is False. Otherwise Anthropic returns:
+            "messages: text content blocks must be non-empty"
+        Reproduces a real failure from the pr-review agent (pydantic-ai).
+        """
+        litellm.modify_params = False
+
+        messages = [
+            {"role": "user", "content": "First message"},
+            {"role": "user", "content": "please review this"},
+            {"role": "user", "content": ""},
+        ]
+
+        result = anthropic_messages_pt(
+            messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+        )
+
+        # All three user messages get merged into one user turn for Anthropic.
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        text_blocks = [
+            b for b in result[0]["content"] if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        assert len(text_blocks) == 3
+        # No text block may be empty — that's the contract Anthropic enforces.
+        for block in text_blocks:
+            assert block["text"].strip() != ""
+        assert text_blocks[2]["text"] == (
+            "[System: Empty message content sanitised to satisfy protocol]"
+        )
+
+    def test_empty_text_block_in_list_content_sanitized(self):
+        """
+        Same regression for the list-of-blocks form:
+            {"role": "user", "content": [{"type": "text", "text": ""}]}
+        Empty text *blocks* must be rewritten too, regardless of modify_params.
+        """
+        litellm.modify_params = False
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "real content"},
+                    {"type": "text", "text": ""},
+                    {"type": "text", "text": "  \n  "},
+                ],
+            },
+        ]
+
+        result = anthropic_messages_pt(
+            messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+        )
+
+        assert len(result) == 1
+        text_blocks = [
+            b for b in result[0]["content"] if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        assert len(text_blocks) == 3
+        assert text_blocks[0]["text"] == "real content"
+        for block in text_blocks[1:]:
+            assert block["text"].strip() != ""
+
+    def test_non_empty_content_unchanged_without_modify_params(self):
+        """
+        Sanity check: when nothing is empty, the messages flow through unchanged
+        even with modify_params disabled.
+        """
+        litellm.modify_params = False
+
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {"role": "user", "content": "How are you?"},
+        ]
+
+        result = anthropic_messages_pt(
+            messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+        )
+
+        # Two user turns + one assistant turn (alternation preserved).
+        assert len(result) == 3
+        assert result[0]["content"][0]["text"] == "Hello"
+        assert result[1]["content"][0]["text"] == "Hi there"
+        assert result[2]["content"][0]["text"] == "How are you?"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

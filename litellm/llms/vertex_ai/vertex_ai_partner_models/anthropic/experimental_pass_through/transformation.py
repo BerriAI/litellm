@@ -17,6 +17,9 @@ from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,
@@ -159,6 +162,6 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             "model", None
         )  # do not pass model in request body to vertex ai
 
-        sanitize_vertex_anthropic_output_params(anthropic_messages_request)
+        sanitize_vertex_anthropic_output_params(anthropic_messages_request, model)
 
         return anthropic_messages_request

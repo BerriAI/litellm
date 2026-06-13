@@ -34,7 +34,7 @@ class PatternUtils:
 
     @staticmethod
     def sorted_patterns(
-        patterns: Dict[str, List[Dict]]
+        patterns: Dict[str, List[Dict]],
     ) -> List[Tuple[str, List[Dict]]]:
         """
         Cached property for patterns sorted by specificity.

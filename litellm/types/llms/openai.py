@@ -79,7 +79,14 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import Annotated, Dict, Required, TypedDict, override
+from typing_extensions import (
+    Annotated,
+    Dict,
+    NotRequired,
+    Required,
+    TypedDict,
+    override,
+)
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.responses.main import (
@@ -795,6 +802,8 @@ ValidUserMessageContentTypes = [
     "audio_url",
     "document",
     "guarded_text",
+    "grounding_source",
+    "query",
     "video_url",
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
@@ -806,6 +815,8 @@ ValidUserMessageContentTypesLiteral = Literal[
     "audio_url",
     "document",
     "guarded_text",
+    "grounding_source",
+    "query",
     "video_url",
     "file",
 ]
@@ -817,6 +828,8 @@ ValidUserMessageContentTypes = [
     "audio_url",
     "document",
     "guarded_text",
+    "grounding_source",
+    "query",
     "video_url",
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
@@ -844,6 +857,8 @@ ValidChatCompletionMessageContentTypesLiteral = Literal[
     "audio_url",
     "document",
     "guarded_text",
+    "grounding_source",
+    "query",
     "video_url",
     "file",
     "thinking",
@@ -857,6 +872,8 @@ ValidChatCompletionMessageContentTypes = [
     "audio_url",
     "document",
     "guarded_text",
+    "grounding_source",
+    "query",
     "video_url",
     "file",
     "thinking",
@@ -958,6 +975,7 @@ ChatCompletionAssistantContentValue = (
 
 class ChatCompletionResponseMessage(TypedDict, total=False):
     content: Optional[ChatCompletionAssistantContentValue]
+    annotations: Optional[List[ChatCompletionAnnotation]]
     tool_calls: Optional[List[ChatCompletionToolCallChunk]]
     role: Literal["assistant"]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
@@ -1076,6 +1094,7 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "imageConfig",
 ]
 
 OpenAIImageEditOptionalParams = Literal[
@@ -1878,14 +1897,24 @@ class OpenAIRealtimeStreamSessionEvents(TypedDict):
 
 class OpenAIRealtimeStreamResponseOutputItemContent(TypedDict, total=False):
     audio: str
-    """Base64-encoded audio bytes, used for 'input_audio' content types"""
+    """Base64-encoded audio bytes, used for 'input_audio' / 'audio' / 'output_audio' content types"""
     id: str
     """The ID of the previous conversation item for reference"""
     text: str
-    """The text content, used for 'input_text' and 'text' content types"""
-    transcript: str
-    """The transcript content, used for 'input_audio' content types"""
-    type: Literal["input_audio", "input_text", "text", "item_reference", "audio"]
+    """The text content, used for 'input_text' / 'text' / 'output_text' content types"""
+    transcript: Optional[str]
+    """The transcript content, used for 'input_audio' / 'audio' content types"""
+    type: Literal[
+        "input_audio",
+        "input_text",
+        # Beta assistant content types
+        "text",
+        "audio",
+        "item_reference",
+        # GA assistant content types (aligns with Responses API)
+        "output_text",
+        "output_audio",
+    ]
     """The type of content"""
 
 
@@ -1925,6 +1954,7 @@ class OpenAIRealtimeStreamResponseOutputItemAdded(TypedDict):
     response_id: str
     output_index: int
     item: OpenAIRealtimeStreamResponseOutputItem
+    event_id: NotRequired[str]
 
 
 class OpenAIRealtimeStreamResponseBaseObject(TypedDict):
@@ -1945,23 +1975,46 @@ class OpenAIRealtimeConversationCreated(TypedDict, total=False):
 
 
 class OpenAIRealtimeConversationItemCreated(TypedDict, total=False):
+    """Beta: single event emitted when a conversation item is created."""
+
     type: Required[Literal["conversation.item.created"]]
     item: OpenAIRealtimeStreamResponseOutputItem
     event_id: str
-    previous_item_id: str
+    previous_item_id: Optional[str]  # None when this is the first item
+
+
+class OpenAIRealtimeConversationItemAdded(TypedDict, total=False):
+    """GA: emitted immediately when a conversation item is added (replaces .created)."""
+
+    type: Required[Literal["conversation.item.added"]]
+    item: OpenAIRealtimeStreamResponseOutputItem
+    event_id: str
+    previous_item_id: Optional[str]  # None when this is the first item
+
+
+class OpenAIRealtimeConversationItemDone(TypedDict, total=False):
+    """GA: emitted when a conversation item is fully complete (e.g. transcription done)."""
+
+    type: Required[Literal["conversation.item.done"]]
+    item: OpenAIRealtimeStreamResponseOutputItem
+    event_id: str
+    previous_item_id: Optional[str]  # None when this is the first item
 
 
 class OpenAIRealtimeResponseContentPart(TypedDict, total=False):
     audio: str
-    """Base64-encoded audio bytes, if type is 'audio'"""
+    """Base64-encoded audio bytes, if type is 'audio' or 'output_audio'"""
 
     text: str
-    """The text content, if type is 'text'"""
+    """The text content, if type is 'text' or 'output_text'"""
 
-    transcript: str
-    """The transcript content, if type is 'audio'"""
+    transcript: Optional[str]
+    """The transcript content, if type is 'audio' or 'output_audio'"""
 
-    type: Literal["audio", "text"]
+    type: Union[
+        Literal["audio", "text"],  # beta
+        Literal["output_audio", "output_text"],  # GA
+    ]
     """The type of content"""
 
 
@@ -1982,7 +2035,14 @@ class OpenAIRealtimeResponseDelta(TypedDict):
     item_id: str
     output_index: int
     response_id: str
-    type: Union[Literal["response.text.delta"], Literal["response.audio.delta"]]
+    type: Union[
+        Literal["response.text.delta"],
+        Literal["response.audio.delta"],
+        # GA renamed events
+        Literal["response.output_text.delta"],
+        Literal["response.output_audio.delta"],
+        Literal["response.output_audio_transcript.delta"],
+    ]
 
 
 class OpenAIRealtimeResponseTextDone(TypedDict):
@@ -1992,7 +2052,10 @@ class OpenAIRealtimeResponseTextDone(TypedDict):
     output_index: int
     response_id: str
     text: str
-    type: Literal["response.text.done"]
+    type: Union[
+        Literal["response.text.done"],
+        Literal["response.output_text.done"],  # GA rename
+    ]
 
 
 class OpenAIRealtimeResponseAudioDone(TypedDict):
@@ -2001,7 +2064,11 @@ class OpenAIRealtimeResponseAudioDone(TypedDict):
     item_id: str
     output_index: int
     response_id: str
-    type: Literal["response.audio.done"]
+    type: Union[
+        Literal["response.audio.done"],
+        Literal["response.output_audio.done"],  # GA rename
+        Literal["response.output_audio_transcript.done"],  # GA rename
+    ]
 
 
 class OpenAIRealtimeContentPartDone(TypedDict):
@@ -2012,6 +2079,17 @@ class OpenAIRealtimeContentPartDone(TypedDict):
     response_id: str
     part: OpenAIRealtimeResponseContentPart
     type: Literal["response.content_part.done"]
+
+
+class OpenAIRealtimeFunctionCallArgumentsDone(TypedDict):
+    type: Literal["response.function_call_arguments.done"]
+    event_id: str
+    response_id: str
+    item_id: str
+    output_index: int
+    call_id: str
+    name: str
+    arguments: str
 
 
 class OpenAIRealtimeOutputItemDone(TypedDict):
@@ -2046,10 +2124,18 @@ class OpenAIRealtimeDoneEvent(TypedDict):
 
 class OpenAIRealtimeEventTypes(Enum):
     SESSION_CREATED = "session.created"
+    # Beta delta event names
     RESPONSE_TEXT_DELTA = "response.text.delta"
     RESPONSE_AUDIO_DELTA = "response.audio.delta"
     RESPONSE_TEXT_DONE = "response.text.done"
     RESPONSE_AUDIO_DONE = "response.audio.done"
+    # GA renamed delta event names
+    RESPONSE_OUTPUT_TEXT_DELTA = "response.output_text.delta"
+    RESPONSE_OUTPUT_AUDIO_DELTA = "response.output_audio.delta"
+    RESPONSE_OUTPUT_AUDIO_TRANSCRIPT_DELTA = "response.output_audio_transcript.delta"
+    RESPONSE_OUTPUT_TEXT_DONE = "response.output_text.done"
+    RESPONSE_OUTPUT_AUDIO_DONE = "response.output_audio.done"
+    RESPONSE_OUTPUT_AUDIO_TRANSCRIPT_DONE = "response.output_audio_transcript.done"
     RESPONSE_DONE = "response.done"
     RESPONSE_OUTPUT_ITEM_ADDED = "response.output_item.added"
     RESPONSE_CONTENT_PART_ADDED = "response.content_part.added"
@@ -2060,13 +2146,18 @@ OpenAIRealtimeEvents = Union[
     OpenAIRealtimeStreamSessionEvents,
     OpenAIRealtimeStreamResponseOutputItemAdded,
     OpenAIRealtimeResponseContentPartAdded,
+    # Beta conversation item event
     OpenAIRealtimeConversationItemCreated,
+    # GA conversation item events
+    OpenAIRealtimeConversationItemAdded,
+    OpenAIRealtimeConversationItemDone,
     OpenAIRealtimeConversationCreated,
     OpenAIRealtimeResponseDelta,
     OpenAIRealtimeResponseTextDone,
     OpenAIRealtimeResponseAudioDone,
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeOutputItemDone,
+    OpenAIRealtimeFunctionCallArgumentsDone,
     OpenAIRealtimeDoneEvent,
 ]
 

@@ -8,14 +8,16 @@ Auth: AWS Bedrock API key as Bearer token (set via BEDROCK_MANTLE_API_KEY env va
       or region-aware key via BEDROCK_MANTLE_{REGION}_API_KEY.
 """
 
-from typing import Iterator, AsyncIterator, Any, Optional, Tuple, Union
+from typing import Iterator, AsyncIterator, Any, List, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.router import GenericLiteLLMParams
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
-
 
 BEDROCK_MANTLE_DEFAULT_REGION = "us-east-1"
 
@@ -34,13 +36,19 @@ class BedrockMantleChatConfig(OpenAILikeChatConfig):
         return super().get_config()
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         region = (
-            get_secret_str("BEDROCK_MANTLE_REGION")
+            (litellm_params.aws_region_name if litellm_params else None)
+            or get_secret_str("BEDROCK_MANTLE_REGION")
+            or get_secret_str("AWS_REGION_NAME")
             or get_secret_str("AWS_REGION")
             or BEDROCK_MANTLE_DEFAULT_REGION
         )
+        BaseAWSLLM._validate_aws_region_name(region)
         api_base = (
             api_base
             or get_secret_str("BEDROCK_MANTLE_API_BASE")
@@ -48,6 +56,30 @@ class BedrockMantleChatConfig(OpenAILikeChatConfig):
         )
         dynamic_api_key = api_key or get_secret_str("BEDROCK_MANTLE_API_KEY")
         return api_base, dynamic_api_key
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        headers = super().validate_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        project_id = litellm_params.get("aws_bedrock_project_id")
+        if project_id:
+            headers["OpenAI-Project"] = project_id
+        return headers
 
     def get_supported_openai_params(self, model: str) -> list:
         base_params = super().get_supported_openai_params(model)
