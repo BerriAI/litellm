@@ -94,17 +94,15 @@ def serialize_response(
 
 
 def _output(response: ChatResponse) -> list[PlainJson]:
-    items: list[PlainJson] = []
     reasoning = _reasoning_text(response.content)
-    if reasoning is not None:
-        items.append(  # nosemgrep: translation-no-mutation
-            _reasoning_item(reasoning, response)
-        )
-    items.append(_message_item(response))  # nosemgrep: translation-no-mutation
-    items.extend(
-        _function_call_items(response.content)
-    )  # nosemgrep: translation-no-mutation
-    return items
+    reasoning_items: list[PlainJson] = (
+        [_reasoning_item(reasoning, response)] if reasoning is not None else []
+    )
+    return [
+        *reasoning_items,
+        _message_item(response),
+        *_function_call_items(response.content),
+    ]
 
 
 def _reasoning_text(content: Block[ContentBlock]) -> str | None:
