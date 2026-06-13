@@ -1573,3 +1573,41 @@ def test_data_residency_composes_with_service_tier(_local_model_cost_map):
 
     assert priority_base_total > 0
     assert priority_eu_total == pytest.approx(priority_base_total * 1.10, rel=1e-9)
+
+
+def test_generic_cost_per_token_bills_highest_crossed_tier():
+    """Regression for #30345.
+
+    With graduated tiers at 90k and 128k, a 150k-token request crosses both and
+    must be billed at the highest tier it crosses (128k). The tier keys were
+    sorted lexicographically, so "_above_90k_" wrongly preceded "_above_128k_"
+    ("9" > "1") and billing stopped at the lower 90k tier.
+    """
+    from unittest.mock import patch
+
+    mock_model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_90k_tokens": 5e-6,
+        "input_cost_per_token_above_128k_tokens": 9e-6,
+        "output_cost_per_token_above_90k_tokens": 6e-6,
+        "output_cost_per_token_above_128k_tokens": 1e-5,
+    }
+    usage = Usage(
+        prompt_tokens=150_000,
+        completion_tokens=100,
+        total_tokens=150_100,
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model="test-tiered-model",
+            usage=usage,
+            custom_llm_provider="test-provider",
+        )
+
+    assert round(prompt_cost, 12) == round(150_000 * 9e-6, 12)
+    assert round(completion_cost, 12) == round(100 * 1e-5, 12)
