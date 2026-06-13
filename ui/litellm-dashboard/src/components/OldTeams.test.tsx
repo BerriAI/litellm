@@ -371,7 +371,7 @@ describe("OldTeams - handleCreate organization handling", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
     await waitFor(() => {
       expect(screen.getByTestId("delete-team-button")).toBeInTheDocument();
@@ -391,7 +391,7 @@ describe("OldTeams - empty state", () => {
   });
 
   it("should display empty state message when teams array is empty", async () => {
-    vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 } as any);
+    vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
@@ -403,7 +403,7 @@ describe("OldTeams - empty state", () => {
   });
 
   it("should display empty state message when teams is null", async () => {
-    vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 } as any);
+    vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
@@ -436,7 +436,7 @@ describe("OldTeams - empty state", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
@@ -606,7 +606,7 @@ describe("OldTeams - premium props", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" premiumUser={true} />);
 
     const teamIdElement = await screen.findByText("team-123456789");
@@ -648,7 +648,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     expect(screen.getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
@@ -676,7 +676,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="proxy_admin" />);
 
     expect(screen.getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
@@ -704,7 +704,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="proxy_admin_viewer" />);
 
     expect(screen.queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
@@ -732,7 +732,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin Viewer" />);
 
     expect(screen.queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
@@ -754,14 +754,14 @@ describe("OldTeams - access_group_ids in team create", () => {
       keys: [],
       members_with_roles: [],
       spend: 0,
-    } as any);
+    });
     mockUseOrganizations.mockReturnValue({
       data: [{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }],
     });
   });
 
   it("should pass access_group_ids to teamCreateCall when creating team", async () => {
-    vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 } as any);
+    vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
@@ -816,7 +816,7 @@ describe("OldTeams - models dropdown options", () => {
   it("should not render all-proxy-models option in models select", async () => {
     vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
 
-    vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 } as any);
+    vi.mocked(teamListCall).mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 1 });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
@@ -886,7 +886,7 @@ describe("OldTeams - organization alias display", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
@@ -919,7 +919,7 @@ describe("OldTeams - organization alias display", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
@@ -951,7 +951,7 @@ describe("OldTeams - organization alias display", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     renderWithQueryClient(<OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     await waitFor(() => {
@@ -990,7 +990,7 @@ describe("OldTeams - Resources column keys badge", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     const { container } = renderWithQueryClient(
       <OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />,
     );
@@ -1025,7 +1025,7 @@ describe("OldTeams - Resources column keys badge", () => {
       page: 1,
       page_size: 100,
       total_pages: 1,
-    } as any);
+    });
     const { container } = renderWithQueryClient(
       <OldTeams accessToken="test-token" userID="user-123" userRole="Admin" />,
     );
