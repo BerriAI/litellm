@@ -2248,9 +2248,17 @@ async def _resolve_request_response_payload(
     if object_key is None:
         return pg_payload
 
-    payload = await cold_storage_handler.get_proxy_server_request_from_cold_storage_with_object_key(
-        object_key=object_key
-    )
+    try:
+        payload = await cold_storage_handler.get_proxy_server_request_from_cold_storage_with_object_key(
+            object_key=object_key
+        )
+    except Exception:
+        verbose_proxy_logger.warning(
+            "Failed to fetch cold storage payload for key %s; falling back to DB values",
+            object_key,
+            exc_info=True,
+        )
+        return pg_payload
     if payload is None:
         return pg_payload
 
