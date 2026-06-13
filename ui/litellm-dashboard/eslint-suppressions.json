@@ -860,48 +860,6 @@
       "count": 1
     }
   },
-  "src/components/chat/ChatMessages.tsx": {
-    "react-hooks/refs": {
-      "count": 1
-    }
-  },
-  "src/components/chat/ChatPage.tsx": {
-    "max-params": {
-      "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/components/chat/ConversationList.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/chat/MCPAppsPanel.tsx": {
-    "max-nested-callbacks": {
-      "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/components/chat/MCPCredentialsTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/chat/useChatHistory.ts": {
-    "react-hooks/set-state-in-effect": {
-      "count": 3
-    }
-  },
   "src/components/claude_code_plugins.tsx": {
     "no-restricted-imports": {
       "count": 1
