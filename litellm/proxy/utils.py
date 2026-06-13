@@ -3334,7 +3334,10 @@ class PrismaClient:
                             db=self.db, hashed_token=hashed_token
                         )
                         if active_token_id:
-                            response = await self.get_data(
+                            # The recursive call returns a finished
+                            # LiteLLM_VerificationTokenView; the dict
+                            # normalization below would crash subscripting it.
+                            deprecated_response = await self.get_data(
                                 token=active_token_id,
                                 table_name="combined_view",
                                 query_type="find_unique",
@@ -3342,10 +3345,11 @@ class PrismaClient:
                                 proxy_logging_obj=proxy_logging_obj,
                                 check_deprecated=False,
                             )
-                            if response is not None:
+                            if deprecated_response is not None:
                                 verbose_proxy_logger.debug(
                                     "Deprecated key used during grace period"
                                 )
+                            return deprecated_response
 
                     if response is not None:
                         if response["team_models"] is None:
