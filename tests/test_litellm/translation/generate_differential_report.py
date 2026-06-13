@@ -2702,12 +2702,114 @@ def _google_stream_rows(lines: list) -> int:
     return failures
 
 
+def _ollama_chat_rows(lines: list) -> int:
+    import json as _json
+
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import test_differential_ollama_chat_request as req
+    from . import test_differential_ollama_chat_response as resp
+
+    failures = 0
+    lines += [
+        "",
+        "## ollama_chat: request bodies (v1 get_optional_params('ollama_chat')"
+        " + the LIVE OllamaChatConfig.transform_request — dedicated elif, the"
+        " {model, messages, options, stream} NDJSON body with the message"
+        " munge whitelist, the think-tag thinking-extract quirk and the"
+        " always-on stream key — vs v2 providers/ollama_chat)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, reason = req.V1_RAISES[name]
+        result = req._v2(case)
+        try:
+            req.run_v1_request_transform(case)
+            raised = False
+        except UnsupportedParamsError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req.V1_SERVES_FALLBACKS):
+        case, reason = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req.V1_RAISES_RAW):
+        case, reason = req.V1_RAISES_RAW[name]
+        result = req._v2(case)
+        try:
+            req.run_v1_request_transform(case)
+            raised = False
+        except _json.JSONDecodeError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises json.JSONDecodeError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## ollama_chat: responses (v1's OWN transform_response mutating a"
+        " pre-allocated ModelResponse — the ollama_chat/{REQUEST model} prefix,"
+        " the thinking remap / think-tag split, tool-arg restringify — vs v2"
+        " parser + the openai construction arm; the wire carries no id so the"
+        " ambient chatcmpl id is kept)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        same = resp._norm(resp._v2_model_response(raw)) == resp._norm(
+            resp._v1_model_response(raw)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(resp._LOUD):
+        raw, fragment = resp._LOUD[name]
+        result = resp._v2_parse(raw)
+        try:
+            resp._v1_model_response(raw)
+            raised = False
+        except Exception:
+            raised = True
+        ok = result.is_error() and fragment in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({fragment})")
+    for name in sorted(resp._V1_SERVES_FALLBACKS):
+        raw, fragment = resp._V1_SERVES_FALLBACKS[name]
+        result = resp._v2_parse(raw)
+        ok = result.is_error() and fragment in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({fragment})")
+    lines += [
+        "",
+        "ollama_chat streams ride a dedicated inbound NDJSON dialect"
+        " (inbound/openai_chat: the ollama_chat ChunkDialect + ollama_fold);"
+        " like every other provider, streaming stays on v1 until the streaming"
+        " seam lands, so there is no stream differential row here yet.",
+    ]
+    return failures
+
+
 def main() -> None:
     _freeze_ambient()
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules + the wave-3 ollama_chat own module)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -2730,6 +2832,7 @@ def main() -> None:
     failures += _watsonx_rows(lines)
     failures += _sagemaker_chat_rows(lines)
     failures += _groq_rows(lines)
+    failures += _ollama_chat_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

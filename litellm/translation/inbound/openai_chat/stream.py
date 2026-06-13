@@ -47,6 +47,7 @@ from typing_extensions import assert_never
 
 from ...errors import BoundaryError, TranslationError
 from ...ir import Body, CompositeChunk, PlainJson, StreamEvent
+from .ollama_fold import ollama_bodies, ollama_delta_body, ollama_reasoning_split
 
 BlockDialect = Literal["anthropic", "bedrock_converse"]
 """Dialects whose provider parsers emit per-block delta events
@@ -73,6 +74,19 @@ ChunkDialect = Literal[
     # finished; include_usage estimate chunk) is seam scope — see
     # _step_generic's docstring.
     "generic",
+    # wave-3: the ollama NDJSON family (providers/ollama_chat is the ONE
+    # consumer). One wire chunk can carry content/thinking/tool deltas AND
+    # the finish (done: true), so the arm emits delta + finish bodies from
+    # one event exactly like v1's wrapper SPLIT (the gemini composite-chunk
+    # shape). The think-tag state machine is STATEFUL across chunks —
+    # StreamState.started_reasoning/finished_reasoning mirror v1's two
+    # iterator flags, truncation bug included (only the tag-BEARING chunk
+    # emits reasoning; the next content chunk flips to plain content). The
+    # iterator's per-chunk usage stamps are stripped by v1's WRAPPER, so the
+    # fold emits usage only as the done chunk's choices: [] tail (seam
+    # contract). usage/ids/created are envelope (per-chunk fresh ids; the
+    # split finish reuses its source chunk's id — pinned in the gate).
+    "ollama_chat",
 ]
 
 
@@ -88,6 +102,13 @@ class StreamState:
     seen_tool_calls: bool = False
     """gemini: tool calls and finishReason arrive in separate wire chunks, so
     a later ``stop`` rewrites to ``tool_calls`` (v1 ``has_seen_tool_calls``)."""
+    started_reasoning: bool = False
+    """ollama_chat: v1's ``started_reasoning_content`` iterator flag (set by
+    a ``thinking`` field or a ``<think>`` tag in content)."""
+    finished_reasoning: bool = False
+    """ollama_chat: v1's ``finished_reasoning_content`` flag — flips on the
+    FIRST content after reasoning started (v1's truncation bug, pinned) or a
+    ``</think>`` tag."""
 
 
 def initial_state(model: str = "", dialect: ChunkDialect = "anthropic") -> StreamState:
@@ -125,12 +146,18 @@ def step(state: StreamState, event: StreamEvent) -> _StepResult:
         case "stop":
             return state, ()
         case "wire_chunk":
-            if state.dialect == "generic":
-                return _step_generic(state, event.wire_chunk.value)
-            return _step_openai(state, event.wire_chunk.value)
+            return _step_wire_chunk(state, event.wire_chunk.value)
         case "chunk":
             return _gemini_chunk_step(state, event.chunk)
     assert_never(event.tag)
+
+
+def _step_wire_chunk(state: StreamState, payload: PlainJson) -> _StepResult:
+    if state.dialect == "generic":
+        return _step_generic(state, payload)
+    if state.dialect == "ollama_chat":
+        return _step_ollama_chat(state, payload)
+    return _step_openai(state, payload)
 
 
 def _thinking_event_step(state: StreamState, event: StreamEvent) -> _StepResult:
@@ -154,7 +181,7 @@ def _as_block_dialect(
     match dialect:
         case "anthropic" | "bedrock_converse":
             return dialect
-        case "openai" | "azure" | "gemini" | "xai" | "generic":
+        case "openai" | "azure" | "gemini" | "xai" | "generic" | "ollama_chat":
             # wire/composite dialects fold whole chunks; a per-block delta
             # here is a wiring bug and must be loud, never a fabricated
             # anthropic-shaped placeholder (critic-google M5 / critic-azure M3).
@@ -396,6 +423,50 @@ def _step_generic(state: StreamState, payload: PlainJson) -> _StepResult:
             },
         )
     return replace(state, sent_role=sent_role), bodies
+
+
+def _step_ollama_chat(state: StreamState, payload: PlainJson) -> _StepResult:
+    """wave-3: mirror v1's wrapper output for the ollama NDJSON family,
+    probed in-process at HEAD (providers/ollama_chat builds the payload):
+
+    - the think-tag state machine runs v1's EXACT flag order (see
+      ``_ollama_reasoning_split``): only the tag-bearing chunk is reasoning,
+      the next content chunk flips to plain content (v1's truncation bug).
+    - one wire chunk emits up to delta + finish + usage-tail bodies (v1's
+      wrapper splits a payload-bearing done chunk; the split finish carries
+      NO system_fingerprint while a standalone finish does — probed).
+    - empty deltas are swallowed (v1's empty-chunk drop); the first emitted
+      delta carries ``role: assistant``.
+    - the finish flush rides the RAW done_reason (both sides run the live
+      map_finish_reason inside StreamingChoices — the watsonx rule).
+    """
+    if not isinstance(payload, dict):
+        return TranslationError.of_unsupported(
+            "ollama_chat chunk dialect received a non-object payload; wiring bug"
+        )
+    reasoning_out, content_out, started, finished = ollama_reasoning_split(
+        payload.get("thinking"),
+        payload.get("content"),
+        state.started_reasoning,
+        state.finished_reasoning,
+    )
+    tool_calls = payload.get("tool_calls")
+    entries = tuple(tool_calls) if isinstance(tool_calls, list) and tool_calls else None
+    delta = ollama_delta_body(
+        state.sent_role, state.model, content_out, reasoning_out, entries
+    )
+    bodies = ollama_bodies(
+        state.model, delta, payload.get("finish"), payload.get("usage")
+    )
+    return (
+        replace(
+            state,
+            sent_role=state.sent_role or delta is not None,
+            started_reasoning=started,
+            finished_reasoning=finished,
+        ),
+        bodies,
+    )
 
 
 def _content_filter_field(choice: dict[str, PlainJson]) -> dict[str, PlainJson]:

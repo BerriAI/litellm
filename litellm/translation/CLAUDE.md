@@ -40,12 +40,20 @@ translation/
 │       │                #   ResponseDialect (anthropic | bedrock_converse |
 │       │                #   gemini) because v1's outbound shapes are
 │       │                #   per-provider
-│       └── stream.py    # IR stream events -> chunk bodies (pure fold); same
-│                        #   dialect idea via ChunkDialect on StreamState;
-│                        #   the gemini dialect consumes composite chunk
-│                        #   events (cumulative tool index + the
-│                        #   seen-tool-calls stop->tool_calls rewrite ride
-│                        #   StreamState)
+│       ├── stream.py    # IR stream events -> chunk bodies (pure fold); same
+│       │                #   dialect idea via ChunkDialect on StreamState;
+│       │                #   the gemini dialect consumes composite chunk
+│       │                #   events (cumulative tool index + the
+│       │                #   seen-tool-calls stop->tool_calls rewrite ride
+│       │                #   StreamState); the ollama_chat dialect splits one
+│       │                #   NDJSON wire chunk into delta + finish + usage
+│       │                #   bodies (started/finished_reasoning ride
+│       │                #   StreamState; the pure body builders live in
+│       │                #   ollama_fold.py to keep this file under the cap)
+│       └── ollama_fold.py # the ollama NDJSON wire fold: the two-flag
+│                        #   think-tag machine (only the tag-bearing chunk is
+│                        #   reasoning — v1's truncation bug) + the delta/
+│                        #   finish/usage body builders, pure over primitives
 ├── providers/      # one subpackage per wire format. Pure, no I/O
 │   ├── anthropic/
 │   │   ├── serialize.py # body assembly in v1 transform_request order
@@ -491,6 +499,37 @@ translation/
 │   │                    #   httpx_chunk factory (reasoning="rename" + the
 │   │                    #   passthrough_delta_keys axis admitting
 │   │                    #   thinking_blocks); "xai" chunk dialect
+│   ├── ollama_chat/     # wave-3 own module: the ollama /api/chat NDJSON
+│   │   │                #   wire (its OWN stream dialect — usage rides every
+│   │   │                #   chunk, incompatible with the httpx_chunk factory;
+│   │   │                #   bare wire model; legacy "ollama" /api/generate
+│   │   │                #   prefix stays a v1 fallback by absence)
+│   │   ├── guard.py     # the shared openai guard with skip_name_fallback
+│   │   │                #   (v1's munge whitelist drops every message name);
+│   │   │                #   NO stream:false arm (the body always carries
+│   │   │                #   stream, default false — absent == explicit false)
+│   │   ├── params.py    # the OllamaChatConfig supported list as typed
+│   │   │                #   fallbacks (parallel_tool_calls/thinking raise,
+│   │   │                #   user silent-drop, tool cache_control); top_k
+│   │   │                #   SERVED via the provider-native options passthrough
+│   │   ├── serialize.py # {model, messages, options, stream} + top-level
+│   │   │                #   format/tools/think; the message munge mirrors
+│   │   │                #   v1's whitelist (content ALWAYS a string, the
+│   │   │                #   <think>/<thinking>/<budget:thinking> regex emits
+│   │   │                #   `thinking` while content keeps the FULL tagged
+│   │   │                #   string, images base64-stripped, tool_calls ->
+│   │   │                #   {function:{name,arguments:<json.loads>}} with a
+│   │   │                #   blank-arg fallback, name dropped); reasoning_effort
+│   │   │                #   -> think (verbatim for gpt-oss*, else the bool)
+│   │   ├── response.py  # mirrors transform_response (the ollama_chat/{REQUEST
+│   │   │                #   model} prefix is parser scope; construction arm
+│   │   │                #   "openai" — fresh-ModelResponse mutation, the
+│   │   │                #   cohere shape, ambient chatcmpl id kept)
+│   │   └── stream.py    # the NDJSON wire decode -> the inbound "ollama_chat"
+│   │                    #   chunk dialect (one wire chunk splits into delta +
+│   │                    #   finish + usage-tail bodies; the think-tag machine
+│   │                    #   and body builders live in
+│   │                    #   inbound/openai_chat/ollama_fold.py)
 │   ├── openrouter/      # wave-2b-alpha own module (httpx dedicated elif
 │   │   │                #   main.py:3354, transforms LIVE, bare wire model)
 │   │   ├── guard.py     # explicit stream:false + the cache-capable-model
@@ -744,7 +783,7 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to seventy-seven providers out — `anthropic`,
+OpenAI-chat-in to seventy-eight providers out — `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
@@ -762,9 +801,11 @@ route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 providers (`perplexity`, `sambanova`, `deepinfra`, `moonshot` on the SDK
 path, `cometapi` on the httpx path), and the wave-2b-alpha own modules
 (`deepseek`, `openrouter`, `hosted_vllm`, `fireworks_ai`, `snowflake`,
-`huggingface` on its api_base route), and the wave-2b-beta own modules
+`huggingface` on its api_base route), the wave-2b-beta own modules
 (`cohere`/`cohere_chat` (one module), `mistral`, `watsonx`,
-`sagemaker_chat`, `groq`) — request, response, and stream
+`sagemaker_chat`, `groq`), and the wave-3 own module `ollama_chat` (the
+`/api/chat` NDJSON wire — the legacy `ollama` `/api/generate` prefix stays
+a v1 fallback by absence) — request, response, and stream
 translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk

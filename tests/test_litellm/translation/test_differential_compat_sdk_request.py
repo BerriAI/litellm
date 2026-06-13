@@ -621,6 +621,8 @@ def test_registered_providers_have_differential_coverage() -> None:
         "watsonx",  # test_differential_watsonx_{request,response,stream}
         "sagemaker_chat",  # test_differential_sagemaker_chat_{request,response,stream}
         "groq",  # test_differential_groq_{request,response,stream}
+        # wave-3 own modules:
+        "ollama_chat",  # test_differential_ollama_chat_{request,response,stream}
     }
     assert providers == dedicated_gates | set(SPECS) | set(HTTPX_SPECS)
     own_modules = {
@@ -638,6 +640,9 @@ def test_registered_providers_have_differential_coverage() -> None:
         "watsonx",
         "sagemaker_chat",
         "groq",
+        # wave-3 (same convention: the row lands in the commit that adds
+        # the module, with the wrong-arm pin in its response gate)
+        "ollama_chat",
     }
     # critic-wave2b-alpha MAJOR-4: every own-module provider must carry a row
     # in pipeline.OWN_MODULE_RESPONSE_STYLES (the construction-style truth the

@@ -159,6 +159,11 @@ Provider = Literal[
     # clamp on responses; the json_schema workaround/raise arms are typed
     # fallbacks, native-schema models serve verbatim).
     "groq",
+    # wave-3: ollama_chat (the /api/chat NDJSON wire; own module with its
+    # own chunk dialect). The legacy "ollama" prefix (/api/generate) stays
+    # a deliberate v1 fallback by ABSENCE (researcher-4/-5: no coercion
+    # exists between the two names; the prefix split is the whole truth).
+    "ollama_chat",
 ]
 
 NeverPortProvider = Literal[
