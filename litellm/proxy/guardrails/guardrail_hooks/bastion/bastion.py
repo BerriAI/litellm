@@ -49,17 +49,18 @@ class BastionGuardrail(CustomGuardrail):
         preset: str = "tiny",
         threshold: Optional[float] = None,
         violation_message: str = DEFAULT_VIOLATION_MESSAGE,
-        event_hook: Optional[
-            Union[Literal["pre_call", "post_call", "during_call"], List[str]]
-        ] = None,
+        event_hook: Optional[Union[str, List[str]]] = None,
         default_on: bool = False,
         **kwargs: Any,
     ) -> None:
-        _event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = None
+        _event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = (
+            None
+        )
         if event_hook is not None:
             if isinstance(event_hook, list):
                 _event_hook = [
-                    GuardrailEventHooks(h) if isinstance(h, str) else h for h in event_hook
+                    GuardrailEventHooks(h) if isinstance(h, str) else h
+                    for h in event_hook
                 ]
             else:
                 _event_hook = GuardrailEventHooks(event_hook)

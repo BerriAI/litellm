@@ -50,7 +50,9 @@ def initialize_guardrail(
     preset = cast(str, _get_param(litellm_params, guardrail, "preset", "tiny"))
 
     threshold_raw = _get_param(litellm_params, guardrail, "threshold")
-    threshold: Optional[float] = float(threshold_raw) if threshold_raw is not None else None
+    threshold: Optional[float] = (
+        float(threshold_raw) if threshold_raw is not None else None
+    )
 
     violation_message = cast(
         str,
@@ -59,7 +61,9 @@ def initialize_guardrail(
         ),
     )
 
-    mode = _get_param(litellm_params, guardrail, "mode")
+    # `mode` is a first-class field on LitellmParams (read it directly, like the
+    # other guardrail initializers do) rather than via the raw-dict fallback.
+    mode = getattr(litellm_params, "mode", None)
     event_hook = cast(
         Optional[Union[str, List[str]]],
         mode if mode is not None else DEFAULT_EVENT_HOOKS,
