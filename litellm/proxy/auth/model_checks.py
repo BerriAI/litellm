@@ -311,7 +311,15 @@ def get_known_models_from_wildcard(
     suffix_appended_wildcard_models = []
     for model in wildcard_models:
         if not model.startswith(wildcard_provider_prefix):
-            model = f"{wildcard_provider_prefix}/{model}"
+            # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
+            # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
+            # multiple instances), replace that existing provider prefix instead of stacking
+            # both, which would otherwise yield an uncallable "ollama_server1/ollama/gemma3:1b".
+            _, sep, model_suffix = model.partition("/")
+            if sep:
+                model = f"{wildcard_provider_prefix}/{model_suffix}"
+            else:
+                model = f"{wildcard_provider_prefix}/{model}"
         suffix_appended_wildcard_models.append(model)
     return suffix_appended_wildcard_models or []
 
