@@ -273,9 +273,10 @@ class BaseOpenAILLM:
         ssl_config = get_ssl_configuration()
 
         # Respect the opt-in outbound HTTP/2 setting. HTTPHandler centralizes the
-        # transport/limits wiring (incl. force_ipv4), so reuse its client.
+        # transport/limits/SSL wiring (incl. force_ipv4); it resolves SSL config
+        # internally, so we don't pass ssl_verify here (it only accepts bool|str).
         if _should_enable_http2():
-            return HTTPHandler(ssl_verify=ssl_config).client
+            return HTTPHandler().client
 
         return httpx.Client(
             verify=ssl_config,
