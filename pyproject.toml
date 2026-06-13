@@ -259,6 +259,7 @@ members = ["enterprise", "litellm-proxy-extras"]
 module-root = ""
 source-exclude = [
     "litellm/proxy/enterprise",
+    "**/guardrail_benchmarks/**",  # eval/test fixtures — not needed at runtime; keeps long fixture paths out of the wheel (Windows MAX_PATH)
     "**/__pycache__",
     "**/__pycache__/**",
     "**/.mypy_cache",
