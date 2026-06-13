@@ -937,7 +937,7 @@ def _system_content_to_blocks(content: Any) -> List[Dict[str, Any]]:
             if b.get("type") == "text" and (b.get("text") or "").strip():
                 new_block: Dict[str, Any] = {"type": "text", "text": b["text"]}
                 if "cache_control" in b:
-                    new_block["cache_control"] = b["cache_control"]
+                    new_block["cache_control"] = copy.deepcopy(b["cache_control"])
                 blocks.append(new_block)
     return blocks
 

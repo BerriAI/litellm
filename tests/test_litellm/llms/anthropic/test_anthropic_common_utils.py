@@ -1420,6 +1420,43 @@ def test_normalize_multiple_leading_system_preserves_order():
     ]
 
 
+def test_system_content_to_blocks_string_and_empty():
+    from litellm.llms.anthropic.common_utils import _system_content_to_blocks
+
+    assert _system_content_to_blocks("Be brief.") == [
+        {"type": "text", "text": "Be brief."}
+    ]
+    # empty / whitespace-only string is dropped
+    assert _system_content_to_blocks("   ") == []
+    assert _system_content_to_blocks("") == []
+
+
+def test_system_content_to_blocks_list_preserves_cache_control_and_drops_empty():
+    from litellm.llms.anthropic.common_utils import _system_content_to_blocks
+
+    content = [
+        {"type": "text", "text": "Keep me.", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "   "},  # empty -> dropped
+        {"type": "image", "source": {}},  # non-text -> dropped
+        "not-a-dict",  # non-dict -> skipped
+    ]
+    out = _system_content_to_blocks(content)
+    assert out == [
+        {"type": "text", "text": "Keep me.", "cache_control": {"type": "ephemeral"}}
+    ]
+
+
+def test_system_content_to_blocks_deepcopies_cache_control():
+    from litellm.llms.anthropic.common_utils import _system_content_to_blocks
+
+    cc = {"type": "ephemeral"}
+    content = [{"type": "text", "text": "x", "cache_control": cc}]
+    out = _system_content_to_blocks(content)
+    # mutating the output's cache_control must NOT reach back into the input
+    out[0]["cache_control"]["type"] = "MUTATED"
+    assert cc == {"type": "ephemeral"}
+
+
 @pytest.fixture
 def local_model_cost_map(monkeypatch):
     """Force the bundled backup cost map so detection doesn't depend on the
