@@ -4979,3 +4979,128 @@ async def test_router_ttft_timeout_acompletion_intercept():
 
     assert result is reconstructed
     assert mock_collect.called
+
+
+# ---------------------------------------------------------------------------
+# stream_idle_timeout tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_router_stream_idle_timeout_raises_on_stalled_provider():
+    """After first token arrives, stream_idle_timeout fires if no subsequent chunk arrives in time."""
+    import asyncio
+    from unittest.mock import patch
+
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        stream_idle_timeout=0.05,
+    )
+
+    async def _stalled_after_first():
+        yield _make_chunk("Hello")
+        await asyncio.sleep(10)  # stalls; will be killed by stream_idle_timeout
+        yield _make_chunk("", finish_reason="stop")
+
+    fake_stream = MagicMock()
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+    gen = _stalled_after_first()
+    fake_stream.__aiter__ = lambda self: gen
+
+    with pytest.raises(litellm.Timeout, match="stream_idle_timeout"):
+        await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=None,
+            stream_idle_timeout=0.05,
+        )
+
+
+@pytest.mark.asyncio
+async def test_router_stream_idle_timeout_completes_when_not_stalled():
+    """stream_idle_timeout does not fire when chunks arrive within the timeout."""
+    from unittest.mock import patch
+
+    from litellm import ModelResponse
+
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        stream_idle_timeout=5.0,
+    )
+
+    chunks = [
+        _make_chunk("Hello"),
+        _make_chunk(" world"),
+        _make_chunk("", finish_reason="stop"),
+    ]
+
+    fake_stream = MagicMock()
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+    fake_stream.__aiter__ = lambda self: _async_chunks(*chunks)
+
+    reconstructed = MagicMock(spec=ModelResponse)
+
+    with patch("litellm.main.stream_chunk_builder", return_value=reconstructed):
+        result = await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=None,
+            stream_idle_timeout=5.0,
+        )
+
+    assert result is reconstructed
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_and_idle_timeout_both_active():
+    """When both ttft_timeout and stream_idle_timeout are set, both phases are enforced."""
+    import asyncio
+    from unittest.mock import patch
+
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=5.0,
+        stream_idle_timeout=0.05,
+    )
+
+    async def _stalled_after_first():
+        yield _make_chunk("Hello")
+        await asyncio.sleep(10)
+        yield _make_chunk("", finish_reason="stop")
+
+    fake_stream = MagicMock()
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+    gen = _stalled_after_first()
+    fake_stream.__aiter__ = lambda self: gen
+
+    with pytest.raises(litellm.Timeout, match="stream_idle_timeout"):
+        await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=5.0,
+            stream_idle_timeout=0.05,
+        )
