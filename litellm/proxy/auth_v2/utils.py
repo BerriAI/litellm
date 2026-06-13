@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from scim2_models import Email, Name
 from scim2_models import Group as ScimGroup
@@ -17,18 +17,6 @@ if TYPE_CHECKING:
 
 def hash_api_key(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def roles_from_claims(claims: Dict[str, Any]) -> List[Role]:
-    raw = claims.get("roles", [])
-    if not isinstance(raw, list):
-        return []
-    valid = {role.value for role in Role}
-    return [Role(value) for value in raw if value in valid]
-
-
-def public_claims(claims: Dict[str, Any]) -> Dict[str, Any]:
-    return {key: value for key, value in claims.items() if not key.startswith("_")}
 
 
 _ROLE_MAP: Dict[str, Role] = {
@@ -96,7 +84,9 @@ def db_user_to_scim(user: "LiteLLM_UserTable") -> ScimUser:
 
 
 def scim_group_to_db(group: ScimGroup) -> Dict[str, object]:
-    members = [{"user_id": member.value, "role": "user"} for member in (group.members or [])]
+    members = [
+        {"user_id": member.value, "role": "user"} for member in (group.members or [])
+    ]
     return {"team_alias": group.display_name, "members_with_roles": members}
 
 

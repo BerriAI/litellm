@@ -29,7 +29,7 @@ from litellm.proxy.auth_v2.models import (
     SecuritySchemeType,
 )
 from litellm.proxy.auth_v2.authorization import RBACEngine, Role
-from litellm.proxy.auth_v2.resolvers.utils import hash_api_key
+from litellm.proxy.auth_v2.utils import hash_api_key
 from litellm.proxy.auth_v2.security import AuthSecurity
 
 from auth_v2_helpers import TEST_AUDIENCE, TEST_ISSUER, FakeJwksClient

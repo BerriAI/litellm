@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Optional, Protocol, runtime_checkable
 
 from scim2_models import Group as ScimGroup
 from scim2_models import User as ScimUser
@@ -24,8 +24,7 @@ from litellm.proxy.auth_v2.models import (
     TeamRole,
     UserIdentity,
 )
-from litellm.proxy.auth_v2.resolvers.base import IdentityStore
-from litellm.proxy.auth_v2.resolvers.utils import (
+from litellm.proxy.auth_v2.utils import (
     db_team_to_scim,
     db_user_to_scim,
     map_role,
@@ -41,6 +40,43 @@ if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy.utils import PrismaClient
+
+
+@runtime_checkable
+class IdentityResolver(Protocol):
+    async def resolve(self, credential: Credential) -> Principal:
+        """Resolve a verified credential to a Principal.
+
+        Must return a freshly constructed Principal, never a cached or shared
+        instance. The caller stamps request-scoped state (the network context)
+        onto the returned object, so handing back a shared one would leak that
+        state across concurrent requests for the same identity. Cache the
+        underlying identity lookups (as the DB resolver does), not the assembled
+        Principal.
+        """
+        ...
+
+
+@runtime_checkable
+class ProvisioningStore(Protocol):
+    async def upsert_user(self, user: ScimUser) -> ScimUser: ...
+    async def get_user(self, resource_id: str) -> Optional[ScimUser]: ...
+    async def deactivate_user(self, resource_id: str) -> None: ...
+    async def list_users(self, filter_expr: Optional[str]) -> List[ScimUser]: ...
+    async def upsert_group(self, group: ScimGroup) -> ScimGroup: ...
+    async def get_group(self, resource_id: str) -> Optional[ScimGroup]: ...
+    async def delete_group(self, resource_id: str) -> None: ...
+    async def list_groups(self, filter_expr: Optional[str]) -> List[ScimGroup]: ...
+
+
+@runtime_checkable
+class IdentityStore(IdentityResolver, ProvisioningStore, Protocol):
+    """An identity backend: resolves credentials and provisions SCIM users/groups.
+
+    This is the single interface every implementation satisfies (in-memory,
+    database, ...). Resolution and provisioning live behind one store so a
+    provisioned user is immediately resolvable.
+    """
 
 
 class DbIdentityStore(IdentityStore):
@@ -105,18 +141,30 @@ class DbIdentityStore(IdentityStore):
             credential_ref=credential.credential_ref,
         )
 
-    def _principal_from_key(self, credential: Credential, key: UserAPIKeyAuth) -> Principal:
+    def _principal_from_key(
+        self, credential: Credential, key: UserAPIKeyAuth
+    ) -> Principal:
         teams: List[TeamIdentity] = []
         if key.team_id is not None:
-            role = team_role(key.team_member.role) if key.team_member else TeamRole.MEMBER
+            role = (
+                team_role(key.team_member.role) if key.team_member else TeamRole.MEMBER
+            )
             teams.append(TeamIdentity(id=key.team_id, name=key.team_alias, role=role))
         organization = (
-            OrganizationIdentity(id=key.org_id, name=key.organization_alias) if key.org_id is not None else None
+            OrganizationIdentity(id=key.org_id, name=key.organization_alias)
+            if key.org_id is not None
+            else None
         )
-        user = UserIdentity(id=key.user_id, email=key.user_email) if key.user_id is not None else None
+        user = (
+            UserIdentity(id=key.user_id, email=key.user_email)
+            if key.user_id is not None
+            else None
+        )
         mapped = map_role(key.user_role)
         return Principal(
-            principal_type=(PrincipalType.HUMAN if key.user_id else PrincipalType.SERVICE_ACCOUNT),
+            principal_type=(
+                PrincipalType.HUMAN if key.user_id else PrincipalType.SERVICE_ACCOUNT
+            ),
             subject=key.user_id or key.key_alias or credential.subject,
             issuer=credential.issuer,
             user=user,
@@ -128,7 +176,9 @@ class DbIdentityStore(IdentityStore):
             credential_ref=credential.credential_ref,
         )
 
-    async def _principal_from_user(self, credential: Credential, user: "LiteLLM_UserTable") -> Principal:
+    async def _principal_from_user(
+        self, credential: Credential, user: "LiteLLM_UserTable"
+    ) -> Principal:
         teams: List[TeamIdentity] = []
         for team_id in user.teams or []:
             try:
@@ -164,7 +214,9 @@ class DbIdentityStore(IdentityStore):
             credential_ref=credential.credential_ref,
         )
 
-    async def _organization(self, user: "LiteLLM_UserTable") -> Optional[OrganizationIdentity]:
+    async def _organization(
+        self, user: "LiteLLM_UserTable"
+    ) -> Optional[OrganizationIdentity]:
         if user.organization_id is None:
             return None
         try:
@@ -180,7 +232,11 @@ class DbIdentityStore(IdentityStore):
     async def upsert_user(self, user: ScimUser) -> ScimUser:
         repo = UserRepository(self._prisma)
         data = scim_user_to_db(user)
-        existing = await repo.table.find_unique(where={"user_id": user.id}) if user.id else None
+        existing = (
+            await repo.table.find_unique(where={"user_id": user.id})
+            if user.id
+            else None
+        )
         if existing is None:
             data["user_id"] = user.id or str(uuid.uuid4())
             stored = await repo.table.create(data=data)
@@ -189,7 +245,9 @@ class DbIdentityStore(IdentityStore):
         return db_user_to_scim(stored)
 
     async def get_user(self, resource_id: str) -> Optional[ScimUser]:
-        stored = await UserRepository(self._prisma).table.find_unique(where={"user_id": resource_id})
+        stored = await UserRepository(self._prisma).table.find_unique(
+            where={"user_id": resource_id}
+        )
         return db_user_to_scim(stored) if stored is not None else None
 
     async def deactivate_user(self, resource_id: str) -> None:
@@ -199,7 +257,9 @@ class DbIdentityStore(IdentityStore):
             return
         metadata = dict(getattr(stored, "metadata", None) or {})
         metadata["scim_active"] = False
-        await repo.table.update(where={"user_id": resource_id}, data={"metadata": metadata})
+        await repo.table.update(
+            where={"user_id": resource_id}, data={"metadata": metadata}
+        )
 
     async def list_users(self, filter_expr: Optional[str]) -> List[ScimUser]:
         rows = await UserRepository(self._prisma).table.find_many()
@@ -208,7 +268,11 @@ class DbIdentityStore(IdentityStore):
     async def upsert_group(self, group: ScimGroup) -> ScimGroup:
         repo = TeamRepository(self._prisma)
         data = scim_group_to_db(group)
-        existing = await repo.table.find_unique(where={"team_id": group.id}) if group.id else None
+        existing = (
+            await repo.table.find_unique(where={"team_id": group.id})
+            if group.id
+            else None
+        )
         if existing is None:
             data["team_id"] = group.id or str(uuid.uuid4())
             stored = await repo.table.create(data=data)
@@ -217,7 +281,9 @@ class DbIdentityStore(IdentityStore):
         return db_team_to_scim(stored)
 
     async def get_group(self, resource_id: str) -> Optional[ScimGroup]:
-        stored = await TeamRepository(self._prisma).table.find_unique(where={"team_id": resource_id})
+        stored = await TeamRepository(self._prisma).table.find_unique(
+            where={"team_id": resource_id}
+        )
         return db_team_to_scim(stored) if stored is not None else None
 
     async def delete_group(self, resource_id: str) -> None:

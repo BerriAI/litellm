@@ -14,7 +14,7 @@ from litellm.proxy.auth_v2.models import (
     PrincipalType,
     SecuritySchemeType,
 )
-from litellm.proxy.auth_v2.resolvers.db import DbIdentityStore
+from litellm.proxy.auth_v2.resolvers import DbIdentityStore
 
 
 class _FakeCache:

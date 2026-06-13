@@ -86,10 +86,10 @@ built once at the composition root.
 dispatch to it by where its credential lives). `build_authenticators` constructs and orders
 them from `AuthConfig`. JWT verification for OIDC/OAuth2 is shared via `JWTVerifier`.
 
-`resolvers/` holds the `IdentityResolver` / `IdentityStore` protocols and their
-implementations (`DbIdentityStore` against Prisma, an in-memory store for tests). The
-store also handles SCIM user/group provisioning so a provisioned user is immediately
-resolvable.
+`resolvers.py` holds the `IdentityResolver` / `IdentityStore` protocols and the single
+`DbIdentityStore` implementation against Prisma. The store also handles SCIM user/group
+provisioning so a provisioned user is immediately resolvable. `utils.py` holds the pure
+SCIM/role-mapping helpers the store uses.
 
 `authorization/` holds the `Authorizer` protocol and its implementations: `RBACEngine`
 (Casbin role hierarchy and policy) and `ABACEngine`. `Role` and the JWT/OIDC/SAML role
