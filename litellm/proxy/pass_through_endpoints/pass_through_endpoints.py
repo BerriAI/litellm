@@ -78,8 +78,23 @@ pass_through_endpoint_logging = PassThroughEndpointLogging()
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Dict[
-    str, Dict[str, Union[str, bool, List[str], Dict[str, Any]]]
+    str, Dict[str, Union[str, bool, List[str], Dict[str, Any], None]]
 ] = {}
+
+
+def _remove_pass_through_adapter(adapter_id: Optional[str]) -> None:
+    """Drop a pass-through adapter from the global registry when its route is replaced or removed."""
+    if adapter_id is None:
+        return
+    litellm.adapters = [
+        adapter_entry
+        for adapter_entry in litellm.adapters
+        if adapter_entry.get("id") != adapter_id
+    ]
+
+
+def _is_pass_through_adapter_active(adapter_id: str) -> bool:
+    return any(adapter_entry.get("id") == adapter_id for adapter_entry in litellm.adapters)
 
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
@@ -161,6 +176,12 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         user_temperature,
         version,
     )
+
+    if not _is_pass_through_adapter_active(adapter_id):
+        raise HTTPException(
+            status_code=404,
+            detail="Pass-through adapter is no longer active",
+        )
 
     data = {}
     try:
@@ -1540,6 +1561,8 @@ def create_pass_through_route(
                 user_api_key_dict=user_api_key_dict,
             )
 
+        endpoint_func._pass_through_adapter_id = adapter_id  # type: ignore[attr-defined]
+
     except Exception:
         verbose_proxy_logger.debug("Defaulting to target being a url.")
 
@@ -2300,6 +2323,48 @@ class SafeRouteAdder:
         )
         return True
 
+    @staticmethod
+    def add_or_replace_api_route(
+        app: FastAPI,
+        path: str,
+        endpoint: Any,
+        methods: List[str],
+        dependencies: Optional[List] = None,
+    ) -> None:
+        """
+        Replace an existing pass-through route handler or add a new one.
+
+        Pass-through endpoints can be updated in place; stale handlers must not
+        keep serving removed adapter targets.
+        """
+        routes_to_remove = []
+        for route in app.routes:
+            route_path = getattr(route, "path", None)
+            route_methods = getattr(route, "methods", None)
+            if route_path == path and route_methods is not None:
+                if any(method in route_methods for method in methods):
+                    routes_to_remove.append(route)
+
+        for route in routes_to_remove:
+            app.routes.remove(route)
+            verbose_proxy_logger.debug(
+                "Removed stale pass-through route handler: %s with methods %s",
+                path,
+                methods,
+            )
+
+        app.add_api_route(
+            path=path,
+            endpoint=endpoint,
+            methods=methods,
+            dependencies=dependencies,
+        )
+        verbose_proxy_logger.debug(
+            "Registered pass-through route handler: %s with methods %s",
+            path,
+            methods,
+        )
+
 
 class InitPassThroughEndpointHelpers:
     @staticmethod
@@ -2335,6 +2400,8 @@ class InitPassThroughEndpointHelpers:
                 path,
                 methods,
             )
+            previous_route = _registered_pass_through_routes[route_key]
+            _remove_pass_through_adapter(previous_route.get("adapter_id"))
 
         verbose_proxy_logger.debug(
             "adding exact pass through endpoint: %s, methods: %s, dependencies: %s",
@@ -2343,22 +2410,24 @@ class InitPassThroughEndpointHelpers:
             dependencies,
         )
 
-        # Use SafeRouteAdder to only add route if it doesn't exist on the app
-        SafeRouteAdder.add_api_route_if_not_exists(
+        endpoint_func = create_pass_through_route(  # type: ignore
+            path,
+            target,
+            custom_headers,
+            forward_headers,
+            merge_query_params,
+            dependencies,
+            cost_per_request=cost_per_request,
+            default_query_params=default_query_params,
+            guardrails=guardrails,
+            config_file_path=config_file_path,
+        )
+        adapter_id = getattr(endpoint_func, "_pass_through_adapter_id", None)
+
+        SafeRouteAdder.add_or_replace_api_route(
             app=app,
             path=path,
-            endpoint=create_pass_through_route(  # type: ignore
-                path,
-                target,
-                custom_headers,
-                forward_headers,
-                merge_query_params,
-                dependencies,
-                cost_per_request=cost_per_request,
-                default_query_params=default_query_params,
-                guardrails=guardrails,
-                config_file_path=config_file_path,
-            ),
+            endpoint=endpoint_func,
             methods=methods,
             dependencies=dependencies,
         )
@@ -2370,6 +2439,7 @@ class InitPassThroughEndpointHelpers:
             "type": "exact",
             "methods": methods,
             "auth": auth,
+            "adapter_id": adapter_id,
             "passthrough_params": {
                 "target": target,
                 "custom_headers": custom_headers,
@@ -2415,6 +2485,8 @@ class InitPassThroughEndpointHelpers:
                 wildcard_path,
                 methods,
             )
+            previous_route = _registered_pass_through_routes[route_key]
+            _remove_pass_through_adapter(previous_route.get("adapter_id"))
 
         verbose_proxy_logger.debug(
             "adding wildcard pass through endpoint: %s, methods: %s, dependencies: %s",
@@ -2423,23 +2495,25 @@ class InitPassThroughEndpointHelpers:
             dependencies,
         )
 
-        # Use SafeRouteAdder to only add route if it doesn't exist on the app
-        SafeRouteAdder.add_api_route_if_not_exists(
+        endpoint_func = create_pass_through_route(  # type: ignore
+            path,
+            target,
+            custom_headers,
+            forward_headers,
+            merge_query_params,
+            dependencies,
+            include_subpath=True,
+            cost_per_request=cost_per_request,
+            default_query_params=default_query_params,
+            guardrails=guardrails,
+            config_file_path=config_file_path,
+        )
+        adapter_id = getattr(endpoint_func, "_pass_through_adapter_id", None)
+
+        SafeRouteAdder.add_or_replace_api_route(
             app=app,
             path=wildcard_path,
-            endpoint=create_pass_through_route(  # type: ignore
-                path,
-                target,
-                custom_headers,
-                forward_headers,
-                merge_query_params,
-                dependencies,
-                include_subpath=True,
-                cost_per_request=cost_per_request,
-                default_query_params=default_query_params,
-                guardrails=guardrails,
-                config_file_path=config_file_path,
-            ),
+            endpoint=endpoint_func,
             methods=methods,
             dependencies=dependencies,
         )
@@ -2451,6 +2525,7 @@ class InitPassThroughEndpointHelpers:
             "type": "subpath",
             "methods": methods,
             "auth": auth,
+            "adapter_id": adapter_id,
             "passthrough_params": {
                 "target": target,
                 "custom_headers": custom_headers,
@@ -2474,6 +2549,7 @@ class InitPassThroughEndpointHelpers:
         ]
         for key in keys_to_remove:
             route_info = _registered_pass_through_routes[key]
+            _remove_pass_through_adapter(route_info.get("adapter_id"))
             path = route_info.get("path")
             if isinstance(path, str):
                 openai_routes = LiteLLMRoutes.openai_routes.value

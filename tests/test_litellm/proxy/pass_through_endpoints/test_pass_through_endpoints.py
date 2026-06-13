@@ -848,6 +848,122 @@ def test_create_pass_through_route_registers_multiple_adapters():
         litellm.adapters = original_adapters
 
 
+def test_pass_through_route_update_removes_stale_adapter():
+    """
+    Re-registering a pass-through adapter route must retire the previous adapter
+    so stale adapter IDs cannot keep serving the old target.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _registered_pass_through_routes,
+        _remove_pass_through_adapter,
+        create_pass_through_route,
+    )
+
+    class DummyAdapter(CustomLogger):
+        pass
+
+    original_adapters = litellm.adapters
+    litellm.adapters = []
+    registry_backup = dict(_registered_pass_through_routes)
+    _registered_pass_through_routes.clear()
+
+    try:
+        first_adapter = DummyAdapter()
+        second_adapter = DummyAdapter()
+
+        first_route = create_pass_through_route(
+            endpoint="/v1/messages",
+            target=first_adapter,
+        )
+        first_adapter_id = first_route._pass_through_adapter_id
+        assert len(litellm.adapters) == 1
+
+        route_key = "endpoint-1:exact:/v1/messages:POST"
+        _registered_pass_through_routes[route_key] = {
+            "endpoint_id": "endpoint-1",
+            "path": "/v1/messages",
+            "type": "exact",
+            "methods": ["POST"],
+            "auth": False,
+            "adapter_id": first_adapter_id,
+            "passthrough_params": {},
+        }
+
+        _remove_pass_through_adapter(
+            _registered_pass_through_routes[route_key].get("adapter_id")
+        )
+        second_route = create_pass_through_route(
+            endpoint="/v1/messages",
+            target=second_adapter,
+        )
+        second_adapter_id = second_route._pass_through_adapter_id
+
+        assert len(litellm.adapters) == 1
+        assert litellm.adapters[0]["id"] == second_adapter_id
+        assert litellm.adapters[0]["adapter"] is second_adapter
+        assert first_adapter_id != second_adapter_id
+    finally:
+        litellm.adapters = original_adapters
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(registry_backup)
+
+
+def test_remove_endpoint_routes_clears_adapter_registry():
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
+        create_pass_through_route,
+    )
+
+    class DummyAdapter(CustomLogger):
+        pass
+
+    original_adapters = litellm.adapters
+    litellm.adapters = []
+    registry_backup = dict(_registered_pass_through_routes)
+    _registered_pass_through_routes.clear()
+
+    try:
+        adapter = DummyAdapter()
+        route = create_pass_through_route(endpoint="/v1/messages", target=adapter)
+        adapter_id = route._pass_through_adapter_id
+        route_key = "endpoint-1:exact:/v1/messages:POST"
+        _registered_pass_through_routes[route_key] = {
+            "endpoint_id": "endpoint-1",
+            "path": "/v1/messages",
+            "type": "exact",
+            "methods": ["POST"],
+            "auth": False,
+            "adapter_id": adapter_id,
+            "passthrough_params": {},
+        }
+
+        InitPassThroughEndpointHelpers.remove_endpoint_routes("endpoint-1")
+
+        assert route_key not in _registered_pass_through_routes
+        assert litellm.adapters == []
+    finally:
+        litellm.adapters = original_adapters
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(registry_backup)
+
+
+def test_stale_pass_through_adapter_is_not_active():
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _is_pass_through_adapter_active,
+    )
+
+    original_adapters = litellm.adapters
+    litellm.adapters = []
+
+    try:
+        assert _is_pass_through_adapter_active("stale-adapter-id") is False
+    finally:
+        litellm.adapters = original_adapters
+
+
 @pytest.mark.asyncio
 async def test_create_pass_through_route_with_cost_per_request():
     """
