@@ -21,10 +21,6 @@ general_settings:
   proxy_batch_write_at: 60 # Batch write spend updates every 60s
   database_connection_pool_limit: 10 # connection pool limit per worker process. Total connections = limit × workers × instances. Calculate: MAX_DB_CONNECTIONS / (instances × workers). Default: 10.
 
-:::warning
-**Multiple instances:** If running multiple LiteLLM instances (e.g., Kubernetes pods), remember each instance multiplies your total connections. Example: 3 instances × 4 workers × 10 connections = 120 total connections.
-:::
-
   # OPTIONAL Best Practices
   disable_error_logs: True # turn off writing LLM Exceptions to DB
   allow_requests_on_db_unavailable: True # Only USE when running LiteLLM on your VPC. Allow requests to still be processed even if the DB is unavailable. We recommend doing this if you're running LiteLLM on VPC that cannot be accessed from the public internet.
@@ -34,6 +30,11 @@ litellm_settings:
   set_verbose: False      # Switch off Debug Logging, ensure your logs do not have any debugging on
   json_logs: true         # Get debug logs in json format
 ```
+:::warning Multiple instances
+
+If running multiple LiteLLM instances (e.g., Kubernetes pods), remember each instance multiplies your total connections. Example: 3 instances × 4 workers × 10 connections = 120 total connections.
+
+:::
 
 Set slack webhook url in your env
 ```shell
