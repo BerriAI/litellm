@@ -18,6 +18,7 @@ from litellm.types.utils import (
     LlmProviders,
     ModelResponseStream,
     StreamingChoices,
+    Usage,
 )
 from litellm.utils import (
     ProviderConfigManager,
@@ -1072,6 +1073,54 @@ def test_get_model_info_gemini():
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
+
+
+def test_get_model_info_preserves_nonstandard_token_cost_tiers():
+    import uuid
+
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    model = f"custom-tiered-model-{uuid.uuid4().hex}"
+    try:
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 1e-6,
+                    "output_cost_per_token": 2e-6,
+                    "cache_creation_input_token_cost": 3e-6,
+                    "cache_read_input_token_cost": 4e-6,
+                    "input_cost_per_token_above_500k_tokens": 9e-6,
+                    "output_cost_per_token_above_500k_tokens": 1.8e-5,
+                    "cache_creation_input_token_cost_above_500k_tokens": 0.0,
+                    "cache_read_input_token_cost_above_500k_tokens": 7e-7,
+                }
+            }
+        )
+
+        model_info = litellm.get_model_info(model=model, custom_llm_provider="openai")
+        assert model_info["input_cost_per_token_above_500k_tokens"] == 9e-6
+        assert model_info["output_cost_per_token_above_500k_tokens"] == 1.8e-5
+        assert model_info["cache_creation_input_token_cost_above_500k_tokens"] == 0.0
+        assert model_info["cache_read_input_token_cost_above_500k_tokens"] == 7e-7
+
+        usage = Usage(
+            prompt_tokens=600_000,
+            completion_tokens=10,
+            total_tokens=600_010,
+        )
+        prompt_cost, completion_cost = litellm.cost_calculator.cost_per_token(
+            model=model,
+            custom_llm_provider="openai",
+            usage_object=usage,
+        )
+        assert prompt_cost == pytest.approx(600_000 * 9e-6)
+        assert completion_cost == pytest.approx(10 * 1.8e-5)
+    finally:
+        litellm.model_cost.pop(model, None)
+        litellm.open_ai_chat_completion_models.discard(model)
+        _invalidate_model_cost_lowercase_map()
 
 
 def test_openai_models_in_model_info():

@@ -5815,6 +5815,28 @@ def get_provider_info(
     return model_info
 
 
+_ABOVE_THRESHOLD_TOKEN_COST_PREFIXES = (
+    "input_cost_per_token_above_",
+    "output_cost_per_token_above_",
+    "cache_creation_input_token_cost_above_",
+    "cache_read_input_token_cost_above_",
+)
+
+
+def _copy_above_threshold_token_costs(
+    model_info: ModelInfoBase, model_cost_entry: Mapping[str, object]
+) -> ModelInfoBase:
+    model_info_dict = cast(dict[str, object], model_info)
+    for key, value in model_cost_entry.items():
+        if (
+            value is not None
+            and "_tokens" in key
+            and key.startswith(_ABOVE_THRESHOLD_TOKEN_COST_PREFIXES)
+        ):
+            model_info_dict[key] = value
+    return model_info
+
+
 def _is_potential_model_name_in_model_cost(
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
 ) -> bool:
@@ -6004,7 +6026,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 )
                 _output_cost_per_token = 0
 
-            return ModelInfoBase(
+            model_info = ModelInfoBase(
                 key=key,
                 max_tokens=_model_info.get("max_tokens", None),
                 max_input_tokens=_model_info.get("max_input_tokens", None),
@@ -6202,6 +6224,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 uses_embed_content=_model_info.get("uses_embed_content", None),
                 supports_image_size=_model_info.get("supports_image_size", None),
+            )
+            return _copy_above_threshold_token_costs(
+                model_info=model_info, model_cost_entry=_model_info
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
