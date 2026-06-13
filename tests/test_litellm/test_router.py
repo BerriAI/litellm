@@ -4756,3 +4756,137 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
         )
         is True
     )
+
+
+# ---------------------------------------------------------------------------
+# ttft_timeout tests
+# ---------------------------------------------------------------------------
+
+
+def _make_chunk(content: str, finish_reason: str = "") -> MagicMock:
+    chunk = MagicMock()
+    chunk.choices = [MagicMock()]
+    chunk.choices[0].delta = MagicMock()
+    chunk.choices[0].delta.content = content
+    chunk.choices[0].delta.tool_calls = None  # must be explicit — MagicMock() is truthy
+    chunk.choices[0].finish_reason = finish_reason or None
+    return chunk
+
+
+async def _async_chunks(*chunks):
+    for chunk in chunks:
+        yield chunk
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_returns_non_streaming_response():
+    """Router reconstructs a non-streaming ModelResponse when provider streams normally."""
+    from unittest.mock import patch
+
+    from litellm import ModelResponse
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=5.0,
+    )
+
+    chunks = [
+        _make_chunk("Hello"),
+        _make_chunk(" world"),
+        _make_chunk("", finish_reason="stop"),
+    ]
+
+    fake_stream = MagicMock()
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+    fake_stream.__aiter__ = lambda self: _async_chunks(*chunks)
+
+    reconstructed = MagicMock(spec=ModelResponse)
+    reconstructed.choices = [MagicMock()]
+    reconstructed.choices[0].message = MagicMock()
+    reconstructed.choices[0].message.content = "Hello world"
+
+    with patch("litellm.main.stream_chunk_builder", return_value=reconstructed):
+        result = await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=5.0,
+        )
+
+    assert result is reconstructed
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_raises_on_hung_provider():
+    """Router raises litellm.Timeout when provider never sends a first token."""
+    import asyncio
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=0.1,
+    )
+
+    async def hung_stream():
+        await asyncio.sleep(10)
+        return
+        yield
+
+    fake_stream = MagicMock()
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+    fake_stream.__aiter__ = lambda self: hung_stream()
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=0.1,
+        )
+
+    assert "ttft_timeout" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_not_reset_by_preamble_chunks():
+    """Preamble chunks must not reset the TTFT clock; only the hard deadline counts."""
+    import asyncio
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=0.2,
+    )
+
+    async def preamble_only_stream():
+        for _ in range(5):
+            yield _make_chunk("")
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(10)
+
+    fake_stream = MagicMock()
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+    fake_stream.__aiter__ = lambda self: preamble_only_stream()
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=0.2,
+        )
+
+    assert "ttft_timeout" in str(exc_info.value)
