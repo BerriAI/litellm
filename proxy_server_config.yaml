@@ -241,9 +241,36 @@ litellm_settings:
   success_callback: []
 
 router_settings:
-  # Round-robin within model groups if/when we add fallbacks. With one
-  # deployment per model_name we get deterministic routing.
-  routing_strategy: "simple-shuffle"
-  # Retry on 429s and transient 5xx for chat-style models.
-  num_retries: 2
-  timeout: 60
+  routing_strategy: usage-based-routing-v2 
+  redis_host: os.environ/REDIS_HOST
+  redis_password: os.environ/REDIS_PASSWORD
+  redis_port: os.environ/REDIS_PORT
+  enable_pre_call_checks: true
+  model_group_alias: {"my-special-fake-model-alias-name": "fake-openai-endpoint-3"} 
+
+general_settings: 
+  master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
+  store_model_in_db: True
+  proxy_budget_rescheduler_min_time: 60
+  proxy_budget_rescheduler_max_time: 64
+  proxy_batch_write_at: 1
+  database_connection_pool_limit: 10
+  # background_health_checks: true
+  # use_shared_health_check: true
+  # health_check_interval: 30
+  # cancel_on_disconnect: true # cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot)
+  # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
+
+  pass_through_endpoints:
+    - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
+      target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
+      headers:                                            # headers to forward to this URL
+        content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
+        accept: application/json
+      forward_headers: True
+
+# environment_variables:
+  # settings for using redis caching
+  # REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
+  # REDIS_PORT: "16337"
+  # REDIS_PASSWORD: 

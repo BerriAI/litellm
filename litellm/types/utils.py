@@ -499,6 +499,7 @@ CallTypesLiteral = Literal[
     "create_batch",
     "acreate_batch",
     "pass_through_endpoint",
+    "allm_passthrough_route",
     "anthropic_messages",
     "aretrieve_batch",
     "retrieve_batch",
@@ -3058,6 +3059,12 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Weave (W&B) dynamic params
     wandb_api_key: Optional[str]
     weave_project_id: Optional[str]
+
+    # Datadog dynamic params
+    dd_api_key: Optional[str]
+    dd_site: Optional[str]
+    dd_agent_host: Optional[str]
+    dd_agent_port: Optional[str]
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages

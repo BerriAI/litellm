@@ -19,6 +19,42 @@ else:
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
 
 
+def _encode_google_genai_sse_event(event_lines: List[str]) -> bytes:
+    return ("\n".join(event_lines) + "\n\n").encode("utf-8")
+
+
+def _next_google_genai_sse_chunk(line_iter) -> bytes:
+    event_lines: List[str] = []
+    while True:
+        try:
+            line = next(line_iter)
+        except StopIteration:
+            if event_lines:
+                return _encode_google_genai_sse_event(event_lines)
+            raise
+        if line == "":
+            if event_lines:
+                return _encode_google_genai_sse_event(event_lines)
+            continue
+        event_lines.append(line)
+
+
+async def _anext_google_genai_sse_chunk(line_iter) -> bytes:
+    event_lines: List[str] = []
+    while True:
+        try:
+            line = await line_iter.__anext__()
+        except StopAsyncIteration:
+            if event_lines:
+                return _encode_google_genai_sse_event(event_lines)
+            raise
+        if line == "":
+            if event_lines:
+                return _encode_google_genai_sse_event(event_lines)
+            continue
+        event_lines.append(line)
+
+
 class BaseGoogleGenAIGenerateContentStreamingIterator:
     """
     Base class for Google GenAI Generate Content streaming iterators that provides common logic
@@ -108,22 +144,20 @@ class GoogleGenAIGenerateContentStreamingIterator(
         self.generate_content_provider_config = generate_content_provider_config
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
-        # Store the iterator once to avoid multiple stream consumption
-        self.stream_iterator = response.iter_bytes()
+        # Gemini streamGenerateContent uses SSE line framing; iter_lines keeps
+        # large inlineData payloads (e.g. image/jpeg) intact within one event.
+        self.stream_iterator = response.iter_lines()
 
     def __iter__(self):
         return self
 
     def __next__(self):
-        while True:
-            try:
-                chunk = next(self.stream_iterator)
-                self.collected_chunks.append(chunk)
-                if self._is_terminal_sse_chunk(chunk):
-                    continue
-                return chunk
-            except StopIteration:
-                raise StopIteration
+        try:
+            chunk = _next_google_genai_sse_chunk(self.stream_iterator)
+            self.collected_chunks.append(chunk)
+            return chunk
+        except StopIteration:
+            raise StopIteration
 
     def __aiter__(self):
         return self
@@ -165,20 +199,18 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(
         self.generate_content_provider_config = generate_content_provider_config
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
-        # Store the async iterator once to avoid multiple stream consumption
-        self.stream_iterator = response.aiter_bytes()
+        # Gemini streamGenerateContent uses SSE line framing; aiter_lines keeps
+        # large inlineData payloads (e.g. image/jpeg) intact within one event.
+        self.stream_iterator = response.aiter_lines()
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
-        while True:
-            try:
-                chunk = await self.stream_iterator.__anext__()
-                self.collected_chunks.append(chunk)
-                if self._is_terminal_sse_chunk(chunk):
-                    continue
-                return chunk
-            except StopAsyncIteration:
-                await self._handle_async_streaming_logging()
-                raise StopAsyncIteration
+        try:
+            chunk = await _anext_google_genai_sse_chunk(self.stream_iterator)
+            self.collected_chunks.append(chunk)
+            return chunk
+        except StopAsyncIteration:
+            await self._handle_async_streaming_logging()
+            raise StopAsyncIteration

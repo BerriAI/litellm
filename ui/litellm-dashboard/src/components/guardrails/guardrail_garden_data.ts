@@ -308,6 +308,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Enterprise", "Security"],
   },
   {
+    id: "cisco_ai_defense",
+    name: "Cisco AI Defense",
+    description:
+      "Cisco AI Defense Inspection API for runtime protection: prompt injection, PII/PCI/PHI, harassment, hate speech, profanity, violence, and code detection.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}cisco.png`,
+    tags: ["Enterprise", "Security", "Prompt Injection", "PII"],
+    providerKey: "CiscoAiDefense",
+  },
+  {
     id: "noma",
     name: "Noma Security",
     description: "AI security platform for detecting and preventing AI-specific threats and vulnerabilities.",

@@ -3260,6 +3260,8 @@ def get_optional_params_image_gen(
         "style": None,
         "user": None,
         "imageConfig": None,
+        "tools": None,
+        "web_search_options": None,
     }
 
     non_default_params = _get_non_default_params(
@@ -3575,6 +3577,15 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         if litellm.VoyageContextualEmbeddingConfig.is_contextualized_embeddings(model):
             optional_params = (
                 litellm.VoyageContextualEmbeddingConfig().map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params={},
+                    model=model,
+                    drop_params=drop_params if drop_params is not None else False,
+                )
+            )
+        elif litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(model):
+            optional_params = (
+                litellm.VoyageMultimodalEmbeddingConfig().map_openai_params(
                     non_default_params=non_default_params,
                     optional_params={},
                     model=model,
@@ -8697,6 +8708,11 @@ class ProviderConfigManager:
             )
         ):
             return litellm.VoyageContextualEmbeddingConfig()
+        elif (
+            litellm.LlmProviders.VOYAGE == provider
+            and litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(model)
+        ):
+            return litellm.VoyageMultimodalEmbeddingConfig()
         elif litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
         elif litellm.LlmProviders.TRITON == provider:
