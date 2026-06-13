@@ -531,9 +531,18 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             return
 
         assembled = stream_chunk_builder(chunks=all_chunks)
-        if not isinstance(assembled, ModelResponse):
+        if assembled is None:
             for chunk in all_chunks:
                 yield chunk
+            return
+        if not isinstance(assembled, ModelResponse):
+            verbose_proxy_logger.warning(
+                "Cisco AI Defense guardrail (%s): assembled streaming "
+                "response has unsupported shape (%s) — failing closed.",
+                self.guardrail_name,
+                type(assembled).__name__,
+            )
+            yield f'data: {json.dumps({"error": {"message": "Cisco AI Defense: unsupported streaming format — response withheld for safety", "type": "guardrail_unsupported_stream", "code": 400, "guardrail": self.guardrail_name}})}\n\n'
             return
 
         response_messages = self._extract_response_messages(assembled)
@@ -1525,14 +1534,14 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             sanitized_messages = sanitized_messages[:-1] or None
         uses_input = "input" in request_data and "messages" not in request_data
         has_instructions = request_data.get("instructions") is not None
+        instructions_redacted = False
         if has_instructions:
-            if not self._redact_responses_instructions(
+            instructions_redacted = self._redact_responses_instructions(
                 request_data, sanitized_text, sanitized_messages
-            ):
-                return False
+            )
             sanitized_messages = self._non_instruction_messages(sanitized_messages)
             if not sanitized_messages:
-                return True
+                return instructions_redacted
         if sanitized_messages:
             if uses_input:
                 rewritten = self._sanitized_messages_to_responses_input(

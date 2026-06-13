@@ -715,6 +715,35 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
                     call_type="completion",
                 )
 
+    @pytest.mark.asyncio
+    async def test_redact_applies_sanitized_input_when_instructions_not_flagged(self):
+        g = _make_guardrail(event_hook="pre_call")
+        data = {
+            "instructions": "Be helpful.",
+            "input": [{"role": "user", "content": "my SSN is 123-45-6789"}],
+        }
+        cisco_resp = _redact_response(
+            sanitized_messages=[
+                {"role": "user", "content": "my SSN is [REDACTED]"},
+            ],
+            rules=({"rule_name": "PII"},),
+        )
+
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        assert "123-45-6789" not in str(
+            data
+        ), f"Sanitized user input was not applied to the request: {data!r}"
+        assert "[REDACTED]" in str(
+            data["input"]
+        ), f"Responses API input was not rewritten: {data['input']!r}"
+
 
 class TestCiscoAIDefenseRedactionEdgeCases:
 
@@ -1230,6 +1259,38 @@ class TestCiscoAIDefenseEdgeCases:
             f'Expected an SSE ``data: {{"error":...}}`` event for '
             f"unsupported streaming shape. Got: {yielded!r}"
         )
+
+    @pytest.mark.asyncio
+    async def test_streaming_assembled_non_model_response_fails_closed(self):
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
+        chunks = _make_streaming_chunks(["leak SSN ", "123-45-6789"])
+        assembled_text_completion = _make_text_completion_response(
+            "leak SSN 123-45-6789"
+        )
+        post_mock = AsyncMock(return_value=_safe_response())
+
+        with patch(
+            "litellm.main.stream_chunk_builder",
+            return_value=assembled_text_completion,
+        ):
+            with _patch_inspection_post(g, post_mock):
+                received = []
+                async for chunk in g.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    response=_aiter(chunks),
+                    request_data={"messages": [{"role": "user", "content": "hi"}]},
+                ):
+                    received.append(chunk)
+
+        for chunk in received:
+            assert chunk not in chunks, (
+                f"Streaming chunk delivered unscanned when the assembled "
+                f"response was not a ModelResponse. Leaked chunk: {chunk!r}"
+            )
+        assert any(
+            isinstance(c, str) and '"error"' in c and "Cisco AI Defense" in c
+            for c in received
+        ), f"Expected a fail-closed SSE error event. Got: {received!r}"
 
     @pytest.mark.asyncio
     async def test_streaming_responses_pydantic_events_fail_closed(self):
