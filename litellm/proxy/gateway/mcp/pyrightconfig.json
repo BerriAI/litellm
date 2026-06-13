@@ -1,0 +1,10 @@
+{
+  "include": ["."],
+  "typeCheckingMode": "strict",
+  "reportMatchNotExhaustive": "error",
+  "reportExplicitAny": "error",
+  "reportAny": "error",
+  "pythonVersion": "3.12",
+  "venvPath": "../../../..",
+  "venv": ".venv"
+}
