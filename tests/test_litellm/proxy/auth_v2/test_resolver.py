@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 import pytest
+from prisma import Json
+from scim2_models import Group as ScimGroup
+from scim2_models import GroupMember as ScimGroupMember
 
 from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth_v2.authorization import Role
@@ -153,3 +156,73 @@ async def test_mtls_credential_resolves_to_service_account():
     assert principal.principal_type == PrincipalType.SERVICE_ACCOUNT
     assert principal.user is None
     assert principal.subject == "CN=svc-a,O=Co"
+
+
+class _FakeTeamTable:
+    """Minimal stand-in for the prisma team table.
+
+    Mirrors the one prisma behavior the group methods depend on: a Json-wrapped
+    write is stored as its plain Python value and read back the same way. Storing
+    the raw value would let a regression that forgets the Json wrapper pass here
+    while failing against a real database.
+    """
+
+    def __init__(self) -> None:
+        self.rows: Dict[str, dict] = {}
+
+    @staticmethod
+    def _norm(data: dict) -> dict:
+        return {k: (v.data if isinstance(v, Json) else v) for k, v in data.items()}
+
+    async def find_unique(self, where):
+        return self.rows.get(where["team_id"])
+
+    async def create(self, data):
+        row = self._norm(data)
+        self.rows[row["team_id"]] = row
+        return row
+
+    async def update(self, where, data):
+        self.rows[where["team_id"]].update(self._norm(data))
+        return self.rows[where["team_id"]]
+
+    async def find_many(self, **kwargs):
+        return list(self.rows.values())
+
+    async def delete(self, where):
+        return self.rows.pop(where["team_id"], None)
+
+
+class _FakeTeamPrisma:
+    def __init__(self) -> None:
+        self.db = type("_Db", (), {"litellm_teamtable": _FakeTeamTable()})()
+
+
+async def test_group_upsert_round_trips_members_through_json():
+    store = DbIdentityStore(_FakeTeamPrisma(), _FakeCache())
+    created = await store.upsert_group(
+        ScimGroup(
+            display_name="eng",
+            members=[ScimGroupMember(value="u-1"), ScimGroupMember(value="u-2")],
+        )
+    )
+
+    assert created.id is not None
+    assert created.display_name == "eng"
+    assert [m.value for m in created.members] == ["u-1", "u-2"]
+
+    fetched = await store.get_group(created.id)
+    assert fetched is not None
+    assert [m.value for m in fetched.members] == ["u-1", "u-2"]
+
+
+async def test_group_list_and_delete():
+    store = DbIdentityStore(_FakeTeamPrisma(), _FakeCache())
+    a = await store.upsert_group(ScimGroup(display_name="a"))
+    await store.upsert_group(ScimGroup(display_name="b"))
+
+    assert {g.display_name for g in await store.list_groups(None)} == {"a", "b"}
+
+    await store.delete_group(a.id)
+    assert await store.get_group(a.id) is None
+    assert {g.display_name for g in await store.list_groups(None)} == {"b"}
