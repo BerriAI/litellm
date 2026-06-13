@@ -37,6 +37,8 @@ export const MIGRATED_E2E_PAGES: Record<string, string> = {
   "logging-and-alerts": "logging-and-alerts",
   "model-hub-table": "model-hub-table",
   new_usage: "usage",
+  agents: "agents",
+  "router-settings": "router-settings",
 };
 
 export const MIGRATED_E2E_SEGMENTS: string[] = [...new Set(Object.values(MIGRATED_E2E_PAGES))];

@@ -1,11 +1,9 @@
 "use client";
 
 import ModelsAndEndpointsView from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
-import AgentsPanel from "@/components/agents";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
-import GeneralSettings from "@/components/general_settings";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components/networking";
 import OldTeams from "@/components/OldTeams";
@@ -355,10 +353,6 @@ function CreateKeyPageContent() {
               userRole={userRole}
               premiumUser={premiumUser}
             />
-          ) : page == "agents" ? (
-            <AgentsPanel accessToken={accessToken} userRole={userRole} teams={teams} />
-          ) : page == "router-settings" ? (
-            <GeneralSettings userID={userID} userRole={userRole} accessToken={accessToken} modelData={modelData} />
           ) : page == "pass-through-settings" ? (
             <PassThroughSettings
               userID={userID}
