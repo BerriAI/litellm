@@ -47,6 +47,7 @@ _DEFAULT_PG_PORT = "5432"
 # schema.prisma pins `provider = "postgresql"`, so these are the only schemes
 # Prisma can actually connect with.
 SUPPORTED_DB_SCHEMES: Final[frozenset[str]] = frozenset({"postgresql", "postgres"})
+_MISSING_SCHEME = "<missing scheme>"
 
 
 def unsupported_db_scheme(database_url: str) -> Optional[str]:
@@ -57,11 +58,26 @@ def unsupported_db_scheme(database_url: str) -> Optional[str]:
     version-dependent (a confusing migration error, or a startup that never
     binds). Callers use this to reject the URL up front with an actionable
     error instead.
+
+    A schemeless value (e.g. a malformed DSN like ``user:pass@host/db``) yields
+    the ``_MISSING_SCHEME`` placeholder rather than the raw URL, so callers that
+    log the return value never echo embedded credentials.
     """
     scheme = urllib.parse.urlsplit(database_url).scheme.lower()
     if scheme in SUPPORTED_DB_SCHEMES:
         return None
-    return scheme or database_url
+    return scheme or _MISSING_SCHEME
+
+
+def unsupported_db_scheme_message(env_var: str, scheme: str) -> str:
+    """Operator-facing message naming the offending env var and scheme."""
+    return (
+        f"{env_var} uses unsupported scheme '{scheme}'. LiteLLM's database "
+        "features (virtual keys, store_model_in_db, spend tracking) require "
+        "PostgreSQL; use a 'postgresql://' connection string. SQLite and other "
+        "engines are not supported. "
+        "See https://docs.litellm.ai/docs/proxy/virtual_keys"
+    )
 
 
 class DatabaseURLSettings(BaseSettings):
@@ -258,6 +274,24 @@ class DatabaseURLSettings(BaseSettings):
             url += f"?schema={schema}"
         return url
 
+    def _raise_for_unsupported_scheme(self) -> None:
+        """Reject an operator-pinned non-PostgreSQL writer/reader URL.
+
+        The componentized entrypoints (gateway / backend / migrations) call
+        ``apply_to_env`` and then hand the URL straight to Prisma, bypassing
+        the CLI's own guard. A pinned URL flows through untouched, so validate
+        it here too rather than letting Prisma stall on an unusable scheme.
+        """
+        for env_var, url in (
+            ("DATABASE_URL", self.database_url),
+            ("DATABASE_URL_READ_REPLICA", self.database_url_read_replica),
+        ):
+            if not url:
+                continue
+            bad_scheme = unsupported_db_scheme(url)
+            if bad_scheme is not None:
+                raise RuntimeError(unsupported_db_scheme_message(env_var, bad_scheme))
+
     def apply_to_env(self) -> bool:
         """Write the assembled URL(s) into ``os.environ``.
 
@@ -265,6 +299,7 @@ class DatabaseURLSettings(BaseSettings):
         password auth that assembled a fresh URL). False means there was
         nothing to do — an operator-pinned URL, or no discrete fields.
         """
+        self._raise_for_unsupported_scheme()
         wrote_writer = False
         writer_url = self.build_writer_url()
         if writer_url is not None:

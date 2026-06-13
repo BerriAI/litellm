@@ -1140,21 +1140,20 @@ def run_server(  # noqa: PLR0915
             os.getenv("DATABASE_URL", None) is not None
             or os.getenv("DIRECT_URL", None) is not None
         ):
-            from litellm.proxy.db.db_url_settings import unsupported_db_scheme
+            from litellm.proxy.db.db_url_settings import (
+                unsupported_db_scheme,
+                unsupported_db_scheme_message,
+            )
 
             for _db_env in ("DATABASE_URL", "DIRECT_URL"):
-                _db_url = os.getenv(_db_env)
-                if _db_url is None:
+                _candidate_url = os.getenv(_db_env)
+                if _candidate_url is None:
                     continue
-                _bad_scheme = unsupported_db_scheme(_db_url)
+                _bad_scheme = unsupported_db_scheme(_candidate_url)
                 if _bad_scheme is not None:
                     print(  # noqa
-                        f"\033[1;31mLiteLLM Proxy: {_db_env} uses unsupported "
-                        f"scheme '{_bad_scheme}'. LiteLLM's database features "
-                        "(virtual keys, store_model_in_db, spend tracking) "
-                        "require PostgreSQL; use a 'postgresql://' connection "
-                        "string. SQLite and other engines are not supported. "
-                        "See https://docs.litellm.ai/docs/proxy/virtual_keys"
+                        f"\033[1;31mLiteLLM Proxy: "
+                        f"{unsupported_db_scheme_message(_db_env, _bad_scheme)}"
                         "\033[0m",
                         file=sys.stderr,
                         flush=True,
