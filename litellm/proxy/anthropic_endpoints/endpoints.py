@@ -204,12 +204,19 @@ async def anthropic_response(
             litellm_logging_obj=None,
         )
 
-        error_msg = f"{str(e)}"
-        raise ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+        # Return an Anthropic-shaped error body (not the OpenAI-shaped
+        # ProxyException envelope) so Anthropic SDK clients can switch on
+        # error.error.type. Use JSONResponse directly: HTTPException(detail=...)
+        # would wrap the dict in a spurious {"detail": ...} envelope.
+        status_code = int(getattr(e, "status_code", 500) or 500)
+        raw_message = getattr(e, "message", str(e))
+        anthropic_error = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=status_code,
+            raw_message=raw_message,
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content=anthropic_error,
             headers=headers,
         )
 
@@ -287,13 +294,15 @@ async def count_tokens(
         raise
     except ProxyException as e:
         status_code = int(e.code) if e.code and e.code.isdigit() else 500
-        detail = AnthropicExceptionMapping.transform_to_anthropic_error(
+        anthropic_error = AnthropicExceptionMapping.transform_to_anthropic_error(
             status_code=status_code,
             raw_message=e.message,
         )
-        raise HTTPException(
+        # JSONResponse, not HTTPException: the latter wraps the dict in a
+        # spurious {"detail": ...} envelope, breaking the Anthropic shape.
+        return JSONResponse(
             status_code=status_code,
-            detail=detail,
+            content=anthropic_error,
         )
     except Exception as e:
         verbose_proxy_logger.exception(

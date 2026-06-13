@@ -1250,17 +1250,17 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
     proxy_server.token_counter = mock_token_counter_error
 
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+        # count_tokens now returns a JSONResponse (top-level Anthropic shape),
+        # not a raised HTTPException (which would wrap in {"detail": ...}).
+        response = await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
 
-        # Verify HTTP status code is correct
-        assert exc_info.value.status_code == 400
-
-        # Verify error is in Anthropic format
-        detail = exc_info.value.detail
-        assert detail["type"] == "error"
-        assert detail["error"]["type"] == "invalid_request_error"
-        assert detail["error"]["message"] == "Input is too long for requested model."
+        assert response.status_code == 400
+        body = json.loads(response.body)
+        # Top-level Anthropic envelope, no {"detail": ...} wrapper.
+        assert "detail" not in body
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["message"] == "Input is too long for requested model."
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
@@ -1302,15 +1302,14 @@ async def test_anthropic_endpoint_403_permission_error_format():
     proxy_server.token_counter = mock_token_counter_error
 
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+        response = await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
 
-        assert exc_info.value.status_code == 403
-
-        detail = exc_info.value.detail
-        assert detail["type"] == "error"
-        assert detail["error"]["type"] == "permission_error"
-        assert detail["error"]["message"] == "Bearer Token has expired"
+        assert response.status_code == 403
+        body = json.loads(response.body)
+        assert "detail" not in body
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "permission_error"
+        assert body["error"]["message"] == "Bearer Token has expired"
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
@@ -1352,15 +1351,14 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     proxy_server.token_counter = mock_token_counter_error
 
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+        response = await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
 
-        assert exc_info.value.status_code == 429
-
-        detail = exc_info.value.detail
-        assert detail["type"] == "error"
-        assert detail["error"]["type"] == "rate_limit_error"
-        assert detail["error"]["message"] == "Rate limit exceeded"
+        assert response.status_code == 429
+        body = json.loads(response.body)
+        assert "detail" not in body
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "rate_limit_error"
+        assert body["error"]["message"] == "Rate limit exceeded"
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
