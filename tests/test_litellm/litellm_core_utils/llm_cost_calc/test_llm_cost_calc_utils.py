@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,6 +35,7 @@ sys.path.insert(
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     PromptTokensDetailsResult,
+    _get_token_base_cost,
     _calculate_input_cost,
     calculate_cache_writing_cost,
     generic_cost_per_token,
@@ -265,6 +267,26 @@ def test_image_tokens_fallback_to_base_cost():
 
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
+
+
+def test_token_base_cost_sorts_tier_thresholds_numerically():
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "input_cost_per_token_above_90k_tokens": 5e-6,
+            "output_cost_per_token_above_90k_tokens": 7e-6,
+            "input_cost_per_token_above_128k_tokens": 9e-6,
+            "output_cost_per_token_above_128k_tokens": 11e-6,
+        },
+    )
+    usage = Usage(prompt_tokens=150_000, completion_tokens=10, total_tokens=150_010)
+
+    prompt_cost, completion_cost, *_ = _get_token_base_cost(model_info, usage)
+
+    assert prompt_cost == 9e-6
+    assert completion_cost == 11e-6
 
 
 def test_generic_cost_per_token_above_200k_tokens():
