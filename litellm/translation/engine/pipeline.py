@@ -194,6 +194,7 @@ _INBOUND: Mapping[InboundSchema, _Inbound] = MappingProxyType(
 def _inbound(schema: InboundSchema) -> _Inbound | None:
     return _INBOUND.get(schema)
 
+
 _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
     {
         "anthropic": serialize_request,
