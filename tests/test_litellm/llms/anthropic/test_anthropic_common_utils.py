@@ -1527,7 +1527,7 @@ class TestClaudeOpus48AdaptiveThinking:
         assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
 
 
-def test_normalize_mid_system_passthrough_on_supported_model():
+def test_normalize_mid_system_passthrough_on_supported_model(local_model_cost_map):
     from litellm.llms.anthropic.common_utils import (
         normalize_system_messages_for_anthropic,
     )
