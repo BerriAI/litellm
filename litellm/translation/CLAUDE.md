@@ -530,6 +530,29 @@ translation/
 │   │                    #   finish + usage-tail bodies; the think-tag machine
 │   │                    #   and body builders live in
 │   │                    #   inbound/openai_chat/ollama_fold.py)
+│   ├── github_copilot/  # wave-3 own module: the SDK-path openai-compat
+│   │   │                #   provider (the big openai elif). The serializer is
+│   │   │                #   openai_compat.assemble_body + ONE delta: the
+│   │   │                #   system->assistant role rewrite (every system
+│   │   │                #   message; gated OFF by the ambient
+│   │   │                #   litellm.disable_copilot_system_to_assistant flag
+│   │   │                #   threaded through deps). Construction arm "openai"
+│   │   │                #   with the seam re-prefix github_copilot/{wire_model}
+│   │   │                #   (the compat_sdk seam arm). No stream.py: chunks
+│   │   │                #   ride the default openai dialect (no v1 iterator).
+│   │   │                #   The codex family bridges to the Responses API
+│   │   │                #   ABOVE the chat seam and never reaches here
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   │                #   (FULL message-name fallback: the base transform
+│   │   │                #   forwards names and the rewrite preserves them)
+│   │   ├── params.py    # the shared openai_compat gates verbatim (gpt-5 /
+│   │   │                #   o-series families fail closed; claude thinking/
+│   │   │                #   reasoning_effort RAISE — DEAD params at HEAD;
+│   │   │                #   user falls back; response_format name gate)
+│   │   ├── serialize.py # assemble_body + the system->assistant rewrite
+│   │   └── response.py  # re-export of the shared openai parser (the SDK
+│   │                    #   LIVE normalizer convert_to_model_response_object;
+│   │                    #   transform_response is DEAD on this path)
 │   ├── openrouter/      # wave-2b-alpha own module (httpx dedicated elif
 │   │   │                #   main.py:3354, transforms LIVE, bare wire model)
 │   │   ├── guard.py     # explicit stream:false + the cache-capable-model
@@ -783,7 +806,7 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to seventy-eight providers out — `anthropic`,
+OpenAI-chat-in to seventy-nine providers out — `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
@@ -803,9 +826,12 @@ path, `cometapi` on the httpx path), and the wave-2b-alpha own modules
 (`deepseek`, `openrouter`, `hosted_vllm`, `fireworks_ai`, `snowflake`,
 `huggingface` on its api_base route), the wave-2b-beta own modules
 (`cohere`/`cohere_chat` (one module), `mistral`, `watsonx`,
-`sagemaker_chat`, `groq`), and the wave-3 own module `ollama_chat` (the
+`sagemaker_chat`, `groq`), and the wave-3 own modules `ollama_chat` (the
 `/api/chat` NDJSON wire — the legacy `ollama` `/api/generate` prefix stays
-a v1 fallback by absence) — request, response, and stream
+a v1 fallback by absence) and `github_copilot` (the SDK-path openai-compat
+provider with the system->assistant role rewrite; the codex family bridges
+to the Responses API above the chat seam and stays v1 by absence) —
+request, response, and stream
 translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk
@@ -1405,6 +1431,49 @@ state into optional_params (main.py:2338-2344) — ambient module state v2
 cannot see, so the fork MUST fall back to v1 when that config is
 non-empty (the ambient-globals rule: vertex_ai_safety_settings/
 custom_prompt_dict precedent).
+Deliberate wave-3 github_copilot fallback surfaces (providers/github_copilot;
+each names the v1 path): the gpt-5 and o-series model families (v1's
+OpenAIGPT5Config/OpenAIOSeriesConfig own their param rewrites — temperature!=1
+RAISES on gpt-5, probed; the shared openai_compat family gate falls back on
+the whole family); ``thinking`` and ``reasoning_effort`` on claude models (v1
+RAISES UnsupportedParamsError — the config's claude thinking/reasoning_effort
+additions are DEAD at HEAD because the ``supports_reasoning`` map keys are
+absent, researcher-5 correction 3, probed; if upstream adds bare-claude
+model_cost entries the gate flips ON ambiently — the differential RAISE rows
+keep the drift loud); ``user`` (model-list gated upstream — v1 SERVES it for
+gpt-4o and silently DROPS it for claude, both probed; the shared gate falls
+back on user for every model because the open_ai_chat_completion_models
+membership is ambient state v2 does not read, so v1 keeps serving the served
+case and reproduces the drop on the other); ``top_k`` (not an openai chat
+param); ``response_format`` on a model literally named gpt-4/gpt-3.5-turbo-16k
+(the base-list name gate — copilot endpoint names are bare so the corner is
+reachable); explicit stream:false (the SDK serializes the key); message
+``name`` and every other openai-guard raw shape (the base transform forwards
+names; the system->assistant rewrite is a message.copy() that preserves every
+key, so a name would survive into the rewritten assistant message and the IR
+cannot carry it — the FULL name fallback); the parse-level unknowns
+(n/seed/penalties/logprobs/logit_bias/stream_options/web_search_options — v1
+serves them). SERVED, pinned IDENTICAL: the system->assistant role rewrite
+(EVERY system message's role -> assistant, content untouched, gated OFF when
+litellm.disable_copilot_system_to_assistant is True — both flag states probed
+two-sided), and the plain SDK body (no rename — assemble_body re-emits the
+caller's keys). github_copilot fork obligations (NOT wired; integrator scope):
+construction arm "openai" (the cdr normalizer + the seam re-prefix
+``github_copilot/{wire_model}`` exactly like the compat_sdk family — NOT a
+parser-side prefix; machine-readable in OWN_MODULE_RESPONSE_STYLES, wrong-arm
+divergence pinned in the response gate); the auth is ENVELOPE — the OAuth
+device-flow happens in validate_environment ABOVE the seam (the xai-OAuth
+rule; resolution is api_base arg > api-key.json endpoints.api >
+GITHUB_COPILOT_API_BASE > the default), so the fork must thread a RESOLVED
+token through the envelope and NEVER trigger the device flow (a bare
+capability read on a github_copilot/ key with no token cache does LIVE
+interactive OAuth — researcher-5 GC-R1; the differential tests seed
+GITHUB_COPILOT_TOKEN_DIR and a guard test asserts no path can reach it). The
+``x-request-id: uuid4()`` default header is nondeterministic envelope bytes
+(out of serializer scope); and EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER=true
+wakes the dormant validate_environment + anthropic-native transform_response
+(GC-R2) — a one-env-var dormancy flip the fork must keep on v1 until those
+surfaces are ported.
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body

@@ -29,7 +29,7 @@ and triggers no network (semgrep-enforced purity).
 
 from __future__ import annotations
 
-from expression import Error, Ok, Result
+from expression import Error, Result
 
 from ...deps import TranslationDeps
 from ...errors import TranslationError
