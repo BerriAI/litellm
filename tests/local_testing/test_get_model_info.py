@@ -128,6 +128,21 @@ def test_get_model_info_bedrock_region():
     assert info["litellm_provider"] == "bedrock_converse"
 
 
+def test_get_model_info_bedrock_region_uses_regional_price():
+    """A regional inference-profile model keeps its region-specific price instead
+    of falling back to the stripped base-model price (issue #27612)."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    regional_key = "au.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    info = litellm.get_model_info(model="bedrock/" + regional_key)
+    print("info", info)
+    assert info["key"] == regional_key
+    assert (
+        info["input_cost_per_token"]
+        == litellm.model_cost[regional_key]["input_cost_per_token"]
+    )
+
+
 @pytest.mark.parametrize(
     "model",
     [

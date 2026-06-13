@@ -5902,9 +5902,9 @@ def _get_model_info_helper(  # noqa: PLR0915
             Check if: (in order of specificity)
             1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
             2. 'model' in litellm.model_cost. Checks "gemini-1.5-pro-002" in  litellm.model_cost if model="gemini-1.5-pro-002" and custom_llm_provider=None
-            3. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
-            4. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
-            5. 'split_model' in litellm.model_cost. Checks "llama3-8b-8192" in litellm.model_cost if model="groq/llama3-8b-8192"
+            3. 'split_model' in litellm.model_cost. Checks "au.anthropic.claude-3" in litellm.model_cost if model="bedrock/au.anthropic.claude-3". Tried before the stripped names so a regional inference profile keeps its region-specific price instead of falling back to the stripped base price.
+            4. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
+            5. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
             """
 
             _model_info: Optional[Dict[str, Any]] = None
@@ -5931,6 +5931,16 @@ def _get_model_info_helper(  # noqa: PLR0915
                     ):
                         _model_info = None
             if _model_info is None:
+                _matched_key = _get_model_cost_key(split_model)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
+                    ):
+                        _model_info = None
+            if _model_info is None:
                 _matched_key = _get_model_cost_key(combined_stripped_model_name)
                 if _matched_key is not None:
                     key = _matched_key
@@ -5942,16 +5952,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                         _model_info = None
             if _model_info is None:
                 _matched_key = _get_model_cost_key(stripped_model_name)
-                if _matched_key is not None:
-                    key = _matched_key
-                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                    if not _check_provider_match(
-                        model_info=_model_info,
-                        custom_llm_provider=model_cost_custom_llm_provider,
-                    ):
-                        _model_info = None
-            if _model_info is None:
-                _matched_key = _get_model_cost_key(split_model)
                 if _matched_key is not None:
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
