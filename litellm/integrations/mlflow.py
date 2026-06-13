@@ -157,7 +157,7 @@ class MlflowLogger(CustomLogger):
                     SpanEvent(
                         name="streaming_chunk",
                         attributes={
-                            "delta": json.dumps(choice.delta.model_dump, default=str)
+                            "delta": json.dumps(choice.delta.model_dump(), default=str)
                         },
                     )
                 )
