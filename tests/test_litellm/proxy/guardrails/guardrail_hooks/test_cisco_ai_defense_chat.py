@@ -1506,6 +1506,10 @@ class TestCiscoAIDefenseEnabledRulesPydanticShape:
         assert result["rule_name"] == "PII"
         assert result["entity_types"] == ["SSN"]
 
+    def test_invalid_rule_definition_raises_at_startup_not_request_time(self):
+        with pytest.raises(ValueError, match="invalid rule definition"):
+            _make_guardrail(enabled_rules=[12345])
+
 
 class TestCiscoAIDefenseResponsesAPIBypass:
 

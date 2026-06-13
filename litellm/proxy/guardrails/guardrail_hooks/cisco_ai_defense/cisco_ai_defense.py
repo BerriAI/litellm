@@ -202,7 +202,11 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 else CISCO_CHAT_INSPECT_PATH
             )
 
-        self.enabled_rules = enabled_rules or None
+        self.enabled_rules = (
+            [self._normalize_rule(rule) for rule in enabled_rules]
+            if enabled_rules
+            else None
+        )
         self.integration_profile_id = integration_profile_id
         self.integration_profile_version = integration_profile_version
         self.integration_tenant_id = integration_tenant_id
@@ -986,9 +990,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _build_config(self) -> Dict[str, Any]:
         config: Dict[str, Any] = {}
         if self.enabled_rules:
-            config["enabled_rules"] = [
-                self._normalize_rule(rule) for rule in self.enabled_rules
-            ]
+            config["enabled_rules"] = self.enabled_rules
         if self.integration_profile_id:
             config["integration_profile_id"] = self.integration_profile_id
         if self.integration_profile_version:
