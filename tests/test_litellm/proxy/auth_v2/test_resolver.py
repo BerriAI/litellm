@@ -93,6 +93,32 @@ async def test_api_key_role_falls_back_to_owning_user():
     assert principal.roles == [Role.PLATFORM_ADMIN]
 
 
+async def test_api_key_role_fails_closed_when_owning_user_unresolvable():
+    # key carries a user_id but no user_role, and the user cannot be resolved
+    # (cache miss + unusable prisma stub): the role lookup must fail closed to no
+    # role rather than raising or inheriting one
+    raw = "sk-live-orphan"
+    key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-missing")
+    store = _store({hash_token(raw): key})
+
+    principal = await store.resolve(_api_key_credential(raw))
+
+    assert principal.user is not None and principal.user.id == "u-missing"
+    assert principal.roles == []
+
+
+async def test_service_account_key_without_user_has_no_role():
+    # a key with no user_id never consults the user table and stays role-less
+    raw = "sk-live-svc"
+    key = UserAPIKeyAuth(token=hash_token(raw), key_alias="ci-bot")
+    store = _store({hash_token(raw): key})
+
+    principal = await store.resolve(_api_key_credential(raw))
+
+    assert principal.principal_type == PrincipalType.SERVICE_ACCOUNT
+    assert principal.roles == []
+
+
 async def test_api_key_lookup_is_keyed_on_hashed_token():
     raw = "sk-live-abc"
     key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-1")
