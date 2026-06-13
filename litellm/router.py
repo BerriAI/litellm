@@ -3061,11 +3061,20 @@ class Router:
 
             if isinstance(response, CustomStreamWrapper):
                 if _forced_stream_for_ttft and _ttft_timeout is not None:
-                    return await self._collect_stream_with_ttft_timeout(
+                    reconstructed = await self._collect_stream_with_ttft_timeout(
                         response=response,
                         messages=messages,
                         ttft_timeout=_ttft_timeout,
                     )
+                    if self._should_raise_content_policy_error(
+                        model=model, response=reconstructed, kwargs=kwargs
+                    ):
+                        raise litellm.ContentPolicyViolationError(
+                            message="Response output was blocked.",
+                            model=model,
+                            llm_provider="",
+                        )
+                    return reconstructed
                 return await self._acompletion_streaming_iterator(
                     model_response=response,
                     messages=messages,
@@ -3378,12 +3387,15 @@ class Router:
         return timeout
 
     def _get_ttft_timeout(self, kwargs: dict, data: dict) -> Optional[float]:
-        return (
-            kwargs.get("ttft_timeout", None)
-            or data.get("ttft_timeout", None)
-            or self.ttft_timeout
-            or self.default_litellm_params.get("ttft_timeout", None)
-        )
+        for source in (
+            kwargs.get("ttft_timeout"),
+            data.get("ttft_timeout"),
+            self.ttft_timeout,
+            self.default_litellm_params.get("ttft_timeout"),
+        ):
+            if source is not None:
+                return source
+        return None
 
     def _get_timeout(self, kwargs: dict, data: dict) -> Optional[Union[float, int]]:
         """Helper to get timeout from kwargs or deployment params"""
