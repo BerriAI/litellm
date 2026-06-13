@@ -172,6 +172,17 @@ Provider = Literal[
     # the chat seam and never reaches here (canary-pinned). The OAuth
     # device-flow is envelope (validate_environment, above the seam).
     "github_copilot",
+    # wave-3: databricks (the LAST outbound provider; httpx dedicated elif
+    # main.py:3280 -> base_llm_http_handler, transforms LIVE, NO seam preset).
+    # The wire is openai-chat-shaped (transform_request is OpenAIGPTConfig's)
+    # but the "claude" in model SUBSTRING fork (DB-R1) drives tools /
+    # response_format / reasoning_effort. Its OWN response parser (block-list
+    # flatten, reasoning/citation extraction, databricks/{wire} prefix INSIDE
+    # the parser, unknown-keys-drop; construction arm "openai") and its OWN
+    # NDJSON-style chunk dialect (usage DROPPED, json_mode byte-reformat). M2M
+    # token POST + WorkspaceClient URL synthesis are envelope (the watsonx-IAM
+    # rule). The fake_stream method is DEAD CODE at HEAD (canary-pinned).
+    "databricks",
 ]
 
 NeverPortProvider = Literal[

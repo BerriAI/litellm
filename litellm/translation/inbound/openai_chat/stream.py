@@ -47,6 +47,7 @@ from typing_extensions import assert_never
 
 from ...errors import BoundaryError, TranslationError
 from ...ir import Body, CompositeChunk, PlainJson, StreamEvent
+from .databricks_fold import fold_choice
 from .ollama_fold import ollama_bodies, ollama_delta_body, ollama_reasoning_split
 
 BlockDialect = Literal["anthropic", "bedrock_converse"]
@@ -87,6 +88,16 @@ ChunkDialect = Literal[
     # contract). usage/ids/created are envelope (per-chunk fresh ids; the
     # split finish reuses its source chunk's id — pinned in the gate).
     "ollama_chat",
+    # wave-3: the databricks chunk dialect (providers/databricks is the ONE
+    # consumer). One wire chunk -> ONE ModelResponseStream body (NO split,
+    # unlike ollama_chat/gemini). v1's DatabricksChatResponseIterator DROPS
+    # the wire usage ENTIRELY (DB-R5 — never attach a usage tail), flattens a
+    # content LIST to a string + reasoning/thinking blocks, lifts a first-item
+    # citations list to provider_specific_fields.citation, rewrites "{}" tool
+    # arguments to "", and (STATEFUL via StreamState.last_function_name) folds
+    # a json_tool_call tool delta to content with the json.loads+dumps byte
+    # REFORMAT (DB-R8). ids/created/model ride the wire chunk verbatim.
+    "databricks",
 ]
 
 
@@ -109,6 +120,15 @@ class StreamState:
     """ollama_chat: v1's ``finished_reasoning_content`` flag — flips on the
     FIRST content after reasoning started (v1's truncation bug, pinned) or a
     ``</think>`` tag."""
+    last_function_name: str | None = None
+    """databricks json_mode: v1's ``_last_function_name`` — the iterator
+    remembers the last tool function name across chunks so an arguments-only
+    delta still folds to content when the name was ``json_tool_call``."""
+    databricks_json_mode: bool = False
+    """databricks: v1's iterator ``json_mode`` flag (the json_tool_call ->
+    content + byte-reformat machine). v2 falls back on every json_mode REQUEST,
+    so the live flag is always False; the stream gate sets it True to pin v1's
+    byte-reformat against the REAL iterator."""
 
 
 def initial_state(model: str = "", dialect: ChunkDialect = "anthropic") -> StreamState:
@@ -157,6 +177,8 @@ def _step_wire_chunk(state: StreamState, payload: PlainJson) -> _StepResult:
         return _step_generic(state, payload)
     if state.dialect == "ollama_chat":
         return _step_ollama_chat(state, payload)
+    if state.dialect == "databricks":
+        return _step_databricks(state, payload)
     return _step_openai(state, payload)
 
 
@@ -181,7 +203,15 @@ def _as_block_dialect(
     match dialect:
         case "anthropic" | "bedrock_converse":
             return dialect
-        case "openai" | "azure" | "gemini" | "xai" | "generic" | "ollama_chat":
+        case (
+            "openai"
+            | "azure"
+            | "gemini"
+            | "xai"
+            | "generic"
+            | "ollama_chat"
+            | "databricks"
+        ):
             # wire/composite dialects fold whole chunks; a per-block delta
             # here is a wiring bug and must be loud, never a fabricated
             # anthropic-shaped placeholder (critic-google M5 / critic-azure M3).
@@ -467,6 +497,46 @@ def _step_ollama_chat(state: StreamState, payload: PlainJson) -> _StepResult:
         ),
         bodies,
     )
+
+
+def _step_databricks(state: StreamState, payload: PlainJson) -> _StepResult:
+    """wave-3: mirror ``DatabricksChatResponseIterator.chunk_parser`` — ONE
+    wire chunk -> ONE ModelResponseStream body (no split). v1 DROPS the wire
+    usage entirely (DB-R5); ids/created/model ride the wire chunk verbatim.
+    The json_mode ``_last_function_name`` rides StreamState (databricks json
+    mode is a request-side fallback, so the arm is dormant from v2's own flow
+    but the stream gate replays the REAL iterator's json_mode sequences)."""
+    if not isinstance(payload, dict):
+        return TranslationError.of_unsupported(
+            "databricks chunk dialect received a non-object payload; wiring bug"
+        )
+    raw_choices = payload.get("choices")
+    choices = raw_choices if isinstance(raw_choices, list) else []
+    transformed: list[PlainJson] = []
+    last_function_name = state.last_function_name
+    for entry in choices:
+        if not isinstance(entry, dict):
+            return TranslationError.of_unsupported(
+                "databricks chunk dialect received a non-object choice; wiring bug"
+            )
+        folded = fold_choice(entry, state.databricks_json_mode, last_function_name)
+        last_function_name = folded.last_function_name
+        transformed = [
+            *transformed,
+            {
+                "index": entry.get("index", 0),
+                "finish_reason": entry.get("finish_reason"),
+                "delta": folded.delta,
+            },
+        ]
+    body: Body = {
+        "id": payload.get("id"),
+        "object": "chat.completion.chunk",
+        "created": payload.get("created"),
+        "model": payload.get("model"),
+        "choices": transformed,
+    }
+    return replace(state, last_function_name=last_function_name), (body,)
 
 
 def _content_filter_field(choice: dict[str, PlainJson]) -> dict[str, PlainJson]:

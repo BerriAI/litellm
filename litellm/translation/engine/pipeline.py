@@ -64,6 +64,11 @@ from ..providers.compat_httpx import SERIALIZERS as compat_httpx_serializers
 from ..providers.compat_httpx.response import ResponseStyle
 from ..providers.compat_sdk import GUARDS as compat_sdk_guards
 from ..providers.compat_sdk import SERIALIZERS as compat_sdk_serializers
+from ..providers.databricks import parse_response as databricks_parse_response
+from ..providers.databricks import serialize_request as databricks_serialize_request
+from ..providers.databricks import (
+    unsupported_request_shapes as databricks_unsupported_request_shapes,
+)
 from ..providers.deepseek import parse_response as deepseek_parse_response
 from ..providers.deepseek import serialize_request as deepseek_serialize_request
 from ..providers.deepseek import (
@@ -210,6 +215,9 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         # wave-3: github_copilot (SDK path — openai_compat assemble_body +
         # the system->assistant rewrite gated by the ambient disable flag).
         "github_copilot": github_copilot_serialize_request,
+        # wave-3: databricks (openai-shaped wire + the claude-substring fork
+        # over tools/response_format/reasoning_effort; its own body assembly).
+        "databricks": databricks_serialize_request,
     }
 )
 
@@ -290,6 +298,13 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # github_copilot/{wire_model} re-prefix as the seam's preset arm
         # (construction arm "openai", NOT parser scope — the compat_sdk shape).
         "github_copilot": github_copilot_parse_response,
+        # wave-3: the databricks parser builds the normalized body itself
+        # (block-list flatten, reasoning/citation extraction, unknown-keys
+        # drop) with the databricks/{wire model} prefix INSIDE the parser, and
+        # rides it on ChatResponse.wire; seam construction arm "openai" (fresh
+        # ModelResponse mutation, the cohere/ollama_chat shape). A malformed
+        # body raises a raw KeyError in v1 — pinned as a fallback row.
+        "databricks": databricks_parse_response,
     }
 )
 
@@ -343,6 +358,12 @@ OWN_MODULE_RESPONSE_STYLES: Mapping[Provider, ResponseStyle] = MappingProxyType(
         # seam re-prefix (the compat_sdk shape) — construction arm "openai";
         # wrong-arm pin in its response gate (the cohere no-id template).
         "github_copilot": "openai",
+        # wave-3: databricks mutates a fresh ModelResponse (the wire's own
+        # id/created copied, model = databricks/{wire}, unknown keys dropped)
+        # — the cdr arm; wrong-arm pin in its response gate (the fireworks/
+        # snowflake template: a verbatim wire index 5 the openai_like arm
+        # keeps and the cdr arm enumerate-rewrites to 0).
+        "databricks": "openai",
     }
 )
 
@@ -411,6 +432,11 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # custom iterator exists in the provider; chunks ride the openai
         # dialect exactly like the compat_sdk family).
         "github_copilot": _OPENAI_DIALECT,
+        # wave-3: databricks — openai outbound body (the parser rides the
+        # normalized body on wire); the chunk-fold dialect is "databricks"
+        # (its own arm — usage DROPPED, json_mode byte-reformat — selected by
+        # the stream gates/future streaming seam, not this outbound-body table).
+        "databricks": _OPENAI_DIALECT,
     }
 )
 
@@ -470,6 +496,11 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         # (the base transform forwards names; the system->assistant rewrite
         # preserves them and the IR cannot carry name).
         "github_copilot": github_copilot_unsupported_request_shapes,
+        # wave-3: databricks — the cache_control move arm + the whitespace-only
+        # content arm + the shared openai guard with name_fallback_user_only
+        # (v1 strips assistant/tool names == the IR drop, keeps user names);
+        # NO stream:false arm (the body always carries stream, default false).
+        "databricks": databricks_unsupported_request_shapes,
     }
 )
 
