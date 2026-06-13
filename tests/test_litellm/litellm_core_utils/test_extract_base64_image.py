@@ -7,6 +7,8 @@ which fixes the Ollama error "illegal base64 data at input byte 4".
 Related issue: https://github.com/BerriAI/litellm/issues/18338
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -91,8 +93,12 @@ class TestExtractImagesFromMessage:
         result = extract_images_from_message(message)
         assert result == ["iVBORw0KGgo"]
 
-    def test_extract_from_message_with_regular_url(self):
-        """Test that regular URLs are preserved"""
+    def test_extract_from_message_with_remote_url_downloads_and_encodes(self):
+        """Remote http(s) URLs must be downloaded and base64-encoded (issue #30313).
+
+        Ollama does not accept URLs, so forwarding one verbatim made it fail with
+        "illegal base64 data at input byte 5".
+        """
         message = {
             "role": "user",
             "content": [
@@ -102,8 +108,14 @@ class TestExtractImagesFromMessage:
                 }
             ],
         }
-        result = extract_images_from_message(message)
-        assert result == ["https://example.com/image.png"]
+        with patch(
+            "litellm.litellm_core_utils.prompt_templates.image_handling.convert_url_to_base64",
+            return_value="data:image/png;base64,ZmV0Y2hlZA==",
+        ) as mock_convert:
+            result = extract_images_from_message(message)
+
+        mock_convert.assert_called_once_with("https://example.com/image.png")
+        assert result == ["ZmV0Y2hlZA=="]
 
     def test_extract_multiple_images(self):
         """Test extracting multiple images from a single message"""
@@ -124,11 +136,15 @@ class TestExtractImagesFromMessage:
                 },
             ],
         }
-        result = extract_images_from_message(message)
+        with patch(
+            "litellm.litellm_core_utils.prompt_templates.image_handling.convert_url_to_base64",
+            return_value="data:image/png;base64,image3base64",
+        ):
+            result = extract_images_from_message(message)
         assert result == [
             "image1base64",
             "image2base64",
-            "https://example.com/image3.png",
+            "image3base64",
         ]
 
     def test_empty_content(self):
