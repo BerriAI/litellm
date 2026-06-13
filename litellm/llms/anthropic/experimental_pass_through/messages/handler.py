@@ -23,6 +23,7 @@ from typing import (
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
+    normalize_system_messages_for_anthropic,
     strip_empty_text_blocks_from_anthropic_messages,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -426,6 +427,23 @@ def anthropic_messages_handler(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+
+    messages, _hoisted_system_blocks = normalize_system_messages_for_anthropic(
+        messages, model=model, custom_llm_provider=custom_llm_provider
+    )
+    if _hoisted_system_blocks:
+        if system is None:
+            system = _hoisted_system_blocks
+        elif isinstance(system, str):
+            system = (
+                [{"type": "text", "text": system}] + _hoisted_system_blocks
+                if system.strip()
+                else _hoisted_system_blocks
+            )
+        elif isinstance(system, list):
+            system = list(system) + _hoisted_system_blocks
+    local_vars["messages"] = messages
+    local_vars["system"] = system
 
     # Store agentic loop params in logging object for agentic hooks
     # This provides original request context needed for follow-up calls

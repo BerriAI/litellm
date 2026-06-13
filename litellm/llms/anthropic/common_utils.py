@@ -966,12 +966,8 @@ def normalize_system_messages_for_anthropic(
     Returns ``(new_messages, hoisted_system_blocks)``. The caller merges the
     hoisted blocks into the top-level ``system``. Input is never mutated.
     """
-    from litellm.utils import _supports_factory
-
-    supports_mid = _supports_factory(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        key="supports_mid_conversation_system",
+    supports_mid = AnthropicModelInfo._supports_model_capability(
+        model, "supports_mid_conversation_system"
     )
     out: List[Any] = []
     hoisted: List[Dict[str, Any]] = []
