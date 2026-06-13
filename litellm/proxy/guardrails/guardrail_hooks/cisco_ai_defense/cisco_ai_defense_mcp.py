@@ -382,7 +382,9 @@ class _CiscoAIDefenseMcpMixin:
             surface="mcp",
             start_time=start_time,
             direction="output",
-            response_obj=response if redact_response_obj is None else redact_response_obj,
+            response_obj=(
+                response if redact_response_obj is None else redact_response_obj
+            ),
         )
 
     def _build_mcp_request_payload(
