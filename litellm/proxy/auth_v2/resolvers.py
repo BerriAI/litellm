@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, List, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, List, Optional, Protocol, cast, runtime_checkable
 
 from scim2_models import Group as ScimGroup
 from scim2_models import User as ScimUser
@@ -38,7 +38,9 @@ from litellm.repositories.user_repository import UserRepository
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
+    from litellm.models.team import LiteLLM_TeamTable
     from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy.auth_v2.authorization import Role
     from litellm.proxy.utils import PrismaClient
 
 
@@ -111,7 +113,29 @@ class DbIdentityStore(IdentityStore):
             raise errors.invalid_token() from exc
         if key.blocked:
             raise errors.account_disabled()
-        return self._principal_from_key(credential, key)
+        return self._principal_from_key(credential, key, await self._key_role(key))
+
+    async def _key_role(self, key: UserAPIKeyAuth) -> Optional[Role]:
+        """Platform role for an API key.
+
+        ``get_key_object`` does not join the owning user's role onto the token, so
+        a key with a ``user_id`` but no ``user_role`` is resolved against the user
+        table (cache-backed) rather than coming back role-less.
+        """
+        if key.user_role is not None:
+            return map_role(key.user_role)
+        if key.user_id is None:
+            return None
+        try:
+            user = await get_user_object(
+                user_id=key.user_id,
+                prisma_client=self._prisma,
+                user_api_key_cache=self._cache,
+                user_id_upsert=False,
+            )
+        except Exception:
+            return None
+        return map_role(user.user_role) if user is not None else None
 
     async def _resolve_subject(self, credential: Credential) -> Principal:
         email = credential.claims.get("email")
@@ -142,14 +166,16 @@ class DbIdentityStore(IdentityStore):
         )
 
     def _principal_from_key(
-        self, credential: Credential, key: UserAPIKeyAuth
+        self, credential: Credential, key: UserAPIKeyAuth, role: Optional[Role]
     ) -> Principal:
         teams: List[TeamIdentity] = []
         if key.team_id is not None:
-            role = (
+            membership = (
                 team_role(key.team_member.role) if key.team_member else TeamRole.MEMBER
             )
-            teams.append(TeamIdentity(id=key.team_id, name=key.team_alias, role=role))
+            teams.append(
+                TeamIdentity(id=key.team_id, name=key.team_alias, role=membership)
+            )
         organization = (
             OrganizationIdentity(id=key.org_id, name=key.organization_alias)
             if key.org_id is not None
@@ -160,7 +186,6 @@ class DbIdentityStore(IdentityStore):
             if key.user_id is not None
             else None
         )
-        mapped = map_role(key.user_role)
         return Principal(
             principal_type=(
                 PrincipalType.HUMAN if key.user_id else PrincipalType.SERVICE_ACCOUNT
@@ -170,7 +195,7 @@ class DbIdentityStore(IdentityStore):
             user=user,
             organization=organization,
             teams=teams,
-            roles=[mapped] if mapped else [],
+            roles=[role] if role else [],
             scopes=list(credential.scopes),
             auth_method=credential.method,
             credential_ref=credential.credential_ref,
@@ -266,29 +291,27 @@ class DbIdentityStore(IdentityStore):
         return [db_user_to_scim(row) for row in rows]
 
     async def upsert_group(self, group: ScimGroup) -> ScimGroup:
+        from prisma import Json
+
         repo = TeamRepository(self._prisma)
         data = scim_group_to_db(group)
-        existing = (
-            await repo.table.find_unique(where={"team_id": group.id})
-            if group.id
-            else None
-        )
+        data["members_with_roles"] = Json(cast(list, data["members_with_roles"]))
+        existing = await repo.find_by_id(group.id, "team_id") if group.id else None
         if existing is None:
             data["team_id"] = group.id or str(uuid.uuid4())
-            stored = await repo.table.create(data=data)
+            stored: Optional[LiteLLM_TeamTable] = await repo.create(data)
         else:
-            stored = await repo.table.update(where={"team_id": group.id}, data=data)
+            stored = await repo.update(group.id, data, id_field="team_id")
+        assert stored is not None
         return db_team_to_scim(stored)
 
     async def get_group(self, resource_id: str) -> Optional[ScimGroup]:
-        stored = await TeamRepository(self._prisma).table.find_unique(
-            where={"team_id": resource_id}
-        )
+        stored = await TeamRepository(self._prisma).find_by_id(resource_id, "team_id")
         return db_team_to_scim(stored) if stored is not None else None
 
     async def delete_group(self, resource_id: str) -> None:
         await TeamRepository(self._prisma).table.delete(where={"team_id": resource_id})
 
     async def list_groups(self, filter_expr: Optional[str]) -> List[ScimGroup]:
-        rows = await TeamRepository(self._prisma).table.find_many()
+        rows = await TeamRepository(self._prisma).find_many()
         return [db_team_to_scim(row) for row in rows]

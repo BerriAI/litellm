@@ -77,6 +77,19 @@ async def test_api_key_resolves_to_principal_with_db_role():
     assert principal.roles == [Role.ORG_ADMIN]
 
 
+async def test_api_key_role_falls_back_to_owning_user():
+    # get_key_object does not join the user's role onto the token, so a key with a
+    # user_id but no user_role must resolve the role from the user table
+    raw = "sk-live-noroll"
+    key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-7")
+    user = LiteLLM_UserTable(user_id="u-7", user_role="proxy_admin")
+    store = _store({hash_token(raw): key, "u-7": user})
+
+    principal = await store.resolve(_api_key_credential(raw))
+
+    assert principal.roles == [Role.PLATFORM_ADMIN]
+
+
 async def test_api_key_lookup_is_keyed_on_hashed_token():
     raw = "sk-live-abc"
     key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-1")

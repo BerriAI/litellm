@@ -2,6 +2,7 @@ import asyncio
 import copy
 import enum
 import importlib
+import importlib.util
 import inspect
 import io
 import os
@@ -886,6 +887,17 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
                 verbose_proxy_logger.warning(f"Password migration skipped: {e}")
 
         asyncio.create_task(_run_pw_migration())
+
+        try:
+            from litellm.proxy.auth_v2 import AuthConfig, AuthSecurity
+            from litellm.proxy.auth_v2.resolvers import DbIdentityStore
+
+            app.state.auth_v2 = AuthSecurity(
+                AuthConfig(),
+                DbIdentityStore(prisma_client, user_api_key_cache),
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(f"auth_v2 wiring skipped: {e}")
 
     ProxyStartupEvent._initialize_startup_logging(
         llm_router=llm_router,
@@ -15817,6 +15829,15 @@ app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 # Eager: /models/{name}:method overlaps with the OpenAI /models endpoint.
 app.include_router(google_router)
+
+# Admin routes are defined in (and owned by) the `backend.routers` package; the
+# proxy mounts them here as the source of truth when that package is importable
+# (it ships with the source tree and Docker image, but not the pip wheel).
+if importlib.util.find_spec("backend") is not None:
+    from backend.routers import admin_routers
+
+    for _admin_router in admin_routers:
+        app.include_router(_admin_router)
 
 attach_lazy_features(app)
 app.add_middleware(
