@@ -2714,3 +2714,52 @@ def test_adapter_translates_in_array_system_list_content():
     system_msgs = [m for m in out if m.get("role") == "system"]
     assert len(system_msgs) == 1
     assert system_msgs[0]["content"] == [{"type": "text", "text": "Be a pirate."}]
+
+
+def test_adapter_in_array_system_preserves_cache_control():
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {"role": "user", "content": "Hi"},
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Be a pirate.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+    out = adapter.translate_anthropic_messages_to_openai(
+        messages=messages, model="claude-opus-4-8"
+    )
+    system_msgs = [m for m in out if m.get("role") == "system"]
+    assert len(system_msgs) == 1
+    block = system_msgs[0]["content"][0]
+    assert block["text"] == "Be a pirate."
+    assert block.get("cache_control") == {"type": "ephemeral"}
+
+
+def test_adapter_in_array_system_drops_empty_content():
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {"role": "user", "content": "Hi"},
+        {"role": "system", "content": "   "},  # whitespace-only -> dropped
+        {"role": "system", "content": []},  # empty list -> dropped
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "  "}],
+        },  # blank text -> dropped
+    ]
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    system_msgs = [m for m in out if m.get("role") == "system"]
+    assert system_msgs == []
