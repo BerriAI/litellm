@@ -39,6 +39,7 @@ export const MIGRATED_E2E_PAGES: Record<string, string> = {
   new_usage: "usage",
   agents: "agents",
   "router-settings": "router-settings",
+  users: "users",
 };
 
 export const MIGRATED_E2E_SEGMENTS: string[] = [...new Set(Object.values(MIGRATED_E2E_PAGES))];
