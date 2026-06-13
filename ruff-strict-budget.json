@@ -1,7 +1,7 @@
 {
   "ANN001": { "baseline": 2865, "slack": 10 },
   "ANN002": { "baseline": 64, "slack": 3 },
-  "ANN003": { "baseline": 759, "slack": 25 },
+  "ANN003": { "baseline": 759, "slack": 10 },
   "ANN401": { "baseline": 1885, "slack": 10 },
   "B006": { "baseline": 180, "slack": 3 },
   "C901": { "baseline": 301, "slack": 3 },

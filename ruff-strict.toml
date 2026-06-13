@@ -11,9 +11,10 @@ max-complexity = 15
 max-args = 5
 
 [lint.flake8-tidy-imports.banned-api]
-"typing.Any".msg = "Define a frozen dataclass, NamedTuple, or TypedDict instead of Any."
-"typing.Dict".msg = "Use a structured type; if a mapping is truly needed, use Mapping with concrete value types."
-"typing.List".msg = "Use tuple[X, ...] or Sequence[X]."
-"typing.Set".msg = "Use frozenset[X] or AbstractSet[X]."
-"typing.MutableSequence".msg = "Use Sequence[X]."
-"typing.MutableMapping".msg = "Use Mapping[X, Y] or a frozen dataclass."
+"typing.Any".msg = "Use a concrete type. Frozen slots=True dataclass (preferred) / NamedTuple / ReadOnly TypedDict for payloads."
+"typing_extensions.Any".msg = "Same as typing.Any."
+"typing.List".msg = "tuple[X, ...] for state, Sequence[X] for params."
+"typing.Dict".msg = "Frozen dataclass / NamedTuple / ReadOnly TypedDict; create a Mapping alias with concrete value types if truly dynamic."
+"typing.Set".msg = "frozenset[X] or AbstractSet[X]."
+"typing.MutableSequence".msg = "Sequence[X]."
+"typing.MutableMapping".msg = "See typing.Dict."
