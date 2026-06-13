@@ -824,24 +824,28 @@ def test_create_pass_through_route_registers_multiple_adapters():
     class DummyAdapter(CustomLogger):
         pass
 
+    original_adapters = litellm.adapters
     litellm.adapters = []
 
-    first_adapter = DummyAdapter()
-    second_adapter = DummyAdapter()
+    try:
+        first_adapter = DummyAdapter()
+        second_adapter = DummyAdapter()
 
-    create_pass_through_route(
-        endpoint="/v1/messages",
-        target=first_adapter,
-    )
-    create_pass_through_route(
-        endpoint="/v1/chat",
-        target=second_adapter,
-    )
+        create_pass_through_route(
+            endpoint="/v1/messages",
+            target=first_adapter,
+        )
+        create_pass_through_route(
+            endpoint="/v1/chat",
+            target=second_adapter,
+        )
 
-    assert len(litellm.adapters) == 2
-    assert litellm.adapters[0]["adapter"] is first_adapter
-    assert litellm.adapters[1]["adapter"] is second_adapter
-    assert litellm.adapters[0]["id"] != litellm.adapters[1]["id"]
+        assert len(litellm.adapters) == 2
+        assert litellm.adapters[0]["adapter"] is first_adapter
+        assert litellm.adapters[1]["adapter"] is second_adapter
+        assert litellm.adapters[0]["id"] != litellm.adapters[1]["id"]
+    finally:
+        litellm.adapters = original_adapters
 
 
 @pytest.mark.asyncio
