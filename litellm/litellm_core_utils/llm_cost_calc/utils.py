@@ -191,6 +191,11 @@ def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> st
     return base_key
 
 
+def _parse_above_token_threshold(key: str) -> float:
+    threshold_str = key.split("_above_")[1].split("_tokens")[0]
+    return float(threshold_str.replace("k", "")) * (1000 if "k" in threshold_str else 1)
+
+
 def _get_token_base_cost(
     model_info: ModelInfo, usage: Usage, service_tier: Optional[str] = None
 ) -> Tuple[float, float, float, float, float]:
@@ -256,7 +261,7 @@ def _get_token_base_cost(
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
     threshold: Optional[float] = None
-    for key in sorted(threshold_keys, reverse=True):
+    for key in sorted(threshold_keys, key=_parse_above_token_threshold, reverse=True):
         value = model_info.get(key)
         if value is not None:
             try:
