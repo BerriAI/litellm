@@ -44,6 +44,14 @@ class TranslationDeps:
     - ``base_model``: the azure deployment's declared base model; v1 detects
       o-series/gpt-5 param families on ``base_model or model``
       (azure.py:245-247). ``None`` for providers without deployment aliasing.
+    - ``api_base``: the request-level api_base (v1: ``litellm_params
+      ["api_base"]``), wave-2b-alpha for huggingface — its transform forks
+      on EXACTLY this value (hf chat/transformation.py:135: the verbatim
+      dedicated-endpoint body vs the router route whose 3-segment names
+      fetch the HF provider mapping over HTTP inside the transform). v2
+      serves ONLY the api_base route; ``None`` means the seam never wired
+      the field and every huggingface request falls back typed. ``None``
+      for providers that never read it.
     """
 
     max_tokens_for_model: Callable[[str], int | None]
@@ -55,3 +63,16 @@ class TranslationDeps:
     modify_params: bool
     api_version: str | None = None
     base_model: str | None = None
+    api_base: str | None = None
+    watsonx_project_id: str | None = None
+    """wave-2b-beta: the resolved watsonx project id. v1 resolves it inside
+    ``_get_api_params`` (param kwargs -> WATSONX_PROJECT_ID/WX_PROJECT_ID/
+    PROJECT_ID env) and ``_prepare_payload`` injects it into the BODY, so it
+    is payload, not envelope; the future watsonx seam fork must run the same
+    resolution before building deps. ``None`` together with
+    ``watsonx_space_id`` means v1 raises WatsonXAIError 401 — the serializer
+    falls back so v1 serves its own raise."""
+    watsonx_space_id: str | None = None
+    """The deployment-space alternative to ``watsonx_project_id`` (same
+    resolution chain, WATSONX_DEPLOYMENT_SPACE_ID/... env); v1 only injects
+    it when the project id is absent."""

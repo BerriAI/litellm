@@ -15,14 +15,11 @@ two azure-only fidelity holes:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import cast
-
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from collections.abc import Mapping
 
 from ...errors import TranslationError
 from ..openai_compat import unsupported_request_shapes as openai_unsupported_shapes
-from ..openai_compat.guard import explicit_stream_false
+from ..openai_compat.guard import carries_cache_control, explicit_stream_false
 
 _Raw = Mapping[str, object]
 
@@ -41,28 +38,13 @@ def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
 
 
 def _azure_reason(raw: _Raw) -> str | None:
+    # the recursive scan is openai_compat.guard.carries_cache_control (lifted
+    # there at wave-2b-alpha; openrouter composes the same mechanism behind
+    # its cache-capable-model policy)
     for field in ("messages", "tools"):
-        if _carries_cache_control(raw.get(field), 0):
+        if carries_cache_control(raw.get(field)):
             return (
                 f"cache_control inside {field} (azure forwards it verbatim, "
                 "az gpt_transformation.py:250-263; the IR strips it)"
             )
     return None
-
-
-def _carries_cache_control(value: object, depth: int) -> bool:
-    if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        # exhaustion must never ADMIT a request: treat the unscannable tail
-        # as if it carried the marker (fall back to v1)
-        return True
-    if isinstance(value, Mapping):
-        mapping = cast(Mapping[str, object], value)
-        if "cache_control" in mapping:
-            return True
-        return any(_carries_cache_control(item, depth + 1) for item in mapping.values())
-    if isinstance(value, Sequence) and not isinstance(value, str):
-        return any(
-            _carries_cache_control(item, depth + 1)
-            for item in cast(Sequence[object], value)
-        )
-    return False

@@ -110,6 +110,55 @@ Provider = Literal[
     "deepinfra",
     "moonshot",
     "cometapi",
+    # wave-2b-alpha own-module providers (providers/<name> packages, each
+    # with dedicated differential gates; APPEND-ONLY, one line per provider
+    # in its own commit). All are httpx-path dedicated elifs. deepseek and
+    # openrouter keep the bare wire model (no seam preset — the xai R4
+    # rule); openrouter's usage.cost hidden-params header is a fork
+    # obligation (its response gate pins it).
+    "deepseek",
+    "openrouter",
+    # hosted_vllm: bare wire model too; thinking serves through v1's
+    # deterministic budget-band rewrite, tools cleaned recursively.
+    "hosted_vllm",
+    # fireworks_ai: the ONE wave-2b-alpha prefixing parser so far —
+    # fireworks_ai/{WIRE model} INSIDE its parser (never a seam preset);
+    # request model rewritten to accounts/fireworks/models/{m}.
+    "fireworks_ai",
+    # snowflake: its own wire mapping (tool_spec / tool_choice objects /
+    # content_list responses); snowflake/{wire model} prefix INSIDE the
+    # parser; stream is ALWAYS a body key (absent == false on the wire).
+    "snowflake",
+    # huggingface: ONLY the api_base (dedicated endpoint) route is ported —
+    # the router route (provider-mapping HTTP fetch INSIDE the transform)
+    # is a permanent typed fallback keyed on deps.api_base; bare wire model.
+    "huggingface",
+    # wave-2b-beta: own-module providers (providers/<name>/). cohere and
+    # cohere_chat are ONE module (main.py's elif handles both names; the v2
+    # wire is the DEFAULT route at HEAD — the legacy "v1/" route predicate
+    # is a typed fallback inside the cohere guard, researcher-4 §11).
+    "cohere",
+    "cohere_chat",
+    # wave-2b-beta: mistral (httpx path, dedicated elif; bare wire model on
+    # responses; the magistral reasoning-prompt injection is a typed
+    # fallback inside the module — codestral reuses the v1 config but is
+    # NOT a wave-2b provider and stays a v1 fallback).
+    "mistral",
+    # wave-2b-beta: watsonx (the OpenAILikeChatHandler route; the IAM-token
+    # auth is envelope, project/space ids ride deps; the LIVE
+    # watsonx/{wire_model} response prefix is parser scope; streams ride the
+    # generic dialect via the databricks iterator).
+    "watsonx",
+    # wave-2b-beta: sagemaker_chat (base GPT config over SigV4 transport;
+    # the endpoint name is the model; streams pinned at the AWS
+    # event-stream PARSED-event seam with the openai dialect).
+    # sagemaker_nova shares the main.py branch but carries its OWN config
+    # overrides and is deliberately ABSENT (stays a typed v1 fallback).
+    "sagemaker_chat",
+    # wave-2b-beta: groq (httpx path; bare wire model + the service_tier
+    # clamp on responses; the json_schema workaround/raise arms are typed
+    # fallbacks, native-schema models serve verbatim).
+    "groq",
 ]
 
 NeverPortProvider = Literal[

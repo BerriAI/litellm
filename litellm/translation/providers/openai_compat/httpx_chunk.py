@@ -17,11 +17,15 @@ trajectory, applied one level up at the chunk seam). Consumers compose
 - cometapi: ``reasoning="copy_both"`` (v1 assigns WITHOUT popping, so both
   keys reach the Delta), key-presence error chunks, strict
   id/created/model/choices envelope (v1 KeyErrors -> CometAPIException).
-- wave 2b (groq: rename with pop semantics == "rename"; openrouter:
-  UNCONDITIONAL — every delta gains the key): extend ``ReasoningMode`` with
-  the new Literal value and its arm IN THE SAME COMMIT as the consumer and
-  its differential rows — never a third copy of this file's machinery, and
-  never an arm without a consumer (the placeholder-arm rule).
+- openrouter (wave-2b-alpha): ``reasoning="unconditional"`` — every delta
+  gains ``reasoning_content`` (None when ``reasoning`` is absent; a native
+  ``reasoning_content`` clobbered), key-presence error chunks, strict
+  id/created/model/choices envelope (v1 KeyErrors -> OpenRouterException).
+- wave 2b remaining (groq: rename with pop semantics == "rename"): extend
+  ``ReasoningMode`` with the new Literal value and its arm IN THE SAME
+  COMMIT as the consumer and its differential rows — never a third copy of
+  this file's machinery, and never an arm without a consumer (the
+  placeholder-arm rule).
 
 Shapes a v2-sent request cannot trigger (multiple choices, ``function_call``
 deltas, logprobs, unknown delta/tool_call keys) are loud error values.
@@ -35,6 +39,7 @@ from typing import Literal
 
 from expression import Error, Ok, Result
 from expression.collections import Block
+from typing_extensions import assert_never
 
 from ...errors import BoundaryError, TranslationError
 from ...ir import JsonBlob, PlainJson, StreamEvent
@@ -42,11 +47,17 @@ from ...ir import JsonBlob, PlainJson, StreamEvent
 _EventResult = Result[StreamEvent | None, TranslationError]
 ParseEvent = Callable[[PlainJson], _EventResult]
 
-ReasoningMode = Literal["rename", "copy_both"]
+ReasoningMode = Literal["rename", "copy_both", "unconditional"]
 """How a wire ``delta.reasoning`` reaches the emitted delta: "rename" emits
 ``reasoning_content`` only (xai; groq's pop has the same output), "copy_both"
 keeps the original key beside the copy (cometapi). Native
-``reasoning_content`` deltas pass through verbatim in every mode."""
+``reasoning_content`` deltas pass through verbatim in those two modes.
+"unconditional" is openrouter's variant (wave-2b-alpha, added with its
+consumer per the no-consumer-no-arm rule): EVERY delta gains
+``reasoning_content = delta.get("reasoning")`` — ``None`` when ``reasoning``
+is absent, the original ``reasoning`` key kept beside it when present, and a
+native wire ``reasoning_content`` CLOBBERED by the assignment (v1
+openrouter's chunk_parser, replay-pinned)."""
 
 _DELTA_KEYS = (
     "content",
@@ -84,6 +95,30 @@ class HttpxChunkPolicy:
     usage through verbatim. Either way usage is attached ONLY to the
     ``choices: []`` tail — v1's wrapper strips it from every emitted
     content/finish chunk and re-synthesizes the final usage chunk."""
+    passthrough_delta_keys: tuple[str, ...] = ()
+    """wave-2b-beta: delta keys (beyond the shared ``_DELTA_KEYS``) a
+    consumer's own pre-step deliberately emits, admitted and copied SET-ONLY
+    verbatim (mistral: ``thinking_blocks`` — its v1 chunk_parser normalizes
+    magistral content-list deltas into content + thinking_blocks +
+    reasoning_content BEFORE the base rebuild, so they are reachable, not
+    "unreachable for v2-sent requests"). The no-consumer-no-arm rule
+    applies: never add a key without the pre-step that emits it and its
+    differential rows in the same commit."""
+
+
+BASE_HANDLER_POLICY = HttpxChunkPolicy(reasoning="rename")
+"""The compat_httpx FAMILY policy — v1's BASE
+``OpenAIChatCompletionStreamingHandler`` rebuild (reasoning rename,
+value-checked error chunks, no required envelope keys, wire usage verbatim
+on the ``choices: []`` tail only). ONE name for the shared truth
+(critic-wave2b-alpha NIT-1: it was declared six times): compat_httpx and the
+five base-handler own modules (deepseek, hosted_vllm, fireworks_ai,
+snowflake, huggingface) all compose ``make_parse_event(BASE_HANDLER_POLICY)``
+— a family-policy fix is a one-site edit here, and each consumer's docstring
+stays the provider-specific pinned truth (v1 = the base handler). groq also
+composes it (sibling-merge sweep): its v1 handler is its OWN class whose
+pop-rename + value-checked-error behavior is output-identical to this
+policy — the groq stream gate's replays pin that equivalence."""
 
 
 def _envelope_error(
@@ -187,7 +222,9 @@ def _normalize_choice(
         return normalized_delta
     if finish is not None and _delta_bears_content(normalized_delta):
         return TranslationError.of_unsupported(
-            "finish chunk with a non-empty delta; v1's wrapper interleaves it"
+            "finish chunk with a non-empty delta; the v2 fold cannot"
+            " reproduce v1 (the base wrapper interleaves it as its own"
+            " chunk; groq's own v1 wrapper silently DROPS the value)"
         )
     index = choice.get("index")
     return {
@@ -201,7 +238,9 @@ def _normalize_choice(
 def _normalize_delta(
     policy: HttpxChunkPolicy, delta: dict[str, PlainJson]
 ) -> dict[str, PlainJson] | TranslationError:
-    extra_keys = set(delta.keys()) - set(_DELTA_KEYS)
+    extra_keys = (
+        set(delta.keys()) - set(_DELTA_KEYS) - set(policy.passthrough_delta_keys)
+    )
     if extra_keys:
         return TranslationError.of_unsupported(
             f"stream delta keys {sorted(extra_keys)!r}; unreachable for v2-sent requests"
@@ -226,7 +265,14 @@ def _normalize_delta(
     # null provider field on content-bearing deltas); refusal and the
     # reasoning keys ride set-only, mirroring Delta's set-field serialization
     # on the dict path — v1 FORWARDS a refusal that rides a role/content
-    # delta and swallows refusal-only deltas (verifier-grok F1).
+    # delta and swallows refusal-only deltas (verifier-grok F1). The refusal
+    # VALUE rides VERBATIM, any type: v1's Delta forwards non-string
+    # refusals on the wire and serves the stream end-to-end (probed two-sided
+    # for groq), so the old _string_or_none nulling diverged on every
+    # non-string value (verifier-wave2b-beta F6's refusal half — the named
+    # INTEGRATOR-FLIP handoff, discharged at the wave-2b sibling merge). A
+    # refusal-bearing FINISH delta stays the loud finish-chunk fallback via
+    # _delta_bears_content (non-None values count).
     base: dict[str, PlainJson] = {
         "content": _string_or_none(delta.get("content")),
         "function_call": None,
@@ -235,19 +281,93 @@ def _normalize_delta(
         "tool_calls": normalized_calls,
     }
     if "refusal" in delta:
-        base = {**base, "refusal": _string_or_none(delta.get("refusal"))}
+        base = {**base, "refusal": delta.get("refusal")}
+    reasoning_error = _non_string_reasoning_error(policy.reasoning, delta)
+    if reasoning_error is not None:
+        return reasoning_error
+    base = _copy_passthrough_keys(policy, delta, base)
     return _reasoning_tail(policy.reasoning, delta, base)
+
+
+def _copy_passthrough_keys(
+    policy: HttpxChunkPolicy,
+    delta: dict[str, PlainJson],
+    base: dict[str, PlainJson],
+) -> dict[str, PlainJson]:
+    """Copy the policy's ``passthrough_delta_keys`` set-only verbatim (the
+    consumer's own pre-step emits them — mistral's ``thinking_blocks``)."""
+    extra = {key: delta[key] for key in policy.passthrough_delta_keys if key in delta}
+    return {**base, **extra} if extra else base
+
+
+def _crash_checked_reasoning_keys(mode: ReasoningMode) -> tuple[str, ...]:
+    """Which delta keys can feed v1's crashing reasoning join, one named arm
+    per ReasoningMode member + ``assert_never`` (critic-wave2b-final NIT-2:
+    this was the implicit-else shape critic-wave2b-alpha MAJOR-3 banned from
+    ``_reasoning_tail``). The native ``reasoning_content`` key is exempt in
+    the unconditional mode only: there v1's assignment clobbers it to None
+    before it can reach the join (replay-pinned), so v1 never crashes."""
+    if mode == "unconditional":
+        return ("reasoning",)
+    if mode == "copy_both":
+        return ("reasoning", "reasoning_content")
+    if mode == "rename":
+        return ("reasoning", "reasoning_content")
+    assert_never(mode)
+
+
+def _non_string_reasoning_error(
+    mode: ReasoningMode, delta: dict[str, PlainJson]
+) -> TranslationError | None:
+    """verifier-wave2b-alpha F3: v1's chunk_parsers serve a non-string
+    reasoning value verbatim, then the stream CRASHES at the end (APIError
+    out of the chunk builder's reasoning join) — never serve what v1 raises
+    on, so the coercion-to-None that silently swallowed the chunk is now a
+    loud error."""
+    for key in _crash_checked_reasoning_keys(mode):
+        value = delta.get(key)
+        if value is not None and not isinstance(value, str):
+            return _boundary(
+                f"non-string stream delta {key!r} ({type(value).__name__}): "
+                "v1 serves the verbatim value, then raises APIError at stream "
+                "end joining reasoning for the chunk builder"
+            )
+    return None
 
 
 def _reasoning_tail(
     mode: ReasoningMode, delta: dict[str, PlainJson], base: dict[str, PlainJson]
 ) -> dict[str, PlainJson]:
-    if "reasoning" in delta:
+    # every ReasoningMode member named, assert_never on the residual: a new
+    # Literal value without an arm here is a pyright error at this line, not
+    # silent rename semantics (critic-wave2b-alpha MAJOR-3, the UsageStyle/M2
+    # precedent — "rename" used to be the implicit else)
+    if mode == "unconditional":
         value = _string_or_none(delta.get("reasoning"))
-        if mode == "copy_both":
-            # v1 cometapi assigns without popping: both keys reach the Delta
+        if "reasoning" in delta:
             return {**base, "reasoning": value, "reasoning_content": value}
         return {**base, "reasoning_content": value}
+    if mode == "copy_both":
+        if "reasoning" in delta:
+            value = _string_or_none(delta.get("reasoning"))
+            # v1 cometapi assigns without popping: both keys reach the Delta
+            return {**base, "reasoning": value, "reasoning_content": value}
+        return _native_reasoning_tail(delta, base)
+    if mode == "rename":
+        if "reasoning" in delta:
+            return {
+                **base,
+                "reasoning_content": _string_or_none(delta.get("reasoning")),
+            }
+        return _native_reasoning_tail(delta, base)
+    assert_never(mode)
+
+
+def _native_reasoning_tail(
+    delta: dict[str, PlainJson], base: dict[str, PlainJson]
+) -> dict[str, PlainJson]:
+    """A native wire ``reasoning_content`` passes through verbatim in the
+    rename and copy_both modes (the unconditional mode CLOBBERS it instead)."""
     if "reasoning_content" in delta:
         return {
             **base,
@@ -281,7 +401,20 @@ def _normalize_tool_call(call: PlainJson) -> PlainJson | TranslationError:
 
 
 def _delta_bears_content(delta: dict[str, PlainJson]) -> bool:
+    """Does a NORMALIZED delta carry payload v1's wrapper would interleave
+    as its own chunk ahead of the finish chunk? Non-empty content,
+    tool_calls — and the refusal/reasoning keys (verifier-wave2b-alpha F1:
+    a reasoning-bearing finish delta used to be served as an EMPTY finish
+    chunk, silently dropping text v1 serves; now it takes the loud
+    finish-chunk fallback above). Those keys count only on non-None values:
+    the unconditional mode stamps ``reasoning_content: None`` onto every
+    delta, including the bare finish chunks v1 serves."""
     content = delta.get("content")
-    return (isinstance(content, str) and len(content) > 0) or delta.get(
-        "tool_calls"
-    ) is not None
+    if isinstance(content, str) and len(content) > 0:
+        return True
+    if delta.get("tool_calls") is not None:
+        return True
+    return any(
+        delta.get(key) is not None
+        for key in ("refusal", "reasoning", "reasoning_content")
+    )

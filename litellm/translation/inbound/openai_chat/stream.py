@@ -55,7 +55,25 @@ xai) fold ``wire_chunk`` events and gemini folds composite ``chunk`` events;
 their parsers can never produce a per-block delta, and the step surfaces a
 loud error (never a fabricated placeholder body) if one ever arrives."""
 
-ChunkDialect = Literal[BlockDialect, "openai", "azure", "gemini", "xai"]
+ChunkDialect = Literal[
+    BlockDialect,
+    "openai",
+    "azure",
+    "gemini",
+    "xai",
+    # wave-2b-beta: the GENERIC arm of CustomStreamWrapper (providers whose
+    # v1 iterators yield GenericStreamingChunk dicts — cohere/cohere_chat is
+    # the consumer; watsonx streams ride the openai_like SSE path, NOT this
+    # arm). The wire_chunk blob carries the normalized generic payload
+    # {text, tool_call, finish, usage, provider_fields}; the fold mirrors
+    # the wrapper's PER-CHUNK behavior only (role on first emitted chunk,
+    # provider fields BOTH in the delta and top-level, the wire finish flush
+    # VERBATIM, usage only on a trailing choices: [] chunk). The wrapper's
+    # end-of-stream synthesis (finish stop/tool_calls when the wire never
+    # finished; include_usage estimate chunk) is seam scope — see
+    # _step_generic's docstring.
+    "generic",
+]
 
 
 @dataclass(frozen=True)
@@ -107,6 +125,8 @@ def step(state: StreamState, event: StreamEvent) -> _StepResult:
         case "stop":
             return state, ()
         case "wire_chunk":
+            if state.dialect == "generic":
+                return _step_generic(state, event.wire_chunk.value)
             return _step_openai(state, event.wire_chunk.value)
         case "chunk":
             return _gemini_chunk_step(state, event.chunk)
@@ -134,7 +154,7 @@ def _as_block_dialect(
     match dialect:
         case "anthropic" | "bedrock_converse":
             return dialect
-        case "openai" | "azure" | "gemini" | "xai":
+        case "openai" | "azure" | "gemini" | "xai" | "generic":
             # wire/composite dialects fold whole chunks; a per-block delta
             # here is a wiring bug and must be loud, never a fabricated
             # anthropic-shaped placeholder (critic-google M5 / critic-azure M3).
@@ -292,6 +312,90 @@ def _step_openai(state: StreamState, chunk: PlainJson) -> _StepResult:
         ],
     }
     return replace(next_state, sent_role=True), (body,)
+
+
+def _step_generic(state: StreamState, payload: PlainJson) -> _StepResult:
+    """wave-2b-beta: mirror CustomStreamWrapper's GenericStreamingChunk arm
+    PER PARSED CHUNK (cohere is the consumer — its v1 iterator yields generic
+    dicts; the wrapper builds each emitted chunk from a FRESH
+    ModelResponseStream with an ambient per-chunk id/created and the request
+    model — per-chunk id minting is a seam/envelope contract, pinned by the
+    cohere stream gate). Probed in-process at HEAD:
+
+    - content/tool/provider-field chunks: role rides the FIRST emitted chunk
+      only; ``content`` is the parser text verbatim (``""`` on tool/field
+      chunks); provider fields ride the delta's ``provider_specific_fields``
+      AND the chunk top level (v1 setattrs each key onto model_response);
+      empty generic chunks are dropped.
+    - a wire-carried finish flushes as its own empty-delta chunk with the
+      parser-mapped reason VERBATIM — the wrapper applies NO seen-tool-calls
+      rewrite to a received finish (probed: an event-keyed cohere
+      ``message-end`` after tool deltas emits "stop", not "tool_calls").
+    - usage passes through ONLY on a trailing ``choices: []`` chunk (the
+      family usage-tail contract); v1 swallows it without
+      ``stream_options.include_usage`` and emits its own final usage chunk.
+    - the wrapper's END-OF-STREAM synthesis is SEAM scope, not fold scope:
+      when the wire never carried a finish (cohere's REAL ``type``-keyed
+      message-end is swallowed by v1's parser), v1 synthesizes the trailing
+      finish chunk at StopIteration ("tool_calls" when tool calls were seen,
+      else "stop") and, under include_usage, a usage chunk with
+      token-counter ESTIMATES — re-derive both before flag-on streaming."""
+    if not isinstance(payload, dict):
+        # the generic parsers only emit dict payloads: anything else is a
+        # wiring bug and must be loud, never silently dropped (the
+        # _as_block_dialect rule; critic-wave2b-beta N1)
+        return TranslationError.of_unsupported(
+            "generic chunk dialect received a non-object payload; wiring bug"
+        )
+    text = payload.get("text")
+    tool_call = payload.get("tool_call")
+    provider_fields = payload.get("provider_fields")
+    finish = payload.get("finish")
+    usage = payload.get("usage")
+    bodies: tuple[Body, ...] = ()
+    sent_role = state.sent_role
+    has_payload = (
+        (isinstance(text, str) and len(text) > 0)
+        or tool_call is not None
+        or isinstance(provider_fields, dict)
+    )
+    if has_payload:
+        delta: dict[str, PlainJson] = {
+            "role": None if sent_role else "assistant",
+            "content": text if isinstance(text, str) else "",
+        }
+        if tool_call is not None:
+            delta = {**delta, "tool_calls": [tool_call]}
+        top_fields: dict[str, PlainJson] = {}
+        if isinstance(provider_fields, dict):
+            delta = {**delta, "provider_specific_fields": provider_fields}
+            top_fields = dict(provider_fields)
+        body: Body = {
+            "model": state.model,
+            "object": "chat.completion.chunk",
+            **top_fields,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+        }
+        bodies = (body,)
+        sent_role = True
+    if isinstance(finish, str):
+        final: Body = {
+            "model": state.model,
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+        }
+        bodies = (*bodies, final)
+    if isinstance(usage, dict):
+        bodies = (
+            *bodies,
+            {
+                "model": state.model,
+                "object": "chat.completion.chunk",
+                "choices": [],
+                "usage": usage,
+            },
+        )
+    return replace(state, sent_role=sent_role), bodies
 
 
 def _content_filter_field(choice: dict[str, PlainJson]) -> dict[str, PlainJson]:

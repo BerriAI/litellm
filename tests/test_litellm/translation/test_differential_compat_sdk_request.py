@@ -607,8 +607,48 @@ def test_registered_providers_have_differential_coverage() -> None:
         "azure_ai",  # test_differential_azure_ai_request + azure stream/response
         "azure_ai_anthropic",  # test_differential_azure_ai_request (Claude route)
         "xai",  # test_differential_xai_*
+        # wave-2b-alpha own-module providers
+        "deepseek",  # test_differential_deepseek_{request,response,stream}
+        "openrouter",  # test_differential_openrouter_{request,response,stream}
+        "hosted_vllm",  # test_differential_hosted_vllm_{request,response,stream}
+        "fireworks_ai",  # test_differential_fireworks_ai_{request,response,stream}
+        "snowflake",  # test_differential_snowflake_{request,response,stream}
+        "huggingface",  # test_differential_huggingface_{request,response,stream}
+        # wave-2b-beta own modules:
+        "cohere",  # test_differential_cohere_{request,response,stream}
+        "cohere_chat",  # same gates: both names run every request row
+        "mistral",  # test_differential_mistral_{request,response,stream}
+        "watsonx",  # test_differential_watsonx_{request,response,stream}
+        "sagemaker_chat",  # test_differential_sagemaker_chat_{request,response,stream}
+        "groq",  # test_differential_groq_{request,response,stream}
     }
     assert providers == dedicated_gates | set(SPECS) | set(HTTPX_SPECS)
+    own_modules = {
+        "deepseek",
+        "openrouter",
+        "hosted_vllm",
+        "fireworks_ai",
+        "snowflake",
+        "huggingface",
+        # wave-2b-beta own modules (sibling-merge consistency sweep): the
+        # construction-style truth covers ALL eleven wave-2b own modules
+        "cohere",
+        "cohere_chat",
+        "mistral",
+        "watsonx",
+        "sagemaker_chat",
+        "groq",
+    }
+    # critic-wave2b-alpha MAJOR-4: every own-module provider must carry a row
+    # in pipeline.OWN_MODULE_RESPONSE_STYLES (the construction-style truth the
+    # future completion() fork selects usage_style from — the compat_httpx
+    # RESPONSE_STYLES shape). Add the row in the commit that adds the module,
+    # WITH a wrong-arm divergence pin in its response gate ("openai_like":
+    # the fireworks_ai/snowflake wire-index template; "openai": the inverted
+    # float-created template — verifier-wave2b-final F1: this gate asserts
+    # KEY membership only, so an unpinned VALUE is enforced by nothing).
+    assert set(pipeline.OWN_MODULE_RESPONSE_STYLES) == own_modules
+    assert own_modules <= dedicated_gates
 
 
 @pytest.mark.parametrize("provider,name", _request_rows())

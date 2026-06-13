@@ -21,9 +21,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import cast
 
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-
 from ...errors import TranslationError
+from ..openai_compat.guard import carries_cache_control
 
 _Raw = Mapping[str, object]
 
@@ -36,28 +35,10 @@ def unsupported_request_shapes(raw: _Raw) -> TranslationError | None:
     has_name = any(isinstance(entry, Mapping) and "name" in entry for entry in entries)
     if not has_name:
         return None
-    if _carries_cache_control(entries, 0):
+    if carries_cache_control(entries):
         return TranslationError.of_unsupported(
             "message 'name' beside cache_control markers: the IR drops 'name'"
             " so its bytes are invisible to the cache-marker token bound,"
             " while v1's check_and_create_cache token-counts them"
         )
     return None
-
-
-def _carries_cache_control(value: object, depth: int) -> bool:
-    if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        # exhaustion must never ADMIT a request: treat the unscannable tail
-        # as if it carried the marker (fall back to v1)
-        return True
-    if isinstance(value, Mapping):
-        mapping = cast(Mapping[str, object], value)
-        if "cache_control" in mapping:
-            return True
-        return any(_carries_cache_control(item, depth + 1) for item in mapping.values())
-    if isinstance(value, Sequence) and not isinstance(value, str):
-        return any(
-            _carries_cache_control(item, depth + 1)
-            for item in cast(Sequence[object], value)
-        )
-    return False

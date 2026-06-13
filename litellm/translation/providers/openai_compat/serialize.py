@@ -14,6 +14,8 @@ losslessly; o-series and gpt-5 models fail closed until their param families
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from expression import Error, Ok, Option, Result
 from expression.collections import Block
 from typing_extensions import assert_never
@@ -27,6 +29,31 @@ from . import params as p
 from .messages import serialize_messages
 
 _SerializeResult = Result[Body, TranslationError]
+
+_GateFn = Callable[[ChatRequest, TranslationDeps], str | None]
+_DeltasFn = Callable[[Body, ChatRequest], Body]
+_Serializer = Callable[[ChatRequest, TranslationDeps], _SerializeResult]
+
+
+def make_gated_serializer(gate: _GateFn, with_deltas: _DeltasFn) -> _Serializer:
+    """The own-module ``serialize_request`` shape — params gate ->
+    ``assemble_body`` -> provider deltas — as ONE factory instead of five
+    identical wrappers (critic-wave2b-alpha NIT-1). Consumers: deepseek,
+    openrouter, hosted_vllm, fireworks_ai, huggingface, and (sibling-merge
+    sweep) cohere, sagemaker_chat, groq. Deliberately NOT rows: snowflake
+    and mistral bind the chain explicitly (their deltas return a Result —
+    the fail-closed tool arm / the two-branch message munge), and watsonx
+    does too (its deltas read deps for the project/space injection)."""
+
+    def serialize_request(
+        request: ChatRequest, deps: TranslationDeps
+    ) -> _SerializeResult:
+        reason = gate(request, deps)
+        if reason is not None:
+            return Error(TranslationError.of_unsupported(reason))
+        return assemble_body(request).map(lambda body: with_deltas(body, request))
+
+    return serialize_request
 
 
 def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _SerializeResult:
@@ -174,3 +201,20 @@ def _response_format_json(
                     pass
             return {"type": "json_schema", "json_schema": inner}
     assert_never(response_format.tag)
+
+
+def strip_function_strict(tool: PlainJson) -> PlainJson:
+    """Drop the FUNCTION-LEVEL ``strict`` key from one tool (deeper
+    ``strict`` keys untouched) — v1's ``function.pop("strict", None)``
+    shape shared by xai (filter_value_from_dict at the function level) and
+    fireworks_ai (_transform_tools). Lifted from xai/serialize.py when
+    fireworks_ai became the second consumer."""
+    if not isinstance(tool, dict):
+        return tool
+    function = tool.get("function")
+    if not isinstance(function, dict):
+        return tool
+    return {
+        **tool,
+        "function": {key: value for key, value in function.items() if key != "strict"},
+    }

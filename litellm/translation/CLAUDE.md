@@ -325,6 +325,266 @@ translation/
 │   │                    #   two-sided-pinned + a named report row; v1's
 │   │                    #   cometapi handler RAISES instead — its policy
 │   │                    #   row mirrors that raise)
+│   ├── cohere/          # wave-2b-beta: the cohere V2 chat wire — the
+│   │   │                #   DEFAULT route at HEAD for BOTH provider names
+│   │   │                #   ("cohere" and "cohere_chat" resolve to
+│   │   │                #   CohereV2ChatConfig and one main.py elif); the
+│   │   │                #   legacy "v1/" route and the explicit "v2/"
+│   │   │                #   model prefix (an envelope strip) are route
+│   │   │                #   predicates in the guard, never Literal rows
+│   │   ├── guard.py     # v1-route/v2-prefix predicates + explicit
+│   │   │                #   stream:false + the shared openai guard (FULL
+│   │   │                #   message-name fallback: the transform is the
+│   │   │                #   inherited GPT one, names ride verbatim)
+│   │   ├── params.py    # supported-list truths as typed fallbacks
+│   │   │                #   (response_format/parallel_tool_calls/thinking/
+│   │   │                #   reasoning_effort RAISE in v1; user is silently
+│   │   │                #   dropped upstream — fallback, v1 serves)
+│   │   ├── serialize.py # openai_compat assemble_body + renames (top_p->p,
+│   │   │                #   stop->stop_sequences, mct->max_tokens),
+│   │   │                #   tool_choice DROPPED (supported list, no map
+│   │   │                #   arm), top_k emitted verbatim top-level (the
+│   │   │                #   generic passthrough — wire-proven, NOT the
+│   │   │                #   extra_body arm)
+│   │   ├── response.py  # cohere-native body -> normalized chat-completion
+│   │   │                #   body on ChatResponse.wire (content join,
+│   │   │                #   citations->annotations, tool-call message
+│   │   │                #   REPLACEMENT, usage.tokens — finish is ALWAYS
+│   │   │                #   "stop", the wire id/finish are never read)
+│   │   └── stream.py    # bare-JSON line seam (NO data:/[DONE] framing) ->
+│   │                    #   GenericStreamingChunk payloads folded by the
+│   │                    #   inbound "generic" chunk dialect; the v1 parser
+│   │                    #   reads message-end off the ``event`` key while
+│   │                    #   the real wire sends ``type`` — both regimes
+│   │                    #   pinned (wrapper end-of-stream synthesis = seam
+│   │                    #   scope)
+│   ├── deepseek/        # wave-2b-alpha own module (httpx dedicated elif
+│   │   │                #   main.py:1942, transforms LIVE, bare wire model)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   │                #   (full message-name fallback: nothing strips)
+│   │   ├── params.py    # base list + thinking/reasoning_effort
+│   │   │                #   (UNCONDITIONAL, every deepseek model);
+│   │   │                #   non-text content lists and thinking-mode
+│   │   │                #   assistant history fall back (v1's lossy
+│   │   │                #   flatten / _fill_reasoning_content rewrites)
+│   │   ├── serialize.py # openai_compat body + the compat_sdk flatten
+│   │   │                #   delta (imported, never copied) + the thinking
+│   │   │                #   rewrite ({"type":"enabled"} only:
+│   │   │                #   budget_tokens discarded, reasoning_effort
+│   │   │                #   rewritten in and its key never on the wire,
+│   │   │                #   a present non-enabled dict shadows it)
+│   │   ├── response.py  # shared openai parser re-export (no v1 override;
+│   │   │                #   NO deepseek/ prefix — the xai R4 shape)
+│   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
+│   │                    #   OpenAIChatCompletionStreamingHandler) +
+│   │                    #   make_parse_line; "xai" chunk dialect
+│   ├── fireworks_ai/    # wave-2b-alpha own module (httpx dedicated elif
+│   │   │                #   main.py:2198; the WIRE model differs from the
+│   │   │                #   request model and the response model carries
+│   │   │                #   the fireworks_ai/ prefix INSIDE the parser)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   │                #   (cache_control needs NO arm: v1 strips it
+│   │   │                #   recursively == the IR drop, served)
+│   │   ├── params.py    # fireworks' OWN list (user SERVED; top_k mention
+│   │   │                #   dead — extra_body crossing) + three capability
+│   │   │                #   forks over fireworks_ai/{m}; the deps read is
+│   │   │                #   STRICTLY NARROWER than v1's get_provider_info
+│   │   │                #   default-true + hyphen-boundary scan (one-
+│   │   │                #   direction mirror gate; honest drift notes);
+│   │   │                #   response_format WITH tools falls back (v1's
+│   │   │                #   json_mode cross-plane machinery); legacy-defs
+│   │   │                #   tools fall back at the shared inbound arm
+│   │   ├── serialize.py # openai_compat body + accounts/fireworks/models/
+│   │   │                #   model rewrite + mct->max_tokens rename +
+│   │   │                #   tool_choice required->any + function-level
+│   │   │                #   strict strip (shared strip_function_strict) +
+│   │   │                #   the #transform=inline image suffix (literal
+│   │   │                #   "vision" substring gate; data: urls exempt;
+│   │   │                #   the ambient disable global is a SEAM
+│   │   │                #   obligation) + user/reasoning_effort verbatim
+│   │   ├── response.py  # the shared make_direct_parser (OpenAILike
+│   │   │                #   DIRECT construction, "openai_like" seam arm)
+│   │   │                #   with the fireworks_ai/{WIRE model} policy +
+│   │   │                #   the tool-calls-in-content repair fallback
+│   │   │                #   (v1 mints uuid4 ids; the pure parser fails
+│   │   │                #   closed)
+│   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
+│   │                    #   handler; chunks keep the BARE wire model);
+│   │                    #   joins the ONE error-chunk PINNED DIVERGENCE
+│   ├── groq/            # wave-2b-beta: groq over openai_compat (httpx
+│   │   │                #   path, bare wire model)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   ├── params.py    # thinking raise, user drop, reasoning_effort
+│   │   │                #   capability gate (groq/{m}), the json_schema
+│   │   │                #   THREE-WAY fork (native serve / workaround
+│   │   │                #   fallback / BadRequestError fallback)
+│   │   ├── serialize.py # assemble_body + mct rename + reasoning_effort +
+│   │   │                #   top_k (extra_body->wire merge) + assistant
+│   │   │                #   None-strip
+│   │   ├── response.py  # openai parse + verbatim wire + the service_tier
+│   │   │                #   clamp (a MISSING service_tier key fails closed
+│   │   │                #   — v1's getattr crashes); F2 arm; construction
+│   │   │                #   arm "openai_like"
+│   │   └── stream.py    # httpx_chunk factory, reasoning="rename" (groq's
+│   │                    #   pop == rename, verified — no new arm); "xai"
+│   │                    #   chunk dialect
+│   ├── hosted_vllm/     # wave-2b-alpha own module (httpx dedicated elif
+│   │   │                #   main.py:2619, transforms LIVE, bare wire model)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   │                #   (its custom-tool / assistant-thinking_blocks
+│   │   │                #   arms double as this provider's rewrite
+│   │   │                #   fallbacks; file parts fall back inbound)
+│   │   ├── params.py    # base list + thinking/reasoning_effort
+│   │   │                #   (UNCONDITIONAL — no capability fork)
+│   │   ├── serialize.py # openai_compat body + recursive tools cleaning
+│   │   │                #   (strict any-depth; additionalProperties only
+│   │   │                #   when false) + the thinking budget-band rewrite
+│   │   │                #   (>=10000 high / >=5000 medium / >=2000 low /
+│   │   │                #   else minimal; disabled+adaptive dropped;
+│   │   │                #   explicit reasoning_effort WINS)
+│   │   ├── response.py  # shared openai parser re-export (no v1 override;
+│   │   │                #   NO hosted_vllm/ prefix)
+│   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
+│   │                    #   handler); joins the ONE error-chunk PINNED
+│   │                    #   DIVERGENCE row
+│   ├── huggingface/     # wave-2b-alpha own module — the api_base
+│   │   │                #   (dedicated endpoint) ROUTE ONLY (httpx elif
+│   │   │                #   main.py:3185, bare wire model)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   │                #   (the api_base arm sends messages VERBATIM)
+│   │   ├── params.py    # the ROUTE gate first: deps.api_base None ->
+│   │   │                #   EVERYTHING falls back (the router route's
+│   │   │                #   3-segment names fetch the HF provider mapping
+│   │   │                #   over HTTP INSIDE the transform; 1-segment
+│   │   │                #   names crash v1); then the plain base list +
+│   │   │                #   top_k (non-compat top-level passthrough)
+│   │   ├── serialize.py # openai_compat body verbatim (v1's
+│   │   │                #   ChatCompletionRequest passthrough: model and
+│   │   │                #   messages untouched, mct verbatim) + top_k
+│   │   ├── response.py  # shared openai parser re-export (no v1 override;
+│   │   │                #   NO huggingface/ prefix)
+│   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
+│   │                    #   handler); joins the ONE PINNED DIVERGENCE
+│   ├── mistral/         # wave-2b-beta: mistral over openai_compat (httpx
+│   │   │                #   path, dedicated elif, bare wire model)
+│   │   ├── guard.py     # own name matrix (tool-role names kept by v1;
+│   │   │                #   the image branch forwards every name) + the
+│   │   │                #   shared openai guard with skip_name_fallback;
+│   │   │                #   NO stream:false arm (v1's map only copies
+│   │   │                #   stream=True — explicit False never reaches
+│   │   │                #   the wire)
+│   │   ├── params.py    # user (silent drop) + thinking/reasoning_effort
+│   │   │                #   (magistral system-prompt injection / raise)
+│   │   │                #   as typed fallbacks
+│   │   ├── serialize.py # assemble_body + mct rename, tool_choice
+│   │   │                #   required->any (dict form silently dropped),
+│   │   │                #   $id/$schema strip at v1's depth cap, top_k
+│   │   │                #   verbatim; two-branch message munge (image ->
+│   │   │                #   verbatim base output; else flatten +
+│   │   │                #   MistralToolCallMessage + empty-assistant
+│   │   │                #   removal + None strip)
+│   │   ├── response.py  # the two raw pre-steps (empty->None FIRST, then
+│   │   │                #   magistral content-list collapse: LAST text
+│   │   │                #   wins, thinking joins -> reasoning_content)
+│   │   │                #   then the shared openai parser
+│   │   └── stream.py    # content-list normalize pre-step over the
+│   │                    #   httpx_chunk factory (reasoning="rename" + the
+│   │                    #   passthrough_delta_keys axis admitting
+│   │                    #   thinking_blocks); "xai" chunk dialect
+│   ├── openrouter/      # wave-2b-alpha own module (httpx dedicated elif
+│   │   │                #   main.py:3354, transforms LIVE, bare wire model)
+│   │   ├── guard.py     # explicit stream:false + the cache-capable-model
+│   │   │                #   arm (claude/gemini/minimax/glm/z-ai substrings
+│   │   │                #   KEEP cache_control + get the message-level
+│   │   │                #   move; other models' base strip == the IR drop,
+│   │   │                #   served) + the shared openai guard
+│   │   ├── params.py    # base list + top_k (top-level passthrough:
+│   │   │                #   openrouter is NOT a compat provider — wire-
+│   │   │                #   proven) + reasoning_effort/thinking on DUAL-
+│   │   │                #   keyed reasoning models (openrouter/{m} OR bare
+│   │   │                #   {m}; openrouter/-prefixed ids answer False —
+│   │   │                #   v1's prefix-strip); thinking falls back BOTH
+│   │   │                #   ways (verbatim emission / UPE)
+│   │   ├── serialize.py # openai_compat body + usage:{include:true}
+│   │   │                #   ALWAYS + top_k/reasoning_effort verbatim
+│   │   ├── response.py  # shared openai parser re-export (bare wire
+│   │   │                #   model); usage.cost rides the dump verbatim and
+│   │   │                #   the _hidden_params cost header is a FORK
+│   │   │                #   obligation (gate-pinned)
+│   │   └── stream.py    # OWN v1 handler -> per-provider policy: the
+│   │                    #   "unconditional" ReasoningMode arm (added with
+│   │                    #   this consumer), key-presence error raise,
+│   │                    #   strict id/created/model/choices envelope +
+│   │                    #   the missing-delta pre-step
+│   ├── sagemaker_chat/  # wave-2b-beta: SageMaker Messages-API endpoints —
+│   │   │                #   the BASE GPT config over SigV4 transport (the
+│   │   │                #   sign-after-body-final bedrock precedent;
+│   │   │                #   endpoint name == model; sagemaker_nova is
+│   │   │                #   deliberately unregistered)
+│   │   ├── guard.py     # explicit stream:false + the shared openai guard
+│   │   ├── params.py    # thinking/reasoning_effort raises, user drop,
+│   │   │                #   the gpt-4-named-endpoint response_format raise
+│   │   ├── serialize.py # assemble_body verbatim + top_k (mct passes
+│   │   │                #   VERBATIM — the widest list in the wave)
+│   │   ├── response.py  # re-export of the shared openai parser (bare
+│   │   │                #   wire model, construction arm "openai")
+│   │   └── stream.py    # openai parser + the litellm-validation post-step
+│   │                    #   (psf:None on every delta, tool type null ->
+│   │                    #   "function") at the AWS event-stream
+│   │                    #   PARSED-event seam; "openai" chunk dialect
+│   ├── snowflake/       # wave-2b-alpha own module (httpx dedicated elif
+│   │   │                #   main.py:4286; a genuine wire mapping; the
+│   │   │                #   response model is snowflake/{wire model}
+│   │   │                #   INSIDE the parser)
+│   │   ├── guard.py     # the shared openai guard ONLY (messages ride
+│   │   │                #   VERBATIM in v1 — no transform); deliberately
+│   │   │                #   NO stream:false arm: stream is ALWAYS a body
+│   │   │                #   key (absent == false on the wire), so v2
+│   │   │                #   SERVES explicit false
+│   │   ├── params.py    # the small static list (mct/stop/n/seed/
+│   │   │                #   parallel RAISE; user silently dropped) +
+│   │   │                #   top_k (non-compat top-level passthrough,
+│   │   │                #   wire-proven via respx — the elif overwrites
+│   │   │                #   the caller's client, so the mock-transport
+│   │   │                #   helper can't reach it)
+│   │   ├── serialize.py # openai_compat body + the ALWAYS-on stream key
+│   │   │                #   + tools -> tool_spec + tool_choice -> object
+│   │   │                #   (required -> any; dict fn -> name ARRAY) +
+│   │   │                #   top_k verbatim
+│   │   ├── response.py  # content_list pre-rewrite (choices[0]: text
+│   │   │                #   concat + tool_use -> tool_calls with
+│   │   │                #   json.dumps(input) DEFAULT-separator
+│   │   │                #   arguments) + the shared direct parser with
+│   │   │                #   the snowflake/{wire-or-empty} prefix policy;
+│   │   │                #   "openai_like" seam arm; the request model in
+│   │   │                #   _hidden_params["model"] is a fork obligation
+│   │   └── stream.py    # httpx_chunk family policy (v1 = the BASE
+│   │                    #   handler); real Cortex delta shapes UNPINNED
+│   │                    #   upstream; joins the ONE PINNED DIVERGENCE
+│   ├── watsonx/         # wave-2b-beta: watsonx /ml/v1/text/chat over the
+│   │   │                #   OpenAILikeChatHandler route (auth incl. the
+│   │   │                #   IAM-token network POST is envelope; project/
+│   │   │                #   space ids ride TranslationDeps)
+│   │   ├── guard.py     # the shared openai guard (full name fallback);
+│   │   │                #   NO stream:false arm (the wire ALWAYS carries
+│   │   │                #   the stream key)
+│   │   ├── params.py    # mct/parallel_tool_calls/thinking raises, the
+│   │   │                #   top_k legacy watsonx_text ValueError, user
+│   │   │                #   drop, deployment/ models, missing project+
+│   │   │                #   space (v1 raises 401) — all typed fallbacks
+│   │   ├── serialize.py # assemble_body + stream-always + model_id +
+│   │   │                #   project_id/space_id injection + tools
+│   │   │                #   strict/additionalProperties-False strip +
+│   │   │                #   tool_choice_option split + reasoning_effort
+│   │   │                #   verbatim
+│   │   ├── response.py  # openai parse for validation, verbatim wire with
+│   │   │                #   the LIVE "watsonx/{wire_model}" prefix (the
+│   │   │                #   seam constructs with usage_style
+│   │   │                #   "openai_like"); F2 non-string-model arm
+│   │   └── stream.py    # databricks ModelResponseIterator mirror ->
+│   │                    #   generic payloads ("generic" dialect; data:-
+│   │                    #   OPTIONAL line seam; v1's silent swallows of
+│   │                    #   malformed lines/chunks are PINNED DIVERGENCES)
 │   └── xai/             # Grok over openai_compat (httpx path: NO model
 │       │                #   prefix anywhere, transform_response is LIVE):
 │       ├── guard.py     # web_search_options (v1's Responses-bridge reroute
@@ -484,7 +744,7 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to sixty-five providers out — `anthropic`,
+OpenAI-chat-in to seventy-seven providers out — `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
@@ -498,9 +758,13 @@ route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `poe`, `chutes`, `assemblyai`, `charity_engine`, `neosantara`,
 `tensormesh`, `parasail`), and the nine wave-1b compat_httpx providers
 (`heroku`, `bedrock_mantle`, `minimax`, `compactifai`, `amazon_nova`,
-`datarobot`, `gradient_ai`, `ovhcloud`, `lemonade`), and the five wave-2a
+`datarobot`, `gradient_ai`, `ovhcloud`, `lemonade`), the five wave-2a
 providers (`perplexity`, `sambanova`, `deepinfra`, `moonshot` on the SDK
-path, `cometapi` on the httpx path) — request, response, and stream
+path, `cometapi` on the httpx path), and the wave-2b-alpha own modules
+(`deepseek`, `openrouter`, `hosted_vllm`, `fireworks_ai`, `snowflake`,
+`huggingface` on its api_base route), and the wave-2b-beta own modules
+(`cohere`/`cohere_chat` (one module), `mistral`, `watsonx`,
+`sagemaker_chat`, `groq`) — request, response, and stream
 translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
 replays; bedrock and google: the characterization corpus per route + quirk
@@ -698,6 +962,167 @@ rows, the xai R4 shape), must route streams through
 compat_httpx.LINE_PARSERS["cometapi"] with the "xai" chunk dialect at the
 SSE line seam (NOT the SDK wrapper arm), and inherits the
 synthesized-final-usage contract from the openai/xai ports.
+Deliberate wave-2b-alpha (deepseek) fallback surfaces (each names the v1
+path): non-text content lists (v1's ALWAYS-on flatten drops non-text
+parts and skips the base image transforms — v1 serves its lossy flatten);
+assistant history in thinking mode on supports_reasoning("deepseek/{m}")
+models (v1's _fill_reasoning_content patches every assistant message
+missing reasoning_content with provider_specific_fields promotion or a
+single-space placeholder — v1 serves its rewrite; the fill is INERT on
+non-reasoning models like deepseek-chat, where the same shape SERVES,
+pinned both ways); top_k (the wire-proven extra_body merge — pinned by a
+mock-transport completion() row per the wave-2b wire-prove rule); user
+(model-list gated, v1 silently drops); explicit stream:false (guard arm);
+and the family guard/parse fallbacks (web_search_options is SERVED by
+v1's base list at HEAD — a dossier drift fact — and falls back at the
+inbound boundary like every parse-level unknown). The thinking rewrite
+itself is SERVED, never a fallback: {"type":"enabled"} verbatim-only with
+budget_tokens discarded, reasoning_effort != "none" rewritten to it (the
+key never reaches the wire), a present non-enabled thinking dict shadows
+reasoning_effort entirely — all pinned by IDENTICAL rows. deepseek fork
+obligations (when the integrator wires it): NO model preset (fresh
+ModelResponse, bare wire model — the xai R4 rule, pinned by the no-prefix
+response rows), streams fold providers/deepseek.parse_line with the "xai"
+chunk dialect at the SSE line seam, and the error-chunk PINNED DIVERGENCE
+(v1's base handler swallows; v2 is loud) extends to deepseek exactly like
+the compat_httpx family.
+Deliberate wave-2b-alpha (openrouter) fallback surfaces (each names the
+v1 path): thinking BOTH ways (reasoning-capable models: v1 serves the
+wire dict VERBATIM, an unported emission — the zai/minimax precedent;
+non-capable models: v1 raises UnsupportedParamsError, like
+reasoning_effort off the dual-keyed capability); cache_control on
+cache-capable models (claude/gemini/minimax/glm/z-ai substrings — v1
+keeps it and moves message-level markers into the last content block;
+on every OTHER model the base strip == the IR drop, SERVED and pinned);
+`transforms`/`models`/`route` (v1's top-level passthrough — the map's
+extra_body packing is DEAD at runtime, a dossier drift fact); user
+(model-list gated); explicit stream:false (guard arm). SERVED, never
+fallbacks: top_k (the top-level passthrough, wire-proven — openrouter is
+NOT in openai_compatible_providers so there is no extra_body crossing),
+reasoning_effort on dual-key-capable models (verbatim emission), and the
+ALWAYS-injected `usage: {"include": true}` body key. openrouter fork
+obligations (when the integrator wires it): NO model preset (fresh
+ModelResponse, bare wire model); streams fold providers/openrouter
+.parse_line (its OWN strict/raising policy row — NOT the family default)
+with the "xai" chunk dialect; and the HARD OBLIGATION from the response
+gate — v1 copies wire `usage.cost` into `_hidden_params
+["additional_headers"]["llm_provider-x-litellm-response-cost"]` as a
+float (the cost-calculator feed); the v2 body retains usage.cost
+verbatim, so the fork MUST rebuild that header from the body before the
+openrouter flag can turn on (pinned by
+test_v1_cost_hidden_param_is_the_fork_obligation and the report's
+SEAM CONTRACT row). The envelope (HTTP-Referer/X-Title headers, the
+litellm.OpenrouterConfig class-attr extra_body merge in the elif) stays
+fork scope.
+Deliberate wave-2b-alpha (hosted_vllm) fallback surfaces (each names the
+v1 path): custom-type tools (the shared openai guard — v1 synthesizes
+function tools from them, asserted in-process); assistant
+`thinking_blocks` (the shared openai guard — v1 prepends them as content
+blocks); `file` content parts (inbound boundary — v1 converts video files
+to `video_url` blocks); top_k (the extra_body crossing, wire-proven);
+user (model-list gated); explicit stream:false (guard arm). SERVED,
+never fallbacks: reasoning_effort verbatim (UNCONDITIONALLY in v1's
+list — no capability fork), the thinking budget-band rewrite (>=10000
+high / >=5000 medium / >=2000 low / else-incl.-absent minimal; disabled
+and adaptive DROPPED; an explicit reasoning_effort WINS — all pinned by
+IDENTICAL rows), and the recursive tools cleaning (`strict` removed at
+every depth and any value; `additionalProperties` removed ONLY when
+false — contrast xai's function-level-only strip). hosted_vllm fork
+obligations: NO model preset (bare wire model); streams fold
+providers/hosted_vllm.parse_line (the FAMILY policy; the base-handler
+error-chunk PINNED DIVERGENCE covers it) with the "xai" chunk dialect.
+Deliberate wave-2b-alpha (fireworks_ai) fallback surfaces (each names the
+v1 path): tools/parallel_tool_calls/tool_choice/reasoning_effort wherever
+the fireworks_ai/{m} map flag is not explicitly true — the deps read is
+STRICTLY NARROWER than v1's get_provider_info default-true +
+hyphen-boundary scan (one-direction soundness pinned by
+test_capability_mirror_is_one_direction: zero v1-False/v2-True rows at
+HEAD; v1 serves or raises per its own gate, the typed fallback reproduces
+it either way; re-evaluate with a deps map-scan surface if tools fallback
+volume hurts); response_format WITH tools (v1 pops response_format and
+sets the json_mode routing marker — the groq-shape cross-plane
+machinery); legacy-def tool schemas (the SHARED inbound arm; v1 inlines
+$refs via unpack_legacy_defs); assistant provider_specific_fields /
+thinking_blocks (v1 POPS both); pdf/file parts (v1 migrates to
+image_url); n / logprobs / penalties / prompt_truncate_length /
+context_length_exceeded_behavior (v1 serves — top-level for the OpenAI
+ones, extra_body crossing for the provider-native two); top_k (extra_body
+crossing, wire-proven); explicit stream:false; on the response side, the
+tool-calls-in-content repair shape (v1 synthesizes a uuid4 tool_call —
+the pure parser fails closed; reserved json_tool_call contents serve
+verbatim, pinned) and non-string wire models (v1's ModelResponse(**json)
+raises ValidationError). SERVED, never fallbacks: the accounts/fireworks/
+models/{m} model rewrite (kept verbatim for accounts/-prefixed and
+#-bearing ids), mct->max_tokens, tool_choice required->any, the
+function-level strict strip (deeper strict keys ride verbatim — v1 keeps
+them), the #transform=inline image suffix (LITERAL "vision" substring
+gate on the REWRITTEN model; data: urls exempt), cache_control stripped
+(== the IR drop), and user/reasoning_effort verbatim. fireworks_ai fork
+obligations: NO seam preset and the "openai_like" construction arm with
+the parser-owned fireworks_ai/{WIRE model} prefix (NOT the request
+model) — the style is machine-readable in
+`engine/pipeline.OWN_MODULE_RESPONSE_STYLES` (the table the fork must
+select usage_style from, asserted complete by the registration gate;
+the wrong arm is a PROVEN byte divergence pinned in the response gate —
+critic-wave2b-alpha MAJOR-4 closed the prose-only gap, and the seam AST
+gate already rejects any fork routed through response_dialect());
+the ambient litellm.disable_add_transform_inline_image_block
+global (and the per-request litellm_params flag) must FORCE v1 at the
+seam before flag-on — the serializer encodes the default-enabled arm
+only; response _hidden_params.additional_headers ride the seam's
+headers-passthrough follow-up.
+Deliberate wave-2b-alpha (snowflake) fallback surfaces (each names the
+v1 path): max_completion_tokens / stop / n / seed / penalties /
+parallel_tool_calls (v1's small static list RAISES — no rename arms
+anywhere); user (silently dropped; the list never carries it); message
+`name` and every other openai-guard raw shape (v1 sends messages
+VERBATIM — its transform never calls super, so no flatten and no base
+image transforms; the guard's fallbacks are all the v1-serves kind); on
+the response side, non-string wire models (v1's ModelResponse(**json)
+raises ValidationError). SERVED, never fallbacks: explicit
+`stream: false` (the ONE wave-2b provider where the family guard arm
+would be WRONG — v1 puts `stream` in every body, default false, so
+absent and explicit-false are the same wire byte, pinned); top_k (the
+non-compat TOP-LEVEL passthrough, wire-proven via respx — the snowflake
+elif OVERWRITES the caller's client at main.py:4390, so the
+mock-transport helper cannot reach it); tools -> Snowflake `tool_spec`
+(missing parameters get the empty-object default); tool_choice -> the
+object shape (auto/none verbatim types, required -> any, the dict
+function form -> {"type":"tool","name":[fn]} with the ARRAY); the
+content_list response rewrite (choices[0] text concat + tool_use ->
+OpenAI tool_calls with json.dumps DEFAULT-separator arguments,
+byte-pinned) and the snowflake/{wire-or-EMPTY} response prefix.
+snowflake fork obligations: NO seam preset and the "openai_like"
+construction arm (machine-readable in
+`engine/pipeline.OWN_MODULE_RESPONSE_STYLES`, wrong-arm divergence
+pinned in the response gate — the fireworks_ai MAJOR-4 shape); the
+request model must ride
+_hidden_params["model"] (v1's cost-calculator feed, dump-invisible —
+gate-pinned); account_id -> URL synthesis and KEYPAIR_JWT/PAT headers
+are pure envelope (header-only auth, researcher-4's correction). Real
+Cortex STREAM delta shapes are unpinned upstream: a content_list delta
+would be a loud v2 error where v1 serves a chunk that silently lost it
+— get real fixtures before flag-on streaming.
+Deliberate wave-2b-alpha (huggingface) fallback surfaces (each names the
+v1 path): the WHOLE router route — `deps.api_base` None falls back every
+request typed (v1's 3-segment `provider/org/model` names fetch the HF
+inference-provider mapping over a BLOCKING HTTP GET inside
+transform_request and rewrite the model to providerId; 2-segment names
+skip the fetch but run the base transforms + router URL synthesis;
+1-segment names CRASH v1 with the split ValueError — all pinned); on the
+api_base route, `max_retries` (NOT popped on this arm — v1 serves it
+INTO the body, an oddity the row pins), user (model-list gated), message
+`name` and the other openai-guard raw shapes (v1 sends messages
+VERBATIM), and explicit stream:false (the body carries every
+optional_params key). SERVED: the verbatim body (model untouched, mct
+verbatim, no renames) plus top_k (the non-compat TOP-LEVEL passthrough).
+huggingface fork obligations: the fork MUST thread
+`litellm_params["api_base"]` into `deps.api_base` (the route gate keys
+on it — None means every request falls back; the env
+HF_API_BASE/HUGGINGFACE_API_BASE chain resolves in v1's envelope ABOVE
+the transform and does NOT arm the api_base transform route, so the
+fork must thread exactly the litellm_params value, not the env) and
+keep the bare wire model (no preset, "openai" construction arm).
 Streaming-seam obligations carried from wave 2a (verifier-wave2a W1/W2 —
 no impact while streaming stays on v1, pinned by
 `test_reasoning_stream_seam_obligation_canary`): the SDK family's openai
@@ -710,6 +1135,28 @@ for reasoning-capable family members; and the line decoders
 (make_parse_line consumers) error loudly on malformed SSE lines that
 v1's BaseModelResponseIterator silently swallows — the PR #30138
 lenient-boundary call belongs to that seam, not the parsers.
+Streaming obligations added at the wave-2b-alpha fix round
+(verifier-wave2b-alpha F1/F2/F3, fixed ONCE in the shared
+`openai_compat/httpx_chunk.py` factory so every dict-path consumer
+inherits them): a reasoning/refusal-bearing FINISH delta is the LOUD
+finish-chunk fallback (v1's wrapper interleaves it as a separate chunk
+the fold cannot reproduce — the pre-fix factory served an empty finish
+chunk with the text silently GONE; two-sided rows in the openrouter and
+xai stream gates, all base-handler consumers inherit; groq's v1 wrapper
+DROPS the finish-riding refusal instead of interleaving — same loud
+fallback, pinned in its gate), and a non-string non-None reasoning value
+is a loud error (v1 serves it then RAISES APIError at stream end in the
+chunk builder). Discharged at the wave-2b sibling merge
+(verifier-wave2b-beta F6's refusal half, the named INTEGRATOR-FLIP
+handoff): a delta ``refusal`` VALUE rides VERBATIM, any type — v1's
+Delta forwards non-string refusals and serves the stream end-to-end
+(re-probed two-sided for groq), so the factory's old _string_or_none
+nulling was the divergence, not the fix. One NAMED zero-data
+divergence remains for the streaming seam to inherit deliberately: v1
+serves a mid-stream empty-string reasoning delta as its own chunk while
+the v2 fold swallows the empty delta (byte-identical otherwise) —
+pinned by the openrouter gate's named-obligation row; decide
+serve-vs-swallow at the seam before flag-on streaming.
 The xai completion() fork is NOT wired (integrator
 scope, like openai/azure); when it lands these are HARD OBLIGATIONS, not
 notes: the in-package `use_xai_oauth` guard arm is defense-in-depth ONLY
@@ -724,6 +1171,199 @@ keep the bare wire model (the B1 re-prefix arm must never fire: xai
 presets no model); synthesize the final stream usage chunk from the
 passthrough `choices: []` tail (non-tail usage is withheld exactly like
 v1's wrapper, so the synthesis covers the tail-chunk shape only).
+Deliberate wave-2b-beta cohere fallback surfaces (providers/cohere — both
+provider names; each names the v1 path): the legacy ``v1/`` route (the v1
+chat wire is DON'T-PORT; route predicate in the guard) and the explicit
+``v2/`` model prefix (main.py strips it before transform — an envelope
+rewrite v2 does not reproduce); every supported-list raise
+(response_format, parallel_tool_calls, thinking, reasoning_effort —
+NOTE the get_optional_params drift: the cohere arm runs the LEGACY
+CohereChatConfig map, byte-equivalent to the v2 config's over the shared
+list, probed at HEAD); ``user`` (silently dropped upstream, v1 serves the
+drop); n/seed/frequency_penalty/presence_penalty (v1 SERVES them — renamed
+n->num_generations — but they are parse-level unknowns, so v1 keeps
+serving); explicit stream:false; message ``name`` (forwarded verbatim by
+the GPT transform, full-name guard arm). SERVED quirks pinned IDENTICAL:
+tool_choice silently dropped (in the supported list with no map arm),
+top_k emitted verbatim top-level (wire-proven — the generic passthrough,
+NOT the extra_body arm), mct->max_tokens, response finish_reason ALWAYS
+"stop" (v1 never reads the wire finish; the fresh-Choices default
+survives even on tool calls), the wire response id IGNORED (ambient
+chatcmpl id), tool-call responses REPLACING the message (text content
+lost, annotations kwarg explicit). Cohere stream/fork obligations (the
+forks are NOT wired; integrator scope): the response construction arm is
+"openai" with NO model preset and the request model riding the body; the
+chunk fold dialect is "generic" (the wrapper's GenericStreamingChunk arm)
+over providers/cohere.parse_line — a BARE-JSON line seam (v1's iterator
+json.loads each line; no data:/[DONE] framing); the generic streaming
+seam must mint a FRESH chunk id per chunk (v1's wrapper does), must NOT
+preset citations/system_fingerprint (to_model_response_stream's openai
+preset would diverge — the cohere stream gate's local adapter is the
+contract), and OWNS v1's end-of-stream synthesis: the real (type-keyed)
+cohere wire never matches the parser's event-keyed message-end arm, so
+v1 synthesizes the trailing finish chunk at StopIteration ("tool_calls"
+when tool deltas were seen, else "stop") and, under include_usage, a
+final usage chunk with token-counter ESTIMATES (the wire usage never
+reaches the wrapper on that regime). One PINNED DIVERGENCE (fail-closed
+on a failure path, the compat_httpx error-chunk precedent): non-str
+stream ``content.text`` — v1 silently swallows the chunk, v2 errors
+loudly (named report row).
+Deliberate wave-2b-beta mistral fallback surfaces (providers/mistral; each
+names the v1 path): every supported-list raise (frequency_penalty,
+presence_penalty, n, logprobs, web_search_options, and
+thinking/reasoning_effort on NON-magistral models); the magistral
+reasoning-prompt INJECTION (v1 rewrites the message list with a constant
+system prompt at transform time — v2 falls back on thinking/
+reasoning_effort everywhere, one arm for both regimes); ``user`` (silently
+dropped upstream — dossier drift: researcher-4 listed it as a raise);
+``seed`` (v1 packs extra_body.random_seed, parse-level fallback); tool-role
+message ``name`` (v1 keeps it; non-tool names serve through the IR drop);
+ANY message ``name`` beside image/file content (the image branch forwards
+names verbatim); string-form stop; single-text content lists (v1 flattens
+— the conservative shared arm, the sambanova precedent); text lists
+flattening to "" (v1's truthy assignment keeps the LIST form). SERVED
+quirks pinned IDENTICAL: explicit stream:false (v1's map only copies True
+— NO guard arm, the IR collapse IS v1's drop), mct->max_tokens, top_k
+verbatim top-level (wire-proven — researcher-4 listed it as a raise, the
+probe refutes it), tool_choice required->any with the DICT form silently
+dropped, tools $id/$schema strip at v1's exact call-site cap —
+``max_depth=DEFAULT_MAX_RECURSE_DEPTH`` (=100 at HEAD; v2 imports the same
+``litellm.constants`` symbol, so the env-overridable value cannot drift;
+the signature's ``max_depth=10`` default is dead there, verifier F2)
+(additionalProperties/strict KEPT — port the code, not the docstring),
+multi-text flatten, MistralToolCallMessage rebuild, empty-assistant
+removal, per-message None strip, the image branch's verbatim
+base-transform passthrough, response empty-content->None BEFORE the
+magistral content-list collapse (LAST text block wins; thinking texts
+join "\\n" into reasoning_content), bare wire model, and the stream
+content-list normalize (thinking_blocks signature "mistral" riding the
+delta via the httpx_chunk factory's wave-2b-beta passthrough_delta_keys
+axis — mistral is the axis's consumer). codestral reuses MistralConfig in
+v1 but is NOT registered here (stays a v1 fallback; re-evaluate with its
+own dossier). Mistral fork obligations (NOT wired; integrator scope): no
+model preset (bare wire model, the xai R4 rule), construction arm
+"openai", streams fold with the "xai" dialect over
+providers/mistral.parse_line (standard data:/[DONE] SSE).
+Deliberate wave-2b-beta watsonx fallback surfaces (providers/watsonx; each
+names the v1 path): max_completion_tokens (RAISES — the OpenAILike rename
+is dead behind the list gate), parallel_tool_calls/thinking/logit_bias/
+web_search_options (raises), top_k and every legacy watsonx-text param
+(the get_optional_params watsonx-only arm raises a bare ValueError naming
+the watsonx_text provider — a DIFFERENT raise class, pinned), ``user``
+(silent drop), ``deployment/`` models (deployment URLs, api_version pop,
+no model_id/project_id payload — envelope), missing project AND space id
+in deps (v1's _get_api_params raises WatsonXAIError 401), message ``name``
+(forwarded verbatim — full-name guard arm), n/seed/penalties/logprobs/
+top_logprobs (parse-level; v1 serves verbatim). SERVED quirks pinned
+IDENTICAL: the body ALWAYS carries ``stream`` (the openai_like handler
+re-adds ``stream or False`` unconditionally, so explicit false == absent —
+NO guard arm), ``model`` AND ``model_id`` both set to the wire model,
+project_id-or-space_id injection (project wins; ids ride
+``TranslationDeps.watsonx_project_id``/``watsonx_space_id`` — the future
+seam fork must run v1's _get_api_params resolution chain), tools
+``strict`` stripped at every depth + ``additionalProperties`` removed only
+where False, tool_choice auto/none/required -> ``tool_choice_option`` with
+the dict form riding ``tool_choice`` verbatim, response_format (object AND
+json_schema) + reasoning_effort verbatim (json_mode is NEVER set —
+the OpenAILike json_mode machinery is dormant), responses constructed
+ModelResponse(**json)-direct with the LIVE ``watsonx/{wire_model}`` prefix
+(model None -> the literal "watsonx/"; non-string wire model fails closed
+— the verifier-longtail F2 arm), and streams through the databricks
+GenericStreamingChunk iterator (researcher-4 drift: NOT the plain openai
+dialect) folded by the "generic" dialect — a truthy STRING wire finish
+rides VERBATIM and the chunk envelope runs v1's live map_finish_reason on
+BOTH sides (IBM time_limit/cancelled/error -> stop, max_tokens -> length,
+unknown strings -> stop — the verifier-F7 fix; v1 SERVES "stop", the old
+conservative loud arm is gone), truthy non-str hashable finishes -> stop
+(the map's .get default), falsy finishes ride as NO finish (StreamingChoices'
+truthy gate; the synthesized tail is seam scope), truthy unhashable
+finishes are loud (v1's map raises TypeError -> MidStreamFallbackError);
+name-only tool starts ride with validated arguments "" and tool indexes
+lax-coerce exactly like v1's Delta (str digits, bools, integral floats);
+mid-stream usage is stripped AFTER validation (non-dict usage raises in
+v1 -> loud; values Usage's lax coercion rejects swallow the whole chunk in
+v1 -> pinned divergence); the choices=[] usage tail passes through (seam
+contract — NOTE: v1's include_usage wrapper OVERRIDES null/zero tail
+values with token-counter ESTIMATES; the future streaming seam must
+reproduce the estimate arm), and a stream without a wire finish gets v1's
+SYNTHESIZED trailing stop (seam scope, the cohere contract). PINNED
+DIVERGENCES (fail-closed on failure paths): non-JSON stream lines, chunks
+failing ModelResponseStream validation (incl. non-str tool id/name/type
+and non-coercible tool indexes — v2 never invents id/name None or index 0
+where v1 drops the chunk, critic B1.4), non-str delta content, and
+lax-rejected usage values — v1 swallows each silently, v2 errors loudly
+(named report rows).
+Watsonx fork obligations (NOT wired; integrator scope): construction arm
+"openai_like" (NEVER "openai" — the construction-arm gate applies), no
+model preset, deps built with the resolved project/space ids, streams fold
+with the "generic" dialect over providers/watsonx.parse_line.
+Deliberate wave-2b-beta sagemaker_chat fallback surfaces
+(providers/sagemaker_chat; each names the v1 path): thinking/
+reasoning_effort (raises — the BASE GPT list, the widest in the wave),
+``user`` (silent drop), response_format on endpoints literally named
+gpt-4/gpt-3.5-turbo-16k (the base-list name gate raises — endpoint names
+are arbitrary so the corner is REACHABLE), explicit stream:false (rides
+the wire), aws_* kwargs (v1 places them in optional_params and the BODY
+carries them — wire-probed aws_region_name; v2's parse rejects the
+unknown key, v1 serves), message ``name`` (forwarded), and the
+parse-level unknowns (n/seed/penalties/logprobs/logit_bias/
+web_search_options — v1 serves all verbatim). SERVED pins:
+max_completion_tokens VERBATIM (no rename), top_k top-level
+(wire-proven), bare wire model on responses (cdr, construction arm
+"openai", NO preset), and streams at the AWS event-stream PARSED-event
+seam (botocore framing is transport — the bedrock precedent): the shared
+openai parser + a post-step mirroring the decoder's litellm validation
+(provider_specific_fields: None materialized on every delta, tool_call
+type missing-or-null -> "function") with the FULL validation breadth LOUD
+(v1's StreamingChatCompletionChunk/ChatCompletionDeltaToolCall validation
+raises — not the watsonx swallow — on non-str delta strings, present
+non-dict delta, non-list tool_calls, non-str tool id/name/arguments/type,
+non-coercible tool/choice indexes, non-dict usage and usage values the
+lax coercion rejects; the verifier-F5 fix), a pre-step SERVING v1's lax
+coercions (index bool/digit-str/integral-float -> int) and the wrapper's
+finish semantics (falsy -> no finish, tail synthesis seam scope; truthy
+non-str hashable -> "stop"; unknown strings ride verbatim through the
+live map both sides; truthy unhashable loud — the verifier-F7 fix).
+sagemaker_nova shares the main.py branch but carries its own
+config overrides and stays a typed v1 fallback (canary in the request
+gate). SigV4 + the /invocations[-response-stream] URL split are envelope;
+the fork must sign AFTER wire_body finalizes (the bedrock rule).
+Deliberate wave-2b-beta groq fallback surfaces (providers/groq; each names
+the v1 path): ``thinking`` (raises), ``reasoning_effort`` on models
+without the ``groq/{m}`` supports_reasoning flag (raises), ``user``
+(silent drop), ``response_format`` with a json_schema on NON-native models
+(v1 serves its json_tool_call WORKAROUND — tools + forced tool_choice +
+json_mode + fake_stream, the cross-plane rewrite v2 deliberately does not
+reproduce; researcher-4's prescribed shape), the same plus user tools (v1
+raises ``litellm.BadRequestError`` — the wave's one
+non-UnsupportedParamsError request raise, exact type pinned), explicit
+stream:false, message ``name``, and the parse-level unknowns
+(seed/n/penalties/logit_bias/logprobs/top_logprobs/service_tier/
+web_search_options/max_retries — v1 serves or silently drops each).
+SERVED pins: mct->max_tokens (groq's map forwards POSITIONALLY so the
+OpenAILike rename runs — its own replace_...=False default is never
+threaded), top_k via extra_body -> hh's wire merge (wire-equivalent
+top-level emission), response_format json_object verbatim (fake_stream is
+a routing key hh pops), json_schema VERBATIM on native-schema models
+(llama-4 / gpt-oss / kimi-k2-0905 map rows; capability via deps over
+groq/{m}), assistant-message None-strip (content: None never reaches the
+wire), reasoning_effort verbatim on flagged models, responses
+ModelResponse(**json)-direct (BARE wire model — the prefix arm is dead,
+custom_llm_provider=None) with x_groq extras surviving and the
+service_tier CLAMP ({auto,default,flex}, null/unknown -> "auto") — a
+response body MISSING the service_tier key fails closed (v1's clamp reads
+getattr with no default and CRASHES with AttributeError, probed), and
+streams through the httpx_chunk factory reasoning="rename" (groq's pop ==
+the existing mode, verified — no new ReasoningMode arm) with truthy error
+chunks loud on both sides (v1 raises -> MidStreamFallbackError; error:
+null serves, the value-check pin). Groq fork obligations (NOT wired;
+integrator scope): construction arm "openai_like", no model preset,
+streams fold with the "xai" dialect over providers/groq.parse_line, and
+the main.py groq elif merges ``GroqChatConfig.get_config()`` CLASS-ATTR
+state into optional_params (main.py:2338-2344) — ambient module state v2
+cannot see, so the fork MUST fall back to v1 when that config is
+non-empty (the ambient-globals rule: vertex_ai_safety_settings/
+custom_prompt_dict precedent).
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body
@@ -754,3 +1394,35 @@ format: write `providers/<name>/`, register it in
 `engine/pipeline._SERIALIZERS` / `_RESPONSE_PARSERS` / `_RESPONSE_DIALECTS`
 (plus `_RAW_GUARDS` when the inbound schema is the provider's own family),
 add a differential corpus, keep the flag off until differential-green.
+
+## Standing typed-discipline batch ("azure-N5"): the ONE canonical member list
+
+This list is the authoritative enumeration of the deferred typed-discipline
+cleanup batch (critic-wave2b-final NIT-4: the members were scattered across
+six reports with no canonical home). New deferrals into the batch APPEND a
+line here in the same commit and cite this section; the batch executor starts
+from this list, not from a report grep. Every member shares the lineage:
+outcome parity holds, only typed/`Any` discipline or shared-seam structure is
+at stake.
+
+- critic-azure N5 (origin): Any-heavy test plumbing — `_azure_corpus.py`
+  (`Dict[str, Any]` throughout, `load_json -> Any`, `jsonable`),
+  `test_differential_azure_request.py` `_v1_body`/`_v2_body` untyped
+  params, `generate_differential_report.py` `_azure_rows(lines: list)` +
+  the unrestored `os.environ.pop("AZURE_API_VERSION")`.
+- critic-wave1b N3: the corpus-helper untyped-invoker lineage the azure
+  plumbing copied.
+- critic-wave2a N6: the report generator's bare `lines: list` parameter
+  house style (every `_*_rows` signature).
+- critic-longtail NIT-5: the ~70-line normalizer residue batched per that
+  critic's own disposition.
+- verifier-longtail F3: the cdr arm's id guard (`isinstance(body_id, str)
+  and body_id`, `litellm/translation_seam.py`) rewrites non-string/empty
+  wire ids to the ambient chatcmpl id where v1's cdr keeps the wire value
+  — touches already-wired openai-style consumers; re-decide with a probe.
+- critic-wave2b-alpha NIT-3: `_own_module_corpus.py`'s Any-heavy invoker,
+  the generator's newer `lines: list` params, and the per-commit
+  interleaved import blocks in `_wave2b_alpha_error_chunk_pins`.
+- verifier-wave2b-beta F8 residual: watsonx response `id: 7` — both sides
+  raise the same ValidationError but v2's raise escapes from the seam,
+  not as a typed fallback (the F2 fail-closed arm covers only `model`).

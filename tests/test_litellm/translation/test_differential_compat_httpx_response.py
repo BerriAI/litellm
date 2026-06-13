@@ -234,9 +234,7 @@ def _v2_with_style(
     response = PARSERS[provider](copy.deepcopy(raw), parsed.ok)
     assert response.is_ok(), response.error.summary
     body = serialize_response(response.ok, build_translation_deps(), "openai")
-    return to_model_response(
-        body, model_response, usage_style=style
-    ).model_dump()
+    return to_model_response(body, model_response, usage_style=style).model_dump()
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
@@ -319,9 +317,7 @@ _INDEX_REWRITE_BODY = {
 }
 
 _OPENAI_LIKE_MEMBERS = sorted(
-    provider
-    for provider in PROVIDERS
-    if RESPONSE_STYLES[provider] == "openai_like"
+    provider for provider in PROVIDERS if RESPONSE_STYLES[provider] == "openai_like"
 )
 
 
@@ -401,16 +397,16 @@ def test_seam_forks_never_select_usage_style_via_response_dialect() -> None:
     )
 
 
-_DODGE_LOCAL_VARIABLE = '''
+_DODGE_LOCAL_VARIABLE = """
 def _send_v2_family(provider_key, body, model_response):
     style = response_dialect(provider_key)
     return to_model_response(body, model_response, usage_style=style)
-'''
+"""
 
-_DODGE_POSITIONAL_ARGUMENT = '''
+_DODGE_POSITIONAL_ARGUMENT = """
 def _send_v2_family(provider_key, body, model_response):
     return to_model_response(body, model_response, response_dialect(provider_key))
-'''
+"""
 
 
 @pytest.mark.parametrize(

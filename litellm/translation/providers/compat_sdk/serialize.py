@@ -366,3 +366,10 @@ def _profile_serializer(profile: CompatProfile) -> Serializer:
 SERIALIZERS: Mapping[p.CompatSdkProvider, Serializer] = MappingProxyType(
     {provider: _profile_serializer(profile) for provider, profile in PROFILES.items()}
 )
+
+# wave-2b-alpha: the deepseek own module composes the same flatten delta
+# (its v1 _transform_messages runs the content-list-to-str conversion
+# unconditionally before super). Public alias so cross-package consumers
+# IMPORT the one mechanism — the checks.py paste-revocation rule applies
+# to this helper too.
+flatten_text_lists = _flatten_text_content_lists

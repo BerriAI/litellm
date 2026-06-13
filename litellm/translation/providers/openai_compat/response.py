@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
+from dataclasses import replace
 
 from expression import Error, Nothing, Ok, Result, Some
 from expression.collections import Block
@@ -356,3 +358,55 @@ def _int_of(value: PlainJson) -> int:
     if isinstance(value, (int, float)):
         return int(value)
     return 0
+
+
+RewriteWireModel = Callable[[str | None, str], str | None]
+"""(wire model, request model) -> the final model field, or None to leave the
+body untouched. The per-provider half of ``make_direct_parser``."""
+
+
+def make_direct_parser(
+    rewrite_model: RewriteWireModel,
+) -> Callable[[PlainJson, ChatRequest], _ParseResult]:
+    """v1's OpenAILike-style DIRECT construction (``ModelResponse(**json)``)
+    as a parser factory: the openai parse runs first for fail-closed shape
+    validation, then the VERBATIM raw body rides ``ChatResponse.wire`` with
+    the model rewritten by the per-provider policy (compat_httpx's
+    ``{prefix}/{REQUEST model}`` overwrite; fireworks_ai's
+    ``fireworks_ai/{WIRE model}`` prefix). Lifted from compat_httpx/response
+    .py when fireworks_ai became the second consumer (the httpx_chunk
+    factory precedent: no copies). A non-string wire model fails CLOSED —
+    v1's construction raises pydantic ValidationError BEFORE any overwrite
+    (verifier-longtail F2); ``model: None`` is constructible in v1 and stays
+    served."""
+
+    def parse(raw: PlainJson, request: ChatRequest) -> _ParseResult:
+        return parse_response(raw, request).bind(
+            lambda response: _verbatim_wire(response, raw, request)
+        )
+
+    def _verbatim_wire(
+        response: ChatResponse, raw: PlainJson, request: ChatRequest
+    ) -> _ParseResult:
+        if not isinstance(raw, dict):
+            # Unreachable: parse_response rejected non-dict bodies before
+            # this bind runs. Fail CLOSED if it ever becomes reachable
+            # (critic-wave1b N5).
+            return Error(_boundary("non-dict response body reached the direct parser"))
+        wire_model = raw.get("model")
+        if wire_model is not None and not isinstance(wire_model, str):
+            return Error(
+                _boundary(
+                    "non-string wire model "
+                    f"({type(wire_model).__name__}): v1's OpenAILike "
+                    "construction raises ValidationError on it"
+                )
+            )
+        body: dict[str, PlainJson] = dict(raw)
+        model = rewrite_model(wire_model, request.model)
+        if model is not None:
+            body = {**body, "model": model}
+            return Ok(replace(response, model=model, wire=Some(JsonBlob(value=body))))
+        return Ok(replace(response, wire=Some(JsonBlob(value=body))))
+
+    return parse

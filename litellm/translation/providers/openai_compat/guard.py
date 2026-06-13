@@ -16,6 +16,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import cast
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
 from ...errors import TranslationError
 
 _Raw = Mapping[str, object]
@@ -35,17 +37,73 @@ def explicit_stream_false(raw: _Raw) -> TranslationError | None:
     return None
 
 
+def carries_cache_control(value: object, depth: int = 0) -> bool:
+    """Recursive ``cache_control`` scan over a raw subtree (messages/tools).
+    The ONE mechanism behind every marker-policy guard arm: azure's
+    verbatim-forward arm, openrouter's cache-capable-model arm, compat_sdk's
+    ``cache_control_preserved`` (dashscope/zai, and minimax via compat_httpx),
+    and google_genai's name-beside-marker arm (critic-wave2b-alpha MAJOR-1
+    completed the lift: the former compat_sdk and google_genai copies import
+    this one — never re-fork it)."""
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        # exhaustion must never ADMIT a request: treat the unscannable tail
+        # as if it carried the marker (fall back to v1)
+        return True
+    if isinstance(value, Mapping):
+        # deliberately narrowing (critic NIT-2): isinstance proved Mapping;
+        # the cast only fixes the unparameterized key/value types to the
+        # untrusted-raw shape (str keys, object values) this guard scans
+        mapping = cast(_Raw, value)
+        if "cache_control" in mapping:
+            return True
+        return any(carries_cache_control(item, depth + 1) for item in mapping.values())
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        # deliberately narrowing: isinstance proved Sequence (non-str); the
+        # cast fixes the element type to object for the recursive scan
+        return any(
+            carries_cache_control(item, depth + 1)
+            for item in cast(Sequence[object], value)
+        )
+    return False
+
+
+def stream_false_then_unsupported_shapes(raw: _Raw) -> TranslationError | None:
+    """The composed DEFAULT guard for paths that keep an explicitly-sent
+    ``stream: false`` on the wire and strip nothing: the stream arm, then
+    this module's guard with the FULL message-``name`` fallback. ONE home
+    for the shared composition (critic-wave2b-alpha NIT-1: it was four
+    byte-identical bodies): compat_sdk's family default and the deepseek /
+    hosted_vllm / fireworks_ai / huggingface / sagemaker_chat / groq own
+    modules all bind it, and cohere's guard runs it after its route
+    predicates (sibling-merge sweep: sagemaker_chat/groq/cohere had
+    re-declared the composition). snowflake deliberately does NOT — stream
+    is always a body key there, so explicit false SERVES; mistral and
+    watsonx have no stream:false arm (v1's map only copies stream=True /
+    the wire always carries the key)."""
+    return explicit_stream_false(raw) or unsupported_request_shapes(raw)
+
+
 def unsupported_request_shapes(
-    raw: _Raw, *, name_fallback_user_only: bool = False
+    raw: _Raw,
+    *,
+    name_fallback_user_only: bool = False,
+    skip_name_fallback: bool = False,
 ) -> TranslationError | None:
     """``name_fallback_user_only``: providers whose v1 transform STRIPS the
     message ``name`` from non-user roles (xai ``strip_name_from_messages``)
     only need the fallback for user messages, where v1 forwards it verbatim;
-    the IR's name-drop IS v1's behavior on the other roles."""
+    the IR's name-drop IS v1's behavior on the other roles.
+
+    ``skip_name_fallback`` (wave-2b-beta): providers whose name semantics are
+    a per-role/per-branch matrix (mistral keeps TOOL-role names and forwards
+    every name on its image branch) run their OWN name arm first and skip the
+    shared one entirely."""
     reason = (
         _params_reason(raw)
         or _tools_reason(raw)
-        or _messages_reason(raw, name_fallback_user_only)
+        or _messages_reason(
+            raw, name_fallback_user_only, skip_name_fallback=skip_name_fallback
+        )
     )
     if reason is None:
         return None
@@ -95,7 +153,12 @@ def _tools_reason(raw: _Raw) -> str | None:
     return None
 
 
-def _messages_reason(raw: _Raw, name_fallback_user_only: bool = False) -> str | None:
+def _messages_reason(
+    raw: _Raw,
+    name_fallback_user_only: bool = False,
+    *,
+    skip_name_fallback: bool = False,
+) -> str | None:
     messages = _as_seq(raw.get("messages"))
     if messages is None:
         return None
@@ -108,8 +171,10 @@ def _messages_reason(raw: _Raw, name_fallback_user_only: bool = False) -> str | 
             # keep scanning so the guard stays locally conservative too
             continue
         role = entry.get("role")
-        if entry.get("name") is not None and (
-            not name_fallback_user_only or role == "user"
+        if (
+            not skip_name_fallback
+            and entry.get("name") is not None
+            and (not name_fallback_user_only or role == "user")
         ):
             return "message name field (not carried by the IR)"
         reason = _message_reason(entry, role, seen_non_system)

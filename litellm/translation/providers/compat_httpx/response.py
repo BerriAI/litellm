@@ -36,15 +36,14 @@ config in this family ever sets json_mode).
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import replace
 from types import MappingProxyType
 from typing import Literal
 
-from expression import Error, Ok, Result, Some
-from expression.collections import Block
+from expression import Result
 
-from ...errors import BoundaryError, TranslationError
-from ...ir import ChatRequest, ChatResponse, JsonBlob, PlainJson
+from ...errors import TranslationError
+from ...ir import ChatRequest, ChatResponse, PlainJson
+from ..openai_compat.response import make_direct_parser
 from ..openai_compat.response import parse_response as openai_parse_response
 from .params import CompatHttpxProvider
 from .serialize import PROFILES
@@ -67,57 +66,17 @@ RESPONSE_STYLES: Mapping[CompatHttpxProvider, ResponseStyle] = MappingProxyType(
 
 
 def _direct_parser(prefix: str | None) -> ResponseParser:
-    def parse(raw: PlainJson, request: ChatRequest) -> _ParseResult:
-        return openai_parse_response(raw, request).bind(
-            lambda response: _verbatim_wire(response, raw, request, prefix)
-        )
+    # the direct-construction machinery is openai_compat.response.
+    # make_direct_parser (lifted there when fireworks_ai became the second
+    # consumer); this family's policy is the {prefix}/{REQUEST model}
+    # overwrite (wire model ignored) or no rewrite at all. The non-string
+    # wire model F2 arm and the unreachable non-dict arm live in the factory.
+    def rewrite(wire_model: str | None, request_model: str) -> str | None:
+        if prefix is None:
+            return None
+        return f"{prefix}/{request_model}"
 
-    return parse
-
-
-def _verbatim_wire(
-    response: ChatResponse, raw: PlainJson, request: ChatRequest, prefix: str | None
-) -> _ParseResult:
-    if not isinstance(raw, dict):
-        # Unreachable: openai_parse_response rejected non-dict bodies before
-        # this bind runs. Fail CLOSED if it ever becomes reachable — the old
-        # `else {}` arm would have ridden an empty wire body into
-        # ModelResponse(**{}) (critic-wave1b N5).
-        return Error(
-            TranslationError.of_boundary(
-                BoundaryError.of(
-                    Block.of_seq(["non-dict response body reached _verbatim_wire"])
-                )
-            )
-        )
-    wire_model = raw.get("model")
-    if wire_model is not None and not isinstance(wire_model, str):
-        # v1's OpenAILike construction is ModelResponse(**response_json)
-        # BEFORE any model overwrite, so a non-string wire model raises
-        # pydantic ValidationError there — while the prefix rewrite below
-        # would hide the bad value from the constructor and SERVE
-        # (verifier-longtail F2: compactifai/amazon_nova/lemonade). Fail
-        # closed so the typed v1 fallback reproduces v1's raise; model:
-        # None is constructible in v1 and stays served.
-        return Error(
-            TranslationError.of_boundary(
-                BoundaryError.of(
-                    Block.of_seq(
-                        [
-                            "non-string wire model "
-                            f"({type(wire_model).__name__}): v1's OpenAILike "
-                            "construction raises ValidationError on it"
-                        ]
-                    )
-                )
-            )
-        )
-    body: dict[str, PlainJson] = dict(raw)
-    if prefix is not None:
-        model = f"{prefix}/{request.model}"
-        body = {**body, "model": model}
-        return Ok(replace(response, model=model, wire=Some(JsonBlob(value=body))))
-    return Ok(replace(response, wire=Some(JsonBlob(value=body))))
+    return make_direct_parser(rewrite)
 
 
 PARSERS: Mapping[CompatHttpxProvider, ResponseParser] = MappingProxyType(
