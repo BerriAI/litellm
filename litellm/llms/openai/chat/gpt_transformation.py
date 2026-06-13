@@ -19,6 +19,7 @@ from typing import (
 )
 
 import os
+from urllib.parse import urlparse
 
 import httpx
 
@@ -437,7 +438,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         The generic `openai` provider also reaches OpenAI-compatible endpoints
         (a LiteLLM proxy, vLLM, an Anthropic-compatible gateway) via a custom
         api_base. Those can understand cache_control, so it must survive there.
-        Real api.openai.com cannot, so it is still stripped for that endpoint.
+        Real OpenAI cannot, so it is still stripped for an openai.com host.
         """
         if custom_llm_provider != "openai":
             return False
@@ -449,7 +450,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
         if not resolved_api_base:
             return False
-        return "api.openai.com" not in resolved_api_base
+        hostname = urlparse(resolved_api_base).hostname
+        if hostname is None:
+            return False
+        return hostname != "openai.com" and not hostname.endswith(".openai.com")
 
     def transform_request(
         self,

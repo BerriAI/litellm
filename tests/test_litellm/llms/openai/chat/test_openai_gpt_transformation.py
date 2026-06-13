@@ -659,6 +659,29 @@ class TestCacheControlPreservationForCustomEndpoint:
             is True
         )
 
+    def test_predicate_resolves_openai_api_base_env(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_BASE", "http://localhost:4000/v1")
+        assert (
+            self.config._should_preserve_cache_control_for_endpoint("openai", None)
+            is True
+        )
+
+    def test_predicate_lookalike_host_is_not_treated_as_openai(self):
+        assert (
+            self.config._should_preserve_cache_control_for_endpoint(
+                "openai", "https://api.openai.com.evil.example/v1"
+            )
+            is True
+        )
+
+    def test_predicate_openai_subdomain_strips(self):
+        assert (
+            self.config._should_preserve_cache_control_for_endpoint(
+                "openai", "https://eu.api.openai.com/v1"
+            )
+            is False
+        )
+
     def test_transform_request_preserves_for_custom_api_base(self):
         body = self._transform("openai", "http://localhost:4000/v1")
         assert all("cache_control" in m for m in body["messages"])
