@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-06-09T19:52:37.839961Z"
+exclude-newer = "2026-06-10T00:35:00.40525Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -17,6 +17,10 @@ members = [
     "litellm",
     "litellm-enterprise",
     "litellm-proxy-extras",
+]
+constraints = [
+    { name = "aiohttp", specifier = ">=3.13.5,<3.14" },
+    { name = "tornado", specifier = ">=6.5.6" },
 ]
 
 [[package]]
@@ -3529,7 +3533,7 @@ requires-dist = [
     { name = "pydantic-settings", marker = "extra == 'proxy'", specifier = ">=2.14.1,<3.0" },
     { name = "pyjwt", marker = "extra == 'proxy'", specifier = ">=2.13.0,<3.0" },
     { name = "pynacl", marker = "extra == 'proxy'", specifier = ">=1.6.2,<2.0" },
-    { name = "pypdf", marker = "python_full_version < '3.14' and extra == 'proxy-runtime'", specifier = ">=6.10.2,<7.0" },
+    { name = "pypdf", marker = "python_full_version < '3.14' and extra == 'proxy-runtime'", specifier = ">=6.12.0,<7.0" },
     { name = "pyroscope-io", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.8.16,<1.0" },
     { name = "python-dotenv", specifier = ">=1.0.0,<2.0" },
     { name = "python-multipart", marker = "extra == 'proxy'", specifier = ">=0.0.27,<1.0" },
