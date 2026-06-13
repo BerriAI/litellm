@@ -59,11 +59,13 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 - Composition over inheritance
 - Never-nester: early returns over deep nesting
 - Don't throw; model failures as values (One function (e.g., raise_public) maps error union to existing public exception contracts via exhaustive match + assert_never)
-- No mutation; instead of mutable lists and dicts, prefer tuples, NamedTuples, frozen dataclasses, etc.
+- No mutation; don't reassign variables. Instead of mutable lists and dicts, prefer tuples, frozen dataclasses (with slots=True), etc.
 - Use dependency injection
-- Fully typed; no `Any` or coarse types like dict[str, Any]. Every function parameter must be strongly typed
+- Fully typed; no `Any` or coarse types like `dict[str, Any]` or just `dict`. Every function parameter must be strongly typed
 - Use tagged unions + match
 - No monster files or god objects
+- No file sprawl: deliberate file and folder structure
+- Standard over hand-rolled: use the official SDK or a library where one exists; where none does, follow industry standards instead of inventing local conventions
 
 if you're trying to create a new function that relies on untyped stuff, instead of adding more Any's and bringing it closer to the max, just validate it in the caller (a simple function that returns the typed thing or raises will do) and then pass the now typed variable in
 
