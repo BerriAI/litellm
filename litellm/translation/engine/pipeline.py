@@ -22,10 +22,18 @@ from types import MappingProxyType
 from expression import Error, Ok, Result
 
 from ..deps import TranslationDeps
-from ..dispatch import Provider
-from ..errors import TranslateResult, TranslationError
-from ..inbound.openai_chat import parse_request
+from ..dispatch import InboundSchema, Provider
+from ..errors import ParseResult, TranslateResult, TranslationError
+from ..inbound.anthropic_messages import parse_request as anthropic_parse_request
+from ..inbound.anthropic_messages.response import (
+    serialize_response as anthropic_serialize_response,
+)
+from ..inbound.openai_chat import parse_request as openai_chat_parse_request
 from ..inbound.openai_chat.response import ResponseDialect, serialize_response
+from ..inbound.responses import parse_request as responses_parse_request
+from ..inbound.responses.response import (
+    serialize_response as responses_serialize_response,
+)
 from ..ir import Body, ChatRequest, ChatResponse, PlainJson
 from ..providers.anthropic import serialize_request
 from ..providers.anthropic.response import parse_response
@@ -152,6 +160,48 @@ _Serializer = Callable[[ChatRequest, TranslationDeps], Result[Body, TranslationE
 _ResponseParser = Callable[
     [PlainJson, ChatRequest], Result[ChatResponse, TranslationError]
 ]
+_ParseRequest = Callable[[Mapping[str, object]], ParseResult]
+_SerializeResponse = Callable[
+    [ChatResponse, TranslationDeps, ResponseDialect], Body | TranslationError
+]
+
+
+@dataclass(frozen=True)
+class _Inbound:
+    """The two inbound-schema transforms the pipeline selects between: the
+    request parser (wire body -> IR ``ChatRequest``) and the reverse response
+    serializer (IR ``ChatResponse`` -> the inbound schema's response body).
+    The provider serializer/parser/dialect tables below are inbound-agnostic
+    (they consume and produce the IR), so a new inbound schema only adds a row
+    here. The ``serialize_response`` takes the provider's outbound
+    ``ResponseDialect``; schemas whose response shape is provider-independent
+    (anthropic_messages always emits the Anthropic Messages body) ignore it."""
+
+    parse_request: _ParseRequest
+    serialize_response: _SerializeResponse
+
+
+_INBOUND: Mapping[InboundSchema, _Inbound] = MappingProxyType(
+    {
+        "openai_chat": _Inbound(
+            parse_request=openai_chat_parse_request,
+            serialize_response=serialize_response,
+        ),
+        "anthropic_messages": _Inbound(
+            parse_request=anthropic_parse_request,
+            serialize_response=anthropic_serialize_response,
+        ),
+        "responses": _Inbound(
+            parse_request=responses_parse_request,
+            serialize_response=responses_serialize_response,
+        ),
+    }
+)
+
+
+def _inbound(schema: InboundSchema) -> _Inbound | None:
+    return _INBOUND.get(schema)
+
 
 _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
     {
@@ -428,8 +478,18 @@ def response_dialect(provider: Provider) -> ResponseDialect:
 
 
 def translate_chat_request(
-    raw: Mapping[str, object], provider: Provider, deps: TranslationDeps
+    raw: Mapping[str, object],
+    provider: Provider,
+    deps: TranslationDeps,
+    schema: InboundSchema = "openai_chat",
 ) -> TranslateResult:
+    inbound = _inbound(schema)
+    if inbound is None:
+        return Error(
+            TranslationError.of_unsupported(
+                f"inbound schema {schema!r} has no v2 parser yet"
+            )
+        )
     serializer = _SERIALIZERS.get(provider)
     if serializer is None:
         return Error(
@@ -440,7 +500,7 @@ def translate_chat_request(
     guard_error = _raw_guard_error(raw, provider)
     if guard_error is not None:
         return Error(guard_error)
-    return parse_request(raw).bind(lambda request: serializer(request, deps))
+    return inbound.parse_request(raw).bind(lambda request: serializer(request, deps))
 
 
 def translate_chat_response(
@@ -448,7 +508,15 @@ def translate_chat_response(
     request: ChatRequest,
     provider: Provider,
     deps: TranslationDeps,
+    schema: InboundSchema = "openai_chat",
 ) -> TranslateResult:
+    inbound = _inbound(schema)
+    if inbound is None:
+        return Error(
+            TranslationError.of_unsupported(
+                f"inbound schema {schema!r} has no v2 serializer yet"
+            )
+        )
     parser = _RESPONSE_PARSERS.get(provider)
     if parser is None:
         return Error(
@@ -458,14 +526,17 @@ def translate_chat_response(
         )
     dialect = response_dialect(provider)
     return parser(raw_response, request).bind(
-        lambda response: _serialized_body(response, deps, dialect)
+        lambda response: _serialized_body(inbound, response, deps, dialect)
     )
 
 
 def _serialized_body(
-    response: ChatResponse, deps: TranslationDeps, dialect: ResponseDialect
+    inbound: _Inbound,
+    response: ChatResponse,
+    deps: TranslationDeps,
+    dialect: ResponseDialect,
 ) -> TranslateResult:
-    body = serialize_response(response, deps, dialect)
+    body = inbound.serialize_response(response, deps, dialect)
     if isinstance(body, TranslationError):
         return Error(body)
     return Ok(body)
@@ -475,15 +546,28 @@ def _serialized_body(
 class PreparedRequest:
     """A request that passed the fail-closed translation; from here on the
     seam is committed to v2 (an HTTP or response failure surfaces as the
-    provider error contract, never a silent re-send through v1)."""
+    provider error contract, never a silent re-send through v1). ``schema`` is
+    the inbound schema that parsed it, so ``send_prepared`` reverse-serializes
+    the provider response back into the same schema's response shape."""
 
     request: ChatRequest
     body: Body
+    schema: InboundSchema = "openai_chat"
 
 
 def prepare_chat_request(
-    raw: Mapping[str, object], provider: Provider, deps: TranslationDeps
+    raw: Mapping[str, object],
+    provider: Provider,
+    deps: TranslationDeps,
+    schema: InboundSchema = "openai_chat",
 ) -> Result[PreparedRequest, TranslationError]:
+    inbound = _inbound(schema)
+    if inbound is None:
+        return Error(
+            TranslationError.of_unsupported(
+                f"inbound schema {schema!r} has no v2 parser yet"
+            )
+        )
     serializer = _SERIALIZERS.get(provider)
     if serializer is None or provider not in _RESPONSE_PARSERS:
         return Error(
@@ -494,13 +578,13 @@ def prepare_chat_request(
     guard_error = _raw_guard_error(raw, provider)
     if guard_error is not None:
         return Error(guard_error)
-    match parse_request(raw):
+    match inbound.parse_request(raw):
         case Result(tag="ok", ok=request):
             pass
         case Result(error=parse_err):
             return Error(parse_err)
     return serializer(request, deps).map(
-        lambda body: PreparedRequest(request=request, body=body)
+        lambda body: PreparedRequest(request=request, body=body, schema=schema)
     )
 
 
@@ -532,8 +616,9 @@ async def send_prepared(
     http: HttpPort,
     endpoint: Endpoint,
 ) -> Result[Body, ExecuteError]:
+    inbound = _inbound(prepared.schema)
     parser = _RESPONSE_PARSERS.get(provider)
-    if parser is None:
+    if inbound is None or parser is None:
         return Error(
             ExecuteError.of_translation(
                 TranslationError.of_unsupported(
@@ -554,7 +639,9 @@ async def send_prepared(
         )
     match parser(response.body, prepared.request):
         case Result(tag="ok", ok=chat_response):
-            body = serialize_response(chat_response, deps, response_dialect(provider))
+            body = inbound.serialize_response(
+                chat_response, deps, response_dialect(provider)
+            )
             if isinstance(body, TranslationError):
                 return Error(ExecuteError.of_translation(body))
             return Ok(body)
@@ -568,8 +655,9 @@ async def execute_chat_request(
     deps: TranslationDeps,
     http: HttpPort,
     endpoint: Endpoint,
+    schema: InboundSchema = "openai_chat",
 ) -> Result[Body, ExecuteError]:
-    match prepare_chat_request(raw, provider, deps):
+    match prepare_chat_request(raw, provider, deps, schema):
         case Result(tag="ok", ok=prepared):
             return await send_prepared(prepared, provider, deps, http, endpoint)
         case Result(error=err):

@@ -31,21 +31,80 @@ translation/
 │                   #   two-file edit). baseten, cohere(v1-route) and the
 │                   #   wave-1b drops stay OUT (own canaries / route
 │                   #   predicate in the future cohere module)
-├── inbound/        # one subpackage per accepted schema: raw <-> OpenAI shapes
-│   └── openai_chat/
-│       ├── schema.py    # pydantic wire models, extra="forbid" + strict=True
-│       ├── messages.py  # wire messages -> IR messages (hot path)
-│       ├── parse.py     # top-level parse + semantic checks
-│       ├── response.py  # IR ChatResponse -> chat-completion body; carries a
-│       │                #   ResponseDialect (anthropic | bedrock_converse |
-│       │                #   gemini) because v1's outbound shapes are
-│       │                #   per-provider
-│       └── stream.py    # IR stream events -> chunk bodies (pure fold); same
-│                        #   dialect idea via ChunkDialect on StreamState;
-│                        #   the gemini dialect consumes composite chunk
-│                        #   events (cumulative tool index + the
-│                        #   seen-tool-calls stop->tool_calls rewrite ride
-│                        #   StreamState)
+├── inbound/        # one subpackage per accepted schema. The engine pipeline
+│   │               #   selects parse_request + reverse serialize_response by
+│   │               #   InboundSchema (a frozen _INBOUND table); the provider
+│   │               #   serializer/parser/dialect tables are inbound-agnostic
+│   ├── openai_chat/
+│   │   ├── schema.py    # pydantic wire models, extra="forbid" + strict=True
+│   │   ├── messages.py  # wire messages -> IR messages (hot path)
+│   │   ├── parse.py     # top-level parse + semantic checks
+│   │   ├── response.py  # IR ChatResponse -> chat-completion body; carries a
+│   │   │                #   ResponseDialect (anthropic | bedrock_converse |
+│   │   │                #   gemini) because v1's outbound shapes are
+│   │   │                #   per-provider
+│   │   └── stream.py    # IR stream events -> chunk bodies (pure fold); same
+│   │                    #   dialect idea via ChunkDialect on StreamState;
+│   │                    #   the gemini dialect consumes composite chunk
+│   │                    #   events (cumulative tool index + the
+│   │                    #   seen-tool-calls stop->tool_calls rewrite ride
+│   │                    #   StreamState)
+│   └── anthropic_messages/  # /v1/messages (Anthropic Messages) inbound. The
+│       │                #   chat IR is Anthropic-shaped, so forward + reverse
+│       │                #   are largely 1:1. May NOT import openai_chat
+│       │                #   (siblings); the dialect arg is accepted+ignored
+│       ├── schema.py    # frozen wire models; max_tokens REQUIRED, system
+│       │                #   str|list[block], stop_sequences, tool_choice/
+│       │                #   thinking unions; documents/hosted tools/
+│       │                #   output_format/mcp_servers/container as object
+│       │                #   then unsupported in parse (fail closed)
+│       ├── messages.py  # Anthropic messages -> IR (hot path); non-text
+│       │                #   system block / non-text image source / non-text
+│       │                #   tool_result part FAIL CLOSED (not v1's drop)
+│       ├── parse.py     # top-level parse; stop_sequences->stop,
+│       │                #   metadata.user_id->user, thinking verbatim,
+│       │                #   every unported field a named unsupported
+│       ├── response.py  # IR ChatResponse -> Anthropic Messages body
+│       │                #   (thinking->text->tool_use order, stop_reason
+│       │                #   map, input+cache_creation usage math)
+│       └── stream.py    # IR StreamEvent -> Anthropic SSE events (pure fold:
+│                        #   message_start / content_block_* / message_delta /
+│                        #   message_stop; owns block-index + lazy-open
+│                        #   bookkeeping on the fold state)
+│   └── responses/      # /v1/responses (OpenAI Responses API) inbound. Always
+│       │                #   rides the IR (no native provider wire, no
+│       │                #   _SAME_FAMILY entry, no fast path). May NOT import
+│       │                #   openai_chat/anthropic_messages (siblings); the
+│       │                #   dialect arg is accepted+ignored (the Responses
+│       │                #   response shape is provider-independent)
+│       ├── schema.py    # frozen wire models; input str|list[item], the input-
+│       │                #   item union (message/function_call/
+│       │                #   function_call_output/reasoning/item_reference),
+│       │                #   function-vs-hosted tools, text.format, reasoning;
+│       │                #   previous_response_id/store/background/include/
+│       │                #   metadata/service_tier as object then unsupported
+│       │                #   in parse (fail closed)
+│       ├── input_items.py # input list -> IR messages (match over the typed
+│       │                #   union): message text/image SERVE (data:-image ->
+│       │                #   base64), function_call -> assistant ToolUse
+│       │                #   (consecutive merge into one assistant turn),
+│       │                #   function_call_output -> ToolResult in a user msg
+│       │                #   (FALL BACK when its call_id has no local
+│       │                #   function_call: v1's TOOL_CALLS_CACHE is banned);
+│       │                #   reasoning item / item_reference / input_file FAIL
+│       │                #   CLOSED
+│       ├── parse.py     # top-level parse; instructions->system,
+│       │                #   max_output_tokens->max_tokens, tool_choice incl.
+│       │                #   Cursor {type:tool/any}->required, reasoning.effort
+│       │                #   ->ReasoningEffort (summary fails closed),
+│       │                #   text.format->response_format; hosted tools and
+│       │                #   every unported field a named unsupported
+│       └── response.py  # IR ChatResponse -> ResponsesAPIResponse body
+│                        #   (reasoning->message->function_call output order,
+│                        #   rs_{hash} reasoning id, status map, usage onto
+│                        #   ResponseAPIUsage; created_at is seam-stamped
+│                        #   envelope). Stream fold is a deferred follow-up
+│                        #   (see ~/sprint/reports/inbound-responses.md)
 ├── providers/      # one subpackage per wire format. Pure, no I/O
 │   ├── anthropic/
 │   │   ├── serialize.py # body assembly in v1 transform_request order
