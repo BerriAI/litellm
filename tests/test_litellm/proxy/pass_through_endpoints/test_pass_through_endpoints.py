@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import litellm
 import pytest
 from fastapi import Request, UploadFile
 from starlette.datastructures import Headers, QueryParams
@@ -808,6 +809,39 @@ async def test_pass_through_success_handler_with_cost_per_request():
     handler._handle_logging.assert_called_once()
     call_kwargs = handler._handle_logging.call_args[1]
     assert call_kwargs["response_cost"] == 1.25
+
+
+def test_create_pass_through_route_registers_multiple_adapters():
+    """
+    Multiple pass-through endpoints with custom adapter targets must all remain
+    registered in litellm.adapters, not overwrite each other.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_route,
+    )
+
+    class DummyAdapter(CustomLogger):
+        pass
+
+    litellm.adapters = []
+
+    first_adapter = DummyAdapter()
+    second_adapter = DummyAdapter()
+
+    create_pass_through_route(
+        endpoint="/v1/messages",
+        target=first_adapter,
+    )
+    create_pass_through_route(
+        endpoint="/v1/chat",
+        target=second_adapter,
+    )
+
+    assert len(litellm.adapters) == 2
+    assert litellm.adapters[0]["adapter"] is first_adapter
+    assert litellm.adapters[1]["adapter"] is second_adapter
+    assert litellm.adapters[0]["id"] != litellm.adapters[1]["id"]
 
 
 @pytest.mark.asyncio

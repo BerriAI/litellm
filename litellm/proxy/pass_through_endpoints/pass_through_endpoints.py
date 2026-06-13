@@ -1525,7 +1525,9 @@ def create_pass_through_route(
         else:
             adapter = get_instance_fn(value=target, config_file_path=config_file_path)
         adapter_id = str(uuid.uuid4())
-        litellm.adapters = [{"id": adapter_id, "adapter": adapter}]
+        if litellm.adapters is None:
+            litellm.adapters = []
+        litellm.adapters.append({"id": adapter_id, "adapter": adapter})
 
         async def endpoint_func(  # type: ignore
             request: Request,
