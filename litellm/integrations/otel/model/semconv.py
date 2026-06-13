@@ -146,6 +146,21 @@ class Error:
     TYPE: Final = "error.type"
 
 
+class ExceptionEvent:
+    """OTel exception-event name and attribute keys (semconv ``exception.*``).
+
+    The full error message rides ``exception.message`` on a span event rather than
+    a custom string attribute. Backends recognise these semantic-convention names
+    and map them as full text; an unrecognised key (e.g. ``error_message``) falls
+    into the default dynamic template, which truncates strings to a 1024-char
+    ``keyword``.
+    """
+
+    NAME: Final = "exception"
+    TYPE: Final = "exception.type"
+    MESSAGE: Final = "exception.message"
+
+
 class Server:
     ADDRESS: Final = "server.address"
     PORT: Final = "server.port"
