@@ -3286,6 +3286,8 @@ async def info_key_fn_v2(
         if not key_info:
             return {"key": data.keys, "info": []}
 
+        from litellm.proxy.proxy_server import model_max_budget_limiter
+
         filtered_key_info = []
         for k in key_info:
             if not await _can_user_query_key_info(
@@ -3298,7 +3300,17 @@ async def info_key_fn_v2(
                 k_dict = k.model_dump()
             except Exception:
                 k_dict = k.dict()
-            k_dict.pop("token", None)
+            k_token_hash = k_dict.pop("token", None)
+
+            model_max_budget = k_dict.get("model_max_budget") or {}
+            if model_max_budget and k_token_hash:
+                k_dict["model_max_budget_usage"] = (
+                    await model_max_budget_limiter.get_current_period_spend(
+                        user_api_key_hash=k_token_hash,
+                        model_max_budget=model_max_budget,
+                    )
+                )
+
             filtered_key_info.append(k_dict)
         return {"key": data.keys, "info": filtered_key_info}
 
@@ -3381,7 +3393,18 @@ async def info_key_fn(
         except Exception:
             # if using pydantic v1
             key_info = key_info.dict()
-        key_info.pop("token")
+        key_token_hash = key_info.pop("token")
+
+        model_max_budget = key_info.get("model_max_budget") or {}
+        if model_max_budget and key_token_hash:
+            from litellm.proxy.proxy_server import model_max_budget_limiter
+
+            key_info["model_max_budget_usage"] = (
+                await model_max_budget_limiter.get_current_period_spend(
+                    user_api_key_hash=key_token_hash,
+                    model_max_budget=model_max_budget,
+                )
+            )
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
