@@ -11,6 +11,26 @@
     "baseline": 759,
     "slack": 10
   },
+  "ANN201": {
+    "baseline": 1944,
+    "slack": 10
+  },
+  "ANN202": {
+    "baseline": 858,
+    "slack": 10
+  },
+  "ANN204": {
+    "baseline": 658,
+    "slack": 10
+  },
+  "ANN205": {
+    "baseline": 117,
+    "slack": 10
+  },
+  "ANN206": {
+    "baseline": 120,
+    "slack": 10
+  },
   "ANN401": {
     "baseline": 1886,
     "slack": 10
