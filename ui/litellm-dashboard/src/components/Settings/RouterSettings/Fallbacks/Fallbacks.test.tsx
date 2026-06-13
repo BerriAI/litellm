@@ -79,10 +79,6 @@ describe("Fallbacks", () => {
   const mockAccessToken = "test-token";
   const mockUserRole = "Admin";
   const mockUserID = "user-123";
-  const mockModelData = {
-    data: [{ model_name: "gpt-4" }, { model_name: "gpt-3.5-turbo" }, { model_name: "claude-3-opus" }],
-  };
-
   const mockRouterSettings = {
     fallbacks: [{ "gpt-4": ["gpt-3.5-turbo", "claude-3-opus"] }, { "claude-3-opus": ["gpt-4"] }],
   };
@@ -91,7 +87,6 @@ describe("Fallbacks", () => {
     accessToken: mockAccessToken,
     userRole: mockUserRole,
     userID: mockUserID,
-    modelData: mockModelData,
   };
 
   const getFirstRowDeleteButton = () => {
