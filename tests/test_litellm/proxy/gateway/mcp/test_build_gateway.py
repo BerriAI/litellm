@@ -1,4 +1,11 @@
+import socket
+import threading
+import time
+
 import httpx
+import uvicorn
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
 from mcp.shared.memory import create_connected_server_and_client_session
 from starlette.applications import Starlette
 from starlette.routing import Mount
@@ -7,9 +14,31 @@ from litellm.proxy.gateway.mcp.app import build_gateway, build_server
 from litellm.proxy.gateway.mcp.foundation import build_test_deps
 
 
-def test_build_gateway_returns_starlette():
-    app = build_gateway(build_test_deps())
-    assert isinstance(app, Starlette)
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+class _LiveServer:
+    def __init__(self, app: Starlette) -> None:
+        self.port = _free_port()
+        config = uvicorn.Config(app, host="127.0.0.1", port=self.port, log_level="warning")
+        self._server = uvicorn.Server(config)
+        self._thread = threading.Thread(target=self._server.run, daemon=True)
+
+    def __enter__(self) -> str:
+        self._thread.start()
+        deadline = time.monotonic() + 10
+        while not self._server.started:
+            if time.monotonic() > deadline:
+                raise RuntimeError("uvicorn did not start in time")
+            time.sleep(0.05)
+        return f"http://127.0.0.1:{self.port}"
+
+    def __exit__(self, *exc: object) -> None:
+        self._server.should_exit = True
+        self._thread.join(timeout=5)
 
 
 def test_build_gateway_yields_independent_apps():
@@ -24,7 +53,7 @@ def test_mcp_endpoint_is_mounted_as_asgi_app():
     assert "/mcp" in mounts
 
 
-async def test_initialize_then_list_tools_returns_empty():
+async def test_server_handshake_and_empty_catalog_in_memory():
     server = build_server(build_test_deps())
     async with create_connected_server_and_client_session(server) as client:
         init = await client.initialize()
@@ -33,28 +62,30 @@ async def test_initialize_then_list_tools_returns_empty():
         assert listed.tools == []
 
 
-async def test_initialize_handshake_over_real_asgi_transport():
+async def test_s0_end_to_end_over_a_real_uvicorn_socket():
     app = build_gateway(build_test_deps())
-    request = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "0"},
-        },
-    }
-    async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
-            resp = await client.post(
-                "/mcp",
+    with _LiveServer(app) as base_url:
+        async with streamablehttp_client(f"{base_url}/mcp") as (read, write, _):
+            async with ClientSession(read, write) as session:
+                init = await session.initialize()
+                assert init.serverInfo.name == "litellm-mcp-gateway"
+                assert init.instructions
+
+                listed = await session.list_tools()
+                assert listed.tools == []
+
+                result = await session.call_tool("anything", {})
+                assert result.isError is True
+                assert "not wired in S0" in result.content[0].text
+
+        async with httpx.AsyncClient(follow_redirects=False) as raw:
+            resp = await raw.post(
+                f"{base_url}/mcp",
                 headers={
                     "content-type": "application/json",
                     "accept": "application/json, text/event-stream",
                 },
-                json=request,
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
             )
-    assert resp.status_code == 200
-    assert "litellm-mcp-gateway" in resp.text
+        assert resp.status_code == 307
+        assert resp.headers["location"].endswith("/mcp/")
