@@ -123,12 +123,17 @@ def _tool_use_blocks(content: Block[ContentBlock]) -> list[PlainJson]:
         if block.tag != "tool_use":
             continue
         identifier = block.tool_use.id
-        base_id = identifier.split(_THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+        base_id, _, signature = identifier.partition(_THOUGHT_SIGNATURE_SEPARATOR)
+        # v1 dumps AnthropicResponseContentBlockToolUse, so
+        # provider_specific_fields is always present: None, or the gemini
+        # thought signature (which the chat IR carries on the tool id suffix).
+        provider_fields: PlainJson = {"signature": signature} if signature else None
         entry: dict[str, PlainJson] = {
             "type": "tool_use",
             "id": base_id,
             "name": block.tool_use.name,
             "input": block.tool_use.arguments.value,
+            "provider_specific_fields": provider_fields,
         }
         blocks.append(entry)  # nosemgrep: translation-no-mutation
     return blocks

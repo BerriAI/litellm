@@ -49,6 +49,9 @@ class StreamState:
     message_started: bool = False
     open_index: int | None = None
     open_type: _BlockType | None = None
+    input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 def initial_state() -> StreamState:
@@ -132,7 +135,17 @@ def _start(state: StreamState, event: StreamEvent) -> _StepResult:
             },
         },
     }
-    return replace(state, message_started=True), (message_start,)
+    # v1's wrapper zeroes message_start usage (the cache-support signal) and
+    # merges the real input usage into message_delta from the final chunk; the
+    # IR carries that input usage on StreamStart, so accumulate it here.
+    next_state = replace(
+        state,
+        message_started=True,
+        input_tokens=start.usage.input_tokens,
+        cache_creation_input_tokens=start.usage.cache_creation_input_tokens,
+        cache_read_input_tokens=start.usage.cache_read_input_tokens,
+    )
+    return next_state, (message_start,)
 
 
 def _tool_use_start(state: StreamState, event: StreamEvent) -> _StepResult:
@@ -210,10 +223,21 @@ def _close_open_block(
 def _finish(state: StreamState, event: StreamEvent) -> _StepResult:
     closed_state, close_events = _close_open_block(state)
     finish = event.finish
+    usage: SseEvent = {
+        "input_tokens": state.input_tokens + state.cache_creation_input_tokens,
+        "output_tokens": finish.output_tokens,
+    }
+    if state.cache_creation_input_tokens > 0:
+        usage = {
+            **usage,
+            "cache_creation_input_tokens": state.cache_creation_input_tokens,
+        }
+    if state.cache_read_input_tokens > 0:
+        usage = {**usage, "cache_read_input_tokens": state.cache_read_input_tokens}
     message_delta: SseEvent = {
         "type": "message_delta",
         "delta": {"stop_reason": _STOP_REASON[finish.finish]},
-        "usage": {"input_tokens": 0, "output_tokens": finish.output_tokens},
+        "usage": usage,
     }
     return closed_state, (*close_events, message_delta)
 
