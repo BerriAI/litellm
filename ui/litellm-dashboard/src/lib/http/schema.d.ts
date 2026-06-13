@@ -7338,6 +7338,11 @@ export interface paths {
          *
          *         - When litellm_model_id is passed, it will return the info for that specific model
          *         - When litellm_model_id is not passed, it will return the info for all models
+         *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
+         *         - teamId: Filter to models accessible by the given team.
+         *
+         *     Each model in the list response includes `model_info.access_via_team_ids` and
+         *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
          *         Returns a dictionary containing information about each model.
@@ -16565,6 +16570,11 @@ export interface paths {
          *
          *         - When litellm_model_id is passed, it will return the info for that specific model
          *         - When litellm_model_id is not passed, it will return the info for all models
+         *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
+         *         - teamId: Filter to models accessible by the given team.
+         *
+         *     Each model in the list response includes `model_info.access_via_team_ids` and
+         *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
          *         Returns a dictionary containing information about each model.
@@ -22053,6 +22063,11 @@ export interface components {
              */
             background_health_checks?: boolean | null;
             /**
+             * Cancel On Disconnect
+             * @description cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure
+             */
+            cancel_on_disconnect?: boolean | null;
+            /**
              * Completion Model
              * @description proxy level default model for all chat completion calls
              */
@@ -22203,6 +22218,11 @@ export interface components {
              * @description Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through
              */
             pass_through_endpoints?: components["schemas"]["PassThroughGenericEndpoint"][] | null;
+            /**
+             * Pass Through Request Timeout
+             * @description Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.
+             */
+            pass_through_request_timeout?: number | null;
             /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
@@ -27993,6 +28013,11 @@ export interface components {
              * @description The URL to which requests for this path should be forwarded.
              */
             target: string;
+            /**
+             * Timeout
+             * @description Upstream request timeout in seconds for this pass-through endpoint. If unset, uses general_settings.pass_through_request_timeout (default 600).
+             */
+            timeout?: number | null;
         };
         /**
          * PassThroughGuardrailSettings
@@ -42430,6 +42455,10 @@ export interface operations {
         parameters: {
             query?: {
                 litellm_model_id?: string | null;
+                /** @description When true, filter to deployments the caller can use via direct access or team membership. */
+                include_team_models?: boolean | null;
+                /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
+                teamId?: string | null;
             };
             header?: never;
             path?: never;
@@ -53695,6 +53724,10 @@ export interface operations {
         parameters: {
             query?: {
                 litellm_model_id?: string | null;
+                /** @description When true, filter to deployments the caller can use via direct access or team membership. */
+                include_team_models?: boolean | null;
+                /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
+                teamId?: string | null;
             };
             header?: never;
             path?: never;
