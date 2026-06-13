@@ -1,4 +1,4 @@
-# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules + the wave-3 ollama_chat own module)
+# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules + the wave-3 ollama_chat and github_copilot own modules)
 
 v1 and v2 run over the same corpus; every row must be IDENTICAL (or an
 explained FALLBACK that v1 serves) for a provider's flag to turn on.
@@ -6,7 +6,7 @@ Bedrock and google rows additionally pin the characterization-corpus
 snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 `python -m tests.test_litellm.translation.generate_differential_report`
 
-- commit: aa2b84f101
+- commit: 68500e3fc7
 
 ## anthropic: request bodies (v1 map_openai_params + transform_request vs v2)
 
@@ -2500,6 +2500,39 @@ snapshot, so each row proves snapshot == v1-at-HEAD == v2. Regenerate with:
 - FALLBACK (v1 serves it): missing_prompt_eval_count_token_counter (token_counter)
 
 ollama_chat streams ride a dedicated inbound NDJSON dialect (inbound/openai_chat: the ollama_chat ChunkDialect + ollama_fold); like every other provider, streaming stays on v1 until the streaming seam lands, so there is no stream differential row here yet.
+
+## github_copilot: request bodies (v1 get_optional_params ('github_copilot') + the LIVE GithubCopilotConfig.transform_request — the SDK-path big openai elif, openai_compat assembly with the system->assistant role rewrite gated by litellm.disable_copilot_system_to_assistant — vs v2 providers/github_copilot; probed with a seeded fake token dir, no live OAuth)
+
+- IDENTICAL: claude_plain_serves
+- IDENTICAL: mct_verbatim_no_rename
+- IDENTICAL: plain
+- IDENTICAL: response_format_json_schema
+- IDENTICAL: sampling
+- IDENTICAL: stream_true
+- IDENTICAL: system_to_assistant
+- IDENTICAL: temperature_int_stays_int
+- IDENTICAL: tool_call_compact_roundtrip
+- IDENTICAL: tool_choice_specific
+- IDENTICAL: tools_auto
+- FALLBACK (v1 raises UnsupportedParamsError): claude_reasoning_effort (reasoning_effort)
+- FALLBACK (v1 raises UnsupportedParamsError): claude_thinking (thinking)
+- FALLBACK (v1 raises UnsupportedParamsError): gpt5_temperature_not_one (gpt-5)
+- FALLBACK (v1 serves it): explicit_stream_false (stream)
+- FALLBACK (v1 serves it): message_name_forwarded (name)
+- FALLBACK (v1 serves it): n_parse_level (field)
+- FALLBACK (v1 serves it): seed_parse_level (seed)
+- FALLBACK (v1 serves it): string_stop (stop)
+- FALLBACK (v1 serves it): top_k_not_a_chat_param (top_k)
+- FALLBACK (v1 serves it): user_claude_dropped_by_v1 (user)
+- FALLBACK (v1 serves it): user_gpt4o_served_by_v1 (user)
+
+## github_copilot: responses (v1's SDK-path convert_to_model_response_object over the github_copilot/{model} preset — the config's transform_response is DEAD on this path — vs v2 the shared openai parser + the seam re-prefix; construction arm openai)
+
+- IDENTICAL: cached_and_reasoning_usage_details
+- IDENTICAL: text
+- IDENTICAL: tool_calls_rewrites_stop
+
+github_copilot has no custom stream iterator in v1 (SDK chunks ride the default openai dialect); streaming stays on v1 until the streaming seam lands, so there is no stream differential row here yet. The codex family (gpt-5.3-codex / gpt-5.1-codex-max) bridges to the Responses API above the chat seam and stays v1 by absence (canary in the request gate).
 
 ## azure: request bodies (v1 api-version-aware map_openai_params + transform_request vs v2)
 

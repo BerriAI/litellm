@@ -2804,12 +2804,85 @@ def _ollama_chat_rows(lines: list) -> int:
     return failures
 
 
+def _github_copilot_rows(lines: list) -> int:
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import test_differential_github_copilot_request as req
+    from . import test_differential_github_copilot_response as resp
+
+    failures = 0
+    lines += [
+        "",
+        "## github_copilot: request bodies (v1 get_optional_params"
+        " ('github_copilot') + the LIVE GithubCopilotConfig.transform_request"
+        " — the SDK-path big openai elif, openai_compat assembly with the"
+        " system->assistant role rewrite gated by"
+        " litellm.disable_copilot_system_to_assistant — vs v2"
+        " providers/github_copilot; probed with a seeded fake token dir, no"
+        " live OAuth)",
+        "",
+    ]
+    for name in sorted(req.CASES):
+        case = req.CASES[name]
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req.V1_RAISES):
+        case, reason = req.V1_RAISES[name]
+        result = req._v2(case)
+        try:
+            req.run_v1_request_transform(case)
+            raised = False
+        except UnsupportedParamsError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req.V1_SERVES_FALLBACKS):
+        case, reason = req.V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## github_copilot: responses (v1's SDK-path"
+        " convert_to_model_response_object over the github_copilot/{model}"
+        " preset — the config's transform_response is DEAD on this path — vs"
+        " v2 the shared openai parser + the seam re-prefix; construction arm"
+        " openai)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSE_ROWS):
+        raw = resp._RESPONSES[name]
+        same = resp._norm(resp._v2_model_response(raw, resp._PRESET)) == resp._norm(
+            resp._v1_model_response(raw, resp._PRESET)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    lines += [
+        "",
+        "github_copilot has no custom stream iterator in v1 (SDK chunks ride"
+        " the default openai dialect); streaming stays on v1 until the"
+        " streaming seam lands, so there is no stream differential row here"
+        " yet. The codex family (gpt-5.3-codex / gpt-5.1-codex-max) bridges to"
+        " the Responses API above the chat seam and stays v1 by absence"
+        " (canary in the request gate).",
+    ]
+    return failures
+
+
 def main() -> None:
     _freeze_ambient()
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules + the wave-3 ollama_chat own module)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules + the wave-3 ollama_chat and github_copilot own modules)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -2833,6 +2906,7 @@ def main() -> None:
     failures += _sagemaker_chat_rows(lines)
     failures += _groq_rows(lines)
     failures += _ollama_chat_rows(lines)
+    failures += _github_copilot_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)
