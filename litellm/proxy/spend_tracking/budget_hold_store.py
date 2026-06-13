@@ -24,6 +24,8 @@ import time
 from typing import TYPE_CHECKING, Dict, List, Tuple
 
 if TYPE_CHECKING:
+    from redis.asyncio import Redis
+
     from litellm.caching.redis_cache import RedisCache
     from litellm.caching.dual_cache import DualCache
 
@@ -70,7 +72,7 @@ class BudgetHoldStore:
         """Record a hold of ``cost`` and return the sum of all live holds (this one included)."""
         redis = self._redis()
         if redis is not None:
-            client = redis.init_async_client()
+            client: "Redis" = redis.init_async_client()  # type: ignore[assignment]
             zkey = redis.check_and_fix_namespace(key=self._zkey(counter_key))
             now = time.time()
             total = await client.eval(
@@ -90,7 +92,7 @@ class BudgetHoldStore:
     ) -> None:
         redis = self._redis()
         if redis is not None:
-            client = redis.init_async_client()
+            client: "Redis" = redis.init_async_client()  # type: ignore[assignment]
             zkey = redis.check_and_fix_namespace(key=self._zkey(counter_key))
             await client.zrem(zkey, _member(hold_id, old_cost))
             await client.zadd(
@@ -109,7 +111,7 @@ class BudgetHoldStore:
     async def remove(self, counter_key: str, hold_id: str, cost: float) -> None:
         redis = self._redis()
         if redis is not None:
-            client = redis.init_async_client()
+            client: "Redis" = redis.init_async_client()  # type: ignore[assignment]
             zkey = redis.check_and_fix_namespace(key=self._zkey(counter_key))
             await client.zrem(zkey, _member(hold_id, cost))
             return
