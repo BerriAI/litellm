@@ -1,0 +1,28 @@
+# Import-linter contract for the MCP Gateway v2 rewrite.
+#
+# Run:  lint-imports --config litellm/proxy/gateway/mcp/.importlinter
+#
+# Direction is enforced HERE, not by folder nesting. Read the layers
+# top-to-bottom = high-to-low. A higher layer may import any lower layer;
+# never the reverse. Modules joined by "|" are independent siblings and
+# may NOT import each other.
+
+# grimp requires a TOP-LEVEL root package; the contract below is still scoped
+# to the mcp container, so only imports among mcp submodules are checked.
+[importlinter]
+root_package = litellm
+
+[importlinter:contract:gateway-layers]
+name = Downward-only gateway layering (inbound -> pipeline -> outbound -> leaves)
+type = layers
+containers =
+    litellm.proxy.gateway.mcp
+layers =
+    transport | oauth_server | management
+    sessions
+    catalog | dispatch
+    hooks | authz
+    connections
+    credentials
+    authn | servers
+    foundation | observability
