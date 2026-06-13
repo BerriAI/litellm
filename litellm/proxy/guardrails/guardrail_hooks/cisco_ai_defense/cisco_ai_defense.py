@@ -1507,6 +1507,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         """Rewrite MCP request arguments in all locations the proxy reads."""
         if sanitized_mcp_arguments is not None:
             request_data["mcp_arguments"] = sanitized_mcp_arguments
+            request_data["modified_arguments"] = sanitized_mcp_arguments
             params = request_data.get("params")
             if isinstance(params, dict):
                 params["arguments"] = sanitized_mcp_arguments
