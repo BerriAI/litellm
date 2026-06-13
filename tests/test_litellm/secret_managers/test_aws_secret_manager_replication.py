@@ -6,6 +6,7 @@ All tests are mocked — no real AWS credentials required.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
@@ -230,3 +231,135 @@ def test_load_aws_secret_manager_passes_replica_regions():
         assert litellm.secret_manager_client.replica_regions == ["us-west-2", "eu-west-1"]
     finally:
         litellm.secret_manager_client = original
+
+
+def _http_status_error(status_code: int, body: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://secretsmanager.us-east-1.amazonaws.com")
+    response = httpx.Response(status_code=status_code, text=body, request=request)
+    return httpx.HTTPStatusError(message=body, request=request, response=response)
+
+
+def _mock_http_client_raising(exc: Exception) -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.raise_for_status.side_effect = exc
+    mock_async_client = AsyncMock()
+    mock_async_client.post.return_value = mock_response
+    return mock_async_client
+
+
+# ---------------------------------------------------------------------------
+# Tests: error paths in async_write_secret
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_secret_http_error_raises():
+    """async_write_secret raises ValueError when CreateSecret returns a non-2xx HTTP status."""
+    manager = AWSSecretsManagerV2()
+
+    with patch.object(
+        AWSSecretsManagerV2,
+        "_prepare_request",
+        return_value=(
+            "https://secretsmanager.us-east-1.amazonaws.com",
+            {"Content-Type": "application/x-amz-json-1.1"},
+            b'{"Name":"litellm/test-key"}',
+        ),
+    ):
+        with patch(
+            "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client",
+            return_value=_mock_http_client_raising(
+                _http_status_error(400, "ResourceExistsException")
+            ),
+        ):
+            with pytest.raises(ValueError, match="HTTP error occurred"):
+                await manager.async_write_secret(
+                    secret_name="litellm/test-key",
+                    secret_value="sk-test-value",
+                )
+
+
+@pytest.mark.asyncio
+async def test_write_secret_timeout_raises():
+    """async_write_secret raises ValueError when the CreateSecret call times out."""
+    manager = AWSSecretsManagerV2()
+
+    with patch.object(
+        AWSSecretsManagerV2,
+        "_prepare_request",
+        return_value=(
+            "https://secretsmanager.us-east-1.amazonaws.com",
+            {"Content-Type": "application/x-amz-json-1.1"},
+            b'{"Name":"litellm/test-key"}',
+        ),
+    ):
+        with patch(
+            "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client",
+            return_value=_mock_http_client_raising(
+                httpx.ReadTimeout("timed out", request=None)
+            ),
+        ):
+            with pytest.raises(ValueError, match="Timeout error occurred"):
+                await manager.async_write_secret(
+                    secret_name="litellm/test-key",
+                    secret_value="sk-test-value",
+                )
+
+
+# ---------------------------------------------------------------------------
+# Tests: error paths in async_replicate_secret
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_replicate_secret_http_error_raises():
+    """async_replicate_secret raises ValueError when ReplicateSecretToRegions returns a non-2xx status."""
+    manager = AWSSecretsManagerV2()
+
+    with patch.object(
+        AWSSecretsManagerV2,
+        "_prepare_request",
+        return_value=(
+            "https://secretsmanager.us-east-1.amazonaws.com",
+            {"Content-Type": "application/x-amz-json-1.1"},
+            b"{}",
+        ),
+    ):
+        with patch(
+            "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client",
+            return_value=_mock_http_client_raising(
+                _http_status_error(403, "AccessDeniedException")
+            ),
+        ):
+            with pytest.raises(ValueError, match="HTTP error occurred"):
+                await manager.async_replicate_secret(
+                    secret_name="litellm/test-key",
+                    replica_regions=["us-west-2"],
+                )
+
+
+@pytest.mark.asyncio
+async def test_replicate_secret_timeout_raises():
+    """async_replicate_secret raises ValueError when the ReplicateSecretToRegions call times out."""
+    manager = AWSSecretsManagerV2()
+
+    with patch.object(
+        AWSSecretsManagerV2,
+        "_prepare_request",
+        return_value=(
+            "https://secretsmanager.us-east-1.amazonaws.com",
+            {"Content-Type": "application/x-amz-json-1.1"},
+            b"{}",
+        ),
+    ):
+        with patch(
+            "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client",
+            return_value=_mock_http_client_raising(
+                httpx.ReadTimeout("timed out", request=None)
+            ),
+        ):
+            with pytest.raises(ValueError, match="Timeout error occurred"):
+                await manager.async_replicate_secret(
+                    secret_name="litellm/test-key",
+                    replica_regions=["us-west-2"],
+                )
