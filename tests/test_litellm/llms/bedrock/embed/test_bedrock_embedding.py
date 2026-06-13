@@ -1004,3 +1004,40 @@ def test_bedrock_cohere_embedding_types_wrapped_as_list(
         assert "embedding_types" in request_body
         assert request_body["embedding_types"] == expected_embedding_types
         assert isinstance(request_body["embedding_types"], list)
+
+
+def test_bedrock_embedding_strips_cache_control_injection_points():
+    """
+    Issue #30314: passing `cache_control_injection_points` (a chat-completion-only
+    param consumed by AnthropicCacheControlHook) to a Bedrock embedding call was
+    forwarded verbatim into the outgoing JSON, triggering
+    `Malformed input request: #: extraneous key [cache_control_injection_points]
+    is not permitted` from AWS. The routing layer in embedding.py should strip
+    the key before the per-provider transformer touches the request body.
+    """
+    litellm.set_verbose = True
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(titan_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        litellm.embedding(
+            model="bedrock/amazon.titan-embed-image-v1",
+            input=[test_input],
+            cache_control_injection_points=[
+                {"location": "message", "role": "user"}
+            ],
+            client=client,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key="test-bearer-token-12345",
+        )
+
+        request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+        assert (
+            "cache_control_injection_points" not in request_body
+        ), "cache_control_injection_points must not leak into Bedrock embedding requests"
