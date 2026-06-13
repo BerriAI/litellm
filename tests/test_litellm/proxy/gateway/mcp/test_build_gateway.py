@@ -1,6 +1,7 @@
+import httpx
 from mcp.shared.memory import create_connected_server_and_client_session
 from starlette.applications import Starlette
-from starlette.routing import Route
+from starlette.routing import Mount
 
 from litellm.proxy.gateway.mcp.app import build_gateway, build_server
 from litellm.proxy.gateway.mcp.foundation import build_test_deps
@@ -17,10 +18,10 @@ def test_build_gateway_yields_independent_apps():
     assert a is not b
 
 
-def test_mcp_route_is_mounted():
+def test_mcp_endpoint_is_mounted_as_asgi_app():
     app = build_gateway(build_test_deps())
-    paths = {r.path for r in app.routes if isinstance(r, Route)}
-    assert "/mcp" in paths
+    mounts = {r.path for r in app.routes if isinstance(r, Mount)}
+    assert "/mcp" in mounts
 
 
 async def test_initialize_then_list_tools_returns_empty():
@@ -30,3 +31,30 @@ async def test_initialize_then_list_tools_returns_empty():
         assert init.serverInfo.name == "litellm-mcp-gateway"
         listed = await client.list_tools()
         assert listed.tools == []
+
+
+async def test_initialize_handshake_over_real_asgi_transport():
+    app = build_gateway(build_test_deps())
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "test-client", "version": "0"},
+        },
+    }
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
+            resp = await client.post(
+                "/mcp",
+                headers={
+                    "content-type": "application/json",
+                    "accept": "application/json, text/event-stream",
+                },
+                json=request,
+            )
+    assert resp.status_code == 200
+    assert "litellm-mcp-gateway" in resp.text

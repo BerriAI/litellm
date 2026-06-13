@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
-from starlette.routing import Route
+from starlette.routing import Mount
 
 from litellm.proxy.gateway.mcp.foundation import GatewayDeps, GatewayError, reason
 from litellm.proxy.gateway.mcp.foundation.types import CallToolResult, TextContent, Tool
@@ -75,11 +75,5 @@ def build_gateway(deps: GatewayDeps) -> Starlette:
 
     return Starlette(
         lifespan=lifespan,
-        routes=[
-            Route(
-                "/mcp",
-                manager.handle_request,
-                methods=["GET", "POST", "DELETE"],
-            )
-        ],
+        routes=[Mount("/mcp", app=manager.handle_request)],
     )

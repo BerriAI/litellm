@@ -44,7 +44,7 @@ tool list. Real logic begins in S1
 | foundation/types.py | The single vocabulary import point: FP spine, SDK wire types (Tool, CallToolResult, ListToolsResult, TextContent), error/result vocab, and a frozen Subject seed model |
 | foundation/deps.py | Frozen GatewayDeps (leaf adapters) + narrow Clock/Cache/HttpxFactory Protocols + build_test_deps() returning typed in-memory fakes (immutable FakeClock, FakeCache, no-network httpx factory) |
 | foundation/__init__.py | Public surface re-export |
-| app.py | build_server(deps) constructs the SDK low-level Server with skeleton list_tools -> [] and call_tool -> typed not-implemented result; build_gateway(deps) wraps it in StreamableHTTPSessionManager(stateless=True) and a Starlette app whose lifespan enters manager.run(). Zero module state |
+| app.py | build_server(deps) constructs the SDK low-level Server with skeleton list_tools -> [] and call_tool -> typed not-implemented result; build_gateway(deps) wraps it in StreamableHTTPSessionManager(stateless=True) and a Starlette app whose lifespan enters manager.run(). The endpoint is mounted with Mount("/mcp", app=manager.handle_request) because handle_request is a raw ASGI app, not a request/response handler. Zero module state |
 | pyrightconfig.json | Strict, scoped to this folder; reportMatchNotExhaustive / reportAny / reportExplicitAny set to error |
 | tests/test_litellm/proxy/gateway/mcp/ | test_build_gateway.py (Starlette type, independent instances, /mcp mounted, the DoD initialize+list_tools==[] handshake via the SDK in-memory client) + foundation/test_errors.py + foundation/test_naming.py |
 
@@ -94,6 +94,21 @@ Commands (run from repo root):
 The one genuine risk for the FP approach is retired here: Expression
 @tagged_union plus exhaustive match passes basedpyright strict with no Any, no
 type: ignore, and no weakened config
+
+Live socket check: running build_gateway(build_test_deps()) under uvicorn and
+connecting with the SDK streamable-http client over a real socket returns
+serverInfo litellm-mcp-gateway 2.0.0, the configured instructions, and an empty
+tools list. This caught a bug the in-memory handshake test could not see: the
+endpoint was first mounted with Route("/mcp", manager.handle_request), but
+handle_request is a raw ASGI app (scope, receive, send), not a request/response
+endpoint, so Starlette called it with one argument and every request 500ed. The
+in-memory test talks to the inner Server directly and never exercises Starlette
+routing, so it passed regardless. Fixed by mounting with Mount, and added
+test_initialize_handshake_over_real_asgi_transport which drives an initialize
+through the real Starlette -> Mount -> manager path (it fails on the Route
+mistake and passes on Mount). Mount serves the endpoint at /mcp/ and 307s /mcp
+to it; the SDK client follows the redirect. Exact-path routing for /mcp and the
+/{tenant}/{server}/mcp patterns is S1's TransportGateway concern
 
 ### Known issues / follow-ups
 
