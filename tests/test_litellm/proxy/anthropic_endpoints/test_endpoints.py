@@ -86,3 +86,62 @@ class TestEventLoggingBatchEndpoint:
 
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
+
+
+class TestStripTotalTokens(unittest.TestCase):
+    """Cover ``_strip_total_tokens_from_anthropic_response``.
+
+    The Anthropic /v1/messages spec does not define ``usage.total_tokens``.
+    LiteLLM injects it internally; the helper must remove it from the wire
+    response so the non-streaming path matches the streaming SSE shape and
+    direct Anthropic API responses.
+    """
+
+    def test_strips_total_tokens_when_present(self):
+        from litellm.proxy.anthropic_endpoints.endpoints import (
+            _strip_total_tokens_from_anthropic_response,
+        )
+
+        response = {
+            "id": "msg_123",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 150,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+        }
+        _strip_total_tokens_from_anthropic_response(response)
+        assert "total_tokens" not in response["usage"]
+        assert response["usage"]["input_tokens"] == 100
+        assert response["usage"]["output_tokens"] == 50
+        assert response["usage"]["cache_read_input_tokens"] == 0
+
+    def test_no_op_when_total_tokens_absent(self):
+        from litellm.proxy.anthropic_endpoints.endpoints import (
+            _strip_total_tokens_from_anthropic_response,
+        )
+
+        response = {"usage": {"input_tokens": 100, "output_tokens": 50}}
+        _strip_total_tokens_from_anthropic_response(response)
+        assert response["usage"] == {"input_tokens": 100, "output_tokens": 50}
+
+    def test_no_op_when_usage_missing(self):
+        from litellm.proxy.anthropic_endpoints.endpoints import (
+            _strip_total_tokens_from_anthropic_response,
+        )
+
+        response = {"id": "msg_123"}
+        _strip_total_tokens_from_anthropic_response(response)
+        assert response == {"id": "msg_123"}
+
+    def test_no_op_on_non_dict_response(self):
+        from litellm.proxy.anthropic_endpoints.endpoints import (
+            _strip_total_tokens_from_anthropic_response,
+        )
+
+        # Streaming responses (StreamingResponse, async iterators) are not dicts.
+        # The helper must not raise or attempt to mutate them.
+        for value in (None, "stream", 42, [{"usage": {"total_tokens": 1}}]):
+            _strip_total_tokens_from_anthropic_response(value)  # no raise

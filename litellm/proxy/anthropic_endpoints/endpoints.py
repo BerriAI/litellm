@@ -23,6 +23,26 @@ from litellm.types.utils import TokenCountResponse
 router = APIRouter()
 
 
+def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
+    """Remove the OpenAI-flavored `usage.total_tokens` field that LiteLLM
+    injects into Anthropic /v1/messages responses.
+
+    The Anthropic /v1/messages spec only defines:
+        input_tokens, output_tokens, cache_creation_input_tokens,
+        cache_read_input_tokens, cache_creation.{ephemeral_5m,ephemeral_1h}
+    The streaming SSE path (message_delta.usage) already does not include
+    total_tokens; this brings the non-streaming path into the same shape.
+
+    Only mutates dict-shaped responses. Streaming (StreamingResponse,
+    AsyncIterator, etc.) is left untouched.
+    """
+    if not isinstance(response, dict):
+        return
+    usage = response.get("usage")
+    if isinstance(usage, dict) and "total_tokens" in usage:
+        usage.pop("total_tokens", None)
+
+
 @router.post(
     "/v1/messages",
     tags=["[beta] Anthropic `/v1/messages`"],
@@ -72,6 +92,18 @@ async def anthropic_response(
             user_api_base=user_api_base,
             version=version,
         )
+        # Strip the non-Anthropic `usage.total_tokens` field LiteLLM adds
+        # internally. Anthropic's official /v1/messages spec only defines
+        # input_tokens / output_tokens / cache_*_input_tokens; total_tokens
+        # is an OpenAI convention. Keeping it here causes:
+        #   - Inconsistency with the streaming SSE path (message_delta.usage
+        #     never carries total_tokens)
+        #   - Inconsistency with direct gateway / Anthropic API responses
+        #   - Numerical misuse: total = input + output undercounts when
+        #     cache_read/creation tokens are present
+        # spend_logs / Prometheus still compute total internally — this only
+        # strips it from the wire response to clients.
+        _strip_total_tokens_from_anthropic_response(result)
         return result
     except ModifyResponseException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
