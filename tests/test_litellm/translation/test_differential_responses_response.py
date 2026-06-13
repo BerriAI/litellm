@@ -136,6 +136,18 @@ _CASES: dict[str, dict] = {
         ),
         "reasoning_tokens": 6,
     },
+    # Anthropic ``refusal`` -> IR ``content_filter``, which the responses reverse
+    # status map has no explicit arm for and folds to its default ``incomplete``
+    # (v1's same default). Pins the content_filter status arm the corpus
+    # otherwise omitted (verifier-inbound GAP-2).
+    "refusal_content_filter_incomplete": {
+        "wire": _wire(
+            [{"type": "text", "text": "i cannot help with that"}],
+            "refusal",
+            _USAGE_PLAIN,
+        ),
+        "reasoning_tokens": 0,
+    },
 }
 
 
@@ -210,6 +222,48 @@ def test_response_matches_v1_responses_reverse(name: str) -> None:
     assert json.dumps(v2_body, sort_keys=True, default=str) == json.dumps(
         v1_body, sort_keys=True, default=str
     ), name
+
+
+def test_function_call_arguments_ride_verbatim_not_reserialized() -> None:
+    """The IR ToolUse.arguments_raw carries the wire bytes verbatim; the reverse
+    must emit them unchanged. The corpus tool args ``{"q":1}`` happen to equal
+    ``json.dumps`` of their parsed value, so a reserialize regression hides
+    there. A compact-spaced ``{"a":1,"b":2}`` does NOT survive json.dumps
+    (which inserts ``", "``/``": "``), so this pins the raw path. v1 copies the
+    ModelResponse tool_call arguments string verbatim (transformation.py:1515),
+    so the verbatim emission is also what v1 does (verifier-inbound GAP-4)."""
+    from dataclasses import replace
+
+    from expression import Nothing, Some
+    from expression.collections import Block as IRBlock
+
+    from litellm.translation.ir import ContentBlock, JsonBlob, ToolUse
+
+    deps = build_real_deps()
+    base = parse_response(
+        _wire(
+            [{"type": "tool_use", "id": "toolu_x", "name": "get", "input": {"a": 1}}],
+            "tool_use",
+            _USAGE_PLAIN,
+        ),
+        parse_request(_REQUEST).ok,
+    ).ok
+    compact = '{"a":1,"b":2}'
+    raw_block = ContentBlock.of_tool_use(
+        ToolUse(
+            id="toolu_x",
+            name="get",
+            arguments=JsonBlob(value={"a": 1, "b": 2}),
+            cache=Nothing,
+            arguments_raw=Some(compact),
+        )
+    )
+    ir = replace(base, content=IRBlock.of_seq([raw_block]))
+
+    body = dict(v2_serialize(ir, deps))
+    call = next(item for item in body["output"] if item["type"] == "function_call")
+    assert call["arguments"] == compact
+    assert call["arguments"] != json.dumps({"a": 1, "b": 2})
 
 
 def test_reasoning_item_precedes_message_and_function_call() -> None:

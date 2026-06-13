@@ -388,6 +388,40 @@ _FALLBACK: dict[str, tuple[dict, str]] = {
         },
         "defer_loading",
     ),
+    # A mid-conversation message item whose role is system/developer: v1
+    # FORWARDS the role verbatim (transformation.py:995 ``role or "user"``),
+    # so the instruction reaches the model as a system turn. The chat IR's
+    # Message.role is Literal[user, assistant] with no home for it, so v2 must
+    # FAIL CLOSED (the seam serves it on v1) rather than silently demote it to
+    # a user turn -- a #30138-class semantic mutation (critic-inbound BLOCKER-1).
+    "message_role_system_fails_closed": (
+        {
+            "model": MODEL,
+            "input": [
+                {
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": "be terse"}],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}],
+                },
+            ],
+        },
+        "role 'system'",
+    ),
+    "message_role_developer_fails_closed": (
+        {
+            "model": MODEL,
+            "input": [
+                {
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "be terse"}],
+                }
+            ],
+        },
+        "role 'developer'",
+    ),
 }
 
 
@@ -399,3 +433,18 @@ def test_unported_shapes_fail_closed(name: str) -> None:
     assert (
         reason_substring in parsed.error.summary
     ), f"{name}: error {parsed.error.summary!r} does not name {reason_substring!r}"
+
+
+@pytest.mark.parametrize("role", ["system", "developer"])
+def test_v1_forwards_a_message_item_role_so_the_fallback_is_real(role: str) -> None:
+    """The fail-closed rows above only matter if v1 actually SERVES the role; if
+    v1 dropped it too the divergence would be invented. Probe v1 in-process at
+    HEAD: it forwards the role verbatim into the chat request (no demotion to
+    user), which is the byte v2 would silently lose if it collapsed the role."""
+    item = {"role": role, "content": [{"type": "input_text", "text": "be terse"}]}
+    message = V1._transform_responses_api_input_item_to_chat_completion_message(
+        input_item=item
+    )
+    assert message == [
+        {"role": role, "content": [{"type": "text", "text": "be terse"}]}
+    ]

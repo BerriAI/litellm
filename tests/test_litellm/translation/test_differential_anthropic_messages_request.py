@@ -188,6 +188,18 @@ _SERVE: dict[str, dict] = {
         "tools": [{"name": "f", "input_schema": {"type": "object"}, "type": "custom"}],
         "tool_choice": {"type": "any"},
     },
+    # tool_choice carrying disable_parallel_tool_use: v2 maps it to the IR
+    # parallel_tool_calls flag (the ``not`` inversion in parse) and the anthropic
+    # serializer re-emits the wire key (the ``not`` inversion in serialize), so a
+    # one-sided inversion mutation breaks this round-trip. The corpus otherwise
+    # had no disable_parallel_tool_use row (verifier-inbound GAP-3).
+    "tool_choice_disable_parallel": {
+        "model": MODEL,
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "x"}]}],
+        "tools": [{"name": "f", "input_schema": {"type": "object"}, "type": "custom"}],
+        "tool_choice": {"type": "auto", "disable_parallel_tool_use": True},
+    },
     "thinking_enabled_budget": {
         "model": MODEL,
         "max_tokens": 2048,

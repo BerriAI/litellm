@@ -154,12 +154,16 @@ def _append_function_call_output(
             "responses function_call_output with empty call_id; v1 drops it"
         )
     if item.call_id not in tool_call_ids:
-        # v1 reconstructs the matching tool_use from the cross-request
-        # TOOL_CALLS_CACHE (transformation.py:1121); that module-level state is
-        # banned and unreproducible, so fail closed when the pair is not local.
+        # When the call_id is in the cross-request TOOL_CALLS_CACHE v1
+        # reconstructs the matching tool_use from it (transformation.py:1121);
+        # when the cache is empty (the common case) v1 serves a bare orphan
+        # tool message with no preceding tool_use. Both rely on state outside
+        # this request (banned module-level cache) or emit a lossy orphan, so
+        # fail closed when the pair is not local to the request.
         return TranslationError.of_unsupported(
             "responses function_call_output without a matching function_call in"
-            " this request; v1 reconstructs it from TOOL_CALLS_CACHE"
+            " this request; v1 serves it from the TOOL_CALLS_CACHE or as a bare"
+            " orphan tool message"
         )
     result = ToolResult(
         tool_use_id=item.call_id,
@@ -177,12 +181,17 @@ def _append_function_call_output(
 def _append_message(
     item: MessageItemIn, messages: list[Message]
 ) -> None | TranslationError:
+    role = item.role or "user"
+    if role not in ("user", "assistant"):
+        return TranslationError.of_unsupported(
+            f"responses message item with role {role!r}; the chat IR carries"
+            " only user/assistant turns, v1 forwards it verbatim"
+        )
     blocks = _message_blocks(item)
     if isinstance(blocks, TranslationError):
         return blocks
     if not blocks:
         return None
-    role = "assistant" if item.role == "assistant" else "user"
     messages.append(  # nosemgrep: translation-no-mutation
         Message(role=role, content=Block.of_seq(blocks))
     )

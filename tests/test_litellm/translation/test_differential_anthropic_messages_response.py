@@ -111,6 +111,16 @@ _CASES: dict[str, dict] = {
         "tool_use",
         _USAGE_CACHED,
     ),
+    # The anthropic wire ``refusal`` stop_reason maps to IR ``content_filter``
+    # (provider FINISH_MAP), which the reverse has no Anthropic stop_reason for
+    # and must fold to v1's default-branch ``end_turn`` (researcher-6 §1.5
+    # item 11). Pins the content_filter arm the corpus otherwise omitted
+    # (verifier-inbound GAP-1).
+    "refusal_content_filter_to_end_turn": _wire(
+        [{"type": "text", "text": "i cannot help with that"}],
+        "refusal",
+        _USAGE_PLAIN,
+    ),
 }
 
 
