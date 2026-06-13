@@ -2,13 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { organizationKeys, useOrganizations } from "./useOrganizations";
-import { organizationListCall } from "@/components/networking";
+import { organizationKeys, useOrganization, useOrganizations } from "./useOrganizations";
+import { organizationInfoCall, organizationListCall } from "@/components/networking";
 import type { Organization } from "@/components/networking";
 
 // Mock the networking function
 vi.mock("@/components/networking", () => ({
   organizationListCall: vi.fn(),
+  organizationInfoCall: vi.fn(),
 }));
 
 // Mock useAuthorized hook - we can override this in individual tests
@@ -315,5 +316,60 @@ describe("useOrganizations", () => {
 
     expect(result.current.error).toEqual(timeoutError);
     expect(result.current.data).toBeUndefined();
+  });
+});
+
+describe("useOrganization", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    vi.clearAllMocks();
+
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("seeds initialData from a filtered list cache entry so the detail renders without a loading state", () => {
+    (organizationInfoCall as any).mockResolvedValue(mockOrganizations[1]);
+    // Only a filtered list was ever fetched; the unfiltered list({}) entry stays empty.
+    queryClient.setQueryData(organizationKeys.list({ filters: { org_id: "org-2" } }), [mockOrganizations[1]]);
+
+    const { result } = renderHook(() => useOrganization("org-2"), { wrapper });
+
+    // initialData found org-2 in the filtered cache, so data is present on the first render.
+    expect(result.current.data).toEqual(mockOrganizations[1]);
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("falls through to the detail API call when no cached list contains the organization", async () => {
+    (organizationInfoCall as any).mockResolvedValue(mockOrganizations[0]);
+    queryClient.setQueryData(organizationKeys.list({ filters: { org_id: "org-2" } }), [mockOrganizations[1]]);
+
+    const { result } = renderHook(() => useOrganization("org-1"), { wrapper });
+
+    // org-1 is in no cached list, so there is no initialData and it loads via the detail API.
+    expect(result.current.data).toBeUndefined();
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(organizationInfoCall).toHaveBeenCalledWith("test-access-token", "org-1");
+    expect(result.current.data).toEqual(mockOrganizations[0]);
   });
 });

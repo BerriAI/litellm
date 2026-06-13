@@ -43,9 +43,10 @@ export const useOrganization = (organizationID?: string) => {
     initialData: () => {
       if (!organizationID) return undefined;
 
-      const organizations = queryClient.getQueryData<Organization[]>(organizationKeys.list({}));
-
-      return organizations?.find((organization: Organization) => organization.organization_id === organizationID);
+      return queryClient
+        .getQueriesData<Organization[]>({ queryKey: organizationKeys.lists() })
+        .flatMap(([, organizations]) => organizations ?? [])
+        .find((organization) => organization.organization_id === organizationID);
     },
   });
 };
