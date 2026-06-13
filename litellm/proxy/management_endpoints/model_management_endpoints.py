@@ -270,7 +270,12 @@ async def patch_model(
         # Fire cache reload in the background so the HTTP response returns immediately
         # after the DB write. clear_cache() re-fetches all models from DB and reloads
         # the router — under load this can take 7-43s, causing 500s when awaited.
-        asyncio.create_task(clear_cache())
+        _task = asyncio.create_task(clear_cache())
+        _task.add_done_callback(
+            lambda t: verbose_proxy_logger.error("clear_cache failed: %s", t.exception())
+            if t.exception()
+            else None
+        )
 
         ## CREATE AUDIT LOG ##
         asyncio.create_task(
@@ -1210,7 +1215,12 @@ async def update_model(
             )
 
             # Fire cache reload in the background — same as patch_model.
-            asyncio.create_task(clear_cache())
+            _task = asyncio.create_task(clear_cache())
+            _task.add_done_callback(
+                lambda t: verbose_proxy_logger.error("clear_cache failed: %s", t.exception())
+                if t.exception()
+                else None
+            )
 
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
