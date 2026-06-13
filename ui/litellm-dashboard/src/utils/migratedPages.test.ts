@@ -111,6 +111,14 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES.new_usage).toBe("usage");
     expect(MIGRATED_PAGES.usage).toBeUndefined();
   });
+
+  it("maps the agents and router-settings ids to their routes", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.agents).toBe("agents");
+    expect(MIGRATED_PAGES["router-settings"]).toBe("router-settings");
+  });
 });
 
 describe("dev server (NODE_ENV=development)", () => {
