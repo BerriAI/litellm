@@ -62,6 +62,10 @@ general_settings:
   # skip_batch_input_file_rate_limiting_for_models:
   #   - my-vllm-batch-model
 
+litellm_settings:
+  # Optional: require target_model_names on POST /v1/files (blocks classic file uploads)
+  # require_managed_files: true
+
 ```
 
 ### 2. Create Virtual Key

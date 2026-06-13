@@ -42,6 +42,28 @@ model_list:
 general_settings: 
   master_key: sk-1234  # alternatively use the env var - LITELLM_MASTER_KEY
   database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # alternatively use the env var - DATABASE_URL
+
+litellm_settings:
+  require_managed_files: true # optional - reject POST /v1/files without target_model_names
+```
+
+#### (Optional) Enforce managed files on upload
+
+By default, `POST /v1/files` falls back to the classic provider file path when `target_model_names` is omitted. Set `require_managed_files: true` under `litellm_settings` to require managed files on every upload.
+
+```yaml
+litellm_settings:
+  require_managed_files: true
+```
+
+When enabled, uploads without `target_model_names` return `400`. Existing managed-file behavior is unchanged when `target_model_names` is provided.
+
+```python
+# String (comma-separated for multiple models)
+extra_body={"target_model_names": "gpt-4o-mini-openai, gemini-2.0-flash"}
+
+# List (OpenAI Python SDK sends this as target_model_names[] in multipart form)
+extra_body={"target_model_names": ["gpt-4o-mini-openai"]}
 ```
 
 ### 2. Start proxy
