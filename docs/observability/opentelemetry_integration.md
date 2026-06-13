@@ -350,6 +350,82 @@ OTLP exporters batch spans. Very large `gen_ai.input.messages`/`gen_ai.output.me
 - Move large payloads off-trace (set `litellm.turn_off_message_logging=true` and rely on Spend Logs / cold storage, referenced via `metadata.cold_storage_object_key`).
 - Raise the collector's `max_attribute_value_length` and OTLP receiver `max_recv_msg_size_mib`.
 
+## Control metric attribute cardinality
+
+When metrics are enabled, every `gen_ai.client.*` sample is stamped with a common set of attributes so you can slice the histograms by model, provider, key, and team. By default that set also includes per-request fields such as `hidden_params` and several `metadata.*` values. Those are close to unique per request, so each one multiplies the number of time series the backend tracks (one series per distinct attribute combination). At volume this explodes metric cardinality, and some backends, for example Splunk Observability Cloud, start throttling or dropping the metrics.
+
+To cap cardinality, filter which attributes get stamped onto metrics. Nest an `attributes` block under `callback_settings.otel` with either an `include_list` (allowlist; emit only the listed attributes) or an `exclude_list` (denylist; emit everything except the listed attributes). The two are mutually exclusive, and setting both raises a configuration error at startup. With no `attributes` block the behavior is unchanged and every attribute is emitted, so existing dashboards keep working.
+
+The filter applies to metrics only. Spans keep their full attribute set, so traces stay rich while metric cardinality stays bounded.
+
+### Drop the high-cardinality attributes (exclude_list)
+
+The common case. Keep the stable identity attributes and drop the per-request blobs that drive cardinality.
+
+```yaml
+litellm_settings:
+  callbacks: ["otel"]
+
+callback_settings:
+  otel:
+    attributes:
+      exclude_list:
+        - hidden_params
+        - metadata.requester_metadata
+        - metadata.requester_ip_address
+        - metadata.spend_logs_metadata
+        - metadata.mcp_tool_call_metadata
+        - metadata.vector_store_request_metadata
+        - metadata.prompt_management_metadata
+```
+
+### Emit only an explicit set (include_list)
+
+When you want the smallest, most predictable attribute set, list exactly the attributes to keep. Anything not listed is dropped from metrics.
+
+```yaml
+litellm_settings:
+  callbacks: ["otel"]
+
+callback_settings:
+  otel:
+    attributes:
+      include_list:
+        - gen_ai.operation.name
+        - gen_ai.system
+        - gen_ai.request.model
+        - gen_ai.framework
+        - metadata.user_api_key_team_id
+        - metadata.user_api_key_org_id
+```
+
+`gen_ai.token.type` cannot be filtered. It is a structural discriminator stamped onto the input and output token series after filtering so the two stay distinct, and listing it in either `include_list` or `exclude_list` is rejected at startup rather than silently ignored.
+
+### Valid attribute names
+
+Both lists are validated at startup against the set below. An unknown name raises a configuration error, so a typo can never silently fall back to emitting every attribute. The valid names are the `gen_ai.*` core attributes, `hidden_params`, and the `metadata.*` keys:
+
+- `gen_ai.operation.name`
+- `gen_ai.system`
+- `gen_ai.request.model`
+- `gen_ai.framework`
+- `hidden_params`
+- `metadata.user_api_key_hash`
+- `metadata.user_api_key_alias`
+- `metadata.user_api_key_team_id`
+- `metadata.user_api_key_org_id`
+- `metadata.user_api_key_user_id`
+- `metadata.user_api_key_team_alias`
+- `metadata.user_api_key_user_email`
+- `metadata.user_api_key_end_user_id`
+- `metadata.spend_logs_metadata`
+- `metadata.requester_ip_address`
+- `metadata.requester_metadata`
+- `metadata.prompt_management_metadata`
+- `metadata.applied_guardrails`
+- `metadata.mcp_tool_call_metadata`
+- `metadata.vector_store_request_metadata`
+
 ## Configuration Reference
 
 All flags below are read from environment variables unless noted. Boolean flags accept `true`/`false` (case-insensitive).
@@ -406,6 +482,7 @@ Per-request keys you can pass in `metadata` to redact a single call without disa
 | `semconv_stability` | env var | Same as `OTEL_SEMCONV_STABILITY_OPT_IN` |
 | `skip_set_global` | `false` | Don't claim the process-global `TracerProvider`/`MeterProvider`/`LoggerProvider` |
 | `ignore_context_propagation` | `false` | Same as `OTEL_IGNORE_CONTEXT_PROPAGATION` |
+| `attributes` | none | Metric attribute include/exclude filter. See [Control metric attribute cardinality](#control-metric-attribute-cardinality) |
 
 ## Appendix: Spans, Metrics, and Attributes Reference
 
