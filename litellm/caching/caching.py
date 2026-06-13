@@ -273,6 +273,12 @@ class Cache:
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace
 
+    def _is_semantic_cache(self) -> bool:
+        return self.type in (
+            LiteLLMCacheType.REDIS_SEMANTIC,
+            LiteLLMCacheType.QDRANT_SEMANTIC,
+        )
+
     def get_cache_key(self, **kwargs) -> str:
         """
         Get the cache key for the given arguments.
@@ -293,7 +299,18 @@ class Cache:
 
         combined_kwargs = ModelParamHelper._get_all_llm_api_params()
         litellm_param_kwargs = all_litellm_params
+        # Semantic caches match on prompt embeddings, not on the prompt text in
+        # the key. Including prompt content here would scope every distinct
+        # wording into its own bucket and defeat similarity matching, so the
+        # scope key is built from non-prompt params only.
+        scope_excluded_params = (
+            ModelParamHelper.get_exclude_params_for_model_parameters()
+            if self._is_semantic_cache()
+            else set()
+        )
         for param in kwargs:
+            if param in scope_excluded_params:
+                continue
             if param in combined_kwargs:
                 param_value: Optional[str] = self._get_param_value(param, kwargs)
                 if param_value is not None:
