@@ -4979,6 +4979,68 @@ async def test_router_ttft_timeout_acompletion_intercept():
 
     assert result is reconstructed
     assert mock_collect.called
+    call_kwargs = mock_collect.call_args.kwargs
+    assert call_kwargs["ttft_timeout"] == 5.0
+    assert call_kwargs["stream_idle_timeout"] is None
+
+
+@pytest.mark.asyncio
+async def test_router_stream_idle_timeout_acompletion_intercept():
+    """When stream_idle_timeout is set and stream=False, _acompletion forces stream=True
+    and passes stream_idle_timeout (with ttft_timeout=None) to _collect_stream_with_ttft_timeout."""
+    from unittest.mock import AsyncMock, patch
+
+    import litellm
+    from litellm import ModelResponse
+    from litellm.utils import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        stream_idle_timeout=30.0,
+    )
+
+    reconstructed = MagicMock(spec=ModelResponse)
+
+    fake_stream = MagicMock(spec=CustomStreamWrapper)
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+
+    with (
+        patch.object(
+            router,
+            "_collect_stream_with_ttft_timeout",
+            new_callable=AsyncMock,
+            return_value=reconstructed,
+        ) as mock_collect,
+        patch.object(router, "async_get_available_deployment") as mock_dep,
+        patch.object(router, "_update_kwargs_with_deployment"),
+        patch.object(router, "async_routing_strategy_pre_call_checks"),
+        patch.object(router, "_get_client", return_value=None),
+        patch.object(router, "_track_deployment_metrics"),
+        patch.object(router, "_should_raise_content_policy_error", return_value=False),
+        patch("litellm.acompletion", new_callable=AsyncMock, return_value=fake_stream),
+    ):
+        mock_dep.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+        }
+
+        result = await router._acompletion(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+        )
+
+    assert result is reconstructed
+    assert mock_collect.called
+    call_kwargs = mock_collect.call_args.kwargs
+    assert call_kwargs["ttft_timeout"] is None
+    assert call_kwargs["stream_idle_timeout"] == 30.0
 
 
 # ---------------------------------------------------------------------------
