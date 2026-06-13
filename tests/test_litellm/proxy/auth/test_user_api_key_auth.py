@@ -28,6 +28,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
+from fastapi import status
 from litellm.proxy.auth.user_api_key_auth import (
     _route_requires_auth_despite_public,
     _reserve_budget_after_common_checks,
@@ -2962,8 +2963,7 @@ def _proxy_attrs_for_db_lookup():
 
 async def _run_builder_with_key_lookup(get_key_object_mock):
     """Drive the real auth builder with ``get_key_object`` replaced by the
-    given mock. Returns the builder result. Patches ``seed_request_identity``
-    so the failure path doesn't touch OTEL."""
+    given mock. Returns the builder result."""
     from fastapi import Request
     from starlette.datastructures import URL
 
@@ -2981,9 +2981,6 @@ async def _run_builder_with_key_lookup(get_key_object_mock):
             patch(
                 "litellm.proxy.auth.user_api_key_auth.get_key_object",
                 get_key_object_mock,
-            ),
-            patch(
-                "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
             ),
         ):
             return await _user_api_key_auth_builder(
