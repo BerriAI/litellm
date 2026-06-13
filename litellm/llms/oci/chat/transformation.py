@@ -25,6 +25,7 @@ from typing import (
 import httpx
 
 import litellm
+from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -87,15 +88,20 @@ STREAMING_TIMEOUT = 60 * 5
 def _model_uses_max_completion_tokens(model: str) -> bool:
     """Return True for OCI-hosted models that require ``maxCompletionTokens``.
 
-    Reasoning models on OCI (e.g. the OpenAI GPT-5 family) reject ``maxTokens``
-    with HTTP 400 and require ``maxCompletionTokens`` per OpenAI's reasoning-API
-    convention. Driven by ``supports_reasoning`` in
-    ``model_prices_and_context_window.json`` so new model families are picked
-    up via a catalog update rather than a code change.
+    OpenAI commercial models proxied through OCI (``openai.*``) reject
+    ``maxTokens`` with HTTP 400 on the reasoning families (gpt-5.x, o-series)
+    and accept ``maxCompletionTokens`` everywhere, so route the whole vendor
+    prefix to it rather than chasing each new release in
+    ``model_prices_and_context_window.json``. The ``openai.gpt-oss-*`` open
+    weights are served by OCI's own stack and keep ``maxTokens``. Any other
+    vendor falls back to the catalog's ``supports_reasoning`` flag.
     """
     if not model:
         return False
     name = model[4:] if model.lower().startswith("oci/") else model
+    lowered = name.lower()
+    if lowered.startswith("openai."):
+        return not lowered.startswith("openai.gpt-oss")
     return supports_reasoning(model=name, custom_llm_provider="oci")
 
 
@@ -193,19 +199,49 @@ def _normalize_response_format(selected_params: Dict, vendor: OCIVendors) -> Non
     rf = selected_params.get("responseFormat")
     if not isinstance(rf, dict) or "type" not in rf:
         return
-    rf_payload = dict(rf)
-    selected_params["responseFormat"] = rf_payload
-    response_type = rf_payload["type"]
-    if "json_schema" in rf_payload:
-        raw_schema = rf_payload.pop("json_schema")
-        rf_payload["jsonSchema"] = (
-            dict(raw_schema) if isinstance(raw_schema, dict) else raw_schema
-        )
+
+    rf_type = str(rf["type"]).lower()
+    raw_schema = rf.get("json_schema")
+    json_schema = raw_schema if isinstance(raw_schema, dict) else None
+
+    if rf_type == "text":
+        selected_params["responseFormat"] = {"type": "TEXT"}
+        return
+
     if vendor == OCIVendors.COHERE:
-        rf_payload["type"] = response_type
-    else:
-        fmt = response_type.upper()
-        rf_payload["type"] = "JSON_OBJECT" if fmt == "JSON" else fmt
+        # OCI Cohere has no JSON_SCHEMA type; a schema rides on JSON_OBJECT.
+        payload: Dict[str, Any] = {"type": "JSON_OBJECT"}
+        if json_schema is not None and json_schema.get("schema") is not None:
+            payload["schema"] = json_schema["schema"]
+        selected_params["responseFormat"] = payload
+        return
+
+    if rf_type == "json_schema":
+        if json_schema is None:
+            raise OCIError(
+                status_code=400,
+                message="response_format type 'json_schema' requires a 'json_schema' object",
+            )
+        # OCI's ResponseJsonSchema accepts only name/description/schema/isStrict.
+        # OpenAI sends `strict` instead of `isStrict`; forwarding it (or any
+        # other extra key) makes OCI reject the whole request with HTTP 400.
+        oci_schema: Dict[str, Any] = {"name": json_schema.get("name") or "response"}
+        if json_schema.get("description") is not None:
+            oci_schema["description"] = json_schema["description"]
+        if json_schema.get("schema") is not None:
+            oci_schema["schema"] = json_schema["schema"]
+        if json_schema.get("strict") is not None:
+            oci_schema["isStrict"] = json_schema["strict"]
+        selected_params["responseFormat"] = {
+            "type": "JSON_SCHEMA",
+            "jsonSchema": oci_schema,
+        }
+        return
+
+    fmt = rf_type.upper()
+    selected_params["responseFormat"] = {
+        "type": "JSON_OBJECT" if fmt == "JSON" else fmt
+    }
 
 
 def get_vendor_from_model(model: str) -> OCIVendors:
@@ -297,6 +333,11 @@ class OCIChatConfig(BaseConfig):
             if get_vendor_from_model(model) == OCIVendors.COHERE
             else self.openai_to_oci_generic_param_map
         )
+        # `n` is intentionally not advertised for Cohere even though n=1 is
+        # tolerated: Cohere has no numGenerations field, so n>1 cannot be
+        # honoured and advertising it would be misleading. Callers that gate on
+        # this list strip n=1 (a no-op, matching what map_openai_params does);
+        # callers that bypass it have n=1 dropped there. Both paths converge.
         return [key for key, value in param_map.items() if value]
 
     def map_openai_params(
@@ -317,6 +358,19 @@ class OCIChatConfig(BaseConfig):
         for key, value in {**non_default_params, **optional_params}.items():
             alias = param_map.get(key)
             if alias is False:
+                # max_retries is a litellm-level control param (litellm applies
+                # retries itself); it is never a generation param OCI accepts, so
+                # drop it silently. The litellm proxy injects it on every request,
+                # which otherwise 500s OCI calls unless drop_params is set.
+                if key == "max_retries":
+                    continue
+                # n=1 (or None) is the OpenAI default: a single generation, which
+                # every OCI model produces anyway. Drop it silently so standard
+                # clients that always send n=1 (e.g. the MLflow gateway) are not
+                # rejected; only n>1 is genuinely unsupported on Cohere, which
+                # has no numGenerations field.
+                if key == "n" and (value is None or value == 1):
+                    continue
                 if drop_params or litellm.drop_params:
                     continue
                 raise OCIError(
@@ -450,6 +504,13 @@ class OCIChatConfig(BaseConfig):
                 selected_params[target] = optional_params[openai_key]  # type: ignore[index]
             elif oci_alias in optional_params:
                 selected_params[target] = optional_params[oci_alias]  # type: ignore[index]
+
+        # OCI's server-side default token cap is tiny (~20 tokens), so an
+        # omitted max_tokens silently truncates the response mid-string. Most
+        # callers never send a limit (MLflow judges among them), so inject a
+        # sane default when one is absent, mirroring litellm's Anthropic config.
+        if max_tokens_key not in selected_params:
+            selected_params[max_tokens_key] = DEFAULT_OCI_CHAT_MAX_TOKENS
 
         # OCI expects uppercase reasoning levels (LOW/MEDIUM/HIGH/NONE); OpenAI
         # clients send lowercase. OpenAI's "disable" maps to OCI's "NONE".

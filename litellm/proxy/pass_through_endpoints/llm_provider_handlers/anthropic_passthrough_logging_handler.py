@@ -101,6 +101,42 @@ class AnthropicPassthroughLoggingHandler:
         return None
 
     @staticmethod
+    def _resolve_costing_model(model: str, logging_obj: LiteLLMLoggingObj) -> str:
+        if model and model != "unknown":
+            return model
+        litellm_params = (getattr(logging_obj, "model_call_details", {}) or {}).get(
+            "litellm_params", {}
+        ) or {}
+        deployment_model = litellm_params.get("model")
+        if deployment_model and deployment_model != "unknown":
+            return deployment_model
+        model_group = (litellm_params.get("metadata", {}) or {}).get("model_group")
+        if model_group:
+            return model_group.removeprefix("passthrough/")
+        return model
+
+    @staticmethod
+    def _extract_model_from_anthropic_chunks(
+        all_chunks: Sequence[Union[str, bytes]],
+    ) -> Optional[str]:
+        for raw in all_chunks:
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            for line in text.splitlines():
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    data = json.loads(line[len("data:") :].strip())
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                if data.get("type") == "message_start":
+                    model = (data.get("message") or {}).get("model")
+                    if model:
+                        return model
+        return None
+
+    @staticmethod
     def _create_anthropic_response_logging_payload(
         litellm_model_response: Union[ModelResponse, TextCompletionResponse],
         model: str,
@@ -125,6 +161,10 @@ class AnthropicPassthroughLoggingHandler:
             # Get custom_llm_provider from logging object if available (e.g., azure_ai for Azure Anthropic)
             custom_llm_provider = logging_obj.model_call_details.get(
                 "custom_llm_provider"
+            )
+
+            model = AnthropicPassthroughLoggingHandler._resolve_costing_model(
+                model, logging_obj
             )
 
             # Prepend custom_llm_provider to model if not already present
@@ -212,6 +252,15 @@ class AnthropicPassthroughLoggingHandler:
             and litellm_logging_obj.model_call_details.get("model")
         ):
             model = cast(str, litellm_logging_obj.model_call_details.get("model"))
+
+        if not model or model == "unknown":
+            chunk_model = (
+                AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(
+                    all_chunks
+                )
+            )
+            if chunk_model:
+                model = chunk_model
 
         complete_streaming_response = (
             AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
@@ -468,6 +517,13 @@ class AnthropicPassthroughLoggingHandler:
             # Process each individual event
             for event_str in individual_events:
                 try:
+                    # Skip OpenAI-style [DONE] sentinels some Anthropic-compatible
+                    # providers emit. Match the whole SSE line so a valid chunk whose
+                    # text payload happens to contain "[DONE]" is not dropped.
+                    if any(
+                        line.strip() == "data: [DONE]" for line in event_str.split("\n")
+                    ):
+                        continue
                     transformed_openai_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
                         chunk=event_str
                     )
@@ -476,6 +532,14 @@ class AnthropicPassthroughLoggingHandler:
 
                 except (StopIteration, StopAsyncIteration):
                     break
+                except json.JSONDecodeError:
+                    # Some upstreams emit non-JSON SSE lines; skip them so the
+                    # logging pipeline is not broken by a single bad frame.
+                    verbose_proxy_logger.debug(
+                        "Skipping non-JSON SSE event: %s",
+                        event_str[:200],
+                    )
+                    continue
 
         complete_streaming_response = litellm.stream_chunk_builder(
             chunks=all_openai_chunks,

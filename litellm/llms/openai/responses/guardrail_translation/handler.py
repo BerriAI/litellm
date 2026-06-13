@@ -35,7 +35,6 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
-    LiteLLMResponsesTransformationHandler,
     OpenAiResponsesToChatCompletionStreamIterator,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -479,90 +478,137 @@ class OpenAIResponsesHandler(BaseTranslation):
     ) -> List[Any]:
         """
         Process output streaming response by applying guardrails to text content.
+
+        Mirrors the Chat Completions handler pattern: extract text from the final
+        chunk, apply the guardrail, then write the result back in-place so the
+        caller sees the modified content (e.g. PII tokens replaced).
+
+        For ``response.completed`` events (the normal end-of-stream signal) we
+        use the same per-item extraction + task-mapping approach as
+        ``process_output_response`` so that unmasking / blocking works correctly
+        for every output item.
         """
+        if not responses_so_far:
+            return responses_so_far
 
         final_chunk = responses_so_far[-1]
+        # Accept both plain dicts and Pydantic models (BaseLiteLLMOpenAIResponseObject
+        # exposes a .get() shim, so all the .get() calls below work for both).
+        if not (isinstance(final_chunk, dict) or hasattr(final_chunk, "get")):
+            return responses_so_far
 
+        # ------------------------------------------------------------------ #
+        # Case 1: response.completed — full response is available in the      #
+        # final chunk; iterate output items, apply guardrail, write back.     #
+        # ------------------------------------------------------------------ #
+        if final_chunk.get("type") == "response.completed":
+            response_obj = final_chunk.get("response") or {}
+            if not hasattr(response_obj, "get"):
+                return responses_so_far
+            outputs: List[Any] = response_obj.get("output") or []
+
+            texts_to_check: List[str] = []
+            tool_calls_to_check: List[ChatCompletionToolCallChunk] = []
+            task_mappings: List[Tuple[int, int]] = []
+
+            for output_idx, output_item in enumerate(outputs):
+                self._extract_output_text_and_images(
+                    output_item=output_item,
+                    output_idx=output_idx,
+                    texts_to_check=texts_to_check,
+                    images_to_check=[],
+                    task_mappings=task_mappings,
+                    tool_calls_to_check=tool_calls_to_check,
+                )
+
+            if texts_to_check or tool_calls_to_check:
+                if request_data is None:
+                    request_data = {}
+                if "response" not in request_data:
+                    request_data["response"] = response_obj
+                if "litellm_metadata" not in request_data:
+                    user_metadata = self.transform_user_api_key_dict_to_metadata(
+                        user_api_key_dict
+                    )
+                    if user_metadata:
+                        request_data["litellm_metadata"] = user_metadata
+
+                inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
+                if tool_calls_to_check:
+                    inputs["tool_calls"] = cast(
+                        List[ChatCompletionToolCallChunk], tool_calls_to_check
+                    )
+                response_model = response_obj.get("model")
+                if response_model:
+                    inputs["model"] = response_model
+
+                guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="response",
+                    logging_obj=litellm_logging_obj,
+                )
+
+                guardrailed_texts = guardrailed_inputs.get("texts", [])
+
+                # Write guardrailed texts back into the output items in-place.
+                # final_chunk is a reference into responses_so_far so this
+                # mutates the list that the caller holds.
+                await self._apply_guardrail_responses_to_output(
+                    response=response_obj,
+                    responses=guardrailed_texts,
+                    task_mappings=task_mappings,
+                )
+
+            return responses_so_far
+
+        # ------------------------------------------------------------------ #
+        # Case 2: response.output_item.done — extract tool calls only.        #
+        # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
-            # convert openai response to model response
             model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
                 final_chunk
             )
-
             tool_calls = model_response_stream.choices[0].delta.tool_calls
             if tool_calls:
                 inputs = GenericGuardrailAPIInputs()
                 inputs["tool_calls"] = cast(
                     List[ChatCompletionToolCallChunk], tool_calls
                 )
-                # Include model information if available
                 if (
                     hasattr(model_response_stream, "model")
                     and model_response_stream.model
                 ):
                     inputs["model"] = model_response_stream.model
-                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,
                     request_data=request_data if request_data is not None else {},
                     input_type="response",
                     logging_obj=litellm_logging_obj,
                 )
-                return responses_so_far
-        elif final_chunk.get("type") == "response.completed":
-            # convert openai response to model response
-            outputs = final_chunk.get("response", {}).get("output", [])
+            return responses_so_far
 
-            model_response_choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
-                output_items=outputs,
-                handle_raw_dict_callback=None,
-            )
-
-            if model_response_choices:
-                tool_calls = model_response_choices[0].message.tool_calls
-                text = model_response_choices[0].message.content
-                guardrail_inputs = GenericGuardrailAPIInputs()
-                if text:
-                    guardrail_inputs["texts"] = [text]
-                if tool_calls:
-                    guardrail_inputs["tool_calls"] = cast(
-                        List[ChatCompletionToolCallChunk], tool_calls
-                    )
-                # Include model information from the response if available
-                response_model = final_chunk.get("response", {}).get("model")
-                if response_model:
-                    guardrail_inputs["model"] = response_model
-                if tool_calls or text:
-                    _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                        inputs=guardrail_inputs,
-                        request_data=request_data if request_data is not None else {},
-                        input_type="response",
-                        logging_obj=litellm_logging_obj,
-                    )
-                    return responses_so_far
-            else:
-                verbose_proxy_logger.debug(
-                    "Skipping output guardrail - model response has no choices"
-                )
-        # model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
-        # tool_calls = model_response_stream.choices[0].tool_calls
-        # convert openai response to model response
+        # ------------------------------------------------------------------ #
+        # Fallback: apply guardrail to the accumulated text string.           #
+        # No structured write-back is possible here; guardrails that only     #
+        # need to block/flag (not rewrite) still work correctly.             #
+        # ------------------------------------------------------------------ #
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
-        inputs = GenericGuardrailAPIInputs(texts=[string_so_far])
-        # Try to get model from the final chunk if available
-        if isinstance(final_chunk, dict):
+        if string_so_far:
+            fallback_inputs = GenericGuardrailAPIInputs(texts=[string_so_far])
             response_model = (
                 final_chunk.get("response", {}).get("model")
                 if isinstance(final_chunk.get("response"), dict)
                 else None
             )
             if response_model:
-                inputs["model"] = response_model
-        _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-            inputs=inputs,
-            request_data=request_data if request_data is not None else {},
-            input_type="response",
-            logging_obj=litellm_logging_obj,
-        )
+                fallback_inputs["model"] = response_model
+            await guardrail_to_apply.apply_guardrail(
+                inputs=fallback_inputs,
+                request_data=request_data if request_data is not None else {},
+                input_type="response",
+                logging_obj=litellm_logging_obj,
+            )
         return responses_so_far
 
     def _check_streaming_has_ended(self, responses_so_far: List[Any]) -> bool:
@@ -721,7 +767,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_output(
         self,
-        response: "ResponsesAPIResponse",
+        response: Union["ResponsesAPIResponse", Dict[Any, Any]],
         responses: List[str],
         task_mappings: List[Tuple[int, int]],
     ) -> None:

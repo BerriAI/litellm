@@ -2,9 +2,9 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddFallbacks, { Fallbacks } from "./AddFallbacks";
-import * as fetchModelsModule from "../../../playground/llm_calls/fetch_models";
+import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
 
-vi.mock("../../../playground/llm_calls/fetch_models", () => ({
+vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
 
