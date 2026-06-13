@@ -247,6 +247,75 @@ OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT="span_and_event"
 
 The gate is enforced centrally, so it applies to **every** backend at once — a user request can never force its prompt into your backend while capture is disabled.
 
+## Metrics
+
+Alongside traces, OTel v2 can emit GenAI **client metrics**: histograms for call latency, token usage, and cost that your backend aggregates across requests. Like the rest of OTel v2 they stay off until you turn them on
+
+Set the flag in the proxy environment next to `LITELLM_OTEL_V2`:
+
+```shell
+LITELLM_OTEL_V2=true
+LITELLM_OTEL_INTEGRATION_ENABLE_METRICS=true
+```
+
+Metrics ship through the exporter you already configured for traces. `OTEL_EXPORTER` (`console`, `otlp_http`, `otlp_grpc`), `OTEL_ENDPOINT`, and `OTEL_HEADERS` decide where the metric stream goes exactly as they do for spans, so the collector that receives your traces receives the metrics too
+
+### What's recorded
+
+Each successful LLM call records the standard OpenTelemetry GenAI client metrics:
+
+| Metric | Unit | What it measures |
+|---|---|---|
+| `gen_ai.client.operation.duration` | `s` | Wall-clock time for the whole LLM call |
+| `gen_ai.client.token.usage` | `{token}` | Tokens consumed, split into input and output by the `gen_ai.token.type` attribute |
+| `gen_ai.client.token.cost` | `USD` | LiteLLM's computed cost for the call |
+| `gen_ai.client.response.time_to_first_token` | `s` | Time to the first streamed token (streaming calls) |
+| `gen_ai.client.response.time_per_output_token` | `s` | Average time per output token |
+| `gen_ai.client.response.duration` | `s` | Provider-side generation time |
+
+Every sample carries the same identity attributes as the matching span (operation, provider/system, request model, framework, and selected `metadata.*` fields), so you can group the histograms by model, provider, key, or team. These are the same six metrics the [v1 OpenTelemetry integration](./opentelemetry_integration) emits, with identical names and units, so a dashboard built for one reads the other
+
+### Control metric attribute cardinality
+
+By default every metric sample is stamped with the full identity attribute set, which includes per-request fields such as `hidden_params` and several `metadata.*` values. Those are close to unique per request, so each one multiplies the number of time series your backend tracks (one series per distinct attribute combination). At volume this explodes metric cardinality, and some backends, for example Splunk Observability Cloud, start throttling or dropping the metrics
+
+v2 reads the same filter v1 does, from `callback_settings.otel.attributes` in your config. Nest an `attributes` block there with either an `include_list` (allowlist; emit only the listed attributes) or an `exclude_list` (denylist; emit everything except the listed attributes). The two are mutually exclusive. The filter applies to metrics only; spans keep their full attribute set, so traces stay rich while metric cardinality stays bounded
+
+The block sits under `callback_settings.otel` on its own. You do not add `otel` to `callbacks`; that key turns on the separate v1 integration, while v2 stays driven by `LITELLM_OTEL_V2`
+
+Unlike v1, v2 has no per-instance `attributes` field, so this global block is the only source. v2 also resolves the filter lazily on the first metric a request records rather than at boot, so a bad config (both lists set, or a forbidden name) surfaces on that first recorded request and editing the lists takes effect only after a restart. The filter is read only on the default OTLP path (callback name `otel` or unset); preset destinations such as `arize`, `arize_phoenix`, and `langfuse_otel` emit their metrics with the full attribute set, the same as in v1
+
+```yaml title="config.yaml"
+callback_settings:
+  otel:
+    attributes:
+      exclude_list:
+        - hidden_params
+        - metadata.requester_metadata
+        - metadata.requester_ip_address
+        - metadata.spend_logs_metadata
+        - metadata.mcp_tool_call_metadata
+        - metadata.vector_store_request_metadata
+        - metadata.prompt_management_metadata
+```
+
+When you want the smallest, most predictable attribute set, list exactly the attributes to keep with `include_list`. Anything not listed is dropped from metrics:
+
+```yaml title="config.yaml"
+callback_settings:
+  otel:
+    attributes:
+      include_list:
+        - gen_ai.operation.name
+        - gen_ai.system
+        - gen_ai.request.model
+        - gen_ai.framework
+        - metadata.user_api_key_team_id
+        - metadata.user_api_key_org_id
+```
+
+`gen_ai.token.type` is never filtered out. It is stamped on `gen_ai.client.token.usage` after the filter runs, so the input/output split survives whatever list you set, and naming it in either `include_list` or `exclude_list` is rejected
+
 ## Which routes are traced
 
 High-frequency, non-LLM routes are **excluded by default** so they don't flood your traces: health checks (`/health*`), the Prometheus scrape (`/metrics`), and static UI/docs assets (`/ui`, `/docs`, `/redoc`, `/_next`, `/openapi.json`, favicons, …).
@@ -283,7 +352,7 @@ All values are environment variables. Boolean flags accept `true`/`false`.
 | `OTEL_ENVIRONMENT_NAME` | none | `deployment.environment` resource attribute (e.g. `production`). |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `no_content` | Prompt/response capture: `no_content`, `span_only`, `event_only`, `span_and_event`. |
 | `OTEL_PYTHON_FASTAPI_EXCLUDED_URLS` | health/metrics/UI routes | Comma-separated paths to exclude from tracing (substring match). Set to `""` to trace everything. |
-| `LITELLM_OTEL_INTEGRATION_ENABLE_METRICS` | `false` | Also emit GenAI client metrics (duration, token usage, cost). |
+| `LITELLM_OTEL_INTEGRATION_ENABLE_METRICS` | `false` | Also emit the GenAI client metrics (duration, token usage, cost, streaming timings). See [Metrics](#metrics). |
 
 ### What's on an LLM-call span
 
