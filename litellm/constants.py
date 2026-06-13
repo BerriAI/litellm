@@ -1697,6 +1697,11 @@ S3_VECTORS_DEFAULT_DISTANCE_METRIC = str(
 )
 S3_VECTORS_DEFAULT_NON_FILTERABLE_METADATA_KEYS = ["source_text"]
 
+########################### Milvus RAG Constants ###########################
+MILVUS_DEFAULT_VECTOR_FIELD = "vector"
+MILVUS_DEFAULT_TEXT_FIELD = "text"
+MILVUS_DEFAULT_METRIC_TYPE = "COSINE"
+
 ########################### Microsoft SSO Constants ###########################
 MICROSOFT_USER_EMAIL_ATTRIBUTE = str(
     os.getenv("MICROSOFT_USER_EMAIL_ATTRIBUTE", "userPrincipalName")
