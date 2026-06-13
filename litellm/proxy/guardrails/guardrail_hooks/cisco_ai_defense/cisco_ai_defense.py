@@ -1127,6 +1127,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         action_raw = verdict_dict.get("action")
         if isinstance(action_raw, str) and action_raw.strip():
             action = self._normalize_action(action_raw)
+        elif verdict.is_safe is False:
+            action = _ACTION_BLOCK
         else:
             action = _ACTION_ALLOW
         verdict = replace(verdict, action=action)
@@ -1528,12 +1530,21 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         sanitized_messages: Optional[List[Dict[str, Any]]],
     ) -> bool:
         """Rewrite chat request input (``messages`` or ``input``)."""
-        if sanitized_messages and self._extract_tool_definition_text(request_data):
-            # We append one synthetic message carrying the tool/function
-            # definitions for inspection; Cisco echoes it back in
-            # ``sanitized_messages``, but it maps to no structured request
-            # field, so drop it before rewriting the real conversation.
-            sanitized_messages = sanitized_messages[:-1] or None
+        if sanitized_messages:
+            tool_text = self._extract_tool_definition_text(request_data)
+            if tool_text:
+                # The synthetic tool-definition message we append for inspection
+                # is echoed back last and maps to no structured request field, so
+                # we can only drop it when Cisco left it unchanged. If it was
+                # rewritten the flagged content lives in the tool definitions,
+                # which we cannot redact in place, so fail closed to
+                # on_flagged_action rather than forward them unsanitized.
+                echoed_tool_text = self._normalize_message_content(
+                    sanitized_messages[-1].get("content")
+                )
+                if echoed_tool_text != tool_text:
+                    return False
+                sanitized_messages = sanitized_messages[:-1] or None
         uses_input = "input" in request_data and "messages" not in request_data
         has_instructions = request_data.get("instructions") is not None
         instructions_redacted = False
