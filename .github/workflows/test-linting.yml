@@ -67,6 +67,12 @@ jobs:
           uv run --no-sync ruff check .
           cd ..
 
+      - name: Check strict-rule budget (delta vs base)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          uv run --no-sync python scripts/ruff_strict_gate.py --base "$BASE_SHA"
+
       - name: Print OpenAI version
         run: |
           uv run --no-sync python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
