@@ -221,6 +221,61 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
 
 
 @pytest.mark.asyncio
+async def test_get_aggregated_daily_spend_update_transactions_none_token_fields():
+    """Regression for #30307.
+
+    Some providers (e.g. certain embedding backends) report usage with the token
+    and request counts as None. Aggregating two such transactions under the same
+    key used to raise "unsupported operand type(s) for +=: 'NoneType' and
+    'NoneType'", which dropped the entire flush tick. None counts must be treated
+    as 0, the same way the cache-token fields already are.
+    """
+    test_key = "user1_2023-01-01_key123_jina-embeddings-v4_openai"
+    none_transaction1 = {
+        "spend": 0.0,
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "api_requests": None,
+        "successful_requests": None,
+        "failed_requests": None,
+    }
+    none_transaction2 = {
+        "spend": 0.0,
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "api_requests": None,
+        "successful_requests": None,
+        "failed_requests": None,
+    }
+    real_transaction = {
+        "spend": 1.0,
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+    }
+
+    updates = [
+        {test_key: none_transaction1},
+        {test_key: none_transaction2},
+        {test_key: real_transaction},
+    ]
+
+    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+        updates
+    )
+
+    agg = result[test_key]
+    assert agg["spend"] == 1.0
+    assert agg["prompt_tokens"] == 100
+    assert agg["completion_tokens"] == 50
+    assert agg["api_requests"] == 1
+    assert agg["successful_requests"] == 1
+    assert agg["failed_requests"] == 0
+
+
+@pytest.mark.asyncio
 async def test_flush_and_get_aggregated_daily_spend_update_transactions(
     daily_spend_update_queue,
 ):

@@ -115,15 +115,24 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                 if _key in aggregated_daily_spend_update_transactions:
                     daily_transaction = aggregated_daily_spend_update_transactions[_key]
                     daily_transaction["spend"] += payload["spend"]
-                    daily_transaction["prompt_tokens"] += payload["prompt_tokens"]
-                    daily_transaction["completion_tokens"] += payload[
-                        "completion_tokens"
-                    ]
-                    daily_transaction["api_requests"] += payload["api_requests"]
-                    daily_transaction["successful_requests"] += payload[
-                        "successful_requests"
-                    ]
-                    daily_transaction["failed_requests"] += payload["failed_requests"]
+                    # Token and request counts can be None when a provider (e.g.
+                    # some embedding backends) reports usage without them, so
+                    # coerce None to 0 the same way the cache-token fields below do.
+                    daily_transaction["prompt_tokens"] = (
+                        daily_transaction["prompt_tokens"] or 0
+                    ) + (payload["prompt_tokens"] or 0)
+                    daily_transaction["completion_tokens"] = (
+                        daily_transaction["completion_tokens"] or 0
+                    ) + (payload["completion_tokens"] or 0)
+                    daily_transaction["api_requests"] = (
+                        daily_transaction["api_requests"] or 0
+                    ) + (payload["api_requests"] or 0)
+                    daily_transaction["successful_requests"] = (
+                        daily_transaction["successful_requests"] or 0
+                    ) + (payload["successful_requests"] or 0)
+                    daily_transaction["failed_requests"] = (
+                        daily_transaction["failed_requests"] or 0
+                    ) + (payload["failed_requests"] or 0)
 
                     # Add optional metrics cache_read_input_tokens and cache_creation_input_tokens
                     daily_transaction["cache_read_input_tokens"] = (
