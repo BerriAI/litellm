@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -35,6 +36,7 @@ sys.path.insert(
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     PromptTokensDetailsResult,
     _calculate_input_cost,
+    _get_token_base_cost,
     calculate_cache_writing_cost,
     generic_cost_per_token,
 )
@@ -361,6 +363,32 @@ def test_generic_cost_per_token_minimax_m3_above_512k_tokens():
     )
     assert round(prompt_cost, 10) == round(expected_prompt, 10)
     assert round(completion_cost, 10) == round(expected_completion, 10)
+
+
+def test_get_token_base_cost_selects_highest_crossed_tier():
+    """A request crossing both the 90k and 128k tiers must bill at the higher 128k
+    tier. Tier selection sorted the threshold keys lexicographically, so "90k" sorted
+    after "128k" and the lower 90k tier was wrongly applied."""
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "input_cost_per_token_above_90k_tokens": 2e-6,
+            "input_cost_per_token_above_128k_tokens": 3e-6,
+        },
+    )
+
+    def prompt_cost(prompt_tokens: int) -> float:
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=0,
+            total_tokens=prompt_tokens,
+        )
+        return _get_token_base_cost(model_info, usage)[0]
+
+    assert prompt_cost(150000) == 3e-6
+    assert prompt_cost(100000) == 2e-6
+    assert prompt_cost(50000) == 1e-6
 
 
 def test_generic_cost_per_token_gpt55():
