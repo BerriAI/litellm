@@ -2311,6 +2311,8 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
 
+    model: Optional[str] = None
+
     usage: Optional[ImageUsage] = None  # type: ignore
     """
     Users might use litellm with older python versions, we don't want this to break for them.
@@ -2360,6 +2362,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         )
         super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
 
+        self.model = kwargs.get("model", None)
         self.quality = kwargs.get("quality", None)
         self.output_format = kwargs.get("output_format", None)
         self.size = kwargs.get("size", None)
