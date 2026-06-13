@@ -281,3 +281,43 @@ def test_filter_headers_for_aws_signature():
     }
     filtered_non_aws = aws_llm._filter_headers_for_aws_signature(non_aws_headers)
     assert filtered_non_aws == {}
+
+
+def test_transform_request_filters_internal_params(bedrock_transformer):
+    """Test that LiteLLM internal params (e.g. MCP handler keys) are not leaked into the provider request body."""
+    messages = [{"role": "user", "content": "Hello"}]
+
+    # Cohere provider path — internal params should be stripped
+    result = bedrock_transformer.transform_request(
+        model="cohere.command-r",
+        messages=messages,
+        optional_params={
+            "max_tokens": 2048,
+            "skip_mcp_handler": True,
+            "_skip_mcp_handler": True,
+            "mcp_handler_context": {"some": "data"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert "skip_mcp_handler" not in result, "skip_mcp_handler leaked into request body"
+    assert "_skip_mcp_handler" not in result, "_skip_mcp_handler leaked into request body"
+    assert "mcp_handler_context" not in result, "mcp_handler_context leaked into request body"
+    # Legit params should still be present
+    assert "max_tokens" in result
+
+    # AI21 provider path — same filter should apply
+    result_ai21 = bedrock_transformer.transform_request(
+        model="ai21.j2-ultra",
+        messages=messages,
+        optional_params={
+            "max_tokens": 2048,
+            "skip_mcp_handler": True,
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert "skip_mcp_handler" not in result_ai21
+    assert "max_tokens" in result_ai21

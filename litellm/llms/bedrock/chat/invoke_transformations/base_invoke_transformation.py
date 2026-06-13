@@ -8,7 +8,10 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    filter_internal_params,
+    map_finish_reason,
+)
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
@@ -168,6 +171,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             for k, v in inference_params.items()
             if k not in self.aws_authentication_params
         }
+        inference_params = filter_internal_params(inference_params)
         request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
