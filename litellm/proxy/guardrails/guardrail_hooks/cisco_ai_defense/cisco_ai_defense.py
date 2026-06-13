@@ -1523,6 +1523,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 if len(string_keys) != 1:
                     continue
                 args_path[string_keys[0]] = sanitized_text
+                request_data["modified_arguments"] = args_path
                 applied = True
             return applied
         return False

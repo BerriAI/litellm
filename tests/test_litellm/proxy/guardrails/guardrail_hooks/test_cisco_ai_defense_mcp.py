@@ -123,6 +123,60 @@ class TestCiscoAIDefenseMCPMode:
         assert sent_payload["params"]["name"] == "do_thing"
         assert sent_payload["params"]["arguments"] == {"x": 1}
 
+    @pytest.mark.parametrize(
+        "verdict_extra",
+        [
+            {"sanitized_payload": {"params": {"arguments": {"note": "ssn [REDACTED]"}}}},
+            {"sanitized_text": "ssn [REDACTED]"},
+        ],
+        ids=["structured_arguments", "sanitized_text_fallback"],
+    )
+    @pytest.mark.asyncio
+    async def test_mcp_input_redaction_reaches_tool_call(self, verdict_extra):
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+        from litellm.proxy.utils import ProxyLogging
+
+        original_args = {"note": "ssn 123-45-6789"}
+        sanitized_args = {"note": "ssn [REDACTED]"}
+
+        g = _make_guardrail(
+            inspection_type="mcp",
+            event_hook="pre_mcp_call",
+            on_flagged_action="monitor",
+        )
+        data = _mcp_request(name="send_email", args=dict(original_args))
+        cisco_resp = _mock_inspect_response(
+            {
+                "is_safe": False,
+                "classifications": ["PRIVACY_VIOLATION"],
+                "severity": "HIGH",
+                "rules": [{"rule_name": "PII"}],
+                "action": "redact",
+                **verdict_extra,
+            },
+            url=MCP_URL,
+        )
+
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
+            result = await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type="mcp_call",
+            )
+
+        forwarded = ProxyLogging(
+            user_api_key_cache=UserApiKeyCache()
+        )._convert_mcp_hook_response_to_kwargs(
+            response_data=result, original_kwargs={"arguments": dict(original_args)}
+        )
+        assert forwarded["arguments"] == sanitized_args, (
+            "Sanitized MCP arguments did not reach the tool call. The proxy "
+            "bridge forwards redactions only via ``modified_arguments``, so a "
+            "redact verdict proceeded while the original unsanitized arguments "
+            f"still hit the MCP server. Got: {forwarded['arguments']!r}"
+        )
+
     @pytest.mark.asyncio
     async def test_mcp_response_hook_inspects_tool_output(self):
         g = _make_guardrail(
