@@ -21,9 +21,15 @@ def build_authenticators(
     by_scheme: Dict[SecuritySchemeType, Authenticator] = {}
     if config.api_key is not None:
         by_scheme[SecuritySchemeType.API_KEY] = APIKeyAuthenticator(config.api_key)
-    by_scheme[SecuritySchemeType.HTTP] = HttpAuthenticator(config.http_basic, verifiers, basic_verifier)
+    by_scheme[SecuritySchemeType.HTTP] = HttpAuthenticator(
+        config.http_basic, verifiers, basic_verifier
+    )
     by_scheme[SecuritySchemeType.OPENID_CONNECT] = OIDCAuthenticator(verifiers)
-    by_scheme[SecuritySchemeType.OAUTH2] = OAuth2Authenticator(verifiers, config.oauth2_introspection)
+    by_scheme[SecuritySchemeType.OAUTH2] = OAuth2Authenticator(
+        verifiers, config.oauth2_introspection
+    )
     if config.mutual_tls.enabled:
-        by_scheme[SecuritySchemeType.MUTUAL_TLS] = MutualTLSAuthenticator(config.mutual_tls, config.network)
+        by_scheme[SecuritySchemeType.MUTUAL_TLS] = MutualTLSAuthenticator(
+            config.mutual_tls, config.network
+        )
     return [by_scheme[scheme] for scheme in config.scheme_order if scheme in by_scheme]

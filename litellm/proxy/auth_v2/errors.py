@@ -6,12 +6,16 @@ from fastapi import HTTPException
 
 
 class AuthError(HTTPException):
-    def __init__(self, status_code: int, detail: str, challenge: Optional[str] = None) -> None:
+    def __init__(
+        self, status_code: int, detail: str, challenge: Optional[str] = None
+    ) -> None:
         headers = {"WWW-Authenticate": challenge} if challenge else None
         super().__init__(status_code=status_code, detail=detail, headers=headers)
 
 
-def bearer_challenge(error: Optional[str] = None, description: Optional[str] = None) -> str:
+def bearer_challenge(
+    error: Optional[str] = None, description: Optional[str] = None
+) -> str:
     parts = ['Bearer realm="litellm"']
     if error:
         parts.append(f'error="{error}"')
@@ -29,7 +33,9 @@ def unauthenticated(challenge: str) -> AuthError:
 
 
 def invalid_token(description: Optional[str] = None) -> AuthError:
-    return AuthError(401, "Invalid token", bearer_challenge("invalid_token", description))
+    return AuthError(
+        401, "Invalid token", bearer_challenge("invalid_token", description)
+    )
 
 
 def insufficient_scope() -> AuthError:

@@ -21,7 +21,9 @@ class InMemorySessionStore(Generic[SessionValue]):
     def _expiry(self, ttl_seconds: Optional[int]) -> float:
         return time.time() + (self._default_ttl if ttl_seconds is None else ttl_seconds)
 
-    def _live(self, key: str, now: float) -> Optional[Tuple[float, Optional[SessionValue]]]:
+    def _live(
+        self, key: str, now: float
+    ) -> Optional[Tuple[float, Optional[SessionValue]]]:
         entry = self._entries.get(key)
         if entry is None:
             return None
@@ -34,7 +36,9 @@ class InMemorySessionStore(Generic[SessionValue]):
         entry = self._live(self._key(key), time.time())
         return entry[1] if entry is not None else None
 
-    async def set(self, key: str, value: SessionValue, ttl_seconds: Optional[int] = None) -> None:
+    async def set(
+        self, key: str, value: SessionValue, ttl_seconds: Optional[int] = None
+    ) -> None:
         self._evict(time.time())
         self._entries[self._key(key)] = (self._expiry(ttl_seconds), value)
 

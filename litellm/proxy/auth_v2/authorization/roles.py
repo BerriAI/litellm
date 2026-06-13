@@ -16,7 +16,9 @@ class Role(str, Enum):
 _PLATFORM_ROLE_VALUES = {Role.PLATFORM_ADMIN.value, Role.PLATFORM_VIEWER.value}
 
 
-def filter_claim_roles(roles: Any, allowed_roles: List[str], allow_platform_roles: bool) -> List[str]:
+def filter_claim_roles(
+    roles: Any, allowed_roles: List[str], allow_platform_roles: bool
+) -> List[str]:
     if not isinstance(roles, list):
         return []
     allowed = set(allowed_roles)

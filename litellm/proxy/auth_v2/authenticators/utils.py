@@ -11,7 +11,12 @@ from jwt import decode as jwt_decode
 from starlette.concurrency import run_in_threadpool
 
 from litellm.proxy.auth_v2 import errors
-from litellm.proxy.auth_v2.models import AuthMethod, Credential, CredentialRef, SecuritySchemeType
+from litellm.proxy.auth_v2.models import (
+    AuthMethod,
+    Credential,
+    CredentialRef,
+    SecuritySchemeType,
+)
 from litellm.proxy.auth_v2.config import OIDCProviderConfig
 from litellm.proxy.auth_v2.authorization import filter_claim_roles
 from litellm.proxy.auth_v2.authenticators.types import Claims
@@ -20,7 +25,9 @@ AT_JWT_TYPES = {"at+jwt", "application/at+jwt"}
 
 
 def apply_role_policy(claims: Claims, provider: OIDCProviderConfig) -> None:
-    claims["roles"] = filter_claim_roles(claims.get("roles"), provider.allowed_roles, provider.allow_platform_roles)
+    claims["roles"] = filter_claim_roles(
+        claims.get("roles"), provider.allowed_roles, provider.allow_platform_roles
+    )
 
 
 def extract_bearer(request: Request) -> Optional[str]:
@@ -65,7 +72,9 @@ def credential_from_claims(
         audience=normalize_audience(claims.get("aud")),
         scopes=split_scope(claims.get("scope")),
         claims=claims,
-        credential_ref=CredentialRef(key_id=header.get("kid"), token_id=claims.get("jti")),
+        credential_ref=CredentialRef(
+            key_id=header.get("kid"), token_id=claims.get("jti")
+        ),
         subject_token=token,
     )
 
@@ -80,7 +89,9 @@ class JWTVerifier:
         if jwks_client is not None:
             self._jwks_client = jwks_client
             return
-        jwks_uri = str(provider.jwks_uri) if provider.jwks_uri else self._discover_jwks()
+        jwks_uri = (
+            str(provider.jwks_uri) if provider.jwks_uri else self._discover_jwks()
+        )
         self._jwks_client = PyJWKClient(
             jwks_uri,
             cache_keys=True,
@@ -99,7 +110,9 @@ class JWTVerifier:
         return str(jwks_uri)
 
     def verify(self, token: str, *, require_at_jwt: Optional[bool] = None) -> Claims:
-        enforce = self.provider.require_at_jwt if require_at_jwt is None else require_at_jwt
+        enforce = (
+            self.provider.require_at_jwt if require_at_jwt is None else require_at_jwt
+        )
         if enforce:
             header = jwt.get_unverified_header(token)
             if str(header.get("typ", "")).lower() not in AT_JWT_TYPES:
@@ -118,8 +131,12 @@ class JWTVerifier:
             raise errors.invalid_token("token verification failed") from exc
 
 
-async def _verify_jwt_off_loop(verifier: JWTVerifier, token: str, *, require_at_jwt: Optional[bool] = None) -> Claims:
-    return await run_in_threadpool(functools.partial(verifier.verify, token, require_at_jwt=require_at_jwt))
+async def _verify_jwt_off_loop(
+    verifier: JWTVerifier, token: str, *, require_at_jwt: Optional[bool] = None
+) -> Claims:
+    return await run_in_threadpool(
+        functools.partial(verifier.verify, token, require_at_jwt=require_at_jwt)
+    )
 
 
 def _select_verifier(token: str, verifiers: List[JWTVerifier]) -> Optional[JWTVerifier]:

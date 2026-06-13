@@ -27,8 +27,12 @@ class RedisSessionStore(Generic[SessionValue]):
         raw = await self._client.get(self._key(key))
         return cast(SessionValue, json.loads(raw)) if raw is not None else None
 
-    async def set(self, key: str, value: SessionValue, ttl_seconds: Optional[int] = None) -> None:
-        await self._client.set(self._key(key), json.dumps(value), ex=self._ttl(ttl_seconds))
+    async def set(
+        self, key: str, value: SessionValue, ttl_seconds: Optional[int] = None
+    ) -> None:
+        await self._client.set(
+            self._key(key), json.dumps(value), ex=self._ttl(ttl_seconds)
+        )
 
     async def pop(self, key: str) -> Optional[SessionValue]:
         raw = await self._client.getdel(self._key(key))
@@ -38,5 +42,7 @@ class RedisSessionStore(Generic[SessionValue]):
         await self._client.delete(self._key(key))
 
     async def add_if_absent(self, key: str, ttl_seconds: Optional[int] = None) -> bool:
-        added = await self._client.set(self._key(key), "1", nx=True, ex=self._ttl(ttl_seconds))
+        added = await self._client.set(
+            self._key(key), "1", nx=True, ex=self._ttl(ttl_seconds)
+        )
         return bool(added)

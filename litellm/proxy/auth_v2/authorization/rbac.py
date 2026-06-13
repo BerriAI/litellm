@@ -56,7 +56,9 @@ class RBACEngine(Authorizer):
             self._enforcer.add_policy(*rule)
 
     def enforce(self, principal: "Principal", obj: str, act: str) -> bool:
-        return any(self._enforcer.enforce(role.value, obj, act) for role in principal.roles)
+        return any(
+            self._enforcer.enforce(role.value, obj, act) for role in principal.roles
+        )
 
     def has_any_role(self, principal: "Principal", allowed: Tuple[Role, ...]) -> bool:
         allowed_values = {role.value for role in allowed}
