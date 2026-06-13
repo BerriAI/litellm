@@ -652,60 +652,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/audit": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Audit Logs
-         * @description Get all audit logs with filtering and pagination.
-         *
-         *     Returns a paginated response of audit logs matching the specified filters.
-         *
-         *     Note: object_team_id and object_key_hash use Prisma JSON path filtering,
-         *     which requires PostgreSQL.
-         */
-        get: operations["get_audit_logs_audit_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/audit/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Audit Log By Id
-         * @description Get detailed information about a specific audit log entry by its ID.
-         *
-         *     Args:
-         *         id (str): The unique identifier of the audit log entry
-         *
-         *     Returns:
-         *         AuditLogResponse: Detailed information about the audit log entry
-         *
-         *     Raises:
-         *         HTTPException: If the audit log is not found or if there's a database connection error
-         */
-        get: operations["get_audit_log_by_id_audit__id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/azure/{endpoint}": {
         parameters: {
             query?: never;
@@ -3064,50 +3010,6 @@ export interface paths {
         put?: never;
         /** Delete Allowed Ip */
         post: operations["delete_allowed_ip_delete_allowed_ip_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/email/event_settings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Email Event Settings
-         * @description Get all email event settings
-         */
-        get: operations["get_email_event_settings_email_event_settings_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Update Event Settings
-         * @description Update the settings for email events
-         */
-        patch: operations["update_event_settings_email_event_settings_patch"];
-        trace?: never;
-    };
-    "/email/event_settings/reset": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reset Event Settings
-         * @description Reset all email event settings to default (new user invitations on, virtual key creation off)
-         */
-        post: operations["reset_event_settings_email_event_settings_reset_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7035,95 +6937,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/mcp-rest/test/connection": {
+    "/mcp-rest": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        /**
-         * Test Connection
-         * @description Test if we can connect to the provided MCP server before adding it
-         */
-        post: operations["test_connection_mcp_rest_test_connection_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/mcp-rest/test/tools/list": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+        /** mcp_rest */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
         };
-        get?: never;
-        put?: never;
-        /**
-         * Test Tools List
-         * @description Preview tools available from MCP server before adding it
-         */
-        post: operations["test_tools_list_mcp_rest_test_tools_list_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/mcp-rest/tools/call": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Call Tool Rest Api
-         * @description REST API to call a specific MCP tool with the provided arguments
-         */
-        post: operations["call_tool_rest_api_mcp_rest_tools_call_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/mcp-rest/tools/list": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Tool Rest Api
-         * @description List all available tools with information about the server they belong to.
-         *
-         *     Example response:
-         *     {
-         *         "tools": [
-         *             {
-         *                 "name": "create_zap",
-         *                 "description": "Create a new zap",
-         *                 "inputSchema": "tool_input_schema",
-         *                 "mcp_info": {
-         *                     "server_name": "zapier",
-         *                     "logo_url": "https://www.zapier.com/logo.png",
-         *                 }
-         *             }
-         *         ],
-         *         "error": null,
-         *         "message": "Successfully retrieved tools"
-         *     }
-         */
-        get: operations["list_tool_rest_api_mcp_rest_tools_list_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9780,240 +9619,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/project/delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Delete Project
-         * @description Delete projects
-         *
-         *     Parameters:
-         *     - project_ids: *List[str]* - List of project ids to delete
-         *
-         *     Example:
-         *     ```bash
-         *     curl --location --request DELETE 'http://0.0.0.0:4000/project/delete' \
-         *     --header 'Authorization: Bearer sk-1234' \
-         *     --header 'Content-Type: application/json' \
-         *     --data '{
-         *         "project_ids": ["project-123", "project-456"]
-         *     }'
-         *     ```
-         */
-        delete: operations["delete_project_project_delete_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/project/info": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Project Info
-         * @description Get information about a specific project
-         *
-         *     Parameters:
-         *     - project_id: *str* - The project id to fetch info for
-         *
-         *     Example:
-         *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/project/info?project_id=project-123' \
-         *     --header 'Authorization: Bearer sk-1234'
-         *     ```
-         */
-        get: operations["project_info_project_info_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/project/list": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Projects
-         * @description List all projects that the user has access to
-         *
-         *     Example:
-         *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/project/list' \
-         *     --header 'Authorization: Bearer sk-1234'
-         *     ```
-         */
-        get: operations["list_projects_project_list_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/project/new": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * New Project
-         * @description Create a new project. Projects sit between teams and keys in the hierarchy.
-         *
-         *     Only admins or team admins can create projects.
-         *
-         *     # Parameters
-         *
-         *     - project_alias: *Optional[str]* - The name of the project.
-         *     - description: *Optional[str]* - Description of the project's purpose and use case.
-         *     - team_id: *str* - The team id that this project belongs to. Required.
-         *     - models: *List* - The models the project has access to.
-         *     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the project.
-         *     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
-         *     - max_budget: *Optional[float]* - Max budget for project
-         *     - tpm_limit: *Optional[int]* - Max tpm limit for project
-         *     - rpm_limit: *Optional[int]* - Max rpm limit for project
-         *     - max_parallel_requests: *Optional[int]* - Max parallel requests for project
-         *     - soft_budget: *Optional[float]* - Get a slack alert when this soft budget is reached. Don't block requests.
-         *     - model_max_budget: *Optional[dict]* - Max budget for a specific model. Example: {"gpt-4": 100.0, "gpt-3.5-turbo": 50.0}
-         *     - model_rpm_limit: *Optional[dict]* - RPM limits per model. Example: {"gpt-4": 1000, "gpt-3.5-turbo": 5000}
-         *     - model_tpm_limit: *Optional[dict]* - TPM limits per model. Example: {"gpt-4": 50000, "gpt-3.5-turbo": 100000}
-         *     - budget_duration: *Optional[str]* - Frequency of reseting project budget
-         *     - metadata: *Optional[dict]* - Metadata for project, store information for project. Example metadata - {"use_case_id": "SNOW-12345", "responsible_ai_id": "RAI-67890"}
-         *     - tags: *Optional[list]* - Tags for the project. Example: ["production", "api"]
-         *     - blocked: *bool* - Flag indicating if the project is blocked or not - will stop all calls from keys with this project_id.
-         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - project-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
-         *
-         *     Example 1: Create new project **without** a budget_id, with model-specific limits
-         *
-         *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: Bearer sk-1234' \
-         *     --header 'Content-Type: application/json' \
-         *     --data '{
-         *         "project_alias": "flight-search-assistant",
-         *         "description": "AI-powered flight search and booking assistant",
-         *         "team_id": "team-123",
-         *         "models": ["gpt-4", "gpt-3.5-turbo"],
-         *         "max_budget": 100,
-         *         "model_rpm_limit": {
-         *             "gpt-4": 1000,
-         *             "gpt-3.5-turbo": 5000
-         *         },
-         *         "model_tpm_limit": {
-         *             "gpt-4": 50000,
-         *             "gpt-3.5-turbo": 100000
-         *         },
-         *         "metadata": {
-         *             "use_case_id": "SNOW-12345",
-         *             "responsible_ai_id": "RAI-67890"
-         *         }
-         *     }'
-         *     ```
-         *
-         *     Example 2: Create new project **with** a budget_id
-         *
-         *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: Bearer sk-1234' \
-         *     --header 'Content-Type: application/json' \
-         *     --data '{
-         *         "project_alias": "hotel-recommendations",
-         *         "description": "Personalized hotel recommendation engine",
-         *         "team_id": "team-123",
-         *         "models": ["claude-3-sonnet"],
-         *         "budget_id": "428eeaa8-f3ac-4e85-a8fb-7dc8d7aa8689",
-         *         "metadata": {
-         *             "use_case_id": "SNOW-54321"
-         *         }
-         *     }'
-         *     ```
-         */
-        post: operations["new_project_project_new_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/project/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Update Project
-         * @description Update a project
-         *
-         *     Parameters:
-         *     - project_id: *str* - The project id to update. Required.
-         *     - project_alias: *Optional[str]* - Updated name for the project
-         *     - description: *Optional[str]* - Updated description for the project
-         *     - team_id: *Optional[str]* - Updated team_id for the project
-         *     - metadata: *Optional[dict]* - Updated metadata for project
-         *     - models: *Optional[list]* - Updated list of models for the project
-         *     - blocked: *Optional[bool]* - Updated blocked status
-         *     - max_budget: *Optional[float]* - Updated max budget
-         *     - tpm_limit: *Optional[int]* - Updated tpm limit
-         *     - rpm_limit: *Optional[int]* - Updated rpm limit
-         *     - model_rpm_limit: *Optional[dict]* - Updated RPM limits per model
-         *     - model_tpm_limit: *Optional[dict]* - Updated TPM limits per model
-         *     - budget_duration: *Optional[str]* - Updated budget duration
-         *     - tags: *Optional[list]* - Updated list of tags for the project
-         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Updated object permission
-         *
-         *     Example:
-         *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/project/update' \
-         *     --header 'Authorization: Bearer sk-1234' \
-         *     --header 'Content-Type: application/json' \
-         *     --data '{
-         *         "project_id": "project-123",
-         *         "description": "Updated flight search system with enhanced capabilities",
-         *         "max_budget": 200,
-         *         "model_rpm_limit": {
-         *             "gpt-4": 2000,
-         *             "gpt-3.5-turbo": 10000
-         *         },
-         *         "metadata": {
-         *             "use_case_id": "SNOW-12345",
-         *             "status": "active"
-         *         }
-         *     }'
-         *     ```
-         */
-        post: operations["update_project_project_update_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/prompts": {
         parameters: {
             query?: never;
@@ -11048,27 +10653,6 @@ export interface paths {
          * @description List input items for a response.
          */
         get: operations["get_response_input_items_responses__response_id__input_items_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/robots.txt": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Robots
-         * @description Block all web crawlers from indexing the proxy server endpoints
-         *     This is useful for ensuring that the API endpoints aren't indexed by search engines
-         */
-        get: operations["get_robots_robots_txt_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -14116,26 +13700,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/user/available_users": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Available Enterprise Users
-         * @description For keys with `max_users` set, return the list of users that are allowed to use the key.
-         */
-        get: operations["available_enterprise_users_user_available_users_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/user/bulk_update": {
         parameters: {
             query?: never;
@@ -15985,458 +15549,6 @@ export interface paths {
          *     ```
          */
         post: operations["index_create_v1_indexes_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/access_groups": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Mcp Access Groups
-         * @description Get all available MCP access groups from the database AND config
-         */
-        get: operations["get_mcp_access_groups_v1_mcp_access_groups_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/discover": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Discover Mcp Servers
-         * @description Returns a curated list of well-known MCP servers for discovery UI
-         */
-        get: operations["discover_mcp_servers_v1_mcp_discover_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/make_public": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Make Mcp Servers Public
-         * @description Allows making MCP servers public for AI Hub
-         */
-        post: operations["make_mcp_servers_public_v1_mcp_make_public_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/network/client-ip": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Client Ip
-         * @description Returns the caller's IP address as seen by the proxy.
-         */
-        get: operations["get_client_ip_v1_mcp_network_client_ip_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/openapi-registry": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Openapi Registry
-         * @description Returns well-known OpenAPI APIs with OAuth 2.0 metadata for the OpenAPI MCP picker
-         */
-        get: operations["get_openapi_registry_v1_mcp_openapi_registry_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/registry.json": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Mcp Registry
-         * @description MCP registry endpoint. Spec: https://github.com/modelcontextprotocol/registry
-         */
-        get: operations["get_mcp_registry_v1_mcp_registry_json_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/server": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fetch All Mcp Servers
-         * @description Returns the mcp server list with associated teams
-         */
-        get: operations["fetch_all_mcp_servers_v1_mcp_server_get"];
-        /**
-         * Edit Mcp Server
-         * @description Allows deleting mcp serves in the db
-         */
-        put: operations["edit_mcp_server_v1_mcp_server_put"];
-        /**
-         * Add Mcp Server
-         * @description Allows creation of mcp servers
-         */
-        post: operations["add_mcp_server_v1_mcp_server_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/server/health": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Health Check Servers
-         * @description Health check for MCP servers
-         */
-        get: operations["health_check_servers_v1_mcp_server_health_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/server/oauth/session": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Add Session Mcp Server
-         * @description Temporarily cache an MCP server in memory without writing to the database
-         */
-        post: operations["add_session_mcp_server_v1_mcp_server_oauth_session_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/server/register": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Register Mcp Server
-         * @description Submit a new MCP server for admin review (non-admin users). Mirrors POST /guardrails/register.
-         */
-        post: operations["register_mcp_server_v1_mcp_server_register_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/server/submissions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Mcp Server Submissions
-         * @description Returns all MCP servers submitted by non-admin users (admin review queue). Mirrors GET /guardrails/submissions.
-         */
-        get: operations["get_mcp_server_submissions_v1_mcp_server_submissions_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/server/{server_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fetch Mcp Server
-         * @description Returns the mcp server info
-         */
-        get: operations["fetch_mcp_server_v1_mcp_server__server_id__get"];
-        put?: never;
-        post?: never;
-        /**
-         * Remove Mcp Server
-         * @description Allows deleting mcp serves in the db
-         */
-        delete: operations["remove_mcp_server_v1_mcp_server__server_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/server/{server_id}/approve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Approve Mcp Server Submission
-         * @description Approve a pending MCP server submission (admin only). Mirrors PUT /guardrails/{id}/approve.
-         */
-        put: operations["approve_mcp_server_submission_v1_mcp_server__server_id__approve_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/server/{server_id}/oauth-user-credential": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Store Mcp Oauth User Credential
-         * @description Store the calling user's OAuth2 token for an OpenAPI MCP server
-         */
-        post: operations["store_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_post"];
-        /**
-         * Delete Mcp Oauth User Credential
-         * @description Revoke the calling user's stored OAuth2 token for an MCP server
-         */
-        delete: operations["delete_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/server/{server_id}/oauth-user-credential/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Mcp Oauth User Credential Status
-         * @description Check whether the calling user has a stored OAuth2 credential for this MCP server
-         */
-        get: operations["get_mcp_oauth_user_credential_status_v1_mcp_server__server_id__oauth_user_credential_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/server/{server_id}/reject": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Reject Mcp Server Submission
-         * @description Reject a pending MCP server submission (admin only). Mirrors PUT /guardrails/{id}/reject.
-         */
-        put: operations["reject_mcp_server_submission_v1_mcp_server__server_id__reject_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/server/{server_id}/user-credential": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Store Mcp User Credential
-         * @description Store or update the calling user's API key for a BYOK MCP server
-         */
-        post: operations["store_mcp_user_credential_v1_mcp_server__server_id__user_credential_post"];
-        /**
-         * Delete Mcp User Credential
-         * @description Delete the calling user's stored API key for a BYOK MCP server
-         */
-        delete: operations["delete_mcp_user_credential_v1_mcp_server__server_id__user_credential_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/tools": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Mcp Tools
-         * @description Get all MCP tools available for the current key, including those from access groups
-         */
-        get: operations["get_mcp_tools_v1_mcp_tools_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/toolset": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fetch Mcp Toolsets
-         * @description List MCP toolsets accessible to the calling key
-         */
-        get: operations["fetch_mcp_toolsets_v1_mcp_toolset_get"];
-        /**
-         * Edit Mcp Toolset
-         * @description Update an existing MCP toolset (admin only)
-         */
-        put: operations["edit_mcp_toolset_v1_mcp_toolset_put"];
-        /**
-         * Add Mcp Toolset
-         * @description Create a new MCP toolset (admin only)
-         */
-        post: operations["add_mcp_toolset_v1_mcp_toolset_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/toolset/{toolset_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fetch Mcp Toolset
-         * @description Get a specific MCP toolset by ID
-         */
-        get: operations["fetch_mcp_toolset_v1_mcp_toolset__toolset_id__get"];
-        put?: never;
-        post?: never;
-        /**
-         * Remove Mcp Toolset
-         * @description Delete an MCP toolset (admin only)
-         */
-        delete: operations["remove_mcp_toolset_v1_mcp_toolset__toolset_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/mcp/user-credentials": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Mcp User Credentials
-         * @description List all OAuth2 MCP credentials stored for the calling user
-         */
-        get: operations["list_mcp_user_credentials_v1_mcp_user_credentials_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -20389,37 +19501,6 @@ export interface components {
              */
             unnamed_teams_count: number;
         };
-        /**
-         * AuditLogResponse
-         * @description Response model for a single audit log entry
-         */
-        AuditLogResponse: {
-            /** Action */
-            action: string;
-            /** Before Value */
-            before_value?: {
-                [key: string]: unknown;
-            } | null;
-            /** Changed By */
-            changed_by: string;
-            /** Changed By Api Key */
-            changed_by_api_key: string;
-            /** Id */
-            id: string;
-            /** Object Id */
-            object_id: string;
-            /** Table Name */
-            table_name: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Updated Values */
-            updated_values?: {
-                [key: string]: unknown;
-            } | null;
-        };
         /** BaseLitellmParams */
         "BaseLitellmParams-Input": {
             /**
@@ -20828,12 +19909,18 @@ export interface components {
         };
         /** Body_audio_transcriptions_audio_transcriptions_post */
         Body_audio_transcriptions_audio_transcriptions_post: {
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
         };
         /** Body_audio_transcriptions_v1_audio_transcriptions_post */
         Body_audio_transcriptions_v1_audio_transcriptions_post: {
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
         };
         /** Body_convert_prompt_file_to_json_utils_dotprompt_json_converter_post */
@@ -20851,7 +19938,10 @@ export interface components {
              * @default openai
              */
             custom_llm_provider: string;
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
@@ -20875,7 +19965,10 @@ export interface components {
              * @default openai
              */
             custom_llm_provider: string;
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
@@ -20899,7 +19992,10 @@ export interface components {
              * @default openai
              */
             custom_llm_provider: string;
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
@@ -20974,21 +20070,30 @@ export interface components {
         };
         /** Body_upload_logo_upload_logo_post */
         Body_upload_logo_upload_logo_post: {
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
         };
         /** Body_video_create_character_v1_videos_characters_post */
         Body_video_create_character_v1_videos_characters_post: {
             /** Name */
             name: string;
-            /** Video */
+            /**
+             * Video
+             * Format: binary
+             */
             video: string;
         };
         /** Body_video_create_character_videos_characters_post */
         Body_video_create_character_videos_characters_post: {
             /** Name */
             name: string;
-            /** Video */
+            /**
+             * Video
+             * Format: binary
+             */
             video: string;
         };
         /** Body_video_generation_v1_videos_post */
@@ -22709,7 +21814,7 @@ export interface components {
              * @description Default role assigned to new users created
              * @default internal_user_viewer
              */
-            user_role: ("internal_user" | "internal_user_viewer" | "proxy_admin" | "proxy_admin_viewer") | null;
+            user_role: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
         /**
          * DefaultTeamSSOParams
@@ -22803,14 +21908,6 @@ export interface components {
         DeleteOrganizationRequest: {
             /** Organization Ids */
             organization_ids: string[];
-        };
-        /**
-         * DeleteProjectRequest
-         * @description Request model for DELETE /project/delete
-         */
-        DeleteProjectRequest: {
-            /** Project Ids */
-            project_ids: string[];
         };
         /**
          * DeleteSkillResponse
@@ -22925,27 +22022,6 @@ export interface components {
             user_table_name: string;
             /** Write Capacity Units */
             write_capacity_units?: number | null;
-        };
-        /**
-         * EmailEvent
-         * @enum {string}
-         */
-        EmailEvent: "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Soft Budget Crossed" | "Max Budget Alert";
-        /** EmailEventSettings */
-        EmailEventSettings: {
-            /** Enabled */
-            enabled: boolean;
-            event: components["schemas"]["EmailEvent"];
-        };
-        /** EmailEventSettingsResponse */
-        EmailEventSettingsResponse: {
-            /** Settings */
-            settings: components["schemas"]["EmailEventSettings"][];
-        };
-        /** EmailEventSettingsUpdateRequest */
-        EmailEventSettingsUpdateRequest: {
-            /** Settings */
-            settings: components["schemas"]["EmailEventSettings"][];
         };
         /** EmbeddingRequest */
         EmbeddingRequest: {
@@ -24543,129 +23619,6 @@ export interface components {
             user_id: string;
         };
         /**
-         * LiteLLM_MCPServerTable
-         * @description Represents a LiteLLM_MCPServerTable record
-         */
-        LiteLLM_MCPServerTable: {
-            /** Alias */
-            alias?: string | null;
-            /**
-             * Allow All Keys
-             * @default false
-             */
-            allow_all_keys: boolean;
-            /** Allowed Tools */
-            allowed_tools?: string[];
-            /**
-             * Approval Status
-             * @description Approval status: 'pending_review', 'active', 'rejected'
-             * @default active
-             */
-            approval_status: string | null;
-            /** Args */
-            args?: string[];
-            /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token") | null;
-            /** Authorization Url */
-            authorization_url?: string | null;
-            /**
-             * Available On Public Internet
-             * @default true
-             */
-            available_on_public_internet: boolean;
-            /** Byok Api Key Help Url */
-            byok_api_key_help_url?: string | null;
-            /** Byok Description */
-            byok_description?: string[];
-            /** Command */
-            command?: string | null;
-            /** Created At */
-            created_at?: string | null;
-            /** Created By */
-            created_by?: string | null;
-            credentials?: components["schemas"]["MCPCredentials"] | null;
-            /** Description */
-            description?: string | null;
-            /** Env */
-            env?: {
-                [key: string]: string;
-            };
-            /** Extra Headers */
-            extra_headers?: string[];
-            /** Has User Credential */
-            has_user_credential?: boolean | null;
-            /** Health Check Error */
-            health_check_error?: string | null;
-            /** Instructions */
-            instructions?: string | null;
-            /**
-             * Is Byok
-             * @default false
-             */
-            is_byok: boolean;
-            /** Last Health Check */
-            last_health_check?: string | null;
-            /** Mcp Access Groups */
-            mcp_access_groups?: string[];
-            /** Mcp Info */
-            mcp_info?: {
-                [key: string]: unknown;
-            } | null;
-            /** Registration Url */
-            registration_url?: string | null;
-            /** Review Notes */
-            review_notes?: string | null;
-            /** Reviewed At */
-            reviewed_at?: string | null;
-            /** Server Id */
-            server_id: string;
-            /** Server Name */
-            server_name?: string | null;
-            /** Source Url */
-            source_url?: string | null;
-            /** Spec Path */
-            spec_path?: string | null;
-            /** Static Headers */
-            static_headers?: {
-                [key: string]: string;
-            } | null;
-            /**
-             * Status
-             * @description Health status: 'healthy', 'unhealthy', 'unknown'
-             * @default unknown
-             */
-            status: ("healthy" | "unhealthy" | "unknown") | null;
-            /** Submitted At */
-            submitted_at?: string | null;
-            /** Submitted By */
-            submitted_by?: string | null;
-            /** Teams */
-            teams?: {
-                [key: string]: string | null;
-            }[];
-            /** Token Url */
-            token_url?: string | null;
-            /** Tool Name To Description */
-            tool_name_to_description?: {
-                [key: string]: string;
-            } | null;
-            /** Tool Name To Display Name */
-            tool_name_to_display_name?: {
-                [key: string]: string;
-            } | null;
-            /**
-             * Transport
-             * @enum {string}
-             */
-            transport: "sse" | "http" | "stdio";
-            /** Updated At */
-            updated_at?: string | null;
-            /** Updated By */
-            updated_by?: string | null;
-            /** Url */
-            url?: string | null;
-        };
-        /**
          * LiteLLM_ManagedVectorStore
          * @description LiteLLM managed vector store object - this is is the object stored in the database
          */
@@ -25157,7 +24110,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: number | string | null;
+            stream_timeout?: string | number | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -25202,65 +24155,6 @@ export interface components {
             watsonx_region_name?: string | null;
         } & {
             [key: string]: unknown;
-        };
-        /**
-         * LiteLLM_ProjectTable
-         * @description Database model representation for project
-         */
-        LiteLLM_ProjectTable: {
-            /**
-             * Blocked
-             * @default false
-             */
-            blocked: boolean;
-            /** Budget Id */
-            budget_id?: string | null;
-            /** Created At */
-            created_at?: string | null;
-            /** Created By */
-            created_by?: string | null;
-            /** Description */
-            description?: string | null;
-            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Rpm Limit */
-            model_rpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Spend */
-            model_spend?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Tpm Limit */
-            model_tpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Models
-             * @default []
-             */
-            models: string[];
-            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
-            /** Object Permission Id */
-            object_permission_id?: string | null;
-            /** Project Alias */
-            project_alias?: string | null;
-            /** Project Id */
-            project_id: string;
-            /**
-             * Spend
-             * @default 0
-             */
-            spend: number;
-            /** Team Id */
-            team_id?: string | null;
-            /** Updated At */
-            updated_at?: string | null;
-            /** Updated By */
-            updated_by?: string | null;
         };
         /** LiteLLM_ProxyModelTable */
         LiteLLM_ProxyModelTable: {
@@ -26535,64 +25429,6 @@ export interface components {
              */
             status?: "healthy" | "unhealthy";
         };
-        /** MCPCredentials */
-        MCPCredentials: {
-            /** Auth Value */
-            auth_value?: string | null;
-            /** Aws Access Key Id */
-            aws_access_key_id?: string | null;
-            /** Aws Region Name */
-            aws_region_name?: string | null;
-            /** Aws Role Name */
-            aws_role_name?: string | null;
-            /** Aws Secret Access Key */
-            aws_secret_access_key?: string | null;
-            /** Aws Service Name */
-            aws_service_name?: string | null;
-            /** Aws Session Name */
-            aws_session_name?: string | null;
-            /** Aws Session Token */
-            aws_session_token?: string | null;
-            /** Client Id */
-            client_id?: string | null;
-            /** Client Secret */
-            client_secret?: string | null;
-            /** Scopes */
-            scopes?: string[] | null;
-        };
-        /**
-         * MCPOAuthUserCredentialRequest
-         * @description Stores a user's OAuth2 token for an OpenAPI MCP server.
-         */
-        MCPOAuthUserCredentialRequest: {
-            /** Access Token */
-            access_token: string;
-            /** Expires In */
-            expires_in?: number | null;
-            /** Refresh Token */
-            refresh_token?: string | null;
-            /** Scopes */
-            scopes?: string[] | null;
-        };
-        /**
-         * MCPOAuthUserCredentialStatus
-         * @description Describes whether the calling user has a stored OAuth credential.
-         */
-        MCPOAuthUserCredentialStatus: {
-            /** Connected At */
-            connected_at?: string | null;
-            /** Expires At */
-            expires_at?: string | null;
-            /** Has Credential */
-            has_credential: boolean;
-            /**
-             * Is Expired
-             * @default false
-             */
-            is_expired: boolean;
-            /** Server Id */
-            server_id: string;
-        };
         /**
          * MCPPublicServer
          * @description Safe params for public MCP servers
@@ -26666,72 +25502,10 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** MCPSubmissionsSummary */
-        MCPSubmissionsSummary: {
-            /** Active */
-            active: number;
-            /** Items */
-            items: components["schemas"]["LiteLLM_MCPServerTable"][];
-            /** Pending Review */
-            pending_review: number;
-            /** Rejected */
-            rejected: number;
-            /** Total */
-            total: number;
-        };
-        /** MCPToolsetTool */
-        MCPToolsetTool: {
-            /** Server Id */
-            server_id: string;
-            /** Tool Name */
-            tool_name: string;
-        };
-        /**
-         * MCPUserCredentialListItem
-         * @description One entry in the /user-credentials list.
-         */
-        MCPUserCredentialListItem: {
-            /** Alias */
-            alias?: string | null;
-            /** Connected At */
-            connected_at?: string | null;
-            /** Credential Type */
-            credential_type: string;
-            /** Expires At */
-            expires_at?: string | null;
-            /** Has Credential */
-            has_credential: boolean;
-            /** Server Id */
-            server_id: string;
-            /** Server Name */
-            server_name?: string | null;
-        };
-        /** MCPUserCredentialRequest */
-        MCPUserCredentialRequest: {
-            /** Credential */
-            credential: string;
-            /**
-             * Save
-             * @default true
-             */
-            save: boolean;
-        };
-        /** MCPUserCredentialResponse */
-        MCPUserCredentialResponse: {
-            /** Has Credential */
-            has_credential: boolean;
-            /** Server Id */
-            server_id: string;
-        };
         /** MakeAgentsPublicRequest */
         MakeAgentsPublicRequest: {
             /** Agent Ids */
             agent_ids: string[];
-        };
-        /** MakeMCPServersPublicRequest */
-        MakeMCPServersPublicRequest: {
-            /** Mcp Server Ids */
-            mcp_server_ids: string[];
         };
         /** Member */
         Member: {
@@ -27047,118 +25821,6 @@ export interface components {
             /** User Id */
             user_id: string;
         };
-        /** NewMCPServerRequest */
-        NewMCPServerRequest: {
-            /** Alias */
-            alias?: string | null;
-            /**
-             * Allow All Keys
-             * @default false
-             */
-            allow_all_keys: boolean;
-            /** Allowed Tools */
-            allowed_tools?: string[] | null;
-            /**
-             * Approval Status
-             * @description Server-managed: set by the endpoint; caller values are overridden.
-             */
-            approval_status?: string | null;
-            /** Args */
-            args?: string[];
-            /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token") | null;
-            /** Authorization Url */
-            authorization_url?: string | null;
-            /**
-             * Available On Public Internet
-             * @default true
-             */
-            available_on_public_internet: boolean;
-            /** Byok Api Key Help Url */
-            byok_api_key_help_url?: string | null;
-            /** Byok Description */
-            byok_description?: string[];
-            /** Command */
-            command?: string | null;
-            credentials?: components["schemas"]["MCPCredentials"] | null;
-            /** Description */
-            description?: string | null;
-            /** Env */
-            env?: {
-                [key: string]: string;
-            };
-            /** Extra Headers */
-            extra_headers?: string[] | null;
-            /** Instructions */
-            instructions?: string | null;
-            /**
-             * Is Byok
-             * @default false
-             */
-            is_byok: boolean;
-            /** Mcp Access Groups */
-            mcp_access_groups?: string[];
-            /** Mcp Info */
-            mcp_info?: {
-                [key: string]: unknown;
-            } | null;
-            /** Oauth2 Flow */
-            oauth2_flow?: ("client_credentials" | "authorization_code") | null;
-            /** Registration Url */
-            registration_url?: string | null;
-            /** Server Id */
-            server_id?: string | null;
-            /** Server Name */
-            server_name?: string | null;
-            /** Source Url */
-            source_url?: string | null;
-            /** Spec Path */
-            spec_path?: string | null;
-            /** Static Headers */
-            static_headers?: {
-                [key: string]: string;
-            } | null;
-            /**
-             * Submitted At
-             * @description Server-managed: set by the endpoint; caller values are overridden.
-             */
-            submitted_at?: string | null;
-            /**
-             * Submitted By
-             * @description Server-managed: set by the endpoint; caller values are overridden.
-             */
-            submitted_by?: string | null;
-            /** Token Url */
-            token_url?: string | null;
-            /** Tool Name To Description */
-            tool_name_to_description?: {
-                [key: string]: string;
-            } | null;
-            /** Tool Name To Display Name */
-            tool_name_to_display_name?: {
-                [key: string]: string;
-            } | null;
-            /**
-             * Transport
-             * @default sse
-             * @enum {string}
-             */
-            transport: "sse" | "http" | "stdio";
-            /** Url */
-            url?: string | null;
-        };
-        /** NewMCPToolsetRequest */
-        NewMCPToolsetRequest: {
-            /** Description */
-            description?: string | null;
-            /**
-             * Tools
-             * @default []
-             */
-            tools: components["schemas"]["MCPToolsetTool"][];
-            /** Toolset Name */
-            toolset_name: string;
-        };
         /** NewModelGroupRequest */
         NewModelGroupRequest: {
             /** Access Group */
@@ -27273,134 +25935,6 @@ export interface components {
             updated_by: string;
             /** Users */
             users?: components["schemas"]["LiteLLM_UserTable"][] | null;
-        };
-        /**
-         * NewProjectRequest
-         * @description Request model for POST /project/new
-         */
-        NewProjectRequest: {
-            /** Allowed Models */
-            allowed_models?: string[] | null;
-            /**
-             * Blocked
-             * @default false
-             */
-            blocked: boolean;
-            /** Budget Duration */
-            budget_duration?: string | null;
-            /** Budget Id */
-            budget_id?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Guardrails */
-            guardrails?: string[] | null;
-            /** Max Budget */
-            max_budget?: number | null;
-            /** Max Parallel Requests */
-            max_parallel_requests?: number | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Max Budget */
-            model_max_budget?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Rpm Limit */
-            model_rpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Tpm Limit */
-            model_tpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Models
-             * @default []
-             */
-            models: string[];
-            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
-            /** Policies */
-            policies?: string[] | null;
-            /** Project Alias */
-            project_alias?: string | null;
-            /** Project Id */
-            project_id?: string | null;
-            /** Rpm Limit */
-            rpm_limit?: number | null;
-            /** Soft Budget */
-            soft_budget?: number | null;
-            /** Tags */
-            tags?: string[] | null;
-            /** Team Id */
-            team_id: string;
-            /** Tpm Limit */
-            tpm_limit?: number | null;
-        };
-        /**
-         * NewProjectResponse
-         * @description Response model for POST /project/new
-         */
-        NewProjectResponse: {
-            /**
-             * Blocked
-             * @default false
-             */
-            blocked: boolean;
-            /** Budget Id */
-            budget_id?: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Created By */
-            created_by?: string | null;
-            /** Description */
-            description?: string | null;
-            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Rpm Limit */
-            model_rpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Spend */
-            model_spend?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Tpm Limit */
-            model_tpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Models
-             * @default []
-             */
-            models: string[];
-            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
-            /** Object Permission Id */
-            object_permission_id?: string | null;
-            /** Project Alias */
-            project_alias?: string | null;
-            /** Project Id */
-            project_id: string;
-            /**
-             * Spend
-             * @default 0
-             */
-            spend: number;
-            /** Team Id */
-            team_id?: string | null;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Updated By */
-            updated_by?: string | null;
         };
         /** NewTeamRequest */
         NewTeamRequest: {
@@ -27910,34 +26444,6 @@ export interface components {
         OrganizationRequest: {
             /** Organizations */
             organizations: string[];
-        };
-        /**
-         * PaginatedAuditLogResponse
-         * @description Response model for paginated audit logs
-         */
-        PaginatedAuditLogResponse: {
-            /** Audit Logs */
-            audit_logs: components["schemas"]["AuditLogResponse"][];
-            /**
-             * Page
-             * @description Current page number
-             */
-            page: number;
-            /**
-             * Page Size
-             * @description Number of items per page
-             */
-            page_size: number;
-            /**
-             * Total
-             * @description Total number of audit logs matching the filters
-             */
-            total: number;
-            /**
-             * Total Pages
-             * @description Total number of pages
-             */
-            total_pages: number;
         };
         /** PassThroughEndpointResponse */
         PassThroughEndpointResponse: {
@@ -29469,11 +27975,6 @@ export interface components {
              * @default 1.0.0
              */
             version: string | null;
-        };
-        /** RejectMCPServerRequest */
-        RejectMCPServerRequest: {
-            /** Review Notes */
-            review_notes?: string | null;
         };
         /** ResetSpendRequest */
         ResetSpendRequest: {
@@ -31283,163 +29784,12 @@ export interface components {
             /** User Id */
             user_id?: string | null;
         };
-        /** UpdateMCPServerRequest */
-        UpdateMCPServerRequest: {
-            /** Alias */
-            alias?: string | null;
-            /**
-             * Allow All Keys
-             * @default false
-             */
-            allow_all_keys: boolean;
-            /** Allowed Tools */
-            allowed_tools?: string[] | null;
-            /** Args */
-            args?: string[];
-            /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token") | null;
-            /** Authorization Url */
-            authorization_url?: string | null;
-            /**
-             * Available On Public Internet
-             * @default true
-             */
-            available_on_public_internet: boolean;
-            /** Byok Api Key Help Url */
-            byok_api_key_help_url?: string | null;
-            /** Byok Description */
-            byok_description?: string[];
-            /** Command */
-            command?: string | null;
-            credentials?: components["schemas"]["MCPCredentials"] | null;
-            /** Description */
-            description?: string | null;
-            /** Env */
-            env?: {
-                [key: string]: string;
-            };
-            /** Extra Headers */
-            extra_headers?: string[] | null;
-            /** Instructions */
-            instructions?: string | null;
-            /**
-             * Is Byok
-             * @default false
-             */
-            is_byok: boolean;
-            /** Mcp Access Groups */
-            mcp_access_groups?: string[];
-            /** Mcp Info */
-            mcp_info?: {
-                [key: string]: unknown;
-            } | null;
-            /** Registration Url */
-            registration_url?: string | null;
-            /** Server Id */
-            server_id: string;
-            /** Server Name */
-            server_name?: string | null;
-            /** Source Url */
-            source_url?: string | null;
-            /** Spec Path */
-            spec_path?: string | null;
-            /** Static Headers */
-            static_headers?: {
-                [key: string]: string;
-            } | null;
-            /** Token Url */
-            token_url?: string | null;
-            /** Tool Name To Description */
-            tool_name_to_description?: {
-                [key: string]: string;
-            } | null;
-            /** Tool Name To Display Name */
-            tool_name_to_display_name?: {
-                [key: string]: string;
-            } | null;
-            /**
-             * Transport
-             * @default sse
-             * @enum {string}
-             */
-            transport: "sse" | "http" | "stdio";
-            /** Url */
-            url?: string | null;
-        };
-        /** UpdateMCPToolsetRequest */
-        UpdateMCPToolsetRequest: {
-            /** Description */
-            description?: string | null;
-            /** Tools */
-            tools?: components["schemas"]["MCPToolsetTool"][] | null;
-            /** Toolset Id */
-            toolset_id: string;
-            /** Toolset Name */
-            toolset_name?: string | null;
-        };
         /** UpdateModelGroupRequest */
         UpdateModelGroupRequest: {
             /** Model Ids */
             model_ids?: string[] | null;
             /** Model Names */
             model_names?: string[] | null;
-        };
-        /**
-         * UpdateProjectRequest
-         * @description Request model for POST /project/update
-         */
-        UpdateProjectRequest: {
-            /** Allowed Models */
-            allowed_models?: string[] | null;
-            /** Blocked */
-            blocked?: boolean | null;
-            /** Budget Duration */
-            budget_duration?: string | null;
-            /** Budget Id */
-            budget_id?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Guardrails */
-            guardrails?: string[] | null;
-            /** Max Budget */
-            max_budget?: number | null;
-            /** Max Parallel Requests */
-            max_parallel_requests?: number | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Max Budget */
-            model_max_budget?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Rpm Limit */
-            model_rpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Tpm Limit */
-            model_tpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /** Models */
-            models?: string[] | null;
-            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
-            /** Policies */
-            policies?: string[] | null;
-            /** Project Alias */
-            project_alias?: string | null;
-            /** Project Id */
-            project_id: string;
-            /** Rpm Limit */
-            rpm_limit?: number | null;
-            /** Soft Budget */
-            soft_budget?: number | null;
-            /** Tags */
-            tags?: string[] | null;
-            /** Team Id */
-            team_id?: string | null;
-            /** Tpm Limit */
-            tpm_limit?: number | null;
         };
         /**
          * UpdatePublicModelGroupsRequest
@@ -32308,10 +30658,6 @@ export interface components {
         };
         /** ValidationError */
         ValidationError: {
-            /** Context */
-            ctx?: Record<string, never>;
-            /** Input */
-            input?: unknown;
             /** Location */
             loc: (string | number)[];
             /** Message */
@@ -32796,7 +31142,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: number | string | null;
+            stream_timeout?: string | number | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -33780,105 +32126,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
-            };
-        };
-    };
-    get_audit_logs_audit_get: {
-        parameters: {
-            query?: {
-                page?: number;
-                page_size?: number;
-                /** @description Filter by user or system that performed the action */
-                changed_by?: string | null;
-                /** @description Filter by API key hash that performed the action */
-                changed_by_api_key?: string | null;
-                /** @description Filter by action type (create, update, delete) */
-                action?: string | null;
-                /** @description Filter by table name that was modified */
-                table_name?: string | null;
-                /** @description Filter by ID of the object that was modified */
-                object_id?: string | null;
-                /** @description Filter logs after this date */
-                start_date?: string | null;
-                /** @description Filter logs before this date */
-                end_date?: string | null;
-                /** @description Filter by team_id present in before_value or updated_values JSON (PostgreSQL only) */
-                object_team_id?: string | null;
-                /** @description Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only) */
-                object_key_hash?: string | null;
-                /** @description Column to sort by (e.g. 'updated_at', 'action', 'table_name') */
-                sort_by?: string | null;
-                /** @description Sort order ('asc' or 'desc') */
-                sort_order?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PaginatedAuditLogResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_audit_log_by_id_audit__id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AuditLogResponse"];
-                };
-            };
-            /** @description Audit log not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description Database connection error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };
@@ -37351,79 +35598,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_email_event_settings_email_event_settings_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EmailEventSettingsResponse"];
-                };
-            };
-        };
-    };
-    update_event_settings_email_event_settings_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EmailEventSettingsUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reset_event_settings_email_event_settings_reset_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
         };
@@ -41892,126 +40066,6 @@ export interface operations {
             };
         };
     };
-    test_connection_mcp_rest_test_connection_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NewMCPServerRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    test_tools_list_mcp_rest_test_tools_list_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NewMCPServerRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    call_tool_rest_api_mcp_rest_tools_call_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    list_tool_rest_api_mcp_rest_tools_list_get: {
-        parameters: {
-            query?: {
-                /** @description The server id to list tools for */
-                server_id?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     memory_usage_in_mem_cache_memory_usage_in_mem_cache_get: {
         parameters: {
             query?: never;
@@ -43391,13 +41445,13 @@ export interface operations {
             /**
              * @description Unified rate-limit error.
              *
-             *         Every rate-limit condition surfaced by litellm — whether it originated from
-             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
-             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
-             *         max-iterations, etc.) — is raised as an instance of this class.
+             *     Every rate-limit condition surfaced by litellm — whether it originated from
+             *     an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *     proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *     max-iterations, etc.) — is raised as an instance of this class.
              *
-             *         The :attr:`category` attribute lets callers distinguish the source. See
-             *         :class:`RateLimitErrorCategory` for the available values.
+             *     The :attr:`category` attribute lets callers distinguish the source. See
+             *     :class:`RateLimitErrorCategory` for the available values.
              */
             429: {
                 headers: {
@@ -43628,7 +41682,11 @@ export interface operations {
     };
     websocket_realtime_websocket_endpoint_get_3: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                intent?: string;
+                guardrails?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -45379,156 +43437,6 @@ export interface operations {
             };
         };
     };
-    delete_project_project_delete_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DeleteProjectRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_ProjectTable"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    project_info_project_info_get: {
-        parameters: {
-            query: {
-                project_id: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_ProjectTable"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_projects_project_list_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_ProjectTable"][];
-                };
-            };
-        };
-    };
-    new_project_project_new_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NewProjectRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NewProjectResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_project_project_update_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateProjectRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_ProjectTable"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     create_prompt_prompts_post: {
         parameters: {
             query?: never;
@@ -46143,7 +44051,11 @@ export interface operations {
     };
     websocket_realtime_websocket_endpoint_get: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                intent?: string;
+                guardrails?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -46261,7 +44173,9 @@ export interface operations {
     };
     websocket_responses_websocket_endpoint_get: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -46437,26 +44351,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_robots_robots_txt_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
         };
@@ -50064,26 +47958,6 @@ export interface operations {
             };
         };
     };
-    available_enterprise_users_user_available_users_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
     bulk_user_update_user_bulk_update_post: {
         parameters: {
             query?: never;
@@ -52654,866 +50528,6 @@ export interface operations {
             };
         };
     };
-    get_mcp_access_groups_v1_mcp_access_groups_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    discover_mcp_servers_v1_mcp_discover_get: {
-        parameters: {
-            query?: {
-                /** @description Search filter for server names and descriptions */
-                query?: string | null;
-                /** @description Filter by category */
-                category?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    make_mcp_servers_public_v1_mcp_make_public_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MakeMCPServersPublicRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_client_ip_v1_mcp_network_client_ip_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    get_openapi_registry_v1_mcp_openapi_registry_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    get_mcp_registry_v1_mcp_registry_json_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    fetch_all_mcp_servers_v1_mcp_server_get: {
-        parameters: {
-            query?: {
-                /** @description Filter MCP servers by team scope. When provided, returns only servers the team has access to plus globally available (allow_all_keys) servers. Used by the Create Key UI to show team-scoped MCP servers. */
-                team_id?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_MCPServerTable"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    edit_mcp_server_v1_mcp_server_put: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
-                "litellm-changed-by"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateMCPServerRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_MCPServerTable"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    add_mcp_server_v1_mcp_server_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
-                "litellm-changed-by"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NewMCPServerRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_MCPServerTable"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    health_check_servers_v1_mcp_server_health_get: {
-        parameters: {
-            query?: {
-                /** @description Server IDs to check. If not provided, checks all accessible servers. */
-                server_ids?: string[] | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    add_session_mcp_server_v1_mcp_server_oauth_session_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
-                "litellm-changed-by"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NewMCPServerRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    register_mcp_server_v1_mcp_server_register_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NewMCPServerRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_MCPServerTable"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_mcp_server_submissions_v1_mcp_server_submissions_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPSubmissionsSummary"];
-                };
-            };
-        };
-    };
-    fetch_mcp_server_v1_mcp_server__server_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                server_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_MCPServerTable"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    remove_mcp_server_v1_mcp_server__server_id__delete: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
-                "litellm-changed-by"?: string | null;
-            };
-            path: {
-                server_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    approve_mcp_server_submission_v1_mcp_server__server_id__approve_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                server_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_MCPServerTable"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    store_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                server_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MCPOAuthUserCredentialRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPOAuthUserCredentialStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                server_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPOAuthUserCredentialStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_mcp_oauth_user_credential_status_v1_mcp_server__server_id__oauth_user_credential_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                server_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPOAuthUserCredentialStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reject_mcp_server_submission_v1_mcp_server__server_id__reject_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                server_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RejectMCPServerRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_MCPServerTable"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    store_mcp_user_credential_v1_mcp_server__server_id__user_credential_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                server_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MCPUserCredentialRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPUserCredentialResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_mcp_user_credential_v1_mcp_server__server_id__user_credential_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                server_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPUserCredentialResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_mcp_tools_v1_mcp_tools_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    fetch_mcp_toolsets_v1_mcp_toolset_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    edit_mcp_toolset_v1_mcp_toolset_put: {
-        parameters: {
-            query?: never;
-            header?: {
-                "litellm-changed-by"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateMCPToolsetRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    add_mcp_toolset_v1_mcp_toolset_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "litellm-changed-by"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NewMCPToolsetRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fetch_mcp_toolset_v1_mcp_toolset__toolset_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                toolset_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    remove_mcp_toolset_v1_mcp_toolset__toolset_id__delete: {
-        parameters: {
-            query?: never;
-            header?: {
-                "litellm-changed-by"?: string | null;
-            };
-            path: {
-                toolset_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_mcp_user_credentials_v1_mcp_user_credentials_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPUserCredentialListItem"][];
-                };
-            };
-        };
-    };
     list_memory_v1_memory_get: {
         parameters: {
             query?: {
@@ -53906,7 +50920,11 @@ export interface operations {
     };
     websocket_realtime_websocket_endpoint_get_2: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                intent?: string;
+                guardrails?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -53984,7 +51002,9 @@ export interface operations {
     };
     websocket_responses_websocket_endpoint_get_2: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -57293,7 +54313,11 @@ export interface operations {
     };
     websocket_vertex_ai_live_passthrough_endpoint: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                vertex_project?: string;
+                vertex_location?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
