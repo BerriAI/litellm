@@ -36,6 +36,8 @@ Don't hesitate to use values in .env to get needed API keys and other secrets, a
 
 Run tests, format your code, and lint your code before each commit
 
+When you fix strict-rule violations gated by `ruff-strict-budget.json`, run `make lint-strict-budget-update` and commit the lowered baselines so the ceilings ratchet down instead of leaving stale headroom
+
 Ask to commit and push your work when you're done (or if you're confident that your code is good and works, just do it)
 
 When you must use real LLM models to, for example, write e2e tests, write a QA runbook, etc., make sure to use the latest models (doesn't have to be smartest, can also be a modern small, fast one. No strong preference for smart vs fast here, just use something modern) as of the year and month of the current date. Do a web search as necessary to figure that out
@@ -57,13 +59,15 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 - Composition over inheritance
 - Never-nester: early returns over deep nesting
 - Don't throw; model failures as values (One function (e.g., raise_public) maps error union to existing public exception contracts via exhaustive match + assert_never)
-- No mutation; don't reassign variables. Instead of mutable lists and dicts, prefer tuples, frozen dataclasses (with slots=True), etc.
+- No mutation; don't reassign variables, global or local. Instead of mutable lists and dicts, prefer tuples, frozen dataclasses (with slots=True), etc.
 - Use dependency injection
 - Fully typed; no `Any` or coarse types like `dict[str, Any]` or just `dict`. Every function parameter must be strongly typed
 - Use tagged unions + match
 - No monster files or god objects
 - No file sprawl: deliberate file and folder structure
 - Standard over hand-rolled: use the official SDK or a library where one exists; where none does, follow industry standards instead of inventing local conventions
+
+if you're trying to create a new function that relies on untyped stuff, instead of adding more Any's and bringing it closer to the max, just validate it in the caller (a simple function that returns the typed thing or raises will do) and then pass the now typed variable in
 
 Follow conventional commits for commit names and PR titles
 
