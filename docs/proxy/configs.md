@@ -624,6 +624,21 @@ general_settings:
 - `database_connect_timeout` and `database_socket_timeout` are omitted from the URL when unset, so Prisma's defaults apply.
 - `database_extra_connection_params` is an untyped passthrough — any key you set here **overrides** the LiteLLM-set defaults for that key (e.g. you can override `pool_timeout` from this dict). Use it for `sslmode`, `pgbouncer`, `statement_cache_size`, or any other Prisma URL param.
 
+### Disable Server-Side Prepared Statements
+
+Set `database_disable_prepared_statements: true` to stop Prisma from reusing server-side prepared statements. It appends `pgbouncer=true` to the Prisma connection URL, so each query is prepared fresh instead of reusing a cached plan.
+
+```yaml
+general_settings:
+  database_disable_prepared_statements: true
+```
+
+Use this when:
+- LiteLLM connects to Postgres through **PgBouncer in transaction pooling mode**, where reused prepared statements break because consecutive queries can land on different server connections.
+- You run **rolling deployments with schema migrations** and see `cached plan must not change result type` errors. The error fires when a migration changes the result type of a column referenced by a plan that a pooled connection still holds; with this flag on there is no reused plan to invalidate, so the migration is harmless.
+
+The tradeoff is that every query pays the prepare cost instead of amortizing it, which adds a small per-query overhead. An explicit `pgbouncer` key in `database_extra_connection_params` takes precedence over this flag.
+
 ## LiteLLM License Key (Enterprise)
 
 To enable [LiteLLM Enterprise features](https://docs.litellm.ai/docs/enterprise), set your license key as an environment variable:
