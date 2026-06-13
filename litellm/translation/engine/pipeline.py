@@ -30,6 +30,10 @@ from ..inbound.anthropic_messages.response import (
 )
 from ..inbound.openai_chat import parse_request as openai_chat_parse_request
 from ..inbound.openai_chat.response import ResponseDialect, serialize_response
+from ..inbound.responses import parse_request as responses_parse_request
+from ..inbound.responses.response import (
+    serialize_response as responses_serialize_response,
+)
 from ..ir import Body, ChatRequest, ChatResponse, PlainJson
 from ..providers.anthropic import serialize_request
 from ..providers.anthropic.response import parse_response
@@ -186,6 +190,10 @@ _INBOUND: Mapping[InboundSchema, _Inbound] = MappingProxyType(
         "anthropic_messages": _Inbound(
             parse_request=anthropic_parse_request,
             serialize_response=anthropic_serialize_response,
+        ),
+        "responses": _Inbound(
+            parse_request=responses_parse_request,
+            serialize_response=responses_serialize_response,
         ),
     }
 )

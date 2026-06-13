@@ -71,6 +71,40 @@ translation/
 │                        #   message_start / content_block_* / message_delta /
 │                        #   message_stop; owns block-index + lazy-open
 │                        #   bookkeeping on the fold state)
+│   └── responses/      # /v1/responses (OpenAI Responses API) inbound. Always
+│       │                #   rides the IR (no native provider wire, no
+│       │                #   _SAME_FAMILY entry, no fast path). May NOT import
+│       │                #   openai_chat/anthropic_messages (siblings); the
+│       │                #   dialect arg is accepted+ignored (the Responses
+│       │                #   response shape is provider-independent)
+│       ├── schema.py    # frozen wire models; input str|list[item], the input-
+│       │                #   item union (message/function_call/
+│       │                #   function_call_output/reasoning/item_reference),
+│       │                #   function-vs-hosted tools, text.format, reasoning;
+│       │                #   previous_response_id/store/background/include/
+│       │                #   metadata/service_tier as object then unsupported
+│       │                #   in parse (fail closed)
+│       ├── input_items.py # input list -> IR messages (match over the typed
+│       │                #   union): message text/image SERVE (data:-image ->
+│       │                #   base64), function_call -> assistant ToolUse
+│       │                #   (consecutive merge into one assistant turn),
+│       │                #   function_call_output -> ToolResult in a user msg
+│       │                #   (FALL BACK when its call_id has no local
+│       │                #   function_call: v1's TOOL_CALLS_CACHE is banned);
+│       │                #   reasoning item / item_reference / input_file FAIL
+│       │                #   CLOSED
+│       ├── parse.py     # top-level parse; instructions->system,
+│       │                #   max_output_tokens->max_tokens, tool_choice incl.
+│       │                #   Cursor {type:tool/any}->required, reasoning.effort
+│       │                #   ->ReasoningEffort (summary fails closed),
+│       │                #   text.format->response_format; hosted tools and
+│       │                #   every unported field a named unsupported
+│       └── response.py  # IR ChatResponse -> ResponsesAPIResponse body
+│                        #   (reasoning->message->function_call output order,
+│                        #   rs_{hash} reasoning id, status map, usage onto
+│                        #   ResponseAPIUsage; created_at is seam-stamped
+│                        #   envelope). Stream fold is a deferred follow-up
+│                        #   (see ~/sprint/reports/inbound-responses.md)
 ├── providers/      # one subpackage per wire format. Pure, no I/O
 │   ├── anthropic/
 │   │   ├── serialize.py # body assembly in v1 transform_request order
