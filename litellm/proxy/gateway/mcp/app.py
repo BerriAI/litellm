@@ -22,6 +22,7 @@ from starlette.routing import Mount
 
 from litellm.proxy.gateway.mcp.foundation import GatewayDeps, GatewayError, reason
 from litellm.proxy.gateway.mcp.foundation.types import CallToolResult, TextContent, Tool
+from litellm.proxy.gateway.mcp.transport.gateway import TransportGateway
 
 _SERVER_NAME = "litellm-mcp-gateway"
 _SERVER_VERSION = "2.0.0"
@@ -67,6 +68,7 @@ def build_gateway(deps: GatewayDeps) -> Starlette:
         json_response=False,
         stateless=True,
     )
+    transport = TransportGateway(manager)
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncGenerator[None]:
@@ -75,5 +77,5 @@ def build_gateway(deps: GatewayDeps) -> Starlette:
 
     return Starlette(
         lifespan=lifespan,
-        routes=[Mount("/mcp", app=manager.handle_request)],
+        routes=[Mount("", app=transport)],
     )

@@ -47,10 +47,10 @@ def test_build_gateway_yields_independent_apps():
     assert a is not b
 
 
-def test_mcp_endpoint_is_mounted_as_asgi_app():
+def test_gateway_mounts_a_catch_all_asgi_app():
     app = build_gateway(build_test_deps())
     mounts = {r.path for r in app.routes if isinstance(r, Mount)}
-    assert "/mcp" in mounts
+    assert "" in mounts
 
 
 async def test_server_handshake_and_empty_catalog_in_memory():
@@ -87,5 +87,4 @@ async def test_s0_end_to_end_over_a_real_uvicorn_socket():
                 },
                 json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
             )
-        assert resp.status_code == 307
-        assert resp.headers["location"].endswith("/mcp/")
+        assert resp.status_code == 200
