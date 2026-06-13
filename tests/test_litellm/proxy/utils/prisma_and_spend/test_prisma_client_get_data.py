@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -22,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
+from litellm.proxy._types import LiteLLM_VerificationTokenView
 from litellm.proxy.utils import PrismaClient
 
 
@@ -152,3 +154,39 @@ async def test_query_first_with_cached_plan_fallback_reraises_non_plan_errors(
     assert prisma_client.db.query_first.await_count == 1
     prisma_client.attempt_db_reconnect.assert_not_awaited()
 
+
+
+@pytest.mark.asyncio
+async def test_get_data_combined_view_returns_view_for_deprecated_key(
+    prisma_client: PrismaClient,
+) -> None:
+    """Grace-period rotation, full get_data flow: the old hash misses the
+    combined view, the deprecated-key table resolves it to the active token,
+    and get_data must return the recursive lookup's finished view instead of
+    re-running dict normalization on it (which raised TypeError and turned
+    every grace-period request into a 401)."""
+    old_hash = "hashed-old-token-grace-e2e"
+    active_hash = "hashed-active-token-grace-e2e"
+    active_row = {
+        "token": active_hash,
+        "team_models": None,
+        "team_blocked": None,
+        "team_members_with_roles": None,
+        "user_id": None,
+        "expires": None,
+    }
+    prisma_client.db.query_first = AsyncMock(side_effect=[None, active_row])
+    prisma_client.db.litellm_deprecatedverificationtoken = MagicMock()
+    prisma_client.db.litellm_deprecatedverificationtoken.find_first = AsyncMock(
+        return_value=SimpleNamespace(
+            active_token_id=active_hash,
+            revoke_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+    )
+
+    response = await prisma_client.get_data(
+        token=old_hash, table_name="combined_view", query_type="find_unique"
+    )
+
+    assert isinstance(response, LiteLLM_VerificationTokenView)
+    assert response.token == active_hash
