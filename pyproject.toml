@@ -125,7 +125,7 @@ proxy-runtime = [
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
     "azure-storage-file-datalake>=12.20.0,<13.0",
-    "pypdf>=6.10.2,<7.0; python_version < '3.14'",
+    "pypdf>=6.12.0,<7.0; python_version < '3.14'",
     "llm-sandbox>=0.3.39,<1.0",
     "detect-secrets>=1.5.0,<2.0",
 ]
@@ -231,6 +231,10 @@ requires = ["uv_build==0.11.8"]
 build-backend = "uv_build"
 
 [tool.uv]
+constraint-dependencies = [
+    "tornado>=6.5.6",
+    "aiohttp>=3.13.5,<3.14",
+]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
 exclude-newer = "3 days"
