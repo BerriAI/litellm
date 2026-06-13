@@ -220,8 +220,7 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
     assert result[test_key] == expected_transaction
 
 
-@pytest.mark.asyncio
-async def test_get_aggregated_daily_spend_update_transactions_none_token_fields():
+def test_get_aggregated_daily_spend_update_transactions_none_token_fields():
     """Regression for #30307.
 
     Some providers (e.g. certain embedding backends) report usage with the token
