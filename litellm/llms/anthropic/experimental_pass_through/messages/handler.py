@@ -442,7 +442,6 @@ def anthropic_messages_handler(
             )
         elif isinstance(system, list):
             system = list(system) + _hoisted_system_blocks
-    local_vars["messages"] = messages
     local_vars["system"] = system
 
     # Store agentic loop params in logging object for agentic hooks
