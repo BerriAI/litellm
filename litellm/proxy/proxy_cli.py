@@ -38,6 +38,41 @@ class LiteLLMDatabaseConnectionPool(Enum):
     database_connection_pool_timeout = 60
 
 
+def _build_db_connection_url_params(
+    connection_limit: int,
+    pool_timeout: Optional[Union[int, float]],
+    connect_timeout: Optional[Union[int, float]] = None,
+    socket_timeout: Optional[Union[int, float]] = None,
+    disable_prepared_statements: bool = False,
+    extra_params: Optional[dict] = None,
+) -> dict:
+    """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
+
+    `connect_timeout` / `socket_timeout` map to the Prisma URL params of the same
+    name (https://www.prisma.io/docs/orm/overview/databases/postgresql) and are
+    omitted when None so Prisma's defaults apply. `disable_prepared_statements`
+    sets `pgbouncer=true`, which makes Prisma stop using server-side prepared
+    statements (pgbouncer transaction-pool compatible; also sidesteps the
+    "cached plan must not change result type" error during rolling migrations).
+    `extra_params` is an untyped passthrough — keys it provides win over the
+    named arguments above, so it can be used to override any default we set here.
+    """
+    params: dict = {
+        "connection_limit": connection_limit,
+    }
+    if pool_timeout is not None:
+        params["pool_timeout"] = pool_timeout
+    if connect_timeout is not None:
+        params["connect_timeout"] = connect_timeout
+    if socket_timeout is not None:
+        params["socket_timeout"] = socket_timeout
+    if disable_prepared_statements:
+        params["pgbouncer"] = "true"
+    if extra_params:
+        params.update(extra_params)
+    return params
+
+
 def append_query_params(url: Optional[str], params: dict) -> str:
     from litellm._logging import verbose_proxy_logger
 
@@ -745,7 +780,12 @@ def run_server(  # noqa: PLR0915
             )
 
         db_connection_pool_limit = 100
-        db_connection_timeout = 60
+        # Starts optional due to config fallback checks; guaranteed non-None before use.
+        db_connection_timeout: Optional[Union[int, float]] = 60
+        db_connect_timeout: Optional[Union[int, float]] = None
+        db_socket_timeout: Optional[Union[int, float]] = None
+        db_disable_prepared_statements: bool = False
+        db_extra_connection_params: Optional[dict] = None
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
@@ -849,9 +889,30 @@ def run_server(  # noqa: PLR0915
                 "database_connection_pool_limit",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
             )
-            db_connection_timeout = general_settings.get(
-                "database_connection_pool_timeout",
-                LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
+            db_connection_timeout = general_settings.get("database_connection_timeout")
+            if db_connection_timeout is None:
+                db_connection_timeout = general_settings.get(
+                    "database_connection_pool_timeout"
+                )
+            if db_connection_timeout is None:
+                db_connection_timeout = (
+                    LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
+                )
+            db_connect_timeout = general_settings.get("database_connect_timeout")
+            db_socket_timeout = general_settings.get("database_socket_timeout")
+            _disable_prepared_statements = general_settings.get(
+                "database_disable_prepared_statements", False
+            )
+            if isinstance(_disable_prepared_statements, str):
+                from litellm.secret_managers.main import str_to_bool
+
+                db_disable_prepared_statements = (
+                    str_to_bool(_disable_prepared_statements) is True
+                )
+            else:
+                db_disable_prepared_statements = bool(_disable_prepared_statements)
+            db_extra_connection_params = general_settings.get(
+                "database_extra_connection_params"
             )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
@@ -892,27 +953,27 @@ def run_server(  # noqa: PLR0915
             try:
                 from litellm.secret_managers.main import get_secret
 
+                connection_url_params = _build_db_connection_url_params(
+                    connection_limit=db_connection_pool_limit,
+                    pool_timeout=db_connection_timeout,
+                    connect_timeout=db_connect_timeout,
+                    socket_timeout=db_socket_timeout,
+                    disable_prepared_statements=db_disable_prepared_statements,
+                    extra_params=db_extra_connection_params,
+                )
                 if os.getenv("DATABASE_URL", None) is not None:
-                    ### add connection pool + pool timeout args
-                    params = {
-                        "connection_limit": db_connection_pool_limit,
-                        "pool_timeout": db_connection_timeout,
-                    }
                     database_url = get_secret("DATABASE_URL", default_value=None)
                     modified_url = append_query_params(
-                        str(database_url) if database_url else None, params
+                        str(database_url) if database_url else None,
+                        connection_url_params,
                     )
                     os.environ["DATABASE_URL"] = modified_url
                 if os.getenv("DIRECT_URL", None) is not None:
-                    ### add connection pool + pool timeout args
-                    params = {
-                        "connection_limit": db_connection_pool_limit,
-                        "pool_timeout": db_connection_timeout,
-                    }
                     database_url = os.getenv("DIRECT_URL")
-                    modified_url = append_query_params(database_url, params)
+                    modified_url = append_query_params(
+                        database_url, connection_url_params
+                    )
                     os.environ["DIRECT_URL"] = modified_url
-                    ###
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True
             except FileNotFoundError:
