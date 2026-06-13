@@ -3784,3 +3784,164 @@ async def test_ui_view_spend_logs_metadata_invalid_json_falls_back_to_empty_dict
         assert body["data"][0]["metadata"] == {}
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+class _FakeColdStorageLogger:
+    """Injectable cold storage logger that records the object key it was asked for."""
+
+    def __init__(self, payload):
+        self._payload = payload
+        self.requested_object_keys = []
+
+    async def get_proxy_server_request_from_cold_storage_with_object_key(
+        self, object_key
+    ):
+        self.requested_object_keys.append(object_key)
+        return self._payload
+
+
+def _cold_storage_handler(payload):
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    logger = _FakeColdStorageLogger(payload)
+    return ColdStorageHandler(cold_storage_logger=logger), logger
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, False),
+        ("", False),
+        ("   ", False),
+        ("{}", False),
+        ("[]", False),
+        ("null", False),
+        ('{"a": 1}', True),
+        ({}, False),
+        ({"a": 1}, True),
+        ([], False),
+        ([1], True),
+    ],
+)
+def test_spend_log_field_has_content(value, expected):
+    assert spend_management_endpoints._spend_log_field_has_content(value) is expected
+
+
+@pytest.mark.parametrize(
+    "metadata, expected",
+    [
+        (None, None),
+        ("{}", None),
+        ("not-json", None),
+        ({"cold_storage_object_key": ""}, None),
+        ({"cold_storage_object_key": "k/req-1.json"}, "k/req-1.json"),
+        ('{"cold_storage_object_key": "k/req-2.json"}', "k/req-2.json"),
+    ],
+)
+def test_cold_storage_object_key_from_metadata(metadata, expected):
+    assert (
+        spend_management_endpoints._cold_storage_object_key_from_metadata(metadata)
+        == expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_prefers_pg_and_skips_cold_storage():
+    handler, logger = _cold_storage_handler({"messages": "X", "response": "Y"})
+    row = {
+        "messages": "{}",
+        "response": '{"choices": [{"message": {"content": "hi"}}]}',
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/req.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert resolved.response == '{"choices": [{"message": {"content": "hi"}}]}'
+    assert logger.requested_object_keys == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_fetches_from_cold_storage_when_pg_empty():
+    cold_payload = {
+        "messages": [{"role": "user", "content": "what is 2+2"}],
+        "response": {"choices": [{"message": {"content": "4"}}]},
+        "proxy_server_request": {"body": {"model": "gpt-4o-mini"}},
+    }
+    handler, logger = _cold_storage_handler(cold_payload)
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "llm-gateway/prod/req-42.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == ["llm-gateway/prod/req-42.json"]
+    assert resolved.messages == cold_payload["messages"]
+    assert resolved.response == cold_payload["response"]
+    assert resolved.proxy_server_request == cold_payload["proxy_server_request"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_metadata_as_json_string():
+    cold_payload = {"messages": "in", "response": "out", "proxy_server_request": None}
+    handler, logger = _cold_storage_handler(cold_payload)
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": json.dumps({"cold_storage_object_key": "k/str-meta.json"}),
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == ["k/str-meta.json"]
+    assert resolved.response == "out"
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_no_object_key_returns_empty_without_fetch():
+    handler, logger = _cold_storage_handler({"messages": "should-not-be-used"})
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == []
+    assert resolved == spend_management_endpoints.RequestResponsePayload(
+        "{}", "{}", "{}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_cold_storage_miss_falls_back_to_pg_values():
+    handler, logger = _cold_storage_handler(None)
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/missing.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == ["k/missing.json"]
+    assert resolved == spend_management_endpoints.RequestResponsePayload(
+        "{}", "{}", "{}"
+    )
