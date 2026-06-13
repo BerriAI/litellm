@@ -32,7 +32,7 @@ password when their ``*_READ_REPLICA`` counterpart is unset.
 
 import os
 import urllib.parse
-from typing import Optional, cast
+from typing import Final, Optional, cast
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,6 +43,25 @@ from litellm.proxy.auth import rds_iam_token
 
 _IAM_ENV_KEY = "IAM_TOKEN_DB_AUTH"
 _DEFAULT_PG_PORT = "5432"
+
+# schema.prisma pins `provider = "postgresql"`, so these are the only schemes
+# Prisma can actually connect with.
+SUPPORTED_DB_SCHEMES: Final[frozenset[str]] = frozenset({"postgresql", "postgres"})
+
+
+def unsupported_db_scheme(database_url: str) -> Optional[str]:
+    """Return the connection URL scheme when it is not PostgreSQL, else None.
+
+    A `sqlite://` / `mysql://` URL can never connect against the
+    postgresql-only datasource, but the resulting Prisma failure is opaque and
+    version-dependent (a confusing migration error, or a startup that never
+    binds). Callers use this to reject the URL up front with an actionable
+    error instead.
+    """
+    scheme = urllib.parse.urlsplit(database_url).scheme.lower()
+    if scheme in SUPPORTED_DB_SCHEMES:
+        return None
+    return scheme or database_url
 
 
 class DatabaseURLSettings(BaseSettings):

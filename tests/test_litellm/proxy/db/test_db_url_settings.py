@@ -16,7 +16,10 @@ from unittest.mock import patch
 
 import pytest
 
-from litellm.proxy.db.db_url_settings import DatabaseURLSettings
+from litellm.proxy.db.db_url_settings import (
+    DatabaseURLSettings,
+    unsupported_db_scheme,
+)
 
 
 def _apply() -> bool:
@@ -287,3 +290,29 @@ def test_password_reader_uses_own_credentials(monkeypatch):
         os.environ["DATABASE_URL_READ_REPLICA"]
         == "postgresql://litellm_ro:ro_pw@reader.example.com:5432/litellm_db"
     )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://u:p@host:5432/db",
+        "postgres://u:p@host:5432/db",
+        "POSTGRESQL://u:p@host:5432/db",
+        "postgresql://host/db?schema=public",
+    ],
+)
+def test_unsupported_db_scheme_accepts_postgres(url):
+    assert unsupported_db_scheme(url) is None
+
+
+@pytest.mark.parametrize(
+    "url,scheme",
+    [
+        ("sqlite:///data/litellm.db", "sqlite"),
+        ("sqlite:///./local.db", "sqlite"),
+        ("mysql://u:p@host:3306/db", "mysql"),
+        ("mssql://host/db", "mssql"),
+    ],
+)
+def test_unsupported_db_scheme_rejects_non_postgres(url, scheme):
+    assert unsupported_db_scheme(url) == scheme
