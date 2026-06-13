@@ -57,3 +57,38 @@ async def test_async_log_success_event_resolves_provider_for_embeddings(
 
     spend = await provider_budget.dual_cache.async_get_cache("provider_spend:openai:1d")
     assert spend == 0.5
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_skips_provider_budget_when_unresolved(
+    disable_budget_sync,
+):
+    """The silent-skip branch of #30276.
+
+    When no provider can be resolved from litellm_params, the top-level kwargs,
+    or the standard logging object, provider-budget enforcement must be skipped
+    without raising and without recording any provider spend.
+    """
+    provider_budget = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={
+            "openai": BudgetConfig(time_period="1d", budget_limit=100),
+        },
+    )
+
+    kwargs = {
+        "call_type": "aembedding",
+        "litellm_params": {"custom_llm_provider": None},
+        "standard_logging_object": {
+            "response_cost": 0.5,
+            "model_id": "embed-model-id",
+            "custom_llm_provider": None,
+        },
+    }
+
+    await provider_budget.async_log_success_event(
+        kwargs=kwargs, response_obj=None, start_time=0, end_time=0
+    )
+
+    spend = await provider_budget.dual_cache.async_get_cache("provider_spend:openai:1d")
+    assert spend is None
