@@ -86,7 +86,7 @@ def assemble_body(request: ChatRequest) -> _SerializeResult:
             tools=_tools_json(request.tools),
             tool_choice=_tool_choice_json(request.tool_choice),
             parallel_tool_calls=request.parallel_tool_calls.default_value(None),
-            response_format=_response_format_json(request.response_format),
+            response_format=response_format_json(request.response_format),
         ),
     }
     return Ok(body)
@@ -167,9 +167,13 @@ def _tool_choice_json(choice_opt: Option[ToolChoice]) -> PlainJson | None:
     assert_never(choice.tag)
 
 
-def _response_format_json(
+def response_format_json(
     response_format_opt: Option[ResponseFormat],
 ) -> PlainJson | None:
+    """The openai-wire response_format builder (type:text/json_object/
+    json_schema). Public because databricks re-emits the SAME verbatim shape
+    on NON-claude models (v1 passes response_format through unchanged there) —
+    the strip_function_strict sharing precedent."""
     match response_format_opt:
         case Option(tag="some", some=response_format):
             pass

@@ -45,7 +45,7 @@ from ...errors import TranslationError
 from ...ir import Body, ChatRequest, PlainJson, ToolDef
 from ..anthropic.params import thinking_json
 from ..openai_compat.messages import serialize_messages
-from ..openai_compat.serialize import _response_format_json
+from ..openai_compat.serialize import response_format_json
 from . import params as p
 from . import tools as t
 
@@ -176,5 +176,5 @@ def _response_format_field(request: ChatRequest) -> dict[str, PlainJson]:
     """NON-claude only (the params gate falls back on claude). The wire shape
     is the openai one verbatim — REUSE the shared builder (v1 passes the
     caller's response_format through unchanged on non-claude models)."""
-    value = _response_format_json(request.response_format)
+    value = response_format_json(request.response_format)
     return {"response_format": value} if value is not None else {}

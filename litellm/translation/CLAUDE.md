@@ -366,6 +366,73 @@ translation/
 │   │                    #   the real wire sends ``type`` — both regimes
 │   │                    #   pinned (wrapper end-of-stream synthesis = seam
 │   │                    #   scope)
+│   ├── databricks/      # wave-3 own module, the LAST outbound provider
+│   │   │                #   (httpx dedicated elif main.py:3280, transforms
+│   │   │                #   LIVE, NO seam preset). openai-chat-shaped wire
+│   │   │                #   (transform_request is OpenAIGPTConfig's; the
+│   │   │                #   anthropic plane contributes pure param mappers
+│   │   │                #   only) with the ``"claude" in model`` SUBSTRING
+│   │   │                #   fork (DB-R1) driving tools/response_format/
+│   │   │                #   reasoning_effort. M2M token POST + WorkspaceClient
+│   │   │                #   URL synthesis are ENVELOPE (the watsonx-IAM rule).
+│   │   │                #   The fake_stream method is DEAD CODE at HEAD
+│   │   │                #   (canary). The claude-fork helpers + the thinking
+│   │   │                #   max-bump live in tools.py (the ollama_fold split)
+│   │   ├── guard.py     # the cache_control move arm (v1 MOVES message-level
+│   │   │                #   markers into a text block; a whitespace-only
+│   │   │                #   message LOSES the marker — a trap, fall back) +
+│   │   │                #   the whitespace-only string-content arm (v1's
+│   │   │                #   _sanitize_empty_content REMOVES the content key)
+│   │   │                #   + the shared openai guard with
+│   │   │                #   name_fallback_user_only (v1 KEEPS user names,
+│   │   │                #   strips assistant/tool == the IR drop); NO
+│   │   │                #   stream:false arm (the body always carries stream)
+│   │   ├── params.py    # the supported-list/serve-fallback split: SERVE
+│   │   │                #   non-claude tools verbatim, claude tools (the
+│   │   │                #   round-trip), thinking, non-claude reasoning_effort
+│   │   │                #   WITH max_tokens, top_k (DRIFT: researcher-5 said
+│   │   │                #   unsupported, the probe SERVES it). FALLBACK:
+│   │   │                #   parallel_tool_calls (UPE), user (silent drop),
+│   │   │                #   response_format on claude (DB-R2 json_object
+│   │   │                #   SILENT DROP + the json_tool_call machinery),
+│   │   │                #   reasoning_effort on claude (thinking machinery),
+│   │   │                #   reasoning_effort on non-claude WITHOUT max_tokens
+│   │   │                #   (DB-R3 raw KeyError crash)
+│   │   ├── serialize.py # {model, messages, stream-always, **mapped}: mct
+│   │   │                #   ALWAYS -> max_tokens, the thinking max-bump
+│   │   │                #   (budget + DEFAULT_MAX_TOKENS when no caller max),
+│   │   │                #   top_k verbatim top-level, tools (claude round-trip
+│   │   │                #   / non-claude verbatim), tool_choice, response_format
+│   │   │                #   verbatim (non-claude), reasoning_effort verbatim
+│   │   │                #   (non-claude + max_tokens)
+│   │   ├── tools.py     # the claude tool round-trip (openai -> anthropic ->
+│   │   │                #   databricks: DROPS function-level strict/$schema/
+│   │   │                #   cache_control via the AnthropicInputSchema
+│   │   │                #   allowed-keys filter, KEEPS additionalProperties,
+│   │   │                #   normalizes empty params; $ref/$defs fall back) +
+│   │   │                #   thinking_max_tokens (the budget+4096 bump)
+│   │   ├── response.py  # the OWN parser (the cohere/ollama_chat shape): the
+│   │   │                #   normalized body on ChatResponse.wire with the
+│   │   │                #   databricks/{wire model} prefix INSIDE the parser
+│   │   │                #   (DB-R7: v1's prefix is litellm_params.custom_llm_
+│   │   │                #   provider, default "databricks" — fork obligation),
+│   │   │                #   block-list flatten, reasoning/summary -> reasoning_
+│   │   │                #   content + thinking_blocks, citations + supported_
+│   │   │                #   text, UNKNOWN keys DROPPED; construction arm
+│   │   │                #   "openai"; a missing required key is a raw v1
+│   │   │                #   KeyError (drift from researcher-5's
+│   │   │                #   DatabricksException claim — the TypedDict does not
+│   │   │                #   validate)
+│   │   └── stream.py    # the SSE line seam -> the inbound "databricks" chunk
+│   │                    #   dialect (one wire chunk -> ONE body, NO split):
+│   │                    #   usage DROPPED (DB-R5), "{}" args -> "", content-
+│   │                    #   list flatten + citation lift, and the STATEFUL
+│   │                    #   json_mode tool->content byte-reformat (DB-R8,
+│   │                    #   _last_function_name rides StreamState; json_mode
+│   │                    #   is a request-side fallback so the arm is dormant
+│   │                    #   from v2's flow, pinned by the REAL-iterator
+│   │                    #   replay). The fold lives in inbound/openai_chat/
+│   │                    #   databricks_fold.py
 │   ├── deepseek/        # wave-2b-alpha own module (httpx dedicated elif
 │   │   │                #   main.py:1942, transforms LIVE, bare wire model)
 │   │   ├── guard.py     # explicit stream:false + the shared openai guard
@@ -806,7 +873,7 @@ A behavior change ships as its own snapshot-diffed PR, never inside a port.
 
 ## Current scope
 
-OpenAI-chat-in to seventy-nine providers out — `anthropic`,
+OpenAI-chat-in to eighty providers out — `anthropic`,
 `bedrock_converse`, `bedrock_invoke`, `openai_compat`, `vertex_ai` (gemini
 route), `gemini` (AI Studio), `vertex_anthropic`, `azure`, `azure_ai`,
 `azure_ai_anthropic`, `xai`, the thirteen wave-1a compat_sdk providers
@@ -828,9 +895,13 @@ path, `cometapi` on the httpx path), and the wave-2b-alpha own modules
 (`cohere`/`cohere_chat` (one module), `mistral`, `watsonx`,
 `sagemaker_chat`, `groq`), and the wave-3 own modules `ollama_chat` (the
 `/api/chat` NDJSON wire — the legacy `ollama` `/api/generate` prefix stays
-a v1 fallback by absence) and `github_copilot` (the SDK-path openai-compat
+a v1 fallback by absence), `github_copilot` (the SDK-path openai-compat
 provider with the system->assistant role rewrite; the codex family bridges
-to the Responses API above the chat seam and stays v1 by absence) —
+to the Responses API above the chat seam and stays v1 by absence), and
+`databricks` (the LAST outbound provider: openai-chat-shaped wire with the
+`"claude" in model` SUBSTRING fork over tools/response_format/
+reasoning_effort, its own response parser and its own NDJSON-style chunk
+dialect — usage DROPPED, json_mode byte-reformat) —
 request, response, and stream
 translation,
 differential-green (anthropic: 46-shape corpus + responses + stream
@@ -1474,6 +1545,99 @@ GITHUB_COPILOT_TOKEN_DIR and a guard test asserts no path can reach it). The
 wakes the dormant validate_environment + anthropic-native transform_response
 (GC-R2) — a one-env-var dormancy flip the fork must keep on v1 until those
 surfaces are ported.
+Deliberate wave-3 databricks fallback surfaces (providers/databricks, the
+LAST outbound provider; each names the v1 path). The CENTRAL structural fact
+is the ``"claude" in model`` SUBSTRING fork (DB-R1, ``params.is_claude``) — a
+user-named serving endpoint carrying the substring (``my-claude-proxy-llama``,
+probed) gets anthropic param treatment; the gate uses the SAME substring,
+never a model-map lookup, so every differential row is parameterized
+claude × non-claude. FALLBACK (v1 RAISES): ``parallel_tool_calls`` (the
+supported list omits it -> UnsupportedParamsError); ``reasoning_effort`` on a
+NON-claude model WITHOUT max_tokens/max_completion_tokens (DB-R3: v1 CRASHES
+with a raw ``KeyError('thinking')`` in
+update_optional_params_with_thinking_tokens, NOT a typed UPE — the row asserts
+v1 raises KeyError so an upstream fix turns it red). FALLBACK (v1 SERVES, the
+machinery is unported): ``response_format`` on a claude-substring model — v1
+routes json_schema through the json_tool_call tool + json_mode + forced
+tool_choice (tool_choice OMITTED when thinking is enabled, probed) and
+SILENTLY DROPS ``{"type":"json_object"}`` ENTIRELY (DB-R2, probed: the
+anthropic mapper returns None and the unconditional pop runs — nothing on the
+wire), the cross-plane json_mode state spanning request/response/stream;
+``reasoning_effort`` on a claude-substring model (v1 maps it to
+thinking{enabled,budget} via AnthropicConfig._map_reasoning_effort —
+low->1024, high->4096, none->popped clean, probed — plus the adaptive
+thinking{type:adaptive} + output_config{effort} arm on the name-predicate
+``_is_adaptive_thinking_model`` opus-4-6 names, traffic-dormant since no such
+model_cost key exists at HEAD); ``cache_control`` on ANY message or tool (v1
+MOVES message-level markers into a text block and a whitespace-only message
+LOSES the marker with the sanitized block — a lossy interaction, guard-side);
+empty/whitespace-only string message content (v1's ``_sanitize_empty_content``
+REMOVES the content key -> a bare ``{role}``, guard-side, the openai guard
+only catches None); USER message ``name`` (v1 KEEPS it via
+``strip_name_from_message(allowed_name_roles=["user"])`` while assistant/tool
+names are STRIPPED == the IR drop -> the name_fallback_user_only arm);
+``user`` (silently dropped upstream, model-list gated — v1 serves its own
+drop); legacy ``$ref``/``$defs`` in a claude tool's parameters (v1 inlines via
+unpack_legacy_defs before the anthropic schema filter — unported, the
+fireworks precedent); and the openai-guard raw shapes + parse-level unknowns
+(n is SERVED by v1's list but is a parse-level unknown; seed/frequency_penalty/
+presence_penalty/logprobs all RAISE in v1's _check_valid_arg, served as
+fallbacks). SERVED, pinned IDENTICAL (claude AND non-claude arms): plain chat;
+temperature/top_p/stop; ``mct -> max_tokens`` ALWAYS (v1 never re-emits
+max_completion_tokens — contrast the openai_compat re-emit); the thinking
+max-bump (``budget_tokens + DEFAULT_MAX_TOKENS`` ONLY when thinking carries a
+budget and the caller gave no max_tokens, probed 2048->6144; a caller max is
+never adjusted, a budget-less thinking dict triggers no bump); ``top_k``
+verbatim TOP-LEVEL (DRIFT: researcher-5 ranked it unsupported; the HEAD probe
+REFUTES it — v1 serves it on the wire both arms); tools on NON-claude verbatim
+(strict/$schema/cache_control KEPT); tools on claude via the round-trip
+(openai -> anthropic -> databricks DROPS function-level strict/$schema/
+cache_control through the ``AnthropicInputSchema`` allowed-keys filter, KEEPS
+additionalProperties, normalizes empty parameters to
+``{"type":"object","properties":{}}``, repositions a present empty description
+AFTER parameters — all probed); tool_choice; ``thinking`` passthrough as
+``{type:enabled[,budget_tokens]}``; ``reasoning_effort`` verbatim on NON-claude
+WITH max_tokens (one line); ``response_format`` verbatim on NON-claude
+(json_object AND json_schema). The ``stream`` key ALWAYS materializes (default
+False) so explicit-false == absent (NO guard arm — the snowflake shape). The
+RESPONSE parser builds v1's normalized body itself (construction arm "openai",
+the cohere/ollama_chat fresh-ModelResponse shape): ``databricks/{wire model}``
+prefix INSIDE the parser (DB-R7: v1's prefix is
+``litellm_params.custom_llm_provider or "databricks"`` — a custom provider
+riding the databricks config keeps its OWN prefix; the dispatch name is
+"databricks", so the literal is correct and the override is a FORK
+OBLIGATION), content block-list flattened to a joined string, reasoning/summary
+blocks -> reasoning_content + thinking_blocks (missing signature -> ""),
+citations -> provider_specific_fields.citations with a supported_text mirror,
+UNKNOWN top-level keys DROPPED (only id/created/model/usage/choices survive;
+the wire's ``object``/``system_fingerprint`` values are NOT carried — probed),
+and a missing required key is a RAW v1 ``KeyError`` (DRIFT from researcher-5's
+"DatabricksException" claim: the ``DatabricksResponse(**json)`` TypedDict does
+NOT validate — pinned as a v1-raise fallback row). The STREAM rides the OWN
+"databricks" chunk dialect (one wire chunk -> ONE ModelResponseStream body, NO
+split): the wire ``usage`` is DROPPED ENTIRELY (DB-R5 — the seam must NOT
+attach a parsed usage tail), ``{}`` tool arguments -> ``""``, a content LIST
+flattens to a string + reasoning/thinking blocks, a first-item ``citations``
+list lifts to ``provider_specific_fields.citation = citations[0]``, and the
+STATEFUL json_mode machine (``_last_function_name`` rides
+``StreamState.last_function_name``) folds a json_tool_call tool delta to
+content with the json.loads+dumps byte REFORMAT (DB-R8: ``{"a":1}`` ->
+``{"a": 1}``, byte-compared not JSON-compared); json_mode is a request-side
+fallback so the arm is dormant from v2's own flow, pinned by the
+REAL-iterator replay with json_mode=True. ``_should_fake_stream`` is DEAD CODE
+at HEAD (DB-R4, verified: only groq's two sites call its own
+``_should_fake_stream``; nothing sets databricks ``fake_stream`` and databricks
+is NOT in openai_compatible_providers) — a canary asserts it so an upstream
+wire-up turns the streaming behavior loud. databricks fork obligations (NOT
+wired; integrator scope): construction arm "openai" (machine-readable in
+``OWN_MODULE_RESPONSE_STYLES``, wrong-arm divergence pinned in the response
+gate), NO seam preset (the parser owns the databricks/{wire} prefix), the
+streaming seam folds providers/databricks.parse_line with the "databricks"
+chunk dialect (the json_mode flag rides StreamState), and the M2M OAuth token
+POST (per request, uncached, at validate_environment time) + the
+WorkspaceClient URL synthesis are ENVELOPE (the watsonx-IAM rule: serialize/
+parse never touch them; a request with api_base=None AND no env hits v1's
+WorkspaceClient ambient-auth arm -> typed fallback, DB-R6).
 Not yet here, each its own follow-up: streaming seams live; the other
 inbound schemas (`anthropic_messages`, `google_genai`, `responses`,
 `completions`); the same-family fast path (waits on the opaque-body

@@ -45,7 +45,11 @@ def fold_choice(
     if json_mode and isinstance(tool_calls, list) and tool_calls:
         return _json_mode_delta(delta, tool_calls, last_function_name)
     if isinstance(tool_calls, list) and tool_calls:
-        delta = {**delta, "tool_calls": _empty_args_to_blank(tool_calls)}
+        blanked: dict[str, PlainJson] = {
+            **delta,
+            "tool_calls": _empty_args_to_blank(tool_calls),
+        }
+        return _content_normalized(blanked, last_function_name)
     return _content_normalized(delta, last_function_name)
 
 
@@ -60,7 +64,11 @@ def _json_mode_delta(
     if not matches:
         return _content_normalized(delta, remembered)
     content = _json_mode_content(tool_calls)
-    converted = {**delta, "content": content, "tool_calls": None}
+    converted: dict[str, PlainJson] = {
+        **delta,
+        "content": content,
+        "tool_calls": None,
+    }
     return _content_normalized(converted, remembered)
 
 
@@ -105,7 +113,7 @@ def _content_normalized(
     with_citation = _with_citation(delta, content)
     content_str = _content_str(content)
     reasoning, thinking_blocks = _reasoning(content)
-    normalized = {
+    normalized: dict[str, PlainJson] = {
         **with_citation,
         "content": content_str,
         "reasoning_content": reasoning,
