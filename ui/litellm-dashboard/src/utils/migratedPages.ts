@@ -43,6 +43,7 @@ export const MIGRATED_PAGES: Record<string, string> = {
   agents: "agents",
   "router-settings": "router-settings",
   users: "users",
+  teams: "teams",
 };
 
 function uiBase(): string {

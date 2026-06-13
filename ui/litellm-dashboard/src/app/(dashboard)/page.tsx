@@ -6,7 +6,6 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components/networking";
-import OldTeams from "@/components/OldTeams";
 import { fetchUserModels, CreateKeyPrefillData } from "@/components/organisms/create_key_button";
 import Organizations, { fetchOrganizations } from "@/components/organizations";
 import PassThroughSettings from "@/components/pass_through_settings";
@@ -321,17 +320,6 @@ function CreateKeyPageContent() {
               setModelData={setModelData}
               premiumUser={premiumUser}
               teams={teams}
-            />
-          ) : page == "teams" ? (
-            <OldTeams
-              teams={teams}
-              setTeams={setTeams}
-              accessToken={accessToken}
-              userID={userID}
-              userRole={userRole}
-              organizations={organizations}
-              premiumUser={premiumUser}
-              searchParams={searchParams}
             />
           ) : page == "organizations" ? (
             <Organizations
