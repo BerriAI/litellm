@@ -127,13 +127,16 @@ def _reasoning_item(reasoning: str, response: ChatResponse) -> PlainJson:
 
 def _message_item(response: ChatResponse) -> PlainJson:
     text = "".join(block.text.text for block in response.content if block.tag == "text")
+    # The chat message content is `text or None` (v1's anthropic dialect), and
+    # v1's OutputText.text copies it verbatim, so a tool-only / empty turn emits
+    # null text rather than "".
     return {
         "type": "message",
         "id": response.id,
         "status": _STATUS[response.finish],
         "role": "assistant",
         "phase": None,
-        "content": [{"type": "output_text", "text": text, "annotations": []}],
+        "content": [{"type": "output_text", "text": text or None, "annotations": []}],
     }
 
 
