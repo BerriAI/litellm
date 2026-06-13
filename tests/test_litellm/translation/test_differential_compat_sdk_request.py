@@ -624,6 +624,7 @@ def test_registered_providers_have_differential_coverage() -> None:
         # wave-3 own modules:
         "ollama_chat",  # test_differential_ollama_chat_{request,response,stream}
         "github_copilot",  # test_differential_github_copilot_{request,response}
+        "databricks",  # test_differential_databricks_{request,response,stream}
     }
     assert providers == dedicated_gates | set(SPECS) | set(HTTPX_SPECS)
     own_modules = {
@@ -645,6 +646,7 @@ def test_registered_providers_have_differential_coverage() -> None:
         # the module, with the wrong-arm pin in its response gate)
         "ollama_chat",
         "github_copilot",
+        "databricks",
     }
     # critic-wave2b-alpha MAJOR-4: every own-module provider must carry a row
     # in pipeline.OWN_MODULE_RESPONSE_STYLES (the construction-style truth the

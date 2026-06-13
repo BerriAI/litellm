@@ -2877,12 +2877,152 @@ def _github_copilot_rows(lines: list) -> int:
     return failures
 
 
+def _databricks_rows(lines: list) -> int:
+    from litellm.exceptions import UnsupportedParamsError
+
+    from . import test_differential_databricks_request as req
+    from . import test_differential_databricks_response as resp
+    from . import test_differential_databricks_stream as stream
+
+    failures = 0
+    lines += [
+        "",
+        "## databricks: request bodies (v1 get_optional_params('databricks') +"
+        " the LIVE DatabricksConfig.transform_request — the {model, messages,"
+        " stream} body, mct->max_tokens, the claude-substring tool round-trip"
+        " (drops strict/$schema) and the thinking max-bump — vs v2"
+        " providers/databricks; every shared shape on BOTH the claude and"
+        " non-claude arms of the \"claude\" in model fork)",
+        "",
+    ]
+    for name in sorted(req._SHARED_CASES):
+        for model in (req.CLAUDE, req.NONCLAUDE):
+            case = {"model": model, **req._SHARED_CASES[name]}
+            result = req._v2(case)
+            same = result.is_ok() and req._norm(result.ok) == req._norm(
+                req.run_v1_request_transform(case)
+            )
+            failures += 0 if same else 1
+            arm = "claude" if model == req.CLAUDE else "nonclaude"
+            lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name} ({arm})")
+    for name in sorted(req._NONCLAUDE_ONLY_CASES):
+        case = {"model": req.NONCLAUDE, **req._NONCLAUDE_ONLY_CASES[name]}
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req._CLAUDE_ONLY_CASES):
+        case = {"model": req.CLAUDE, **req._CLAUDE_ONLY_CASES[name]}
+        result = req._v2(case)
+        same = result.is_ok() and req._norm(result.ok) == req._norm(
+            req.run_v1_request_transform(case)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(req._V1_RAISES):
+        case, reason = req._V1_RAISES[name]
+        result = req._v2(case)
+        try:
+            req.run_v1_request_transform(case)
+            raised = False
+        except UnsupportedParamsError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises UnsupportedParamsError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req._V1_RAISES_RAW):
+        case, reason = req._V1_RAISES_RAW[name]
+        result = req._v2(case)
+        try:
+            req.run_v1_request_transform(case)
+            raised = False
+        except KeyError:
+            raised = True
+        ok = result.is_error() and reason in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises raw KeyError, DB-R3)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    for name in sorted(req._V1_SERVES_FALLBACKS):
+        case, reason = req._V1_SERVES_FALLBACKS[name]
+        result = req._v2(case)
+        ok = result.is_error() and reason in result.error.summary
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 serves it)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({reason})")
+    lines += [
+        "",
+        "## databricks: responses (v1's transform_response — content-list"
+        " flatten, reasoning/summary -> reasoning_content + thinking_blocks,"
+        " citations -> provider_specific_fields with supported_text, the"
+        " databricks/{wire model} prefix; a missing required key is a RAW"
+        " KeyError — vs v2 the parser + openai construction arm)",
+        "",
+    ]
+    for name in sorted(resp._RESPONSES):
+        raw = resp._RESPONSES[name]
+        same = resp._norm(resp._v2_model_response(raw)) == resp._norm(
+            resp._v1_model_response(raw)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(resp._LOUD):
+        raw, fragment = resp._LOUD[name]
+        result = resp._v2_parse(raw)
+        try:
+            resp._v1_model_response(raw)
+            raised = False
+        except KeyError:
+            raised = True
+        ok = result.is_error() and fragment in result.error.summary and raised
+        failures += 0 if ok else 1
+        label = "FALLBACK (v1 raises raw KeyError)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({fragment})")
+    lines += [
+        "",
+        "## databricks: streams (v1 DatabricksChatResponseIterator — ONE body"
+        " per wire chunk, the wire usage DROPPED ENTIRELY (DB-R5), the json_mode"
+        " json_tool_call->content byte-reformat (DB-R8) — vs v2 the databricks"
+        " chunk dialect; the non-JSON/empty line seam is a PINNED DIVERGENCE)",
+        "",
+    ]
+    for name in sorted(stream.STREAMS):
+        events = stream.STREAMS[name]
+        v1 = stream._v1_chunks(events)
+        v2 = stream._v2_bodies(events)
+        same = len(v1) == len(v2) and all(
+            stream._norm_delta(stream._v1_delta(a)) == stream._norm_delta(
+                stream._v2_delta(b)
+            )
+            for a, b in zip(v1, v2)
+        )
+        failures += 0 if same else 1
+        lines.append(f"- {'IDENTICAL' if same else 'DIVERGENT'}: {name}")
+    for name in sorted(stream._PINNED_DIVERGENCES):
+        raw_lines, fragment = stream._PINNED_DIVERGENCES[name]
+        from litellm.translation.engine.stream import fold_lines
+        from litellm.translation.inbound.openai_chat.stream import initial_state
+
+        folded = fold_lines(
+            list(raw_lines),
+            stream.parse_line,
+            initial_state(stream.MODEL, dialect="databricks"),
+        )
+        ok = folded.is_error() and fragment in folded.error.summary
+        failures += 0 if ok else 1
+        label = "PINNED DIVERGENCE (v1 swallows, v2 loud)" if ok else "DIVERGENT"
+        lines.append(f"- {label}: {name} ({fragment})")
+    return failures
+
+
 def main() -> None:
     _freeze_ambient()
     _stub_vertex_token()
 
     lines = [
-        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules + the wave-3 ollama_chat and github_copilot own modules)",
+        "# Translation v2 differential report (anthropic + bedrock + openai + google + azure + xai + the compat_sdk family (waves 1a+1b+2a) + the wave-1b compat_httpx family + the wave-2b-alpha + wave-2b-beta own modules + the wave-3 ollama_chat, github_copilot, and databricks own modules)",
         "",
         "v1 and v2 run over the same corpus; every row must be IDENTICAL (or an",
         "explained FALLBACK that v1 serves) for a provider's flag to turn on.",
@@ -2907,6 +3047,7 @@ def main() -> None:
     failures += _groq_rows(lines)
     failures += _ollama_chat_rows(lines)
     failures += _github_copilot_rows(lines)
+    failures += _databricks_rows(lines)
     failures += _azure_rows(lines)
     failures += _azure_ai_rows(lines)
     failures += _bedrock_request_rows(lines)

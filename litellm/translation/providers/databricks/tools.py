@@ -43,7 +43,7 @@ the ``thinking`` dict omits ``budget_tokens`` NO bump fires (v1's
 
 from __future__ import annotations
 
-from litellm.constants import DEFAULT_MAX_TOKENS
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, DEFAULT_MAX_TOKENS
 
 from ...errors import TranslationError
 from ...ir import (
@@ -123,7 +123,7 @@ def _carries_legacy_defs(schema: dict[str, PlainJson]) -> bool:
 
 
 def _scan_legacy_defs(value: PlainJson, depth: int) -> bool:
-    if depth > 100:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
         return True
     if isinstance(value, dict):
         if "$ref" in value or "$defs" in value or "definitions" in value:

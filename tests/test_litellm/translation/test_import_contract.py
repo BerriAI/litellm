@@ -53,6 +53,7 @@ def test_no_module_imports_a_forbidden_v1_surface() -> None:
 # unification item). APPEND a module name below when a new consumer lands.
 
 _DEPTH_CAP_CONSUMERS = (
+    "providers.databricks.tools",
     "providers.google_genai.schema",
     "providers.mistral.serialize",
     "providers.openai_compat.guard",
