@@ -275,7 +275,9 @@ def _get_token_base_cost(
     threshold: Optional[float] = None
     for key in sorted(
         threshold_keys,
-        key=lambda k: _parse_above_tokens_threshold(k) or -1.0,
+        key=lambda k: (
+            v if (v := _parse_above_tokens_threshold(k)) is not None else -1.0
+        ),
         reverse=True,
     ):
         value = model_info.get(key)

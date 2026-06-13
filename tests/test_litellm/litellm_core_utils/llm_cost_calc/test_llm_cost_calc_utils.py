@@ -1609,5 +1609,5 @@ def test_generic_cost_per_token_bills_highest_crossed_tier():
             custom_llm_provider="test-provider",
         )
 
-    assert round(prompt_cost, 12) == round(150_000 * 9e-6, 12)
-    assert round(completion_cost, 12) == round(100 * 1e-5, 12)
+    assert prompt_cost == pytest.approx(150_000 * 9e-6, rel=1e-9)
+    assert completion_cost == pytest.approx(100 * 1e-5, rel=1e-9)
