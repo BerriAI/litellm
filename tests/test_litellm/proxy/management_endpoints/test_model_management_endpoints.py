@@ -566,7 +566,8 @@ class TestUpdateModel:
             )
 
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
-            mock_clear_cache.assert_awaited_once_with()
+            # clear_cache is now fired via asyncio.create_task, not directly awaited.
+            mock_clear_cache.assert_called_once_with()
 
 
 class TestUpdatePublicModelGroups:

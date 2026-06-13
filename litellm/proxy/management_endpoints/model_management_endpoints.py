@@ -267,8 +267,10 @@ async def patch_model(
             data=update_data,
         )
 
-        # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
-        await clear_cache()
+        # Fire cache reload in the background so the HTTP response returns immediately
+        # after the DB write. clear_cache() re-fetches all models from DB and reloads
+        # the router — under load this can take 7-43s, causing 500s when awaited.
+        asyncio.create_task(clear_cache())
 
         ## CREATE AUDIT LOG ##
         asyncio.create_task(
@@ -1207,8 +1209,8 @@ async def update_model(
                 data=_data,  # type: ignore
             )
 
-            # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
-            await clear_cache()
+            # Fire cache reload in the background — same as patch_model.
+            asyncio.create_task(clear_cache())
 
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
