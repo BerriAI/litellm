@@ -74,6 +74,15 @@ from ..providers.fireworks_ai import serialize_request as fireworks_serialize_re
 from ..providers.fireworks_ai import (
     unsupported_request_shapes as fireworks_unsupported_request_shapes,
 )
+from ..providers.github_copilot import (
+    parse_response as github_copilot_parse_response,
+)
+from ..providers.github_copilot import (
+    serialize_request as github_copilot_serialize_request,
+)
+from ..providers.github_copilot import (
+    unsupported_request_shapes as github_copilot_unsupported_request_shapes,
+)
 from ..providers.google_genai import parse_response as google_parse_response
 from ..providers.google_genai import (
     serialize_request_studio as google_serialize_request_studio,
@@ -198,6 +207,9 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
         # wave-3: ollama_chat (the NDJSON /api/chat wire — its own body
         # assembly over the shared message inverse).
         "ollama_chat": ollama_chat_serialize_request,
+        # wave-3: github_copilot (SDK path — openai_compat assemble_body +
+        # the system->assistant rewrite gated by the ambient disable flag).
+        "github_copilot": github_copilot_serialize_request,
     }
 )
 
@@ -272,6 +284,12 @@ _RESPONSE_PARSERS: Mapping[Provider, _ResponseParser] = MappingProxyType(
         # parser scope) and rides it on ChatResponse.wire; seam construction
         # arm "openai" (fresh-ModelResponse mutation, the cohere shape).
         "ollama_chat": ollama_chat_parse_response,
+        # wave-3: github_copilot — the SDK-path LIVE normalizer is
+        # convert_to_model_response_object (the config's transform_response is
+        # dead there); the shared openai parser verbatim, with the
+        # github_copilot/{wire_model} re-prefix as the seam's preset arm
+        # (construction arm "openai", NOT parser scope — the compat_sdk shape).
+        "github_copilot": github_copilot_parse_response,
     }
 )
 
@@ -321,6 +339,10 @@ OWN_MODULE_RESPONSE_STYLES: Mapping[Provider, ResponseStyle] = MappingProxyType(
         # the cdr arm; wrong-arm pin in its response gate (the cohere
         # no-id template: "openai_like" mints a fresh envelope id).
         "ollama_chat": "openai",
+        # wave-3: github_copilot rides the SDK-path cdr normalizer with the
+        # seam re-prefix (the compat_sdk shape) — construction arm "openai";
+        # wrong-arm pin in its response gate (the cohere no-id template).
+        "github_copilot": "openai",
     }
 )
 
@@ -385,6 +407,10 @@ _RESPONSE_DIALECTS: Mapping[Provider, ResponseDialect] = MappingProxyType(
         # (its own NDJSON arm — selected by the stream gates/future
         # streaming seam, not this outbound-body table).
         "ollama_chat": _OPENAI_DIALECT,
+        # wave-3: github_copilot — SDK path, default openai wrapper arm (no
+        # custom iterator exists in the provider; chunks ride the openai
+        # dialect exactly like the compat_sdk family).
+        "github_copilot": _OPENAI_DIALECT,
     }
 )
 
@@ -439,6 +465,11 @@ _RAW_GUARDS: Mapping[Provider, _RawGuard] = MappingProxyType(
         # skip_name_fallback (v1's munge whitelist drops every message
         # name); NO stream:false arm (the body always carries stream).
         "ollama_chat": ollama_chat_unsupported_request_shapes,
+        # wave-3: github_copilot — explicit stream:false (SDK serializes the
+        # key) + the shared openai guard with the FULL message-name fallback
+        # (the base transform forwards names; the system->assistant rewrite
+        # preserves them and the IR cannot carry name).
+        "github_copilot": github_copilot_unsupported_request_shapes,
     }
 )
 

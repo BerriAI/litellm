@@ -66,6 +66,8 @@ def build_translation_deps(
         drop_params=drop_params_global or request_drop_params is True,
         drop_params_global=drop_params_global,
         modify_params=litellm.modify_params is True,
+        disable_copilot_system_to_assistant=litellm.disable_copilot_system_to_assistant
+        is True,
     )
 
 

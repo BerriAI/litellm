@@ -164,6 +164,14 @@ Provider = Literal[
     # a deliberate v1 fallback by ABSENCE (researcher-4/-5: no coercion
     # exists between the two names; the prefix split is the whole truth).
     "ollama_chat",
+    # wave-3: github_copilot (SDK path — the big openai elif; serializer is
+    # openai_compat assemble_body + the system->assistant role rewrite gated
+    # by the ambient disable flag through deps; construction arm "openai"
+    # with the seam re-prefix github_copilot/{wire_model}). The codex family
+    # (gpt-5.3-codex / gpt-5.1-codex-max) bridges to the Responses API ABOVE
+    # the chat seam and never reaches here (canary-pinned). The OAuth
+    # device-flow is envelope (validate_environment, above the seam).
+    "github_copilot",
 ]
 
 NeverPortProvider = Literal[
