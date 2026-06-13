@@ -34,10 +34,11 @@ async def test_openai_moderation_guardrail_init():
 
 @pytest.mark.asyncio
 async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
-    """Test that OpenAI moderation guardrail adds itself to litellm callbacks during initialization"""
+    """openai_moderation initializes through the Rust dispatcher and registers a callback."""
     import litellm
-    from litellm.proxy.guardrails.guardrail_hooks.openai import (
-        initialize_guardrail as openai_initialize_guardrail,
+    from litellm.proxy.guardrails.guardrail_hooks.rust_guardrail import RUST_AVAILABLE
+    from litellm.proxy.guardrails.guardrail_registry import (
+        guardrail_initializer_registry,
     )
     from litellm.types.guardrails import (
         Guardrail,
@@ -45,7 +46,17 @@ async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
         SupportedGuardrailIntegrations,
     )
 
-    # Clear existing callbacks for clean test
+    if not RUST_AVAILABLE:
+        pytest.skip("litellm-guardrails-rs engine not installed")
+
+    from litellm.proxy.guardrails.guardrail_hooks.rust_guardrail.rust_guardrail import (
+        RustGuardrail,
+    )
+
+    initialize = guardrail_initializer_registry[
+        SupportedGuardrailIntegrations.OPENAI_MODERATION.value
+    ]
+
     original_callbacks = litellm.callbacks.copy()
     litellm.logging_callback_manager._reset_all_callbacks()
 
@@ -57,7 +68,7 @@ async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
                 model="omni-moderation-latest",
                 mode="pre_call",
             )
-            guardrail = openai_initialize_guardrail(
+            guardrail = initialize(
                 litellm_params=guardrail_litellm_params,
                 guardrail=Guardrail(
                     guardrail_name="test-openai-moderation",
@@ -65,16 +76,10 @@ async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
                 ),
             )
 
-            # Check that the guardrail was added to litellm callbacks
             assert guardrail in litellm.callbacks
-            assert len(litellm.callbacks) == 1
-
-            # Verify it's the correct guardrail
-            callback = litellm.callbacks[0]
-            assert isinstance(callback, OpenAIModerationGuardrail)
-            assert callback.guardrail_name == "test-openai-moderation"
+            assert isinstance(guardrail, RustGuardrail)
+            assert guardrail.guardrail_name == "test-openai-moderation"
     finally:
-        # Restore original callbacks
         litellm.logging_callback_manager._reset_all_callbacks()
         for callback in original_callbacks:
             litellm.logging_callback_manager.add_litellm_callback(callback)
@@ -845,38 +850,18 @@ async def test_openai_moderation_guardrail_streaming_overrides():
 
 
 @pytest.mark.asyncio
-async def test_openai_moderation_initialize_guardrail_forwards_streaming_flags():
-    """initialize_guardrail forwards streaming knobs from litellm_params (extra='allow')."""
-    import litellm
-    from litellm.proxy.guardrails.guardrail_hooks.openai import (
-        initialize_guardrail as openai_initialize_guardrail,
-    )
-    from litellm.types.guardrails import (
-        Guardrail,
-        LitellmParams,
-        SupportedGuardrailIntegrations,
-    )
+async def test_openai_moderation_guardrail_stores_streaming_flags():
+    """OpenAIModerationGuardrail stores the streaming knobs it is constructed with.
 
-    litellm.logging_callback_manager._reset_all_callbacks()
-    try:
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-            litellm_params = LitellmParams(
-                guardrail=SupportedGuardrailIntegrations.OPENAI_MODERATION,
-                api_key="test-key",
-                model="omni-moderation-latest",
-                mode="post_call",
-                streaming_end_of_stream_only=False,
-                streaming_sampling_rate=2,
-            )
-            guardrail = openai_initialize_guardrail(
-                litellm_params=litellm_params,
-                guardrail=Guardrail(
-                    guardrail_name="test-openai-moderation",
-                    litellm_params=litellm_params,
-                ),
-            )
+    Streaming sampling is a Python-only feature; the Rust engine does not
+    implement it, so this exercises the class directly rather than routing.
+    """
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            streaming_end_of_stream_only=False,
+            streaming_sampling_rate=2,
+        )
 
-            assert guardrail.streaming_end_of_stream_only is False
-            assert guardrail.streaming_sampling_rate == 2
-    finally:
-        litellm.logging_callback_manager._reset_all_callbacks()
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 2

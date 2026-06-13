@@ -7,11 +7,19 @@ from .generic_guardrail_api import GenericGuardrailAPI
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
+# Runtime initialization is owned by the Rust dispatcher in
+# guardrail_hooks/rust_guardrail/__init__.py, which routes to Rust and calls
+# initialize_python_guardrail below as a fallback. This module only exposes the
+# class registry (UI config-field schemas, and GenericGuardrailAPI remains the
+# base class for guardrails like qohash) and that fallback initializer.
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+
+def initialize_python_guardrail(
+    litellm_params: "LitellmParams", guardrail: "Guardrail"
+):
     import litellm
 
-    _generic_guardrail_api_callback = GenericGuardrailAPI(
+    callback = GenericGuardrailAPI(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         headers=getattr(litellm_params, "headers", None),
@@ -27,15 +35,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         default_on=litellm_params.default_on,
     )
 
-    litellm.logging_callback_manager.add_litellm_callback(
-        _generic_guardrail_api_callback
-    )
-    return _generic_guardrail_api_callback
+    litellm.logging_callback_manager.add_litellm_callback(callback)
+    return callback
 
-
-guardrail_initializer_registry = {
-    SupportedGuardrailIntegrations.GENERIC_GUARDRAIL_API.value: initialize_guardrail,
-}
 
 guardrail_class_registry = {
     SupportedGuardrailIntegrations.GENERIC_GUARDRAIL_API.value: GenericGuardrailAPI,

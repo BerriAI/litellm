@@ -49,4 +49,8 @@ pub struct RequestContext {
     pub request_headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pub dynamic_params: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub litellm_version: Option<String>,
+    #[serde(default)]
+    pub extra_header_allowlist: Vec<String>,
 }

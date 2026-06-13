@@ -1,21 +1,38 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use guardrails_core::{
+use crate::{
     Detection, GenericApiConfig, Guardrail, GuardrailInput, GuardrailOutcome, InputType,
-    ProviderError, RequestContext, UnreachableFallback, Verdict,
+    ProviderError, RequestContext, UnreachableFallback, Verdict, headers,
 };
-use guardrails_http::HttpClient;
+use crate::HttpClient;
 use serde::{Deserialize, Serialize};
+
+const ENDPOINT_SUFFIX: &str = "/beta/litellm_basic_guardrail_api";
+
+fn normalize_api_base(raw: &str) -> String {
+    if raw.ends_with(ENDPOINT_SUFFIX) {
+        raw.to_owned()
+    } else {
+        format!("{}{ENDPOINT_SUFFIX}", raw.trim_end_matches('/'))
+    }
+}
 
 pub struct GenericGuardrailApi {
     config: GenericApiConfig,
+    api_base: String,
     http: Arc<HttpClient>,
 }
 
 impl GenericGuardrailApi {
     pub fn new(config: GenericApiConfig, http: Arc<HttpClient>) -> Self {
-        Self { config, http }
+        let api_base = normalize_api_base(&config.api_base);
+        Self {
+            config,
+            api_base,
+            http,
+        }
     }
 
     fn classify_error(&self, err: &ProviderError) -> Result<(), ProviderError> {
@@ -36,7 +53,7 @@ struct GenericRequest<'a> {
     input_type: InputType,
     texts: &'a [String],
     images: &'a [String],
-    structured_messages: &'a [guardrails_core::Message],
+    structured_messages: &'a [crate::Message],
     tools: &'a [serde_json::Value],
     tool_calls: &'a [serde_json::Value],
     model: &'a Option<String>,
@@ -44,8 +61,13 @@ struct GenericRequest<'a> {
     litellm_call_id: &'a Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     litellm_trace_id: &'a Option<String>,
+    request_data: &'a serde_json::Map<String, serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_headers: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    litellm_version: &'a Option<String>,
     #[serde(flatten)]
-    additional_provider_specific_params: &'a serde_json::Map<String, serde_json::Value>,
+    additional_provider_specific_params: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +101,15 @@ impl Guardrail for GenericGuardrailApi {
     ) -> Result<GuardrailOutcome, ProviderError> {
         let start = Instant::now();
 
+        let sanitized_headers = ctx.request_headers.as_ref().map(|raw| {
+            headers::sanitize_headers(raw, &ctx.extra_header_allowlist)
+        });
+
+        let mut merged_params = self.config.additional_provider_specific_params.clone();
+        for (k, v) in &ctx.dynamic_params {
+            merged_params.insert(k.clone(), v.clone());
+        }
+
         let body = GenericRequest {
             input_type,
             texts: &input.texts,
@@ -89,31 +120,24 @@ impl Guardrail for GenericGuardrailApi {
             model: &input.model,
             litellm_call_id: &ctx.litellm_call_id,
             litellm_trace_id: &ctx.litellm_trace_id,
-            additional_provider_specific_params: &self.config.additional_provider_specific_params,
+            request_data: &ctx.user_api_key_metadata,
+            request_headers: sanitized_headers,
+            litellm_version: &ctx.litellm_version,
+            additional_provider_specific_params: merged_params,
         };
 
-        let mut req = self.http.inner().post(&self.config.api_base).json(&body);
+        let mut req = self.http.inner().post(&self.api_base).json(&body);
 
         if let Some(key) = &self.config.api_key {
             req = req.header("x-api-key", key);
         }
-        if let Some(headers) = &self.config.headers {
-            for (k, v) in headers {
+        if let Some(hdrs) = &self.config.headers {
+            for (k, v) in hdrs {
                 req = req.header(k, v);
             }
         }
 
-        let resp = req.send().await.map_err(|e| {
-            if e.is_timeout() {
-                ProviderError::Timeout {
-                    ms: start.elapsed().as_millis() as u64,
-                }
-            } else {
-                ProviderError::Network {
-                    message: e.to_string(),
-                }
-            }
-        });
+        let resp = req.send().await.map_err(super::map_send_error(start));
 
         let resp = match resp {
             Ok(r) => r,
@@ -189,5 +213,32 @@ impl Guardrail for GenericGuardrailApi {
             provider_response: raw,
             duration_ms,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_normalization_appends_suffix() {
+        assert_eq!(
+            normalize_api_base("http://localhost:8888"),
+            "http://localhost:8888/beta/litellm_basic_guardrail_api"
+        );
+    }
+
+    #[test]
+    fn url_normalization_strips_trailing_slash() {
+        assert_eq!(
+            normalize_api_base("http://localhost:8888/"),
+            "http://localhost:8888/beta/litellm_basic_guardrail_api"
+        );
+    }
+
+    #[test]
+    fn url_normalization_preserves_existing_suffix() {
+        let url = "http://localhost:8888/beta/litellm_basic_guardrail_api";
+        assert_eq!(normalize_api_base(url), url);
     }
 }

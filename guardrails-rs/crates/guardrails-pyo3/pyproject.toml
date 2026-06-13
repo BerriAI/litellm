@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "litellm-guardrails-rs"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "Rust-accelerated guardrail engine for litellm"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "litellm_guardrails_rs"
+manifest-path = "Cargo.toml"

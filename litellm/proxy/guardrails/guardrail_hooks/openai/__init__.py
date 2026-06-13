@@ -1,6 +1,5 @@
 from typing import TYPE_CHECKING
 
-import litellm
 from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import (
     OpenAIModerationGuardrail,
 )
@@ -9,8 +8,25 @@ from litellm.types.guardrails import SupportedGuardrailIntegrations
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
+# Runtime initialization is owned by the Rust dispatcher in
+# guardrail_hooks/rust_guardrail/__init__.py, which routes to Rust and calls
+# initialize_python_guardrail below as a fallback. This module only exposes the
+# class registry (UI config-field schemas) and that fallback initializer.
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+
+def _get_config_value(litellm_params, optional_params, attribute_name):
+    if optional_params is not None:
+        value = getattr(optional_params, attribute_name, None)
+        if value is not None:
+            return value
+    return getattr(litellm_params, attribute_name, None)
+
+
+def initialize_python_guardrail(
+    litellm_params: "LitellmParams", guardrail: "Guardrail"
+):
+    import litellm
+
     guardrail_name = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("OpenAI Moderation: guardrail_name is required")
@@ -38,19 +54,6 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     litellm.logging_callback_manager.add_litellm_callback(openai_moderation_guardrail)
 
     return openai_moderation_guardrail
-
-
-def _get_config_value(litellm_params, optional_params, attribute_name):
-    if optional_params is not None:
-        value = getattr(optional_params, attribute_name, None)
-        if value is not None:
-            return value
-    return getattr(litellm_params, attribute_name, None)
-
-
-guardrail_initializer_registry = {
-    SupportedGuardrailIntegrations.OPENAI_MODERATION.value: initialize_guardrail,
-}
 
 
 guardrail_class_registry = {

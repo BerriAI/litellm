@@ -8,8 +8,15 @@ from .text_moderation import AzureContentSafetyTextModerationGuardrail
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
+# Runtime initialization is owned by the Rust dispatcher in
+# guardrail_hooks/rust_guardrail/__init__.py, which routes to Rust and calls
+# initialize_python_guardrail below as a fallback. This module only exposes the
+# class registry (UI config-field schemas) and that fallback initializer.
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+
+def initialize_python_guardrail(
+    litellm_params: "LitellmParams", guardrail: "Guardrail"
+):
     import litellm
 
     if not litellm_params.api_key:
@@ -57,12 +64,6 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         azure_content_safety_guardrail
     )
     return azure_content_safety_guardrail
-
-
-guardrail_initializer_registry = {
-    SupportedGuardrailIntegrations.AZURE_PROMPT_SHIELD.value: initialize_guardrail,
-    SupportedGuardrailIntegrations.AZURE_TEXT_MODERATIONS.value: initialize_guardrail,
-}
 
 
 guardrail_class_registry = {
