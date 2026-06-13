@@ -17,8 +17,13 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 
+if TYPE_CHECKING:
+    from litellm.types.mcp import MCPPostCallResponseObject
 
-def _serialize_mcp_content_item(item: Any) -> Dict[str, Any]:
+    from .cisco_ai_defense import _ScanContext
+
+
+def _serialize_mcp_content_item(item: object) -> Dict[str, Any]:
     """Serialize an MCP content item to a JSON-friendly dict.
 
     Handles raw dicts, MCP SDK Pydantic models, and simple ``.text`` objects.
@@ -72,10 +77,9 @@ class _CiscoAIDefenseMcpMixin:
             self,
             inspect_response: Dict[str, Any],
             request_data: dict,
-            surface: str,
+            context: "_ScanContext",
             start_time: datetime,
-            direction: str = ...,
-            response_obj: Any = ...,
+            response_obj: object = ...,
         ) -> Dict[str, Any]: ...
 
     # ------------------------------------------------------------------
@@ -85,10 +89,10 @@ class _CiscoAIDefenseMcpMixin:
     async def async_post_mcp_tool_call_hook(
         self,
         kwargs: dict,
-        response_obj: Any,
-        start_time: Any,
-        end_time: Any,
-    ) -> Optional[Any]:
+        response_obj: "MCPPostCallResponseObject",
+        start_time: datetime,
+        end_time: datetime,
+    ) -> Optional["MCPPostCallResponseObject"]:
         """Scan MCP tool output and return a replacement object on block."""
         del start_time, end_time
 
@@ -176,9 +180,9 @@ class _CiscoAIDefenseMcpMixin:
 
     def _build_blocking_mcp_response(
         self,
-        detail: Any,
-        original_response_obj: Any,
-    ) -> Any:
+        detail: object,
+        original_response_obj: object,
+    ) -> "MCPPostCallResponseObject":
         """Build a synthetic MCPPostCallResponseObject for blocked output."""
         import json as _json
 
@@ -220,7 +224,9 @@ class _CiscoAIDefenseMcpMixin:
         )
 
     @staticmethod
-    def _replace_mcp_tool_response(response_obj: Any, replacement_obj: Any) -> bool:
+    def _replace_mcp_tool_response(
+        response_obj: object, replacement_obj: object
+    ) -> bool:
         replacement = getattr(replacement_obj, "mcp_tool_call_response", None)
         if replacement is None:
             return False
@@ -280,7 +286,9 @@ class _CiscoAIDefenseMcpMixin:
         return False
 
     @staticmethod
-    def _replacement_structured_content(replacement: Any) -> Optional[Dict[str, str]]:
+    def _replacement_structured_content(
+        replacement: object,
+    ) -> Optional[Dict[str, str]]:
         if not isinstance(replacement, list) or not replacement:
             return None
         first = replacement[0]
@@ -292,7 +300,7 @@ class _CiscoAIDefenseMcpMixin:
         return {"result": text} if isinstance(text, str) else None
 
     @staticmethod
-    def _extract_mcp_tool_call_response(response_obj: Any) -> Any:
+    def _extract_mcp_tool_call_response(response_obj: object) -> object:
         """Pull the raw tool-call response off a MCPPostCallResponseObject."""
         inner = getattr(response_obj, "mcp_tool_call_response", None)
         if inner is None and isinstance(response_obj, dict):
@@ -333,20 +341,21 @@ class _CiscoAIDefenseMcpMixin:
                 direction="input",
             )
 
+        from .cisco_ai_defense import _ScanContext
+
         return self._finalize_inspection(
             inspect_response=inspect_response,
             request_data=data,
-            surface="mcp",
+            context=_ScanContext(surface="mcp", direction="input"),
             start_time=start_time,
-            direction="input",
         )
 
     async def _inspect_mcp_response(
         self,
         request_data: dict,
-        response: Any,
+        response: object,
         user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-        redact_response_obj: Any = None,
+        redact_response_obj: object = None,
     ) -> Dict[str, Any]:
         del user_api_key_dict  # carried via logging metadata, not the wire payload
         url = f"{self.api_base}{self.inspect_path}"
@@ -376,12 +385,13 @@ class _CiscoAIDefenseMcpMixin:
                 direction="output",
             )
 
+        from .cisco_ai_defense import _ScanContext
+
         return self._finalize_inspection(
             inspect_response=inspect_response,
             request_data=request_data,
-            surface="mcp",
+            context=_ScanContext(surface="mcp", direction="output"),
             start_time=start_time,
-            direction="output",
             response_obj=(
                 response if redact_response_obj is None else redact_response_obj
             ),
@@ -432,7 +442,7 @@ class _CiscoAIDefenseMcpMixin:
     def _build_mcp_response_payload(
         self,
         request_data: dict,
-        response: Any,
+        response: object,
     ) -> Optional[Dict[str, Any]]:
         """Build the MCP response-inspection body sent to ``/inspect/mcp``."""
         request_payload = self._build_mcp_request_payload(data=request_data)
@@ -485,7 +495,7 @@ class _CiscoAIDefenseMcpMixin:
             request_data.setdefault("server_name", server_name)
 
     @staticmethod
-    def _normalize_mcp_response(response: Any) -> Optional[Dict[str, Any]]:
+    def _normalize_mcp_response(response: object) -> Optional[Dict[str, Any]]:
         """Normalize an MCP tool response into a JSON-RPC envelope.
 
         Handles JSON-RPC dicts, raw content lists, MCP SDK models, and
@@ -553,7 +563,7 @@ class _CiscoAIDefenseMcpMixin:
     @staticmethod
     def _build_mcp_result(
         content: List[Any],
-        source: Any = None,
+        source: object = None,
     ) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "content": [_serialize_mcp_content_item(item) for item in content]
@@ -573,7 +583,7 @@ class _CiscoAIDefenseMcpMixin:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _set_mcp_tool_response_text(response_obj: Any, text: str) -> bool:
+    def _set_mcp_tool_response_text(response_obj: object, text: str) -> bool:
         """Replace text content in any supported MCP response shape."""
         if response_obj is None:
             return False
@@ -628,7 +638,7 @@ class _CiscoAIDefenseMcpMixin:
         return replaced
 
     @staticmethod
-    def _coerce_to_content_list(response_obj: Any) -> Optional[List[Any]]:
+    def _coerce_to_content_list(response_obj: object) -> Optional[List[Any]]:
         """Find the MCP content list inside supported response shapes."""
         if response_obj is None:
             return None
