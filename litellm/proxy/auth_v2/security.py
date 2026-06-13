@@ -1,8 +1,11 @@
 import os
-from typing import Annotated, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Annotated, Callable, Dict, List, Optional, cast
 
 from fastapi import Request, Security
 from fastapi.security import SecurityScopes
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
 
 from litellm._redis import get_redis_async_client
 from litellm.proxy.auth_v2 import errors
@@ -50,7 +53,9 @@ def _open_session_store(
     silently stranding state on one pod.
     """
     if any(os.getenv(signal) for signal in _REDIS_ENV_SIGNALS):
-        return RedisSessionStore(get_redis_async_client(), namespace, default_ttl)
+        return RedisSessionStore(
+            cast("Redis", get_redis_async_client()), namespace, default_ttl
+        )
     return InMemorySessionStore(namespace, default_ttl)
 
 

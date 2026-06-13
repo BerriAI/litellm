@@ -64,6 +64,7 @@ def credential_from_claims(
 ) -> Credential:
     header = jwt.get_unverified_header(token)
     issuer = claims.get("iss")
+    jti = claims.get("jti")
     return Credential(
         scheme=scheme,
         method=method,
@@ -73,7 +74,7 @@ def credential_from_claims(
         scopes=split_scope(claims.get("scope")),
         claims=claims,
         credential_ref=CredentialRef(
-            key_id=header.get("kid"), token_id=claims.get("jti")
+            key_id=header.get("kid"), token_id=jti if isinstance(jti, str) else None
         ),
         subject_token=token,
     )
