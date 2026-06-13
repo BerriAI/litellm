@@ -678,14 +678,6 @@
       "count": 1
     }
   },
-  "src/components/WebRTCTester.jsx": {
-    "no-restricted-syntax": {
-      "count": 2
-    },
-    "react/no-unescaped-entities": {
-      "count": 2
-    }
-  },
   "src/components/activity_metrics.tsx": {
     "no-restricted-imports": {
       "count": 1
