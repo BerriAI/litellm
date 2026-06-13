@@ -490,8 +490,11 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 yield chunk
             return
 
-        if not self.should_run_guardrail(
-            data=request_data, event_type=GuardrailEventHooks.post_call
+        if (
+            self.should_run_guardrail(
+                data=request_data, event_type=GuardrailEventHooks.post_call
+            )
+            is not True
         ):
             async for chunk in response:
                 yield chunk
@@ -1951,7 +1954,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     "Cisco AI Defense scanning service is temporarily "
                     "unavailable and fallback_on_error='block'"
                 ),
-                "original_error": str(error),
+                "error_type": type(error).__name__,
             },
         )
 
