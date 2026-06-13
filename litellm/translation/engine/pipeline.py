@@ -24,6 +24,10 @@ from expression import Error, Ok, Result
 from ..deps import TranslationDeps
 from ..dispatch import InboundSchema, Provider
 from ..errors import ParseResult, TranslateResult, TranslationError
+from ..inbound.anthropic_messages import parse_request as anthropic_parse_request
+from ..inbound.anthropic_messages.response import (
+    serialize_response as anthropic_serialize_response,
+)
 from ..inbound.openai_chat import parse_request as openai_chat_parse_request
 from ..inbound.openai_chat.response import ResponseDialect, serialize_response
 from ..ir import Body, ChatRequest, ChatResponse, PlainJson
@@ -178,6 +182,10 @@ _INBOUND: Mapping[InboundSchema, _Inbound] = MappingProxyType(
         "openai_chat": _Inbound(
             parse_request=openai_chat_parse_request,
             serialize_response=serialize_response,
+        ),
+        "anthropic_messages": _Inbound(
+            parse_request=anthropic_parse_request,
+            serialize_response=anthropic_serialize_response,
         ),
     }
 )
