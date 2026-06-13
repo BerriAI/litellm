@@ -141,17 +141,22 @@ class _CiscoAIDefenseMcpMixin:
             )
             return None
 
+        original_response = kwargs.get("original_response")
         try:
             await self._inspect_mcp_response(
                 request_data=request_data,
                 response=mcp_tool_response,
+                redact_response_obj=(
+                    original_response
+                    if original_response is not None
+                    else mcp_tool_response
+                ),
             )
         except HTTPException as exc:
             blocking_response = self._build_blocking_mcp_response(
                 detail=exc.detail, original_response_obj=response_obj
             )
             self._replace_mcp_tool_response(response_obj, blocking_response)
-            original_response = kwargs.get("original_response")
             if original_response is not None:
                 self._replace_mcp_tool_response(original_response, blocking_response)
             add_guardrail_to_applied_guardrails_header(
@@ -341,6 +346,7 @@ class _CiscoAIDefenseMcpMixin:
         request_data: dict,
         response: Any,
         user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+        redact_response_obj: Any = None,
     ) -> Dict[str, Any]:
         del user_api_key_dict  # carried via logging metadata, not the wire payload
         url = f"{self.api_base}{self.inspect_path}"
@@ -376,7 +382,7 @@ class _CiscoAIDefenseMcpMixin:
             surface="mcp",
             start_time=start_time,
             direction="output",
-            response_obj=response,
+            response_obj=response if redact_response_obj is None else redact_response_obj,
         )
 
     def _build_mcp_request_payload(

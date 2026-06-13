@@ -556,6 +556,49 @@ class TestCiscoAIDefenseRedactListShape:
             assert structured_content == {"result": "[REDACTED tool output]"}
             assert "123-45-6789" not in json.dumps(structured_content)
 
+    @pytest.mark.asyncio
+    async def test_redact_rewrites_client_visible_original_response(self):
+        from mcp.types import CallToolResult, TextContent
+
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPPostCallResponseObject
+
+        original_response = CallToolResult(
+            content=[TextContent(type="text", text="SSN: 123-45-6789")],
+            structuredContent={"patient": {"ssn": "123-45-6789"}},
+            isError=False,
+        )
+        wrapper = MCPPostCallResponseObject(
+            mcp_tool_call_response=original_response,
+            hidden_params=HiddenParams(),
+        )
+
+        g = _make_guardrail(
+            inspection_type="mcp", event_hook=["pre_mcp_call", "during_mcp_call"]
+        )
+        with _patch_inspection_post(
+            g, AsyncMock(return_value=self._violation_with_redact_response())
+        ):
+            await g.async_post_mcp_tool_call_hook(
+                kwargs={
+                    "name": "leak",
+                    "arguments": {},
+                    "original_response": original_response,
+                },
+                response_obj=wrapper,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+
+        assert original_response.content[0].text == "[REDACTED tool output]"
+        assert "123-45-6789" not in json.dumps(original_response.structuredContent), (
+            "Redact verdict left the client-visible MCP tool output unchanged. "
+            "The post-call hook receives a wrapped MCPPostCallResponseObject but "
+            "the endpoint returns kwargs['original_response'], so the redaction "
+            "must rewrite that object too. structuredContent still leaks: "
+            f"{original_response.structuredContent!r}"
+        )
+
 
 class TestCiscoAIDefenseMcpInputRedactionFallback:
     """``sanitized_text``-only redaction of structured MCP arguments."""
