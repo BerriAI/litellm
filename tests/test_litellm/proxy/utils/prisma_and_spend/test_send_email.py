@@ -64,6 +64,19 @@ async def test_send_email_starttls_uses_ssl(
 
 
 @pytest.mark.asyncio
+async def test_send_email_skips_starttls_when_tls_disabled(
+    in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SMTP_TLS", "False")
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+    )
+    assert in_memory_smtp.sent[0].starttls_called is False
+
+
+@pytest.mark.asyncio
 async def test_send_email_error_missing_sender_email(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
