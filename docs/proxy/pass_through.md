@@ -174,12 +174,14 @@ general_settings:
 
 ```yaml
 general_settings:
+  pass_through_request_timeout: 600   # Optional: upstream timeout (seconds) for all pass-through routes. Default: 600
   pass_through_endpoints:
     - path: string                    # Route on LiteLLM Proxy Server
       target: string                  # Target URL for forwarding
       auth: boolean                   # Enable LiteLLM authentication (Enterprise)
       forward_headers: boolean        # Forward all incoming headers
       include_subpath: boolean        # If true, forwards requests to sub-paths (default: false)
+      timeout: float                  # Optional: per-endpoint upstream timeout (seconds). Overrides pass_through_request_timeout
       methods: list[string]           # Optional: HTTP methods (e.g., ["GET", "POST"]). If not specified, all methods are supported.
       default_query_params:           # Optional: Default query parameters sent with every request
         <param-name>: string          # Key-value pairs (e.g., version: "v1", format: "json")
@@ -191,6 +193,10 @@ general_settings:
         LANGFUSE_SECRET_KEY: string  # For Langfuse endpoints
         <custom-header>: string      # Any custom header
 ```
+
+### Request timeouts
+
+Pass-through routes default to a **600 second** upstream timeout. Set `general_settings.pass_through_request_timeout` for a global override, or `timeout` on a custom endpoint (per-endpoint wins). Applies to custom pass-through endpoints and native provider passthrough routes (e.g. Bedrock `/converse`).
 
 ### Header Options
 - **Authorization**: Authentication for the target API
