@@ -59,7 +59,7 @@ When `EXPERIMENTAL_UI_LOGIN` is enabled, the **browser UI login** session uses a
 :::tip
 You can check your current token's age and expiration status using:
 ```bash
-litellm-proxy whoami
+lite whoami
 ```
 :::
 
@@ -103,23 +103,28 @@ Example poll response (after SSO completes):
 
 1. **Install the CLI**
 
-   If you have [uv](https://github.com/astral-sh/uv) installed, you can try this:
+   The `lite` client is a thin laptop install: it points at a LiteLLM proxy and runs your coding agents through it, with none of the proxy server runtime pulled in. The one-line installer needs only `curl`; it bootstraps [uv](https://github.com/astral-sh/uv) when it's missing and lets uv provision a compatible Python for you:
 
    ```shell
-   uv tool install 'litellm[proxy]'
+   curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install-cli.sh | sh
    ```
 
-   If that works, you'll see something like this:
+   On macOS you can install it with Homebrew instead:
 
    ```shell
-   ...
-   Installed 2 executables: litellm, litellm-proxy
+   brew install BerriAI/litellm/lite
    ```
 
-   and now you can use the tool by just typing `litellm-proxy` in your terminal:
+   Already have uv and prefer to drive it yourself? Install the package directly:
 
    ```shell
-   litellm-proxy
+   uv tool install 'litellm[cli]'
+   ```
+
+   Any of these gives you the `lite` command; if you already run a proxy server from `litellm[proxy]`, it ships there too. Start by typing it in your terminal:
+
+   ```shell
+   lite
    ```
 
 2. **Set up environment variables**
@@ -135,7 +140,7 @@ Example poll response (after SSO completes):
 3. **Login**
 
    ```shell
-   litellm-proxy login
+   lite login
    ```
 
    This will open a browser window to authenticate. If you have connected LiteLLM Proxy to your SSO provider, you should be able to login with your SSO credentials. Once logged in, you can use the CLI to make requests to the LiteLLM Gateway.
@@ -143,7 +148,7 @@ Example poll response (after SSO completes):
 4. **Make a test request to view models**
 
    ```shell
-   litellm-proxy models list
+   lite models list
    ```
 
    This will list all the models available to you.

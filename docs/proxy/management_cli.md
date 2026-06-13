@@ -1,6 +1,6 @@
 # LiteLLM Proxy CLI
 
-The `litellm-proxy` CLI is a command-line tool for managing your LiteLLM proxy
+The `lite` CLI is a command-line tool for managing your LiteLLM proxy
 server. It provides commands for managing models, credentials, API keys, users,
 and more, as well as making chat and HTTP requests to the proxy server.
 
@@ -17,23 +17,28 @@ and more, as well as making chat and HTTP requests to the proxy server.
 
 1. **Install the CLI**
 
-   If you have [uv](https://github.com/astral-sh/uv) installed, you can try this:
+   The `lite` client is a thin laptop install: it points at a LiteLLM proxy and runs your coding agents through it, with none of the proxy server runtime pulled in. The one-line installer needs only `curl`; it bootstraps [uv](https://github.com/astral-sh/uv) when it's missing and lets uv provision a compatible Python for you:
 
    ```shell
-   uv tool install 'litellm[proxy]'
+   curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install-cli.sh | sh
    ```
 
-   If that works, you'll see something like this:
+   On macOS you can install it with Homebrew instead:
 
    ```shell
-   ...
-   Installed 2 executables: litellm, litellm-proxy
+   brew install BerriAI/litellm/lite
    ```
 
-   and now you can use the tool by just typing `litellm-proxy` in your terminal:
+   Already have uv and prefer to drive it yourself? Install the package directly:
 
    ```shell
-   litellm-proxy
+   uv tool install 'litellm[cli]'
+   ```
+
+   Any of these gives you the `lite` command; if you already run a proxy server from `litellm[proxy]`, it ships there too. Start by typing it in your terminal:
+
+   ```shell
+   lite
    ```
 
 2. **Set up environment variables**
@@ -48,7 +53,7 @@ and more, as well as making chat and HTTP requests to the proxy server.
 3. **Make your first request (list models)**
 
    ```bash
-   litellm-proxy models list
+   lite models list
    ```
 
    If the CLI is set up correctly, you should see a list of available models or a table output.
@@ -99,7 +104,7 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 2. **Login**
 
    ```bash
-   litellm-proxy login
+   lite login
    ```
 
    This will open a browser window to authenticate. If you have connected LiteLLM Proxy to your SSO provider, you can login with your SSO credentials. Once logged in, you can use the CLI to make requests to the LiteLLM Gateway.
@@ -107,7 +112,7 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 3. **Test your authentication**
 
    ```bash
-   litellm-proxy models list
+   lite models list
    ```
 
    This will list all the models available to you.
@@ -120,12 +125,12 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 - Example:
 
   ```bash
-  litellm-proxy models list
-  litellm-proxy models add gpt-4 \
+  lite models list
+  lite models add gpt-4 \
     --param api_key=sk-123 \
     --param max_tokens=2048
-  litellm-proxy models update <model-id> -p temperature=0.7
-  litellm-proxy models delete <model-id>
+  lite models update <model-id> -p temperature=0.7
+  lite models delete <model-id>
   ```
 
   [API used (OpenAPI)](https://litellm-api.up.railway.app/#/model%20management)
@@ -136,12 +141,12 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 - Example:
 
   ```bash
-  litellm-proxy credentials list
-  litellm-proxy credentials create azure-prod \
+  lite credentials list
+  lite credentials create azure-prod \
     --info='{"custom_llm_provider": "azure"}' \
     --values='{"api_key": "sk-123", "api_base": "https://prod.azure.openai.com"}'
-  litellm-proxy credentials get azure-cred
-  litellm-proxy credentials delete azure-cred
+  lite credentials get azure-cred
+  lite credentials delete azure-cred
   ```
 
   [API used (OpenAPI)](https://litellm-api.up.railway.app/#/credential%20management)
@@ -152,14 +157,14 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 - Example:
 
   ```bash
-  litellm-proxy keys list
-  litellm-proxy keys generate \
+  lite keys list
+  lite keys generate \
     --models=gpt-4 \
     --spend=100 \
     --duration=24h \
     --key-alias=my-key
-  litellm-proxy keys info --key sk-key1
-  litellm-proxy keys delete --keys sk-key1,sk-key2 --key-aliases alias1,alias2
+  lite keys info --key sk-key1
+  lite keys delete --keys sk-key1,sk-key2 --key-aliases alias1,alias2
   ```
 
   [API used (OpenAPI)](https://litellm-api.up.railway.app/#/key%20management)
@@ -170,15 +175,15 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 - Example:
 
   ```bash
-  litellm-proxy users list
-  litellm-proxy users create \
+  lite users list
+  lite users create \
     --email=user@example.com \
     --role=internal_user \
     --alias="Alice" \
     --team=team1 \
     --max-budget=100.0
-  litellm-proxy users get --id <user-id>
-  litellm-proxy users delete <user-id>
+  lite users get --id <user-id>
+  lite users delete <user-id>
   ```
 
   [API used (OpenAPI)](https://litellm-api.up.railway.app/#/Internal%20User%20management)
@@ -189,7 +194,7 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 - Example:
 
   ```bash
-  litellm-proxy chat completions gpt-4 -m "user:Hello, how are you?"
+  lite chat completions gpt-4 -m "user:Hello, how are you?"
   ```
 
   [API used (OpenAPI)](https://litellm-api.up.railway.app/#/chat%2Fcompletions)
@@ -200,7 +205,7 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 - Example:
 
   ```bash
-  litellm-proxy http request \
+  lite http request \
     POST /chat/completions \
     --json '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
   ```
@@ -217,13 +222,13 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 1. **List all models:**
 
    ```bash
-   litellm-proxy models list
+   lite models list
    ```
 
 2. **Add a new model:**
 
    ```bash
-   litellm-proxy models add gpt-4 \
+   lite models add gpt-4 \
      --param api_key=sk-123 \
      --param max_tokens=2048
    ```
@@ -231,7 +236,7 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 3. **Create a credential:**
 
    ```bash
-   litellm-proxy credentials create azure-prod \
+   lite credentials create azure-prod \
      --info='{"custom_llm_provider": "azure"}' \
      --values='{"api_key": "sk-123", "api_base": "https://prod.azure.openai.com"}'
    ```
@@ -239,7 +244,7 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 4. **Generate an API key:**
 
    ```bash
-   litellm-proxy keys generate \
+   lite keys generate \
      --models=gpt-4 \
      --spend=100 \
      --duration=24h \
@@ -249,14 +254,14 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 5. **Chat completion:**
 
    ```bash
-   litellm-proxy chat completions gpt-4 \
+   lite chat completions gpt-4 \
      -m "user:Write a story"
    ```
 
 6. **Custom HTTP request:**
 
    ```bash
-   litellm-proxy http request \
+   lite http request \
      POST /chat/completions \
      --json '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
    ```
