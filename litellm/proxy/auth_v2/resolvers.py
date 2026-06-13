@@ -37,10 +37,10 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 
 if TYPE_CHECKING:
-    from litellm.caching.caching import DualCache
     from litellm.models.team import LiteLLM_TeamTable
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy.auth_v2.authorization import Role
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import PrismaClient
 
 
@@ -89,7 +89,7 @@ class DbIdentityStore(IdentityStore):
     the composition root can build once the proxy DB is connected.
     """
 
-    def __init__(self, prisma_client: "PrismaClient", cache: "DualCache") -> None:
+    def __init__(self, prisma_client: "PrismaClient", cache: "UserApiKeyCache") -> None:
         self._prisma = prisma_client
         self._cache = cache
 
