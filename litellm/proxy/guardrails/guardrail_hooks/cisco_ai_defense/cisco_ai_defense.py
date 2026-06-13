@@ -2223,7 +2223,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         output_items = getattr(response, "output", None)
         if not isinstance(output_items, list):
             return []
-        text_parts: List[str] = []
+        output_parts: List[str] = []
         for item in output_items:
             get = (
                 item.get
@@ -2239,14 +2239,14 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 for key in ("text", "reasoning", "thinking"):
                     value = pget(key)
                     if isinstance(value, str) and value:
-                        text_parts.append(value)
+                        output_parts.append(value)
             args = get("arguments")
             if isinstance(args, str) and args:
-                text_parts.append(args)
+                output_parts.append(args)
             direct = get("text")
             if isinstance(direct, str) and direct:
-                text_parts.append(direct)
-        joined = " ".join(text_parts)
+                output_parts.append(direct)
+        joined = " ".join(output_parts)
         return [{"role": "assistant", "content": joined}] if joined else []
 
     @classmethod
