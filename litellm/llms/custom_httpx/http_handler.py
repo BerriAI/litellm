@@ -61,6 +61,130 @@ except Exception:
     version = "0.0.0"
 
 
+# Caches whether the `h2` package is importable so the check runs at most once
+# per process: None = not yet checked, True = available, False = unavailable.
+_HTTP2_AVAILABLE: Optional[bool] = None
+
+
+def _should_enable_http2() -> bool:
+    """
+    HTTP/2 for outbound LLM requests is opt-in. Returns True when enabled via:
+      - litellm.enable_http2 = True  (also accepts the string "true"/"True" from config.yaml)
+      - LITELLM_ENABLE_HTTP2 env var
+
+    HTTP/2 requires the httpx transport (aiohttp cannot speak HTTP/2), so callers
+    use this to both switch off aiohttp and pass http2=True to httpx clients.
+    """
+    from litellm.secret_managers.main import str_to_bool
+
+    flag = getattr(litellm, "enable_http2", False)
+    # `flag` may be a real bool (set in code / parsed YAML) or a string like
+    # "true" when set via config.yaml with quotes — accept both.
+    if flag is True:
+        return True
+    if isinstance(flag, str) and str_to_bool(flag) is True:
+        return True
+    if str_to_bool(os.getenv("LITELLM_ENABLE_HTTP2", "False")) is True:
+        return True
+    return False
+
+
+def _verify_http2_available() -> None:
+    """
+    Raise a clear, actionable error if HTTP/2 was requested but the `h2` package
+    (httpx's HTTP/2 backend) is not installed. The import result (success or
+    failure) is cached so the check runs at most once per process.
+    """
+    global _HTTP2_AVAILABLE
+    if _HTTP2_AVAILABLE is True:
+        return
+    if _HTTP2_AVAILABLE is None:
+        try:
+            import h2  # noqa: F401
+
+            _HTTP2_AVAILABLE = True
+            return
+        except ImportError:
+            _HTTP2_AVAILABLE = False
+    # _HTTP2_AVAILABLE is False here -> h2 confirmed missing.
+    raise ImportError(
+        "HTTP/2 was requested (litellm.enable_http2=True or LITELLM_ENABLE_HTTP2) "
+        "but the 'h2' package is not installed. Install it with `pip install h2`."
+    )
+
+
+def _resolve_http2_limit(global_attr: str, env_var: str) -> Optional[int]:
+    """
+    Resolve an HTTP/2 pool limit from (in priority order) the litellm global, then
+    the env var. Returns None when unset. Raises ValueError for non-positive or
+    non-integer values so misconfiguration fails fast instead of surfacing as a
+    cryptic httpx PoolTimeout at request time.
+    """
+    value: Any = getattr(litellm, global_attr, None)
+    if value is None:
+        env_value = os.getenv(env_var)
+        if env_value is not None and env_value.strip() != "":
+            try:
+                value = int(env_value)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"{env_var} must be a positive integer, got {env_value!r}"
+                )
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(
+            f"litellm.{global_attr} / {env_var} must be a positive integer, "
+            f"got {value!r}"
+        )
+    return value
+
+
+def _http2_cache_key_suffix() -> str:
+    """
+    Cache-key suffix that isolates clients by their HTTP/2 configuration. Encodes
+    both the on/off flag and the pool limits so a runtime change to enable_http2
+    or the limits never returns a stale client with the wrong protocol/pool.
+    Returns "" when HTTP/2 is off (keeps HTTP/1.1 cache keys byte-for-byte
+    unchanged).
+    """
+    if not _should_enable_http2():
+        return ""
+    # Invalid limit config raises ValueError here (same as client construction),
+    # so misconfiguration fails fast and consistently at the cache-lookup boundary
+    # rather than producing a cache key for a client that can never be built.
+    limits = _get_http2_limits()
+    if limits is None:
+        return "_http2"
+    return f"_http2_mc{limits.max_connections}_mk{limits.max_keepalive_connections}"
+
+
+def _get_http2_limits() -> Optional[httpx.Limits]:
+    """
+    Build an httpx.Limits for the HTTP/2 path.
+
+    Under HTTP/1.1 litellm relies on httpx's default pool (max_connections=100).
+    Under HTTP/2 a single TCP connection multiplexes many streams, so a naive
+    switch can REDUCE effective concurrency for high-throughput deployments.
+    Users can tune the pool via litellm.http2_max_connections /
+    litellm.http2_max_keepalive_connections (or the LITELLM_HTTP2_MAX_CONNECTIONS /
+    LITELLM_HTTP2_MAX_KEEPALIVE_CONNECTIONS env vars). Returns None (httpx
+    defaults) when neither is set.
+    """
+    max_connections = _resolve_http2_limit(
+        "http2_max_connections", "LITELLM_HTTP2_MAX_CONNECTIONS"
+    )
+    max_keepalive = _resolve_http2_limit(
+        "http2_max_keepalive_connections", "LITELLM_HTTP2_MAX_KEEPALIVE_CONNECTIONS"
+    )
+    if max_connections is None and max_keepalive is None:
+        return None
+    return httpx.Limits(
+        max_connections=max_connections,
+        max_keepalive_connections=max_keepalive,
+    )
+
+
 # aiohttp 3.10+ exposes a `socket_factory` kwarg on TCPConnector. Older
 # versions don't — detect once and skip the keep-alive wiring there.
 # https://docs.aiohttp.org/en/stable/client_reference.html#aiohttp.TCPConnector
@@ -553,16 +677,33 @@ class AsyncHTTPHandler:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
 
+        # HTTP/2 is opt-in and requires the httpx transport. A caller-supplied
+        # aiohttp `shared_session` takes priority (it cannot speak HTTP/2), so we
+        # disable HTTP/2 for that client rather than silently dropping the session.
+        http2_enabled = _should_enable_http2()
+        if http2_enabled and shared_session is not None:
+            verbose_logger.warning(
+                "litellm: HTTP/2 is enabled but a shared aiohttp session was provided. "
+                "aiohttp cannot speak HTTP/2 — using the shared session over HTTP/1.1 "
+                "for this client."
+            )
+            http2_enabled = False
+        _http2_limits = _get_http2_limits() if http2_enabled else None
+        if http2_enabled:
+            _verify_http2_available()
+
         transport = AsyncHTTPHandler._create_async_transport(
             ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             shared_session=shared_session,
+            http2=http2_enabled,
+            limits=_http2_limits,
         )
 
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers = get_default_headers()
 
-        return httpx.AsyncClient(
+        client_kwargs: Dict[str, Any] = dict(
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
@@ -571,6 +712,17 @@ class AsyncHTTPHandler:
             headers=default_headers,
             follow_redirects=True,
         )
+        if http2_enabled:
+            # http2/limits are honored by httpx only when it builds its own
+            # transport (transport=None — the non-force_ipv4 path). The force_ipv4
+            # path builds an explicit transport with http2/limits already applied,
+            # so these kwargs are ignored there (httpx ignores them once a
+            # transport is passed) — set them for the transport=None path.
+            client_kwargs["http2"] = True
+            if _http2_limits is not None:
+                client_kwargs["limits"] = _http2_limits
+
+        return httpx.AsyncClient(**client_kwargs)
 
     async def close(self):
         # Close the client when you're done with it
@@ -885,6 +1037,8 @@ class AsyncHTTPHandler:
         ssl_context: Optional[ssl.SSLContext] = None,
         ssl_verify: Optional[bool] = None,
         shared_session: Optional["ClientSession"] = None,
+        http2: bool = False,
+        limits: Optional[httpx.Limits] = None,
     ) -> Optional[Union[LiteLLMAiohttpTransport, AsyncHTTPTransport]]:
         """
         - Creates a transport for httpx.AsyncClient
@@ -901,45 +1055,65 @@ class AsyncHTTPHandler:
             - Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         #########################################################
-        # AIOHTTP TRANSPORT is off by default
+        # A caller-supplied aiohttp shared_session can only be used by the
+        # aiohttp transport. Honor it even when HTTP/2 is globally enabled
+        # (create_client already resolved http2=False and warned in that case).
         #########################################################
-        if AsyncHTTPHandler._should_use_aiohttp_transport():
+        if http2:
+            # HTTP/2 is resolved by the caller (create_client turns it off and
+            # warns when a shared_session is present, since aiohttp cannot speak
+            # HTTP/2). A resolved http2=True forces the httpx transport.
+            return AsyncHTTPHandler._create_httpx_transport(http2=True, limits=limits)
+
+        # HTTP/2 off: preserve the original (pre-HTTP/2) transport selection — use
+        # aiohttp unless the user explicitly disabled it; a shared_session is only
+        # usable by the aiohttp transport so it rides along here.
+        if not AsyncHTTPHandler._aiohttp_transport_disabled_by_config():
             return AsyncHTTPHandler._create_aiohttp_transport(
                 ssl_context=ssl_context,
                 ssl_verify=ssl_verify,
                 shared_session=shared_session,
             )
 
-        #########################################################
-        # HTTPX TRANSPORT is used when aiohttp is not installed
-        #########################################################
+        # HTTPX TRANSPORT is used when aiohttp is explicitly disabled
         return AsyncHTTPHandler._create_httpx_transport()
+
+    @staticmethod
+    def _aiohttp_transport_disabled_by_config() -> bool:
+        """
+        True when the user explicitly disabled the aiohttp transport via
+        litellm.disable_aiohttp_transport or DISABLE_AIOHTTP_TRANSPORT. Independent
+        of HTTP/2 (which is resolved per-client by the caller).
+        """
+        import os
+
+        from litellm.secret_managers.main import str_to_bool
+
+        return (
+            litellm.disable_aiohttp_transport is True
+            or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRANSPORT", "False")) is True
+        )
 
     @staticmethod
     def _should_use_aiohttp_transport() -> bool:
         """
         AiohttpTransport is the default transport for litellm.
 
-        Httpx can be used by the following
+        Httpx is used instead when:
             - litellm.disable_aiohttp_transport = True
             - os.getenv("DISABLE_AIOHTTP_TRANSPORT") = "True"
+            - litellm.enable_http2 = True  (aiohttp cannot speak HTTP/2)
+
+        Note: this reflects the *global* configuration (used for health reporting
+        and as a default). Per-client transport selection in _create_async_transport
+        uses the resolved http2 flag, which also accounts for shared_session.
         """
-        import os
-
-        from litellm.secret_managers.main import str_to_bool
-
-        #########################################################
-        # Check if user disabled aiohttp transport
-        ########################################################
-        if (
-            litellm.disable_aiohttp_transport is True
-            or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRANSPORT", "False")) is True
-        ):
+        if _should_enable_http2():
             return False
 
-        #########################################################
-        # Default: Use AiohttpTransport
-        ########################################################
+        if AsyncHTTPHandler._aiohttp_transport_disabled_by_config():
+            return False
+
         verbose_logger.debug("Using AiohttpTransport...")
         return True
 
@@ -1053,15 +1227,28 @@ class AsyncHTTPHandler:
         )
 
     @staticmethod
-    def _create_httpx_transport() -> Optional[AsyncHTTPTransport]:
+    def _create_httpx_transport(
+        http2: bool = False,
+        limits: Optional[httpx.Limits] = None,
+    ) -> Optional[AsyncHTTPTransport]:
         """
         Creates an AsyncHTTPTransport
 
-        - If force_ipv4 is True, it will create an AsyncHTTPTransport with local_address set to "0.0.0.0"
-        - [Default] If force_ipv4 is False, it will return None
+        - If force_ipv4 is True, it will create an AsyncHTTPTransport with local_address set to "0.0.0.0".
+          When http2/limits are also requested, they must be set on this explicit
+          transport (httpx ignores AsyncClient(http2=..., limits=...) once an
+          explicit transport is passed).
+        - If http2 is True (without force_ipv4), return None so httpx builds its own
+          HTTP/2-capable transport from AsyncClient(http2=True).
+        - [Default] Otherwise return None.
         """
         if litellm.force_ipv4:
-            return AsyncHTTPTransport(local_address="0.0.0.0")
+            transport_kwargs: Dict[str, Any] = dict(
+                local_address="0.0.0.0", http2=http2
+            )
+            if limits is not None:
+                transport_kwargs["limits"] = limits
+            return AsyncHTTPTransport(**transport_kwargs)
         else:
             return None
 
@@ -1091,10 +1278,33 @@ class HTTPHandler:
         default_headers = get_default_headers() if not disable_default_headers else None
 
         if client is None:
-            transport = self._create_sync_transport()
+            http2_enabled = _should_enable_http2()
+            _http2_limits = _get_http2_limits() if http2_enabled else None
+            if http2_enabled:
+                _verify_http2_available()
+
+            transport = self._create_sync_transport(
+                http2=http2_enabled, limits=_http2_limits
+            )
+
+            # A user-supplied litellm.sync_transport (returned by
+            # _create_sync_transport when force_ipv4 is False) takes priority and
+            # is used as-is. httpx ignores Client(http2=...) once an explicit
+            # transport is passed, so HTTP/2 cannot be applied to it — warn rather
+            # than silently downgrade.
+            user_transport_wins = (
+                http2_enabled and not litellm.force_ipv4 and transport is not None
+            )
+            if user_transport_wins:
+                verbose_logger.warning(
+                    "litellm: HTTP/2 is enabled but a custom litellm.sync_transport "
+                    "was provided. httpx cannot apply HTTP/2 to an explicit transport "
+                    "— this client will use the provided transport as-is. Set "
+                    "http2=True on your transport to use HTTP/2."
+                )
 
             # Create a client with a connection pool
-            self.client = httpx.Client(
+            client_kwargs: Dict[str, Any] = dict(
                 transport=transport,
                 timeout=timeout,
                 verify=ssl_config,
@@ -1102,6 +1312,15 @@ class HTTPHandler:
                 headers=default_headers,
                 follow_redirects=True,
             )
+            if http2_enabled and not user_transport_wins:
+                # http2/limits are honored by httpx only when it builds its own
+                # transport (transport=None). The force_ipv4 path applies them to
+                # the explicit transport instead (httpx ignores them once a
+                # transport is passed).
+                client_kwargs["http2"] = True
+                if _http2_limits is not None:
+                    client_kwargs["limits"] = _http2_limits
+            self.client = httpx.Client(**client_kwargs)
         else:
             self.client = client
 
@@ -1316,15 +1535,27 @@ class HTTPHandler:
         except Exception:
             pass
 
-    def _create_sync_transport(self) -> Optional[HTTPTransport]:
+    def _create_sync_transport(
+        self, http2: bool = False, limits: Optional[httpx.Limits] = None
+    ) -> Optional[HTTPTransport]:
         """
         Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True.
-        Otherwise, return None.
+        Otherwise, return any user-supplied litellm.sync_transport (or None).
 
-        Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
+        Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them.
+
+        When http2/limits are requested with force_ipv4, they must be set on this
+        explicit transport (httpx ignores Client(http2=..., limits=...) once a
+        transport is passed). A user-supplied litellm.sync_transport always takes
+        priority and is returned as-is.
         """
         if litellm.force_ipv4:
-            return HTTPTransport(local_address="0.0.0.0")
+            transport_kwargs: Dict[str, Any] = dict(
+                local_address="0.0.0.0", http2=http2
+            )
+            if limits is not None:
+                transport_kwargs["limits"] = limits
+            return HTTPTransport(**transport_kwargs)
         else:
             return getattr(litellm, "sync_transport", None)
 
@@ -1349,6 +1580,9 @@ def get_async_httpx_client(
                 pass
 
     _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider
+    # Isolate HTTP/2 clients (and distinct pool limits) from HTTP/1.1 clients so a
+    # runtime change to enable_http2 / the limits never returns a stale client.
+    _cache_key_name += _http2_cache_key_suffix()
 
     # Lazily initialize the global in-memory client cache to avoid relying on
     # litellm globals being fully populated during import time.
@@ -1400,6 +1634,9 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
                 pass
 
     _cache_key_name = "httpx_client" + _params_key_name
+    # Isolate HTTP/2 clients (and distinct pool limits) from HTTP/1.1 clients so a
+    # runtime change to enable_http2 / the limits never returns a stale client.
+    _cache_key_name += _http2_cache_key_suffix()
 
     # Lazily initialize the global in-memory client cache to avoid relying on
     # litellm globals being fully populated during import time.

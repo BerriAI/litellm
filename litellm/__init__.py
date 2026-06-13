@@ -465,6 +465,15 @@ disable_aiohttp_trust_env: bool = (
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
+enable_http2: bool = (
+    False  # opt-in: use HTTP/2 for outbound LLM requests. Forces the httpx transport (aiohttp cannot speak HTTP/2) and requires the `h2` package.
+)
+http2_max_connections: Optional[int] = (
+    None  # when enable_http2 is True, max number of (multiplexed) connections in the httpx pool. None -> httpx default.
+)
+http2_max_keepalive_connections: Optional[int] = (
+    None  # when enable_http2 is True, max number of idle keep-alive connections. None -> httpx default.
+)
 network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
