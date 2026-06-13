@@ -56,9 +56,10 @@ def _make_semantic_cache(cache_type):
     # Semantic backends need a live Redis/Qdrant connection to construct; the
     # scope-key logic under test lives entirely in Cache.get_cache_key, so the
     # backend is stubbed out.
-    with patch(
-        "litellm.caching.caching.RedisSemanticCache", return_value=MagicMock()
-    ), patch("litellm.caching.caching.QdrantSemanticCache", return_value=MagicMock()):
+    with (
+        patch("litellm.caching.caching.RedisSemanticCache", return_value=MagicMock()),
+        patch("litellm.caching.caching.QdrantSemanticCache", return_value=MagicMock()),
+    ):
         return Cache(type=cache_type)
 
 
@@ -92,6 +93,63 @@ def test_semantic_cache_key_excludes_prompt_content():
             messages=[{"role": "user", "content": "What is the capital of France?"}],
         )
         assert key_a != key_other_model, f"{cache_type} ignored model in scope key"
+
+
+def test_semantic_cache_key_isolated_by_authenticated_tenant():
+    """Without prompt content in the key, semantic buckets must be isolated by
+    the proxy-authenticated identity; otherwise a similar prompt from a
+    different key/team could return another tenant's cached response."""
+    for cache_type in (
+        LiteLLMCacheType.REDIS_SEMANTIC,
+        LiteLLMCacheType.QDRANT_SEMANTIC,
+    ):
+        cache = _make_semantic_cache(cache_type)
+
+        messages = [{"role": "user", "content": "What is the capital of France?"}]
+
+        key_tenant_a = cache.get_cache_key(
+            model="gpt-4o-mini",
+            messages=messages,
+            metadata={"user_api_key": "hash-a", "user_api_key_team_id": "team-a"},
+        )
+        key_tenant_b = cache.get_cache_key(
+            model="gpt-4o-mini",
+            messages=messages,
+            metadata={"user_api_key": "hash-b", "user_api_key_team_id": "team-b"},
+        )
+
+        assert key_tenant_a != key_tenant_b, f"{cache_type} leaked across tenants"
+
+        # Same tenant + same params still shares a bucket so similar prompts hit.
+        key_tenant_a_again = cache.get_cache_key(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Which city is France's capital?"}],
+            metadata={"user_api_key": "hash-a", "user_api_key_team_id": "team-a"},
+        )
+        assert key_tenant_a == key_tenant_a_again, f"{cache_type} split same tenant"
+
+
+def test_semantic_cache_tenant_scope_reads_server_metadata_not_prompt():
+    """Tenant scope must come from server-set auth metadata (including the
+    litellm_params copy), never from request-supplied prompt content."""
+    cache = _make_semantic_cache(LiteLLMCacheType.QDRANT_SEMANTIC)
+
+    scope = cache._get_semantic_cache_tenant_scope(
+        {
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "hash-z",
+                    "user_api_key_org_id": "org-z",
+                }
+            }
+        }
+    )
+
+    assert "hash-z" in scope
+    assert "org-z" in scope
+
+    # SDK calls without auth identity produce an empty (shared) scope.
+    assert cache._get_semantic_cache_tenant_scope({}) == ""
 
 
 def test_non_semantic_cache_key_includes_prompt_content():

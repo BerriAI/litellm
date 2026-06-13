@@ -273,11 +273,50 @@ class Cache:
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace
 
+    # Params whose values carry prompt content. Excluded from semantic cache
+    # scope keys so differently worded but semantically similar prompts share a
+    # bucket (matching happens via vector similarity, not the scope key). Kept
+    # separate from logging-exclusion lists so the two concerns evolve apart.
+    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset = frozenset(
+        {"messages", "prompt", "input"}
+    )
+
+    # Server-set identity fields (from proxy auth) used to isolate semantic
+    # cache buckets per tenant, preventing one key/team/org from reading
+    # another's cached response via a semantically similar prompt.
+    _SEMANTIC_CACHE_TENANT_SCOPE_FIELDS: Tuple[str, ...] = (
+        "user_api_key",
+        "user_api_key_team_id",
+        "user_api_key_org_id",
+    )
+
     def _is_semantic_cache(self) -> bool:
         return self.type in (
             LiteLLMCacheType.REDIS_SEMANTIC,
             LiteLLMCacheType.QDRANT_SEMANTIC,
         )
+
+    def _get_semantic_cache_tenant_scope(self, kwargs: dict) -> str:
+        """
+        Build a tenant scope from proxy-auth identity so semantically similar
+        prompts from different keys/teams/orgs never share a cache bucket.
+
+        Only server-set metadata is used (the hashed key and its team/org),
+        never request-supplied prompt content. Returns "" for non-proxy (SDK)
+        calls that carry no auth identity.
+        """
+        metadata: Dict = kwargs.get("metadata") or {}
+        litellm_params: Dict = kwargs.get("litellm_params") or {}
+        metadata_in_litellm_params: Dict = litellm_params.get("metadata") or {}
+
+        scope = ""
+        for field in self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS:
+            value = metadata.get(field)
+            if value is None:
+                value = metadata_in_litellm_params.get(field)
+            if value is not None:
+                scope += f"{field}: {value}"
+        return scope
 
     def get_cache_key(self, **kwargs) -> str:
         """
@@ -299,14 +338,15 @@ class Cache:
 
         combined_kwargs = ModelParamHelper._get_all_llm_api_params()
         litellm_param_kwargs = all_litellm_params
+        is_semantic_cache = self._is_semantic_cache()
         # Semantic caches match on prompt embeddings, not on the prompt text in
         # the key. Including prompt content here would scope every distinct
         # wording into its own bucket and defeat similarity matching, so the
         # scope key is built from non-prompt params only.
         scope_excluded_params = (
-            ModelParamHelper.get_exclude_params_for_model_parameters()
-            if self._is_semantic_cache()
-            else set()
+            self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS
+            if is_semantic_cache
+            else frozenset()
         )
         for param in kwargs:
             if param in scope_excluded_params:
@@ -325,6 +365,12 @@ class Cache:
                         continue  # ignore None params
                     param_value = kwargs[param]
                     cache_key += f"{str(param)}: {str(param_value)}"
+
+        # Without prompt content in the key, semantic buckets must be isolated
+        # by the authenticated tenant or a similar prompt from another key could
+        # return this tenant's cached response.
+        if is_semantic_cache:
+            cache_key += self._get_semantic_cache_tenant_scope(kwargs)
 
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
