@@ -7,7 +7,7 @@ Use web search with litellm
 
 | Feature | Details |
 |---------|---------|
-| Supported Endpoints | - `/chat/completions` <br/> - `/responses` |
+| Supported Endpoints | - `/chat/completions` <br/> - `/responses` <br/> - `/images/generations` (Gemini image models only) |
 | Supported Providers | `openai`, `xai`, `vertex_ai`, `anthropic`, `gemini`, `perplexity` |
 | LiteLLM Cost Tracking | ✅ Supported |
 | LiteLLM Version | `v1.71.0+` |
@@ -247,6 +247,20 @@ response = completion(
     }
 )
 ```
+
+**Gemini image generation (using web_search_options on `/images/generations`)**
+
+```python showLineNumbers
+from litellm import image_generation
+
+response = image_generation(
+    model="gemini/gemini-3.1-flash-image-preview",
+    prompt="Generate an image of the latest iPhone design",
+    web_search_options={},
+)
+```
+
+Works with `vertex_ai/gemini-3.1-flash-image-preview` and other Gemini image models. See [Vertex AI Image Generation](../providers/vertex_image.md) and [Google AI Studio Image Generation](../providers/google_ai_studio/image_gen.md).
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 

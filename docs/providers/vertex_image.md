@@ -57,6 +57,49 @@ response = await litellm.aimage_generation(
 print(response.data[0].b64_json)
 ```
 
+### Google Search Grounding
+
+Gemini image models (e.g. `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview`) support Google Search on `/v1/images/generations`. LiteLLM maps `web_search_options` or OpenAI-style `web_search` tools to Gemini's `googleSearch` tool on the underlying `generateContent` request.
+
+```python showLineNumbers title="Image generation with Google Search"
+import litellm
+
+response = await litellm.aimage_generation(
+    prompt="Generate an image of the latest iPhone design",
+    model="vertex_ai/gemini-3.1-flash-image-preview",
+    vertex_ai_project="your-project-id",
+    vertex_ai_location="us-central1",
+    web_search_options={},
+)
+
+print(response.data[0].b64_json)
+```
+
+```python showLineNumbers title="Using OpenAI-style web_search tool"
+import litellm
+
+response = await litellm.aimage_generation(
+    prompt="Generate an image of the latest iPhone design",
+    model="vertex_ai/gemini-3.1-flash-image-preview",
+    vertex_ai_project="your-project-id",
+    vertex_ai_location="us-central1",
+    tools=[{"type": "web_search"}],
+)
+```
+
+Via LiteLLM Proxy (`/v1/images/generations`):
+
+```bash showLineNumbers title="Proxy request with web_search_options"
+curl -X POST 'http://localhost:4000/v1/images/generations' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gemini-3.1-flash-image-preview",
+    "prompt": "Generate an image of the latest iPhone design",
+    "web_search_options": {}
+}'
+```
+
 ### Imagen Models
 
 ```python showLineNumbers title="Imagen Image Generation"
@@ -122,6 +165,7 @@ print(response.data[0].url)
 ### Gemini Image Generation Models
 
 - `vertex_ai/gemini-2.5-flash-image` - Fast, efficient image generation (1024px resolution)
+- `vertex_ai/gemini-3.1-flash-image-preview` - Fast image generation with Google Search grounding
 - `vertex_ai/gemini-3-pro-image-preview` - Advanced model with 4K output, Google Search grounding, and thinking mode
 - `vertex_ai/gemini-2.0-flash-preview-image` - Preview model
 - `vertex_ai/gemini-2.5-flash-image-preview` - Preview model

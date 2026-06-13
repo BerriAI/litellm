@@ -191,6 +191,38 @@ curl --location 'http://localhost:4000/v1/images/generations' \
 </TabItem>
 </Tabs>
 
+## Gemini Image Models
+
+Gemini image models (e.g. `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview`) use the `generateContent` API and return base64 images. They also support **Google Search grounding** on `/v1/images/generations`.
+
+```python showLineNumbers title="Gemini image generation with Google Search"
+import litellm
+import os
+
+os.environ["GEMINI_API_KEY"] = "your-api-key-here"
+
+response = litellm.image_generation(
+    model="gemini/gemini-3.1-flash-image-preview",
+    prompt="Generate an image of the latest iPhone design",
+    web_search_options={},
+)
+
+print(response.data[0].b64_json)
+```
+
+```bash showLineNumbers title="Proxy request with web_search_options"
+curl --location 'http://localhost:4000/v1/images/generations' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer sk-1234' \
+--data '{
+    "model": "gemini-3.1-flash-image-preview",
+    "prompt": "Generate an image of the latest iPhone design",
+    "web_search_options": {}
+}'
+```
+
+You can also pass `tools=[{"type": "web_search"}]` or native `tools=[{"googleSearch": {}}]`.
+
 ## Supported Parameters
 
 Google AI Studio Image Generation supports the following OpenAI-compatible parameters:
@@ -201,6 +233,8 @@ Google AI Studio Image Generation supports the following OpenAI-compatible param
 | `model` | string | The model to use for generation | Required | `"gemini/imagen-4.0-generate-001"` |
 | `n` | integer | Number of images to generate (1-4) | `1` | `2` |
 | `size` | string | Image dimensions | `"1024x1024"` | `"512x512"`, `"1024x1024"` |
+| `web_search_options` | object | Enable Google Search grounding (Gemini image models only) | - | `{}` |
+| `tools` | array | Pass `{"type": "web_search"}` or `{"googleSearch": {}}` (Gemini image models only) | - | `[{"type": "web_search"}]` |
 
 1. Create an account at [Google AI Studio](https://aistudio.google.com/)
 2. Generate an API key from [API Keys section](https://aistudio.google.com/app/apikey)
