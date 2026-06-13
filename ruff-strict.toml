@@ -1,0 +1,20 @@
+extend = "ruff.toml"
+
+[lint]
+select = ["ANN001", "ANN002", "ANN003", "ANN401", "B006", "C901", "PLR0913", "PLW0603", "RUF012", "TID251"]
+extend-select = []
+
+[lint.mccabe]
+max-complexity = 15
+
+[lint.pylint]
+max-args = 5
+
+[lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Use a concrete type. Frozen slots=True dataclass (preferred) / NamedTuple / ReadOnly TypedDict for payloads."
+"typing_extensions.Any".msg = "Same as typing.Any."
+"typing.List".msg = "tuple[X, ...] for state, Sequence[X] for params."
+"typing.Dict".msg = "Frozen dataclass / NamedTuple / ReadOnly TypedDict; create a Mapping alias with concrete value types if truly dynamic."
+"typing.Set".msg = "frozenset[X] or AbstractSet[X]."
+"typing.MutableSequence".msg = "Sequence[X]."
+"typing.MutableMapping".msg = "See typing.Dict."
