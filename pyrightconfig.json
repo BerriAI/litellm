@@ -1,7 +1,9 @@
 {
+    "include": ["litellm"],
     "ignore": [],
     "exclude": ["**/node_modules", "**/__pycache__", "litellm/types/utils.py", "litellm/proxy/_types.py"],
+    "typeCheckingMode": "strict",
+    "enableTypeIgnoreComments": false,
     "reportMissingImports": false,
     "reportPrivateImportUsage": false
 }
-  
