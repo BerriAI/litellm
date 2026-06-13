@@ -2973,12 +2973,12 @@ async def test_centralized_common_checks_reserves_request_end_user_budget():
             "entity_type": "EndUser",
             "entity_id": "alice",
             "reserved_cost": 0.6,
-            "applied_adjustment": 0.0,
         }
     ]
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:end_user:alice"
-    ) == pytest.approx(0.6)
+    import litellm.proxy.proxy_server as _ps
+
+    holds = _ps.budget_hold_store._memory_holds.get("spend:end_user:alice", {})
+    assert sum(cost for cost, _ in holds.values()) == pytest.approx(0.6)
 
 
 @pytest.mark.asyncio

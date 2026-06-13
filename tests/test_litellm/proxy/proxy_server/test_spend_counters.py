@@ -6,7 +6,6 @@ Pins covered:
 - ``_reconcile_budget_reservation_for_counter_update``
 - ``_increment_end_user_and_tag_spend_counters``
 - ``_increment_org_spend_counter``
-- ``_init_and_increment_unreserved_spend_counter``
 - ``_init_and_increment_spend_counter``
 - ``_init_and_increment_window_spend_counter``
 - ``_ensure_spend_counter_initialized``
@@ -181,41 +180,33 @@ async def test_increment_spend_counters_zero_cost_is_noop_finalizes_reservation(
 
 
 @pytest.mark.asyncio
-async def test_reconcile_budget_reservation_for_counter_update_returns_empty_set_when_none():
+async def test_reconcile_budget_reservation_for_counter_update_noop_when_none():
     result = await ps._reconcile_budget_reservation_for_counter_update(
-        budget_reservation=None, response_cost=1.0
+        budget_reservation=None
     )
-    assert result == set()
+    assert result is None
 
 
 @pytest.mark.asyncio
-async def test_reconcile_budget_reservation_for_counter_update_failure_invalidates(
+async def test_reconcile_budget_reservation_for_counter_update_swallows_failure(
     monkeypatch,
 ):
-    """Reservation reconcile raising must invalidate reserved counters, swallow
-    the exception, and return an empty set so the caller falls back to the
-    direct spend-counter increment instead of skipping it."""
+    """Removing this request's holds is best-effort: a failure is logged and
+    swallowed so the committed-spend increment that follows still runs. The
+    holds and the committed counter are distinct, so this cannot corrupt spend."""
     import litellm.proxy.spend_tracking.budget_reservation as br
 
-    monkeypatch.setattr(
-        br,
-        "get_reserved_counter_keys",
-        MagicMock(return_value={"spend:key:abc"}),
-    )
     monkeypatch.setattr(
         br,
         "reconcile_budget_reservation",
         AsyncMock(side_effect=RuntimeError("boom")),
     )
-    fake_invalidate = AsyncMock()
-    monkeypatch.setattr(br, "invalidate_budget_reservation_counters", fake_invalidate)
 
     result = await ps._reconcile_budget_reservation_for_counter_update(
-        budget_reservation={"foo": "bar"}, response_cost=1.0
+        budget_reservation={"hold_id": "abc", "entries": []}
     )
 
-    assert result == set()
-    assert fake_invalidate.called is True
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +233,6 @@ async def test_increment_end_user_and_tag_spend_counters_increments_each_unique_
         end_user_id="eu1",
         tags=["a", "b", "a", "", None],
         response_cost=3.0,
-        reserved_counter_keys=set(),
     )
 
     observed = {
@@ -268,7 +258,6 @@ async def test_increment_end_user_and_tag_spend_counters_no_end_user_no_tags_inv
         end_user_id=None,
         tags=None,
         response_cost=1.0,
-        reserved_counter_keys=set(),
     )
 
     assert fake_cache.redis_cache.async_increment.called is False
@@ -295,7 +284,6 @@ async def test_increment_org_spend_counter_increments_when_org_present(monkeypat
     await ps._increment_org_spend_counter(
         org_id="org-1",
         response_cost=10.0,
-        reserved_counter_keys=set(),
     )
 
     observed = {
@@ -320,66 +308,9 @@ async def test_increment_org_spend_counter_no_org_is_noop_invalid_id(monkeypatch
     await ps._increment_org_spend_counter(
         org_id=None,
         response_cost=1.0,
-        reserved_counter_keys=set(),
     )
 
     assert fake_cache.redis_cache.async_increment.called is False
-
-
-# ---------------------------------------------------------------------------
-# _init_and_increment_unreserved_spend_counter
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_init_and_increment_unreserved_spend_counter_skips_reserved_keys(
-    monkeypatch,
-):
-    fake_cache = _make_spend_counter_cache()
-    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
-
-    await ps._init_and_increment_unreserved_spend_counter(
-        counter_key="spend:tag:x",
-        source_cache_key="tag:x",
-        increment=1.0,
-        reserved_counter_keys={"spend:tag:x"},
-    )
-
-    assert fake_cache.redis_cache.async_increment.called is False
-
-
-@pytest.mark.asyncio
-async def test_init_and_increment_unreserved_spend_counter_proceeds_when_not_reserved(
-    monkeypatch,
-):
-    fake_cache = _make_spend_counter_cache(
-        redis_get_value=None, redis_increment_value=2.0
-    )
-    fake_user_cache = _make_user_api_key_cache()
-    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
-    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
-    monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr(
-        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
-    )
-
-    await ps._init_and_increment_unreserved_spend_counter(
-        counter_key="spend:tag:y",
-        source_cache_key="tag:y",
-        increment=2.0,
-        reserved_counter_keys=set(),
-    )
-
-    observed = {
-        "increment_called": fake_cache.redis_cache.async_increment.called,
-        "redis_get_called": fake_cache.redis_cache.async_get_cache.called,
-        "reseed_consulted": True,
-    }
-    assert observed == {
-        "increment_called": True,
-        "redis_get_called": True,
-        "reseed_consulted": True,
-    }
 
 
 # ---------------------------------------------------------------------------

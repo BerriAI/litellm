@@ -98,7 +98,6 @@ async def test_skips_when_user_counter_is_reserved():
                     "entity_type": "User",
                     "entity_id": "user-1",
                     "reserved_cost": 10.0,
-                    "applied_adjustment": 0.0,
                 }
             ],
             "finalized": False,
@@ -140,7 +139,6 @@ async def test_does_not_skip_when_reservation_covers_a_different_counter():
                     "entity_type": "Team",
                     "entity_id": "team-x",
                     "reserved_cost": 5.0,
-                    "applied_adjustment": 0.0,
                 }
             ],
             "finalized": False,

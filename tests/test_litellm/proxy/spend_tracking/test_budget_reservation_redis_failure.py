@@ -1,16 +1,12 @@
 """
-Regression test for enforced-spend underreporting when Redis fails during the
-budget-reservation reconcile step of ``increment_spend_counters``.
+Regression test for the budget-reservation settle path under Redis trouble.
 
-Production failure mode: a managed Redis returns an intermittent timeout on the
-reconcile increment. Reconcile deletes (invalidates) the shared counter and
-gives up, but ``increment_spend_counters`` still treats the counter as
-"already reconciled" and skips the direct increment. The actual call cost never
-lands in the enforced counter, so budgets stop gating until the next cold
-reseed pulls a lagging value from the DB.
-
-The fix makes the reconcile path fall back to the direct increment when it
-fails, so the actual cost is always written to the shared counter.
+Holds (in-flight reservations) live separately from the committed spend
+counter, and the committed counter is only ever incremented by actual cost.
+So even if removing this request's holds fails (a Redis blip during settle),
+``increment_spend_counters`` must still write the real cost to the committed
+counter — the two operations are independent and a hold-removal failure cannot
+suppress the spend increment or corrupt the shared counter.
 """
 
 import pytest
@@ -19,58 +15,33 @@ from litellm.caching import DualCache
 from litellm.proxy import proxy_server
 
 
-class _FlakyRedisCache:
-    def __init__(self) -> None:
-        self._store: dict = {}
-        self._increment_calls = 0
-
-    async def async_increment(self, key, value, **kwargs):
-        self._increment_calls += 1
-        if self._increment_calls == 1:
-            raise Exception("Redis timeout")
-        self._store[key] = float(self._store.get(key, 0.0)) + float(value)
-        return self._store[key]
-
-    async def async_get_cache(self, key, *args, **kwargs):
-        return self._store.get(key)
-
-    async def async_delete_cache(self, key, *args, **kwargs):
-        self._store.pop(key, None)
-
-    async def async_set_cache(self, key, value, *args, **kwargs):
-        self._store[key] = float(value)
-        return True
-
-
 @pytest.mark.asyncio
-async def test_direct_increment_runs_when_reservation_reconcile_hits_redis_failure(
-    monkeypatch,
-):
+async def test_committed_spend_increments_even_when_hold_removal_fails(monkeypatch):
     hashed_token = "hashed_test_token"
     counter_key = f"spend:key:{hashed_token}"
     reserved_cost = 0.5
     response_cost = 1.0
 
-    flaky_redis = _FlakyRedisCache()
-    flaky_redis._store[counter_key] = reserved_cost
-
+    counter_cache = DualCache()
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
-    monkeypatch.setattr(proxy_server.spend_counter_cache, "redis_cache", flaky_redis)
-    proxy_server.spend_counter_cache.in_memory_cache.set_cache(
-        key=counter_key, value=reserved_cost
-    )
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", counter_cache)
+
+    async def fail_remove(*args, **kwargs):
+        raise Exception("Redis timeout")
+
+    monkeypatch.setattr(proxy_server.budget_hold_store, "remove", fail_remove)
 
     budget_reservation = {
-        "reserved_cost": reserved_cost,
+        "hold_id": "hold-redis-failure",
         "finalized": False,
+        "reserved_cost": reserved_cost,
         "entries": [
             {
                 "counter_key": counter_key,
                 "entity_type": "Key",
                 "entity_id": hashed_token,
                 "reserved_cost": reserved_cost,
-                "applied_adjustment": 0.0,
             }
         ],
     }
@@ -83,5 +54,6 @@ async def test_direct_increment_runs_when_reservation_reconcile_hits_redis_failu
         budget_reservation=budget_reservation,
     )
 
-    enforced_spend = await flaky_redis.async_get_cache(key=counter_key)
-    assert enforced_spend == response_cost
+    enforced_spend = counter_cache.in_memory_cache.get_cache(key=counter_key)
+    assert enforced_spend == pytest.approx(response_cost)
+    assert budget_reservation["finalized"] is True

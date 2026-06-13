@@ -218,6 +218,7 @@ from litellm.constants import (
     APSCHEDULER_MAX_INSTANCES,
     APSCHEDULER_MISFIRE_GRACE_TIME,
     APSCHEDULER_REPLACE_EXISTING,
+    BUDGET_HOLD_TTL_SECONDS,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -452,6 +453,7 @@ from litellm.proxy.response_api_endpoints.endpoints import router as response_ro
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.proxy.spend_tracking.budget_hold_store import BudgetHoldStore
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -1876,6 +1878,10 @@ user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
 spend_counter_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
+budget_hold_store = BudgetHoldStore(
+    dual_cache=spend_counter_cache,
+    ttl_seconds=BUDGET_HOLD_TTL_SECONDS,
+)
 model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
@@ -2084,9 +2090,8 @@ async def increment_spend_counters(
     Awaited (not create_task) in the cost callback, so the counter is
     updated before the next request's auth check runs.
     """
-    reserved_counter_keys = await _reconcile_budget_reservation_for_counter_update(
+    await _reconcile_budget_reservation_for_counter_update(
         budget_reservation=budget_reservation,
-        response_cost=response_cost,
     )
 
     if response_cost is None or response_cost == 0:
@@ -2106,13 +2111,11 @@ async def increment_spend_counters(
             if isinstance(token, str) and token.startswith("sk-")
             else token
         )
-        key_counter_key = f"spend:key:{hashed_token}"
-        if key_counter_key not in reserved_counter_keys:
-            await _init_and_increment_spend_counter(
-                counter_key=key_counter_key,
-                source_cache_key=hashed_token,
-                increment=response_cost,
-            )
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:key:{hashed_token}",
+            source_cache_key=hashed_token,
+            increment=response_cost,
+        )
 
         # Increment per-window budget counters for multi-budget keys
         key_obj = await user_api_key_cache.async_get_cache(key=hashed_token)
@@ -2129,28 +2132,24 @@ async def increment_spend_counters(
                         if isinstance(window, dict)
                         else window.budget_duration
                     )
-                    key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
-                    if key_window_counter not in reserved_counter_keys:
-                        from litellm.proxy.spend_tracking.budget_reservation import (
-                            get_budget_window_start,
-                        )
+                    from litellm.proxy.spend_tracking.budget_reservation import (
+                        get_budget_window_start,
+                    )
 
-                        await _init_and_increment_window_spend_counter(
-                            counter_key=key_window_counter,
-                            entity_type="Key",
-                            entity_id=hashed_token,
-                            window_start=get_budget_window_start(window),
-                            increment=response_cost,
-                        )
+                    await _init_and_increment_window_spend_counter(
+                        counter_key=f"spend:key:{hashed_token}:window:{duration}",
+                        entity_type="Key",
+                        entity_id=hashed_token,
+                        window_start=get_budget_window_start(window),
+                        increment=response_cost,
+                    )
 
     if team_id is not None:
-        team_counter_key = f"spend:team:{team_id}"
-        if team_counter_key not in reserved_counter_keys:
-            await _init_and_increment_spend_counter(
-                counter_key=team_counter_key,
-                source_cache_key=f"team_id:{team_id}",
-                increment=response_cost,
-            )
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:team:{team_id}",
+            source_cache_key=f"team_id:{team_id}",
+            increment=response_cost,
+        )
 
         # Increment per-window budget counters for multi-budget teams
         team_obj = await user_api_key_cache.async_get_cache(key=f"team_id:{team_id}")
@@ -2167,49 +2166,41 @@ async def increment_spend_counters(
                         if isinstance(window, dict)
                         else window.budget_duration
                     )
-                    team_window_counter = f"spend:team:{team_id}:window:{duration}"
-                    if team_window_counter not in reserved_counter_keys:
-                        from litellm.proxy.spend_tracking.budget_reservation import (
-                            get_budget_window_start,
-                        )
+                    from litellm.proxy.spend_tracking.budget_reservation import (
+                        get_budget_window_start,
+                    )
 
-                        await _init_and_increment_window_spend_counter(
-                            counter_key=team_window_counter,
-                            entity_type="Team",
-                            entity_id=team_id,
-                            window_start=get_budget_window_start(window),
-                            increment=response_cost,
-                        )
+                    await _init_and_increment_window_spend_counter(
+                        counter_key=f"spend:team:{team_id}:window:{duration}",
+                        entity_type="Team",
+                        entity_id=team_id,
+                        window_start=get_budget_window_start(window),
+                        increment=response_cost,
+                    )
 
     if user_id is not None and team_id is not None:
-        team_member_counter_key = f"spend:team_member:{user_id}:{team_id}"
-        if team_member_counter_key not in reserved_counter_keys:
-            await _init_and_increment_spend_counter(
-                counter_key=team_member_counter_key,
-                source_cache_key=f"team_membership:{user_id}:{team_id}",
-                increment=response_cost,
-            )
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:team_member:{user_id}:{team_id}",
+            source_cache_key=f"team_membership:{user_id}:{team_id}",
+            increment=response_cost,
+        )
 
     if user_id is not None:
-        user_counter_key = f"spend:user:{user_id}"
-        if user_counter_key not in reserved_counter_keys:
-            await _init_and_increment_spend_counter(
-                counter_key=user_counter_key,
-                source_cache_key=user_id,
-                increment=response_cost,
-            )
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:user:{user_id}",
+            source_cache_key=user_id,
+            increment=response_cost,
+        )
 
     await _increment_end_user_and_tag_spend_counters(
         end_user_id=end_user_id,
         tags=tags,
         response_cost=response_cost,
-        reserved_counter_keys=reserved_counter_keys,
     )
 
     await _increment_org_spend_counter(
         org_id=org_id,
         response_cost=response_cost,
-        reserved_counter_keys=reserved_counter_keys,
     )
     if budget_reservation is not None:
         budget_reservation["finalized"] = True
@@ -2217,55 +2208,39 @@ async def increment_spend_counters(
 
 async def _reconcile_budget_reservation_for_counter_update(
     budget_reservation: Optional[dict],
-    response_cost: Optional[float],
-) -> Set[str]:
+) -> None:
+    """Release this request's holds. Committed spend is incremented separately
+    by the caller; holds and committed spend are distinct, so removing a hold
+    cannot fail in a way that corrupts the shared counter."""
     if budget_reservation is None:
-        return set()
+        return
 
     from litellm.proxy.spend_tracking.budget_reservation import (
-        get_reserved_counter_keys,
-        invalidate_budget_reservation_counters,
         reconcile_budget_reservation,
     )
 
-    reserved_counter_keys = get_reserved_counter_keys(
-        budget_reservation=budget_reservation
-    )
     try:
         await reconcile_budget_reservation(
             budget_reservation=budget_reservation,
-            actual_cost=response_cost or 0.0,
             finalize=False,
         )
     except Exception:
         verbose_proxy_logger.warning(
-            "Failed to reconcile budget reservation after persisted spend; invalidating reserved counters and falling back to direct increment",
+            "Failed to release budget reservation holds after persisted spend",
             exc_info=True,
         )
-        try:
-            await invalidate_budget_reservation_counters(
-                budget_reservation=budget_reservation
-            )
-        except Exception:
-            verbose_proxy_logger.exception(
-                "Failed to invalidate reserved counters after reservation reconciliation failed"
-            )
-        return set()
-    return reserved_counter_keys
 
 
 async def _increment_end_user_and_tag_spend_counters(
     end_user_id: Optional[str],
     tags: Optional[List[str]],
     response_cost: float,
-    reserved_counter_keys: Set[str],
 ) -> None:
     if end_user_id is not None:
-        await _init_and_increment_unreserved_spend_counter(
+        await _init_and_increment_spend_counter(
             counter_key=f"spend:end_user:{end_user_id}",
             source_cache_key=f"end_user_id:{end_user_id}",
             increment=response_cost,
-            reserved_counter_keys=reserved_counter_keys,
         )
 
     if tags is None:
@@ -2276,43 +2251,24 @@ async def _increment_end_user_and_tag_spend_counters(
         if not tag_name or not isinstance(tag_name, str) or tag_name in seen_tags:
             continue
         seen_tags.add(tag_name)
-        await _init_and_increment_unreserved_spend_counter(
+        await _init_and_increment_spend_counter(
             counter_key=f"spend:tag:{tag_name}",
             source_cache_key=f"tag:{tag_name}",
             increment=response_cost,
-            reserved_counter_keys=reserved_counter_keys,
         )
 
 
 async def _increment_org_spend_counter(
     org_id: Optional[str],
     response_cost: float,
-    reserved_counter_keys: Set[str],
 ) -> None:
     if org_id is None:
         return
 
-    await _init_and_increment_unreserved_spend_counter(
+    await _init_and_increment_spend_counter(
         counter_key=f"spend:org:{org_id}",
         source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
         increment=response_cost,
-        reserved_counter_keys=reserved_counter_keys,
-    )
-
-
-async def _init_and_increment_unreserved_spend_counter(
-    counter_key: str,
-    source_cache_key: Union[str, List[str]],
-    increment: float,
-    reserved_counter_keys: Set[str],
-) -> None:
-    if counter_key in reserved_counter_keys:
-        return
-
-    await _init_and_increment_spend_counter(
-        counter_key=counter_key,
-        source_cache_key=source_cache_key,
-        increment=increment,
     )
 
 

@@ -6512,16 +6512,17 @@ async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_finalizes_after_unreserved_increments():
+async def test_increment_spend_counters_finalizes_after_all_increments():
+    """Holds are separate from committed spend, so every entity's committed
+    counter (key + team) is incremented by the actual cost — there is no
+    reserved-counter skip — and the reservation is finalized only after all of
+    them have run."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import increment_spend_counters
 
     counter_cache = DualCache()
-    counter_cache.in_memory_cache.set_cache(
-        key="spend:key:key-finalize-after-increments",
-        value=0.5,
-    )
     budget_reservation = {
+        "hold_id": "hold-finalize-after-increments",
         "reserved_cost": 0.5,
         "entries": [
             {
@@ -6529,14 +6530,13 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
                 "entity_type": "Key",
                 "entity_id": "key-finalize-after-increments",
                 "reserved_cost": 0.5,
-                "applied_adjustment": 0.0,
             }
         ],
         "finalized": False,
     }
     incremented_counters = []
 
-    async def assert_reservation_not_finalized_yet(**kwargs):
+    async def record_not_finalized_yet(**kwargs):
         assert budget_reservation["finalized"] is False
         incremented_counters.append(kwargs["counter_key"])
 
@@ -6548,7 +6548,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
     try:
         with patch(
             "litellm.proxy.proxy_server._init_and_increment_spend_counter",
-            new=AsyncMock(side_effect=assert_reservation_not_finalized_yet),
+            new=AsyncMock(side_effect=record_not_finalized_yet),
         ):
             await increment_spend_counters(
                 token="key-finalize-after-increments",
@@ -6558,45 +6558,42 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
                 budget_reservation=budget_reservation,
             )
 
-        assert incremented_counters == ["spend:team:team-finalize-after-increments"]
+        assert incremented_counters == [
+            "spend:key:key-finalize-after-increments",
+            "spend:team:team-finalize-after-increments",
+        ]
         assert budget_reservation["finalized"] is True
-        assert counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-finalize-after-increments"
-        ) == pytest.approx(0.25)
     finally:
         ps.spend_counter_cache = orig_counter
         ps.user_api_key_cache = orig_user
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_finalizes_none_cost_reservation():
+async def test_increment_spend_counters_finalizes_and_releases_hold_on_none_cost():
     from litellm.caching.dual_cache import DualCache
+    from litellm.constants import BUDGET_HOLD_TTL_SECONDS
     from litellm.proxy.proxy_server import increment_spend_counters
+    from litellm.proxy.spend_tracking.budget_hold_store import BudgetHoldStore
 
     counter_cache = DualCache()
-    counter_cache.in_memory_cache.set_cache(
-        key="spend:key:key-finalize-none-cost",
-        value=0.5,
-    )
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [
-            {
-                "counter_key": "spend:key:key-finalize-none-cost",
-                "entity_type": "Key",
-                "entity_id": "key-finalize-none-cost",
-                "reserved_cost": 0.5,
-                "applied_adjustment": 0.0,
-            }
-        ],
-        "finalized": False,
-    }
+    counter_key = "spend:key:key-finalize-none-cost"
 
     import litellm.proxy.proxy_server as ps
 
-    orig_counter = ps.spend_counter_cache
+    orig_counter, orig_hold = ps.spend_counter_cache, ps.budget_hold_store
     ps.spend_counter_cache = counter_cache
+    ps.budget_hold_store = BudgetHoldStore(
+        dual_cache=counter_cache, ttl_seconds=BUDGET_HOLD_TTL_SECONDS
+    )
     try:
+        await ps.budget_hold_store.place_and_total(counter_key, "hold-none", 0.5)
+        budget_reservation = {
+            "hold_id": "hold-none",
+            "reserved_cost": 0.5,
+            "entries": [{"counter_key": counter_key, "reserved_cost": 0.5}],
+            "finalized": False,
+        }
+
         await increment_spend_counters(
             token="key-finalize-none-cost",
             team_id=None,
@@ -6606,64 +6603,11 @@ async def test_increment_spend_counters_finalizes_none_cost_reservation():
         )
 
         assert budget_reservation["finalized"] is True
-        assert counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-finalize-none-cost"
-        ) == pytest.approx(0.0)
+        holds = ps.budget_hold_store._memory_holds.get(counter_key, {})
+        assert sum(cost for cost, _ in holds.values()) == pytest.approx(0.0)
     finally:
         ps.spend_counter_cache = orig_counter
-
-
-@pytest.mark.asyncio
-async def test_increment_spend_counters_falls_back_to_direct_increment_on_bad_reserved_counter():
-    """When the reservation reconcile fails, the reserved counters are
-    invalidated and the actual response cost must still be written via the
-    direct increment fallback. Leaving the counter at ``None`` lets the next
-    request reseed a stale value from the DB and silently stops budget gating,
-    which is the bug this fix addresses."""
-    from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import increment_spend_counters
-
-    counter_cache = DualCache()
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [
-            {
-                "counter_key": "spend:key:key-bad-reserved-counter",
-                "entity_type": "Key",
-                "entity_id": "key-bad-reserved-counter",
-                "reserved_cost": 0.5,
-                "applied_adjustment": 0.0,
-            }
-        ],
-        "finalized": False,
-    }
-
-    import litellm.proxy.proxy_server as ps
-
-    orig_counter = ps.spend_counter_cache
-    ps.spend_counter_cache = counter_cache
-    try:
-        with patch(
-            "litellm.proxy.proxy_server.verbose_proxy_logger.warning"
-        ) as mock_warning:
-            await increment_spend_counters(
-                token="key-bad-reserved-counter",
-                team_id=None,
-                user_id=None,
-                response_cost=0.25,
-                budget_reservation=budget_reservation,
-            )
-
-        mock_warning.assert_called_once()
-        assert budget_reservation["finalized"] is True
-        assert (
-            counter_cache.in_memory_cache.get_cache(
-                key="spend:key:key-bad-reserved-counter"
-            )
-            == 0.25
-        )
-    finally:
-        ps.spend_counter_cache = orig_counter
+        ps.budget_hold_store = orig_hold
 
 
 @pytest.mark.asyncio

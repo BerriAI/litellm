@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, cast
@@ -34,14 +35,8 @@ class _BudgetCounter:
 
 
 class _CounterReservationUnavailable(Exception):
-    def __init__(
-        self,
-        touched_counter: bool = False,
-        counter_invalidated: bool = False,
-    ) -> None:
-        self.touched_counter = touched_counter
-        self.counter_invalidated = counter_invalidated
-        super().__init__("Counter reservation unavailable")
+    """Raised when a counter cannot be reserved against (cold window spend, Redis
+    error); the caller skips it and falls back to read-time enforcement."""
 
 
 def get_reserved_counter_keys(budget_reservation: Optional[dict]) -> set:
@@ -89,7 +84,6 @@ async def reserve_budget_for_request(
     if not counters:
         return None
 
-    current_spend_by_counter_key: Dict[str, float] = {}
     reservation_cost = estimate_request_max_cost(
         request_body=request_body,
         route=route,
@@ -102,42 +96,30 @@ async def reserve_budget_for_request(
         return None
 
     applied_entries: List[Dict[str, Any]] = []
+    hold_id = uuid.uuid4().hex
     try:
         for counter in counters:
             entry = _counter_to_reservation_entry(
                 counter=counter,
                 reserved_cost=reservation_cost,
             )
-            applied_entries.append(entry)
             try:
-                reserved_value = await _reserve_counter(
+                current_spend = await _reserve_counter(
                     counter=counter,
+                    hold_id=hold_id,
                     reservation_cost=reservation_cost,
                 )
-            except _CounterReservationUnavailable as exc:
-                if exc.touched_counter and not exc.counter_invalidated:
-                    await _release_applied_entries_best_effort(
-                        entries=[entry],
-                        default_reserved_cost=reservation_cost,
-                    )
-                applied_entries.remove(entry)
+            except _CounterReservationUnavailable:
                 continue
-
-            if reserved_value is not None:
-                current_spend = reserved_value
-            else:
-                cached_spend = current_spend_by_counter_key.get(counter.counter_key)
-                if cached_spend is None:
-                    cached_spend = await _get_current_counter_value(counter=counter)
-                current_spend = cached_spend + reservation_cost
+            applied_entries.append(entry)
             if current_spend > counter.max_budget:
                 remaining_before_reservation = counter.max_budget - (
                     current_spend - reservation_cost
                 )
                 if remaining_before_reservation > 1e-12:
                     await _resize_applied_reservation(
+                        hold_id=hold_id,
                         entries=applied_entries,
-                        current_reserved_cost=reservation_cost,
                         new_reserved_cost=remaining_before_reservation,
                     )
                     reservation_cost = remaining_before_reservation
@@ -154,8 +136,8 @@ async def reserve_budget_for_request(
                 )
     except Exception:
         await _release_applied_entries_best_effort(
+            hold_id=hold_id,
             entries=applied_entries,
-            default_reserved_cost=reservation_cost,
         )
         raise
 
@@ -163,6 +145,7 @@ async def reserve_budget_for_request(
         return None
 
     return {
+        "hold_id": hold_id,
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
         "finalized": False,
@@ -171,40 +154,49 @@ async def reserve_budget_for_request(
 
 async def reconcile_budget_reservation(
     budget_reservation: Optional[dict],
-    actual_cost: Optional[float],
     finalize: bool = True,
 ) -> None:
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
 
-    reserved_cost = float(budget_reservation.get("reserved_cost") or 0.0)
-    actual = float(actual_cost or 0.0)
-    await _set_reserved_entries_actual_cost(
-        entries=budget_reservation.get("entries") or [],
-        actual_cost=actual,
-        default_reserved_cost=reserved_cost,
-    )
+    await _remove_all_holds(budget_reservation=budget_reservation)
     if finalize:
         budget_reservation["finalized"] = True
 
 
 async def release_budget_reservation(budget_reservation: Optional[dict]) -> None:
-    await reconcile_budget_reservation(
-        budget_reservation=budget_reservation,
-        actual_cost=0.0,
-    )
+    await reconcile_budget_reservation(budget_reservation=budget_reservation)
 
 
 async def invalidate_budget_reservation_counters(
     budget_reservation: Optional[dict],
 ) -> None:
-    if budget_reservation is None:
+    await _remove_all_holds(budget_reservation=budget_reservation)
+
+
+async def _remove_all_holds(budget_reservation: Optional[dict]) -> None:
+    if not budget_reservation:
         return
 
-    from litellm.proxy.proxy_server import _invalidate_spend_counter
+    from litellm.proxy.proxy_server import budget_hold_store
 
-    for counter_key in get_reserved_counter_keys(budget_reservation=budget_reservation):
-        await _invalidate_spend_counter(counter_key=counter_key)
+    hold_id = budget_reservation.get("hold_id")
+    if hold_id is None:
+        return
+    for entry in budget_reservation.get("entries") or []:
+        counter_key = entry.get("counter_key")
+        if counter_key is None:
+            continue
+        try:
+            await budget_hold_store.remove(
+                counter_key=counter_key,
+                hold_id=hold_id,
+                cost=_get_entry_reserved_cost(entry=entry, default_reserved_cost=0.0),
+            )
+        except Exception:
+            verbose_proxy_logger.warning(
+                "Failed to remove budget hold for %s", counter_key, exc_info=True
+            )
 
 
 async def _get_budget_counters(
@@ -553,16 +545,19 @@ def _coerce_window(window: Any) -> dict:
 
 async def _reserve_counter(
     counter: _BudgetCounter,
+    hold_id: str,
     reservation_cost: float,
-) -> Optional[float]:
+) -> float:
+    """Place this request's hold on ``counter`` and return the effective spend
+    (committed spend + every live hold, including this one). Raises
+    ``_CounterReservationUnavailable`` to skip the counter when its committed
+    spend cannot be loaded or the hold cannot be placed."""
     from litellm.proxy.proxy_server import (
         _ensure_spend_counter_initialized,
         _ensure_window_spend_counter_initialized,
-        _invalidate_spend_counter,
-        _increment_spend_counter_cache,
+        budget_hold_store,
     )
 
-    attempted_increment = False
     try:
         if counter.source_cache_key is not None:
             await _ensure_spend_counter_initialized(
@@ -584,35 +579,31 @@ async def _reserve_counter(
                     counter.counter_key,
                 )
                 raise _CounterReservationUnavailable
-
-        attempted_increment = True
-        reserved_value = await _increment_spend_counter_cache(
-            counter_key=counter.counter_key,
-            increment=reservation_cost,
-        )
-        return float(reserved_value) if reserved_value is not None else None
     except _CounterReservationUnavailable:
         raise
     except Exception:
         verbose_proxy_logger.warning(
-            "Skipping budget reservation for %s because spend counter reservation failed",
+            "Skipping budget reservation for %s because spend counter could not be initialized",
             counter.counter_key,
             exc_info=True,
         )
-        counter_invalidated = False
-        try:
-            await _invalidate_spend_counter(counter_key=counter.counter_key)
-            counter_invalidated = True
-        except Exception:
-            verbose_proxy_logger.warning(
-                "Failed to invalidate spend counter after budget reservation failure for %s",
-                counter.counter_key,
-                exc_info=True,
-            )
-        raise _CounterReservationUnavailable(
-            touched_counter=attempted_increment,
-            counter_invalidated=counter_invalidated,
+        raise _CounterReservationUnavailable
+
+    committed_spend = await _get_current_counter_value(counter=counter)
+    try:
+        live_holds = await budget_hold_store.place_and_total(
+            counter_key=counter.counter_key,
+            hold_id=hold_id,
+            cost=reservation_cost,
         )
+    except Exception:
+        verbose_proxy_logger.warning(
+            "Skipping budget reservation for %s because the hold could not be placed",
+            counter.counter_key,
+            exc_info=True,
+        )
+        raise _CounterReservationUnavailable
+    return committed_spend + live_holds
 
 
 async def _get_current_counter_value(counter: _BudgetCounter) -> float:
@@ -624,121 +615,46 @@ async def _get_current_counter_value(counter: _BudgetCounter) -> float:
     )
 
 
-async def _set_reserved_entries_actual_cost(
-    entries: List[dict],
-    actual_cost: float,
-    default_reserved_cost: float,
-) -> None:
-    for entry in entries:
-        await _set_reserved_entry_actual_cost(
-            entry=entry,
-            actual_cost=actual_cost,
-            default_reserved_cost=default_reserved_cost,
-        )
-
-
-async def _set_reserved_entry_actual_cost(
-    entry: dict,
-    actual_cost: float,
-    default_reserved_cost: float,
-) -> None:
-    from litellm.proxy.proxy_server import _increment_spend_counter_cache
-
-    counter_key = entry.get("counter_key")
-    if counter_key is None:
-        return
-    reserved_cost = _get_entry_reserved_cost(
-        entry=entry,
-        default_reserved_cost=default_reserved_cost,
-    )
-    target_adjustment = actual_cost - reserved_cost
-    applied_adjustment = float(entry.get("applied_adjustment") or 0.0)
-    adjustment = target_adjustment - applied_adjustment
-    if adjustment == 0:
-        return
-    await _ensure_counter_can_apply_adjustment(
-        counter_key=counter_key,
-        adjustment=adjustment,
-    )
-    await _increment_spend_counter_cache(
-        counter_key=counter_key,
-        increment=adjustment,
-    )
-    entry["applied_adjustment"] = target_adjustment
-
-
-async def _ensure_counter_can_apply_adjustment(
-    counter_key: str,
-    adjustment: float,
-) -> None:
-    from litellm.proxy.proxy_server import (
-        _invalidate_spend_counter,
-        spend_counter_cache,
-    )
-
-    current_value = await spend_counter_cache.async_get_cache(key=counter_key)
-    if current_value is None:
-        await _invalidate_spend_counter(counter_key=counter_key)
-        raise RuntimeError(
-            f"Cannot apply budget reservation adjustment to missing counter {counter_key}"
-        )
-
-    try:
-        current_float = float(current_value)
-    except (TypeError, ValueError):
-        await _invalidate_spend_counter(counter_key=counter_key)
-        raise RuntimeError(
-            f"Cannot apply budget reservation adjustment to non-numeric counter {counter_key}"
-        )
-
-    if adjustment < 0 and current_float + adjustment < -1e-12:
-        await _invalidate_spend_counter(counter_key=counter_key)
-        raise RuntimeError(
-            f"Budget reservation adjustment would make counter negative {counter_key}"
-        )
-
-
 async def _release_applied_entries_best_effort(
+    hold_id: str,
     entries: List[dict],
-    default_reserved_cost: float,
 ) -> None:
+    from litellm.proxy.proxy_server import budget_hold_store
+
     for entry in entries:
+        counter_key = entry.get("counter_key")
+        if counter_key is None:
+            continue
         try:
-            await _set_reserved_entry_actual_cost(
-                entry=entry,
-                actual_cost=0.0,
-                default_reserved_cost=default_reserved_cost,
+            await budget_hold_store.remove(
+                counter_key=counter_key,
+                hold_id=hold_id,
+                cost=_get_entry_reserved_cost(entry=entry, default_reserved_cost=0.0),
             )
         except Exception:
-            counter_key = entry.get("counter_key")
             verbose_proxy_logger.exception(
-                "Failed to release partial budget reservation during exception cleanup"
+                "Failed to release budget hold during exception cleanup"
             )
-            if counter_key is None:
-                continue
-            try:
-                from litellm.proxy.proxy_server import _invalidate_spend_counter
-
-                await _invalidate_spend_counter(counter_key=counter_key)
-            except Exception:
-                verbose_proxy_logger.exception(
-                    "Failed to invalidate partial budget reservation counter during exception cleanup"
-                )
 
 
 async def _resize_applied_reservation(
+    hold_id: str,
     entries: List[dict],
-    current_reserved_cost: float,
     new_reserved_cost: float,
 ) -> None:
-    await _set_reserved_entries_actual_cost(
-        entries=entries,
-        actual_cost=new_reserved_cost,
-        default_reserved_cost=current_reserved_cost,
-    )
+    from litellm.proxy.proxy_server import budget_hold_store
+
     for entry in entries:
+        counter_key = entry.get("counter_key")
+        if counter_key is None:
+            continue
+        await budget_hold_store.resize(
+            counter_key=counter_key,
+            hold_id=hold_id,
+            old_cost=_get_entry_reserved_cost(entry=entry, default_reserved_cost=0.0),
+            new_cost=new_reserved_cost,
+        )
         entry["reserved_cost"] = new_reserved_cost
-        entry["applied_adjustment"] = 0.0
 
 
 def _counter_to_reservation_entry(
@@ -750,7 +666,6 @@ def _counter_to_reservation_entry(
         "entity_type": counter.entity_type,
         "entity_id": counter.entity_id,
         "reserved_cost": reserved_cost,
-        "applied_adjustment": 0.0,
     }
 
 

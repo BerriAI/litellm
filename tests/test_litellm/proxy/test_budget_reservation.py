@@ -28,16 +28,22 @@ from litellm.proxy.utils import ProxyLogging
 @pytest.fixture()
 def spend_counter_state():
     import litellm.proxy.proxy_server as ps
+    from litellm.constants import BUDGET_HOLD_TTL_SECONDS
+    from litellm.proxy.spend_tracking.budget_hold_store import BudgetHoldStore
 
     original_counter_cache = ps.spend_counter_cache
     original_key_cache = ps.user_api_key_cache
     original_prisma_client = ps.prisma_client
+    original_hold_store = ps.budget_hold_store
 
     counter_cache = DualCache()
     key_cache = DualCache()
     ps.spend_counter_cache = counter_cache
     ps.user_api_key_cache = key_cache
     ps.prisma_client = None
+    ps.budget_hold_store = BudgetHoldStore(
+        dual_cache=counter_cache, ttl_seconds=BUDGET_HOLD_TTL_SECONDS
+    )
 
     try:
         yield counter_cache, key_cache
@@ -45,6 +51,15 @@ def spend_counter_state():
         ps.spend_counter_cache = original_counter_cache
         ps.user_api_key_cache = original_key_cache
         ps.prisma_client = original_prisma_client
+        ps.budget_hold_store = original_hold_store
+
+
+def _live_hold_total(counter_key: str) -> float:
+    """Sum the live reservation holds for a counter (no-Redis in-memory backend)."""
+    import litellm.proxy.proxy_server as ps
+
+    holds = ps.budget_hold_store._memory_holds.get(counter_key, {})
+    return sum(cost for cost, _ in holds.values())
 
 
 def _request_body() -> dict:
@@ -97,10 +112,12 @@ async def test_should_shrink_second_key_reservation_to_remaining_budget(
             proxy_logging_obj=proxy_logging_obj,
         )
         assert reservation is not None
+        # The reservation is a hold, not a write to the committed spend counter.
         assert (
             counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-race")
-            == 0.6
+            is None
         )
+        assert _live_hold_total("spend:key:key-budget-race") == pytest.approx(0.6)
 
         second_reservation = await reserve_budget_for_request(
             request_body=_request_body(),
@@ -115,9 +132,7 @@ async def test_should_shrink_second_key_reservation_to_remaining_budget(
         )
         assert second_reservation is not None
         assert second_reservation["reserved_cost"] == pytest.approx(0.4)
-        assert counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-budget-race"
-        ) == pytest.approx(1.0)
+        assert _live_hold_total("spend:key:key-budget-race") == pytest.approx(1.0)
 
         with pytest.raises(litellm.BudgetExceededError):
             await reserve_budget_for_request(
@@ -132,15 +147,13 @@ async def test_should_shrink_second_key_reservation_to_remaining_budget(
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-race"
-    ) == pytest.approx(1.0)
+    # The rejected request's hold is released, leaving only the two admitted ones.
+    assert _live_hold_total("spend:key:key-budget-race") == pytest.approx(1.0)
 
     await release_budget_reservation(second_reservation)
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-race"
-    ) == pytest.approx(0.6)
+    assert _live_hold_total("spend:key:key-budget-race") == pytest.approx(0.6)
     await release_budget_reservation(reservation)
+    assert _live_hold_total("spend:key:key-budget-race") == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
@@ -177,9 +190,9 @@ async def test_should_shrink_second_end_user_reservation_to_remaining_budget(
             end_user_object=end_user_object,
         )
         assert reservation is not None
-        assert counter_cache.in_memory_cache.get_cache(
-            key="spend:end_user:end-user-budget-race"
-        ) == pytest.approx(0.6)
+        assert _live_hold_total("spend:end_user:end-user-budget-race") == pytest.approx(
+            0.6
+        )
 
         second_reservation = await reserve_budget_for_request(
             request_body=_request_body(),
@@ -195,9 +208,9 @@ async def test_should_shrink_second_end_user_reservation_to_remaining_budget(
         )
         assert second_reservation is not None
         assert second_reservation["reserved_cost"] == pytest.approx(0.4)
-        assert counter_cache.in_memory_cache.get_cache(
-            key="spend:end_user:end-user-budget-race"
-        ) == pytest.approx(1.0)
+        assert _live_hold_total("spend:end_user:end-user-budget-race") == pytest.approx(
+            1.0
+        )
 
         with pytest.raises(litellm.BudgetExceededError):
             await reserve_budget_for_request(
@@ -213,14 +226,10 @@ async def test_should_shrink_second_end_user_reservation_to_remaining_budget(
                 end_user_object=end_user_object,
             )
 
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:end_user:end-user-budget-race"
-    ) == pytest.approx(1.0)
+    assert _live_hold_total("spend:end_user:end-user-budget-race") == pytest.approx(1.0)
 
     await release_budget_reservation(second_reservation)
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:end_user:end-user-budget-race"
-    ) == pytest.approx(0.6)
+    assert _live_hold_total("spend:end_user:end-user-budget-race") == pytest.approx(0.6)
 
     from litellm.proxy.proxy_server import increment_spend_counters
 
@@ -233,6 +242,8 @@ async def test_should_shrink_second_end_user_reservation_to_remaining_budget(
         end_user_id="end-user-budget-race",
     )
 
+    # Settle: the hold is removed and the committed counter records actual spend.
+    assert _live_hold_total("spend:end_user:end-user-budget-race") == pytest.approx(0.0)
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:end_user:end-user-budget-race"
     ) == pytest.approx(0.2)
@@ -290,16 +301,10 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
                 "entity_type": "Tag",
                 "entity_id": "tag-budget-race",
                 "reserved_cost": 0.6,
-                "applied_adjustment": 0.0,
             }
         ]
-        assert counter_cache.in_memory_cache.get_cache(
-            key="spend:tag:tag-budget-race"
-        ) == pytest.approx(0.6)
-        assert (
-            counter_cache.in_memory_cache.get_cache(key="spend:tag:tag-without-budget")
-            is None
-        )
+        assert _live_hold_total("spend:tag:tag-budget-race") == pytest.approx(0.6)
+        assert _live_hold_total("spend:tag:tag-without-budget") == pytest.approx(0.0)
 
         second_reservation = await reserve_budget_for_request(
             request_body=request_body,
@@ -314,9 +319,7 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
         )
         assert second_reservation is not None
         assert second_reservation["reserved_cost"] == pytest.approx(0.4)
-        assert counter_cache.in_memory_cache.get_cache(
-            key="spend:tag:tag-budget-race"
-        ) == pytest.approx(1.0)
+        assert _live_hold_total("spend:tag:tag-budget-race") == pytest.approx(1.0)
 
         with pytest.raises(litellm.BudgetExceededError):
             await reserve_budget_for_request(
@@ -331,14 +334,10 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:tag:tag-budget-race"
-    ) == pytest.approx(1.0)
+    assert _live_hold_total("spend:tag:tag-budget-race") == pytest.approx(1.0)
 
     await release_budget_reservation(second_reservation)
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:tag:tag-budget-race"
-    ) == pytest.approx(0.6)
+    assert _live_hold_total("spend:tag:tag-budget-race") == pytest.approx(0.6)
 
     from litellm.proxy.proxy_server import increment_spend_counters
 
@@ -351,6 +350,7 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
         tags=["tag-budget-race"],
     )
 
+    assert _live_hold_total("spend:tag:tag-budget-race") == pytest.approx(0.0)
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:tag:tag-budget-race"
     ) == pytest.approx(0.2)
@@ -467,14 +467,21 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    # Committed counters hold only the seeded base spend (0.1); the 0.3
+    # reservation lives as a separate hold on each counter.
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:team_member:user-budget-shared:team-budget-shared"
-    ) == pytest.approx(0.4)
+    ) == pytest.approx(0.1)
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:org:org-budget-shared"
-    ) == pytest.approx(0.4)
+    ) == pytest.approx(0.1)
+    assert _live_hold_total(
+        "spend:team_member:user-budget-shared:team-budget-shared"
+    ) == pytest.approx(0.3)
+    assert _live_hold_total("spend:org:org-budget-shared") == pytest.approx(0.3)
 
     await release_budget_reservation(reservation)
+    assert _live_hold_total("spend:org:org-budget-shared") == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
@@ -574,14 +581,18 @@ async def test_should_cap_known_estimate_to_remaining_budget(
 
     assert reservation is not None
     assert reservation["reserved_cost"] == pytest.approx(0.1)
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-known-estimate-cap"
-    ) == pytest.approx(1.0)
-
-    await release_budget_reservation(reservation)
+    # Committed spend is untouched at 0.9; the hold fills the 0.1 of headroom.
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-budget-known-estimate-cap"
     ) == pytest.approx(0.9)
+    assert _live_hold_total("spend:key:key-budget-known-estimate-cap") == pytest.approx(
+        0.1
+    )
+
+    await release_budget_reservation(reservation)
+    assert _live_hold_total("spend:key:key-budget-known-estimate-cap") == pytest.approx(
+        0.0
+    )
 
 
 @pytest.mark.asyncio
@@ -1003,20 +1014,22 @@ async def test_should_skip_budget_window_with_unparseable_duration(
     assert [entry["counter_key"] for entry in reservation["entries"]] == [
         "spend:key:key-budget-malformed-window"
     ]
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-malformed-window"
-    ) == pytest.approx(1.1)
-    assert (
-        counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-budget-malformed-window:window:not-a-duration"
-        )
-        is None
-    )
-
-    await release_budget_reservation(reservation)
+    # The base counter keeps its committed 0.9; the 0.2 reservation is a hold.
+    # The malformed window counter is skipped entirely (no hold, no counter).
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-budget-malformed-window"
     ) == pytest.approx(0.9)
+    assert _live_hold_total("spend:key:key-budget-malformed-window") == pytest.approx(
+        0.2
+    )
+    assert _live_hold_total(
+        "spend:key:key-budget-malformed-window:window:not-a-duration"
+    ) == pytest.approx(0.0)
+
+    await release_budget_reservation(reservation)
+    assert _live_hold_total("spend:key:key-budget-malformed-window") == pytest.approx(
+        0.0
+    )
 
 
 @pytest.mark.asyncio
@@ -1061,10 +1074,12 @@ async def test_should_skip_window_reservation_when_db_baseline_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_should_skip_reservation_when_counter_increment_fails(
+async def test_should_skip_reservation_when_hold_placement_fails(
     spend_counter_state,
     monkeypatch,
 ):
+    import litellm.proxy.proxy_server as ps
+
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(
@@ -1073,10 +1088,10 @@ async def test_should_skip_reservation_when_counter_increment_fails(
         max_budget=1.0,
     )
 
-    async def fail_increment_cache(*args, **kwargs):
-        raise RuntimeError("counter unavailable")
+    async def fail_place(*args, **kwargs):
+        raise RuntimeError("hold store unavailable")
 
-    monkeypatch.setattr(counter_cache, "async_increment_cache", fail_increment_cache)
+    monkeypatch.setattr(ps.budget_hold_store, "place_and_total", fail_place)
 
     with (
         patch(
@@ -1101,12 +1116,9 @@ async def test_should_skip_reservation_when_counter_increment_fails(
 
     assert reservation is None
     assert mock_warning.call_count >= 1
-    assert (
-        counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-budget-reserve-unavailable"
-        )
-        is None
-    )
+    assert _live_hold_total(
+        "spend:key:key-budget-reserve-unavailable"
+    ) == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
@@ -1154,66 +1166,6 @@ async def test_should_skip_reservation_when_counter_initialization_fails(
         )
         is None
     )
-
-
-@pytest.mark.asyncio
-async def test_should_release_tracked_entry_when_reservation_fails_after_increment(
-    spend_counter_state,
-):
-    counter_cache, key_cache = spend_counter_state
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
-    valid_token = UserAPIKeyAuth(
-        token="key-budget-reserve-after-increment-failure",
-        spend=0.0,
-        max_budget=1.0,
-    )
-
-    import litellm.proxy.proxy_server as ps
-
-    original_increment_counter = ps._increment_spend_counter_cache
-    first_increment = True
-
-    async def fail_after_increment(counter_key: str, increment: float):
-        nonlocal first_increment
-        if first_increment:
-            first_increment = False
-            await counter_cache.async_increment_cache(key=counter_key, value=increment)
-            raise RuntimeError("lost increment response")
-        return await original_increment_counter(
-            counter_key=counter_key,
-            increment=increment,
-        )
-
-    with (
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-            return_value=0.5,
-        ),
-        patch(
-            "litellm.proxy.proxy_server._increment_spend_counter_cache",
-            side_effect=fail_after_increment,
-        ),
-        patch(
-            "litellm.proxy.proxy_server._invalidate_spend_counter",
-            side_effect=RuntimeError("invalidate unavailable"),
-        ),
-    ):
-        reservation = await reserve_budget_for_request(
-            request_body=_request_body(),
-            route="/chat/completions",
-            llm_router=None,
-            valid_token=valid_token,
-            team_object=None,
-            user_object=None,
-            prisma_client=None,
-            user_api_key_cache=key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    assert reservation is None
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-reserve-after-increment-failure"
-    ) == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
@@ -1288,83 +1240,17 @@ async def test_should_release_reservation_on_failure(spend_counter_state):
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    assert _live_hold_total("spend:key:key-budget-release") == pytest.approx(0.4)
+
     await release_budget_reservation(reservation)
     await release_budget_reservation(reservation)
 
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-release"
-    ) == pytest.approx(0.0)
-
-
-@pytest.mark.asyncio
-async def test_should_retry_partial_release_without_double_decrement(
-    spend_counter_state,
-    monkeypatch,
-):
-    counter_cache, key_cache = spend_counter_state
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
-    valid_token = UserAPIKeyAuth(
-        token="key-budget-partial-release",
-        spend=0.0,
-        max_budget=1.0,
-        team_id="team-budget-partial-release",
+    # Release is idempotent: the hold is gone and the committed counter is clean.
+    assert _live_hold_total("spend:key:key-budget-release") == pytest.approx(0.0)
+    assert (
+        counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-release")
+        is None
     )
-    team_object = LiteLLM_TeamTable(
-        team_id="team-budget-partial-release",
-        spend=0.0,
-        max_budget=1.0,
-    )
-
-    with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-        return_value=0.4,
-    ):
-        reservation = await reserve_budget_for_request(
-            request_body=_request_body(),
-            route="/chat/completions",
-            llm_router=None,
-            valid_token=valid_token,
-            team_object=team_object,
-            user_object=None,
-            prisma_client=None,
-            user_api_key_cache=key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    original_increment_cache = counter_cache.async_increment_cache
-    fail_next_team_release = True
-
-    async def flaky_increment_cache(key, value, *args, **kwargs):
-        nonlocal fail_next_team_release
-        if (
-            key == "spend:team:team-budget-partial-release"
-            and value < 0
-            and fail_next_team_release
-        ):
-            fail_next_team_release = False
-            raise RuntimeError("simulated counter failure")
-        return await original_increment_cache(key=key, value=value, *args, **kwargs)
-
-    monkeypatch.setattr(counter_cache, "async_increment_cache", flaky_increment_cache)
-
-    with pytest.raises(RuntimeError):
-        await release_budget_reservation(reservation)
-
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-partial-release"
-    ) == pytest.approx(0.0)
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:team:team-budget-partial-release"
-    ) == pytest.approx(0.4)
-
-    await release_budget_reservation(reservation)
-
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-partial-release"
-    ) == pytest.approx(0.0)
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:team:team-budget-partial-release"
-    ) == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
@@ -1390,18 +1276,12 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
         value=team_object,
     )
 
-    original_increment_cache = counter_cache.async_increment_cache
-    fail_key_cleanup = True
+    import litellm.proxy.proxy_server as ps
 
-    async def flaky_increment_cache(key, value, *args, **kwargs):
-        nonlocal fail_key_cleanup
-        if key == "spend:key:key-budget-cleanup-failure" and value < 0:
-            if fail_key_cleanup:
-                fail_key_cleanup = False
-                raise RuntimeError("simulated cleanup failure")
-        return await original_increment_cache(key=key, value=value, *args, **kwargs)
+    async def fail_remove(*args, **kwargs):
+        raise RuntimeError("simulated cleanup failure")
 
-    monkeypatch.setattr(counter_cache, "async_increment_cache", flaky_increment_cache)
+    monkeypatch.setattr(ps.budget_hold_store, "remove", fail_remove)
 
     with (
         patch(
@@ -1425,6 +1305,8 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
                 proxy_logging_obj=proxy_logging_obj,
             )
 
+    # The BudgetExceededError is preserved even though best-effort hold cleanup
+    # failed; committed counters are never touched by the reservation path.
     assert (
         counter_cache.in_memory_cache.get_cache(
             key="spend:key:key-budget-cleanup-failure"
@@ -1438,132 +1320,42 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
 
 
 @pytest.mark.asyncio
-async def test_should_not_create_negative_counter_when_release_counter_is_missing(
+async def test_should_invalidate_reserved_counters_removes_holds_not_committed_spend(
     spend_counter_state,
 ):
-    counter_cache, _ = spend_counter_state
-    reservation = {
-        "reserved_cost": 0.4,
-        "entries": [
-            {
-                "counter_key": "spend:key:key-budget-missing-release",
-                "reserved_cost": 0.4,
-                "applied_adjustment": 0.0,
-            }
-        ],
-        "finalized": False,
-    }
-
-    with pytest.raises(RuntimeError, match="missing counter"):
-        await release_budget_reservation(reservation)
-
-    assert (
-        counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-budget-missing-release"
-        )
-        is None
-    )
-    assert reservation["finalized"] is False
-
-
-@pytest.mark.asyncio
-async def test_should_invalidate_counter_when_release_would_underflow(
-    spend_counter_state,
-):
+    """invalidate_budget_reservation_counters drops this request's holds and
+    must never delete the committed spend counter (which would let other pods'
+    reservations corrupt the shared budget)."""
     counter_cache, _ = spend_counter_state
     await counter_cache.async_increment_cache(
-        key="spend:key:key-budget-underflow-release",
-        value=0.1,
+        key="spend:key:key-budget-invalidate", value=0.4
     )
-    reservation = {
-        "reserved_cost": 0.4,
-        "entries": [
-            {
-                "counter_key": "spend:key:key-budget-underflow-release",
-                "reserved_cost": 0.4,
-                "applied_adjustment": 0.0,
-            }
-        ],
-        "finalized": False,
-    }
 
-    with pytest.raises(RuntimeError, match="negative"):
-        await release_budget_reservation(reservation)
+    import litellm.proxy.proxy_server as ps
 
-    assert (
-        counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-budget-underflow-release"
-        )
-        is None
+    hold_id = "hold-invalidate"
+    await ps.budget_hold_store.place_and_total(
+        counter_key="spend:key:key-budget-invalidate", hold_id=hold_id, cost=0.4
     )
-    assert reservation["finalized"] is False
-
-
-@pytest.mark.asyncio
-async def test_should_invalidate_non_numeric_counter_during_release(
-    spend_counter_state,
-):
-    counter_cache, _ = spend_counter_state
-    counter_cache.in_memory_cache.set_cache(
-        key="spend:key:key-budget-nonnumeric-release",
-        value="stale",
-    )
-    reservation = {
-        "reserved_cost": 0.4,
-        "entries": [
-            {
-                "counter_key": "spend:key:key-budget-nonnumeric-release",
-                "reserved_cost": 0.4,
-                "applied_adjustment": 0.0,
-            }
-        ],
-        "finalized": False,
-    }
-
-    with pytest.raises(RuntimeError, match="non-numeric"):
-        await release_budget_reservation(reservation)
-
-    assert (
-        counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-budget-nonnumeric-release"
-        )
-        is None
-    )
-    assert reservation["finalized"] is False
-
-
-@pytest.mark.asyncio
-async def test_should_invalidate_reserved_counters_after_persisted_spend_failure(
-    spend_counter_state,
-):
-    counter_cache, _ = spend_counter_state
-    await counter_cache.async_increment_cache(
-        key="spend:key:key-budget-invalidate",
-        value=0.4,
-    )
-    await counter_cache.async_increment_cache(
-        key="spend:team:team-budget-invalidate",
-        value=0.4,
-    )
+    assert _live_hold_total("spend:key:key-budget-invalidate") == pytest.approx(0.4)
 
     await invalidate_budget_reservation_counters(
         {
-            "reserved_cost": 0.4,
+            "hold_id": hold_id,
             "entries": [
-                {"counter_key": "spend:key:key-budget-invalidate"},
-                {"counter_key": "spend:team:team-budget-invalidate"},
+                {
+                    "counter_key": "spend:key:key-budget-invalidate",
+                    "reserved_cost": 0.4,
+                },
             ],
         }
     )
 
-    assert (
-        counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-invalidate")
-        is None
-    )
-    assert (
-        counter_cache.in_memory_cache.get_cache(key="spend:team:team-budget-invalidate")
-        is None
-    )
+    assert _live_hold_total("spend:key:key-budget-invalidate") == pytest.approx(0.0)
+    # Committed spend is untouched.
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-invalidate"
+    ) == pytest.approx(0.4)
 
 
 @pytest.mark.asyncio
@@ -1598,11 +1390,15 @@ async def test_should_reserve_all_budgeted_counters(spend_counter_state):
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    assert _live_hold_total("spend:key:key-budget-all") == pytest.approx(0.3)
+    assert _live_hold_total("spend:team:team-budget-all") == pytest.approx(0.3)
+    # Reservations never touch the committed spend counters.
     assert (
-        counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-all") == 0.3
+        counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-all") is None
     )
     assert (
-        counter_cache.in_memory_cache.get_cache(key="spend:team:team-budget-all") == 0.3
+        counter_cache.in_memory_cache.get_cache(key="spend:team:team-budget-all")
+        is None
     )
 
 

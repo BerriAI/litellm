@@ -1508,6 +1508,12 @@ SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL",
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = int(
     os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000)
 )
+# Lifetime of an in-flight budget reservation ("hold"). A hold that outlives
+# this (e.g. its pod was OOMKilled before the request settled) is pruned at the
+# next admission, so an orphaned reservation cannot pin a shared budget counter.
+# Set above the longest possible single request; hosted providers terminate
+# streams at/under ~60 min, so 1 hour covers effectively all real requests.
+BUDGET_HOLD_TTL_SECONDS = int(os.getenv("BUDGET_HOLD_TTL", 3600))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute

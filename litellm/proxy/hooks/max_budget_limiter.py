@@ -35,11 +35,11 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             if user_api_key_dict.team_id is not None:
                 return
 
-            # The reservation path admits at the strict-`<` boundary and
-            # atomically pre-fills the same counter we'd read here. Re-checking
-            # with `>=` would reject a request the reservation already admitted
-            # when the reservation fills the counter to exactly max_budget.
-            # Imported lazily to avoid a circular import via proxy.utils.
+            # The reservation path already admitted this counter at the
+            # strict-`<` boundary (committed spend + live holds <= max_budget),
+            # so a redundant `>=` re-check here could reject a request it
+            # already let through. Imported lazily to avoid a circular import
+            # via proxy.utils.
             from litellm.proxy.spend_tracking.budget_reservation import (
                 get_reserved_counter_keys,
             )
