@@ -3821,6 +3821,7 @@ def _cold_storage_handler(payload):
         ({"a": 1}, True),
         ([], False),
         ([1], True),
+        (5, True),
     ],
 )
 def test_spend_log_field_has_content(value, expected):
@@ -3945,3 +3946,136 @@ async def test_resolve_payload_cold_storage_miss_falls_back_to_pg_values():
     assert resolved == spend_management_endpoints.RequestResponsePayload(
         "{}", "{}", "{}"
     )
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_cold_storage_exception_falls_back_to_pg_values():
+    """A backend error during fetch degrades to PG values instead of bubbling a 500."""
+
+    class _RaisingLogger:
+        async def get_proxy_server_request_from_cold_storage_with_object_key(
+            self, object_key
+        ):
+            raise RuntimeError("cold storage backend unavailable")
+
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    handler = ColdStorageHandler(cold_storage_logger=_RaisingLogger())
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/boom.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert resolved == spend_management_endpoints.RequestResponsePayload(
+        "{}", "{}", "{}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cold_storage_handler_uses_injected_logger():
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    logger = _FakeColdStorageLogger({"messages": "in", "response": "out"})
+    handler = ColdStorageHandler(cold_storage_logger=logger)
+
+    result = await handler.get_proxy_server_request_from_cold_storage_with_object_key(
+        object_key="k/req.json"
+    )
+
+    assert result == {"messages": "in", "response": "out"}
+    assert logger.requested_object_keys == ["k/req.json"]
+
+
+@pytest.mark.asyncio
+async def test_cold_storage_handler_returns_none_when_no_logger_configured(monkeypatch):
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", None, raising=False)
+    handler = ColdStorageHandler()
+
+    result = await handler.get_proxy_server_request_from_cold_storage_with_object_key(
+        object_key="k/req.json"
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_cold_storage_handler_resolves_configured_logger_from_registry(monkeypatch):
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    logger = _FakeColdStorageLogger({"messages": "from-registry"})
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2", raising=False)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_custom_logger_for_callback_name",
+        lambda name: logger if name == "s3_v2" else None,
+    )
+    handler = ColdStorageHandler()
+
+    result = await handler.get_proxy_server_request_from_cold_storage_with_object_key(
+        object_key="k/req.json"
+    )
+
+    assert result == {"messages": "from-registry"}
+    assert logger.requested_object_keys == ["k/req.json"]
+
+
+def test_ui_view_request_response_reads_from_cold_storage(client, monkeypatch):
+    """End-to-end: a placeholder row with a cold_storage_object_key is served from
+    cold storage through the detail endpoint."""
+    from types import SimpleNamespace
+
+    placeholder_row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/cold.json"},
+    }
+
+    async def _query_raw(_sql, *_args):
+        return [placeholder_row]
+
+    fake_prisma = SimpleNamespace(db=SimpleNamespace(query_raw=_query_raw))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", fake_prisma)
+
+    cold_logger = _FakeColdStorageLogger(
+        {
+            "messages": [{"role": "user", "content": "hi"}],
+            "response": {"choices": [{"message": {"content": "hello"}}]},
+            "proxy_server_request": None,
+        }
+    )
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2", raising=False)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_additional_logging_utils_from_custom_logger",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_custom_logger_for_callback_name",
+        lambda name: cold_logger if name == "s3_v2" else None,
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_1"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/req-cold",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["messages"] == [{"role": "user", "content": "hi"}]
+        assert body["response"] == {"choices": [{"message": {"content": "hello"}}]}
+        assert cold_logger.requested_object_keys == ["k/cold.json"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
