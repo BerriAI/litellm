@@ -49,6 +49,14 @@ end
 return tostring(total)
 """
 
+# Atomic resize: swap this hold's member for its resized cost in one step so a
+# concurrent admission's sum never runs while the hold is momentarily absent.
+_RESIZE_LUA = """
+redis.call('ZREM', KEYS[1], ARGV[1])
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
+redis.call('EXPIRE', KEYS[1], ARGV[4])
+"""
+
 
 def _member(hold_id: str, cost: float) -> str:
     return f"{hold_id}:{cost!r}"
@@ -94,14 +102,18 @@ class BudgetHoldStore:
         if redis is not None:
             client: "Redis" = redis.init_async_client()  # type: ignore[assignment]
             zkey = redis.check_and_fix_namespace(key=self._zkey(counter_key))
-            await client.zrem(zkey, _member(hold_id, old_cost))
-            await client.zadd(
-                zkey, {_member(hold_id, new_cost): time.time() + self._ttl_seconds}
+            # ZREM of the last member would drop the set and its key TTL, so the
+            # script re-sets EXPIRE; doing it atomically also keeps a concurrent
+            # admission from summing while the resized hold is absent.
+            await client.eval(
+                _RESIZE_LUA,
+                1,
+                zkey,
+                _member(hold_id, old_cost),
+                time.time() + self._ttl_seconds,
+                _member(hold_id, new_cost),
+                self._ttl_seconds,
             )
-            # ZREM of the last member drops the set and its TTL, so the ZADD
-            # above can recreate it without one; refresh so an idle counter's
-            # holds key still expires.
-            await client.expire(zkey, self._ttl_seconds)
             return
         holds = self._memory_holds.get(counter_key)
         if holds is not None and hold_id in holds:

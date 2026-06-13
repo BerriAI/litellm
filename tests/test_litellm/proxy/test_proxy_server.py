@@ -6611,6 +6611,75 @@ async def test_increment_spend_counters_finalizes_and_releases_hold_on_none_cost
 
 
 @pytest.mark.asyncio
+async def test_increment_spend_counters_commits_spend_before_releasing_hold(
+    monkeypatch,
+):
+    """The committed counter must already hold the actual cost at the moment the
+    hold is released, so a concurrent admission never sees a window with neither
+    the hold nor the cost counted (veria-ai budget admission gap)."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.constants import BUDGET_HOLD_TTL_SECONDS
+    from litellm.proxy.proxy_server import increment_spend_counters
+    from litellm.proxy.spend_tracking.budget_hold_store import BudgetHoldStore
+
+    counter_cache = DualCache()
+    counter_key = "spend:key:key-order"
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_user, orig_hold, orig_prisma = (
+        ps.spend_counter_cache,
+        ps.user_api_key_cache,
+        ps.budget_hold_store,
+        ps.prisma_client,
+    )
+    ps.spend_counter_cache = counter_cache
+    ps.user_api_key_cache = DualCache()
+    ps.prisma_client = None
+    ps.budget_hold_store = BudgetHoldStore(
+        dual_cache=counter_cache, ttl_seconds=BUDGET_HOLD_TTL_SECONDS
+    )
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    committed_at_release = {}
+    real_remove = ps.budget_hold_store.remove
+
+    async def capture_remove(**kwargs):
+        committed_at_release["value"] = counter_cache.in_memory_cache.get_cache(
+            key=kwargs["counter_key"]
+        )
+        await real_remove(**kwargs)
+
+    monkeypatch.setattr(ps.budget_hold_store, "remove", capture_remove)
+
+    try:
+        await ps.budget_hold_store.place_and_total(counter_key, "hold-order", 0.5)
+        budget_reservation = {
+            "hold_id": "hold-order",
+            "reserved_cost": 0.5,
+            "entries": [{"counter_key": counter_key, "reserved_cost": 0.5}],
+            "finalized": False,
+        }
+
+        await increment_spend_counters(
+            token="key-order",
+            team_id=None,
+            user_id=None,
+            response_cost=0.25,
+            budget_reservation=budget_reservation,
+        )
+
+        assert committed_at_release["value"] == pytest.approx(0.25)
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.user_api_key_cache = orig_user
+        ps.budget_hold_store = orig_hold
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
 async def test_increment_spend_counter_invalidates_stale_cache_on_redis_failure():
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import _increment_spend_counter_cache

@@ -2090,11 +2090,11 @@ async def increment_spend_counters(
     Awaited (not create_task) in the cost callback, so the counter is
     updated before the next request's auth check runs.
     """
-    await _reconcile_budget_reservation_for_counter_update(
-        budget_reservation=budget_reservation,
-    )
-
     if response_cost is None or response_cost == 0:
+        # Nothing to commit; release this request's holds and finalize.
+        await _reconcile_budget_reservation_for_counter_update(
+            budget_reservation=budget_reservation,
+        )
         if budget_reservation is not None:
             budget_reservation["finalized"] = True
         return
@@ -2201,6 +2201,14 @@ async def increment_spend_counters(
     await _increment_org_spend_counter(
         org_id=org_id,
         response_cost=response_cost,
+    )
+
+    # Release holds only after committed spend is written. A concurrent
+    # admission then never sees a window with neither the hold nor the cost
+    # counted; the brief overlap double-counts (hold + committed), which blocks
+    # early rather than over-admitting.
+    await _reconcile_budget_reservation_for_counter_update(
+        budget_reservation=budget_reservation,
     )
     if budget_reservation is not None:
         budget_reservation["finalized"] = True
