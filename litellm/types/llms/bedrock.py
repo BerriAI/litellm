@@ -432,7 +432,8 @@ class BedrockInvokeNovaRequest(TypedDict, total=False):
     guardrailConfig: Optional[GuardrailConfigBlock]
 
 
-class BedrockInvokeCohereInferenceParams(TypedDict, total=False):
+class BedrockInvokeCohereCompletionRequest(TypedDict, total=False):
+    prompt: Required[str]
     max_tokens: int
     temperature: float
     return_likelihood: str
@@ -450,18 +451,28 @@ class BedrockInvokeCohereInferenceParams(TypedDict, total=False):
     force_single_step: bool
 
 
-class BedrockInvokeCohereCompletionRequest(
-    BedrockInvokeCohereInferenceParams, total=False
-):
-    prompt: Required[str]
-
-
-class BedrockInvokeCohereChatRequest(BedrockInvokeCohereInferenceParams, total=False):
+class BedrockInvokeCohereChatRequest(TypedDict, total=False):
     message: Required[str]
     chat_history: List[Dict[str, object]]
+    max_tokens: int
+    temperature: float
+    return_likelihood: str
+    p: float
+    k: int
+    stop_sequences: List[str]
+    num_generations: int
+    frequency_penalty: float
+    presence_penalty: float
+    truncate: str
+    stream: bool
+    tools: List[Dict[str, object]]
+    tool_results: List[Dict[str, object]]
+    seed: int
+    force_single_step: bool
 
 
-class BedrockInvokeAI21InferenceParams(TypedDict, total=False):
+class BedrockInvokeAI21Request(TypedDict, total=False):
+    prompt: Required[str]
     maxTokens: int
     temperature: float
     topP: float
@@ -472,20 +483,13 @@ class BedrockInvokeAI21InferenceParams(TypedDict, total=False):
     countPenalty: Dict[str, object]
 
 
-class BedrockInvokeAI21Request(BedrockInvokeAI21InferenceParams, total=False):
+class BedrockInvokeMistralRequest(TypedDict, total=False):
     prompt: Required[str]
-
-
-class BedrockInvokeMistralInferenceParams(TypedDict, total=False):
     max_tokens: int
     temperature: float
     top_p: float
     top_k: float
     stop: List[str]
-
-
-class BedrockInvokeMistralRequest(BedrockInvokeMistralInferenceParams, total=False):
-    prompt: Required[str]
 
 
 class BedrockInvokeTitanInferenceParams(TypedDict, total=False):
@@ -500,15 +504,12 @@ class BedrockInvokeTitanRequest(TypedDict):
     textGenerationConfig: BedrockInvokeTitanInferenceParams
 
 
-class BedrockInvokeLlamaInferenceParams(TypedDict, total=False):
+class BedrockInvokeLlamaRequest(TypedDict, total=False):
+    prompt: Required[str]
     max_gen_len: int
     temperature: float
     top_p: float
     topP: float
-
-
-class BedrockInvokeLlamaRequest(BedrockInvokeLlamaInferenceParams, total=False):
-    prompt: Required[str]
 
 
 class GenericStreamingChunk(TypedDict):
