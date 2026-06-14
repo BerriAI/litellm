@@ -5,7 +5,7 @@
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
-	lint-mypy lint-mypy-baseline-update lint-basedpyright lint-basedpyright-baseline-update \
+	lint-mypy lint-mypy-budget-update lint-basedpyright lint-basedpyright-budget-update \
 	lint-strict-budget lint-strict-budget-update \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
@@ -24,10 +24,10 @@ help:
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
 	@echo "  make lint               - Run all linting (Ruff, MyPy, Black check, circular imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
-	@echo "  make lint-mypy          - Run MyPy (disallow_untyped_defs) filtered through its baseline"
-	@echo "  make lint-mypy-baseline-update - Re-capture the MyPy baseline (ratchet)"
-	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by its baseline"
-	@echo "  make lint-basedpyright-baseline-update - Re-capture the basedpyright baseline (ratchet)"
+	@echo "  make lint-mypy          - Run MyPy (disallow_untyped_defs), gated by per-file error counts"
+	@echo "  make lint-mypy-budget-update - Re-capture the MyPy per-file budget (ratchet)"
+	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-file error counts"
+	@echo "  make lint-basedpyright-budget-update - Re-capture the basedpyright per-file budget (ratchet)"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
 	@echo "  make lint-strict-budget - Gate the codebase total of each strict ruff rule against its ceiling"
 	@echo "  make lint-strict-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
@@ -125,16 +125,16 @@ lint-ruff-FULL-dev: install-dev
 	else echo "No changed .py files to check."; fi
 
 lint-mypy: install-dev
-	cd litellm && ($(UV_RUN) mypy . || true) | $(UV_RUN) mypy-baseline filter --baseline-path .mypy-baseline.txt
+	cd litellm && ($(UV_RUN) mypy . || true) | $(UV_RUN) python ../scripts/type_check_gate.py --tool mypy
 
-lint-mypy-baseline-update: install-dev
-	cd litellm && ($(UV_RUN) mypy . || true) | $(UV_RUN) mypy-baseline sync --baseline-path .mypy-baseline.txt
+lint-mypy-budget-update: install-dev
+	cd litellm && ($(UV_RUN) mypy . || true) | $(UV_RUN) python ../scripts/type_check_gate.py --tool mypy --update
 
 lint-basedpyright: install-dev
-	$(UV_RUN) basedpyright
+	($(UV_RUN) basedpyright || true) | $(UV_RUN) python scripts/type_check_gate.py --tool basedpyright
 
-lint-basedpyright-baseline-update: install-dev
-	$(UV_RUN) basedpyright --writebaseline
+lint-basedpyright-budget-update: install-dev
+	($(UV_RUN) basedpyright || true) | $(UV_RUN) python scripts/type_check_gate.py --tool basedpyright --update
 
 lint-black: format-check
 

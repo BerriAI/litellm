@@ -149,7 +149,6 @@ dev = [
     "flake8==7.3.0",
     "black==26.3.1",
     "mypy==1.19.0",
-    "mypy-baseline==0.7.4",
     "basedpyright==1.39.7",
     "pytest==9.0.3",
     "pytest-mock==3.15.1",

@@ -80,11 +80,11 @@ jobs:
       - name: Run MyPy type checking
         run: |
           cd litellm
-          (uv run --no-sync mypy . || true) | uv run --no-sync mypy-baseline filter --baseline-path .mypy-baseline.txt
+          (uv run --no-sync mypy . || true) | uv run --no-sync python ../scripts/type_check_gate.py --tool mypy
 
       - name: Run basedpyright type checking
         run: |
-          uv run --no-sync basedpyright
+          (uv run --no-sync basedpyright || true) | uv run --no-sync python scripts/type_check_gate.py --tool basedpyright
 
       - name: Check for circular imports
         run: |
