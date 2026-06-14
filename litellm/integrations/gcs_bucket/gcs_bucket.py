@@ -6,12 +6,14 @@ import time
 from litellm._uuid import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
 
 from litellm._logging import verbose_logger
 from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
+from litellm.litellm_core_utils.cloud_storage_security import (
+    sanitize_cloud_object_component,
+)
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
@@ -335,7 +337,11 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         _litellm_params = kwargs.get("litellm_params", None) or {}
         _metadata = _litellm_params.get("metadata", None) or {}
         if "gcs_log_id" in _metadata:
-            object_name = _metadata["gcs_log_id"]
+            safe_log_id = sanitize_cloud_object_component(
+                _metadata.get("gcs_log_id"), fallback=""
+            )
+            if safe_log_id:
+                object_name = f"{current_date}/custom-{uuid.uuid4().hex}-{safe_log_id}"
 
         return object_name
 
@@ -367,8 +373,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                     request_date_str=date_str,
                     response_id=request_id,
                 )
-                encoded_object_name = quote(object_name, safe="")
-                response = await self.download_gcs_object(encoded_object_name)
+                response = await self.download_gcs_object(object_name)
 
                 if response is not None:
                     loaded_response = json.loads(response)

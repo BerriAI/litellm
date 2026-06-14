@@ -11,8 +11,9 @@ import json
 import os
 import re
 import traceback
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
+import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -103,6 +104,9 @@ class GenericAPILogger(CustomBatchLogger):
         event_types: Optional[List[API_EVENT_TYPES]] = None,
         callback_name: Optional[str] = None,
         log_format: Optional[LOG_FORMAT_TYPES] = None,
+        max_retries: int = 0,
+        retry_delay: float = 1.0,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         **kwargs,
     ):
         """
@@ -114,6 +118,9 @@ class GenericAPILogger(CustomBatchLogger):
             event_types: Optional[List[API_EVENT_TYPES]] = None,
             callback_name: Optional[str] = None - If provided, loads config from generic_api_compatible_callbacks.json
             log_format: Optional[LOG_FORMAT_TYPES] = None - Format for log output: "json_array" (default), "ndjson", or "single"
+            max_retries: Number of retry attempts after the initial request fails. Defaults to 0.
+            retry_delay: Initial retry delay in seconds. Retries use exponential backoff.
+            timeout: Optional timeout to use for Generic API callback requests.
         """
         #########################################################
         # Check if callback_name is provided and load config
@@ -162,6 +169,10 @@ class GenericAPILogger(CustomBatchLogger):
         self.endpoint: str = endpoint
         self.event_types: Optional[List[API_EVENT_TYPES]] = event_types
         self.callback_name: Optional[str] = callback_name
+        self.max_retries = max(0, int(max_retries or 0))
+        retry_delay_value = 0.0 if retry_delay is None else retry_delay
+        self.retry_delay = max(0.0, float(retry_delay_value))
+        self.timeout = timeout
 
         # Validate and store log_format
         if log_format is not None and log_format not in [
@@ -225,6 +236,53 @@ class GenericAPILogger(CustomBatchLogger):
             headers_dict.update(headers)
 
         return headers_dict
+
+    def _should_retry_exception(self, exception: Exception) -> bool:
+        if isinstance(exception, (litellm.Timeout, httpx.TransportError)):
+            return True
+
+        if isinstance(exception, httpx.HTTPStatusError):
+            return exception.response.status_code >= 500
+
+        return False
+
+    async def _sleep_before_retry(self, attempt: int) -> None:
+        if self.retry_delay <= 0:
+            return
+
+        delay = self.retry_delay * (2**attempt)
+        await asyncio.sleep(delay)
+
+    async def _post_with_retries(self, data: str) -> httpx.Response:
+        post_kwargs: Dict[str, Any] = {
+            "url": self.endpoint,
+            "headers": self.headers,
+            "data": data,
+        }
+        if self.timeout is not None:
+            post_kwargs["timeout"] = self.timeout
+
+        total_attempts = self.max_retries + 1
+        for attempt in range(total_attempts):
+            try:
+                return await self.async_httpx_client.post(**post_kwargs)
+            except Exception as e:
+                is_last_attempt = attempt == self.max_retries
+                should_retry = self._should_retry_exception(e)
+                if is_last_attempt or not should_retry:
+                    raise
+
+                verbose_logger.warning(
+                    "Generic API Logger - retrying request to %s after error: %s "
+                    "(attempt %s/%s)",
+                    self.endpoint,
+                    str(e),
+                    attempt + 1,
+                    total_attempts,
+                )
+                await self._sleep_before_retry(attempt)
+
+        raise RuntimeError("Generic API Logger retry loop exited unexpectedly")
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -325,11 +383,7 @@ class GenericAPILogger(CustomBatchLogger):
                 # Send each log as individual HTTP request in parallel
                 tasks = []
                 for log_entry in self.log_queue:
-                    task = self.async_httpx_client.post(
-                        url=self.endpoint,
-                        headers=self.headers,
-                        data=safe_dumps(log_entry),
-                    )
+                    task = self._post_with_retries(data=safe_dumps(log_entry))
                     tasks.append(task)
 
                 # Execute all requests in parallel
@@ -356,11 +410,7 @@ class GenericAPILogger(CustomBatchLogger):
                     raise ValueError(f"Unknown log_format: {self.log_format}")
 
                 # Make POST request
-                response = await self.async_httpx_client.post(
-                    url=self.endpoint,
-                    headers=self.headers,
-                    data=data,
-                )
+                response = await self._post_with_retries(data=data)
 
                 verbose_logger.debug(
                     f"Generic API Logger - sent batch to {self.endpoint}, "

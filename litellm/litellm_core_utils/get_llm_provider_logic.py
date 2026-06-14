@@ -1,4 +1,6 @@
+import re
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
@@ -6,6 +8,43 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
+
+
+def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
+    """
+    Match a registered openai-compatible endpoint against a caller-supplied
+    ``api_base`` using parsed-URL semantics, not unanchored substring search.
+
+    Both inputs may be a bare hostname (``api.perplexity.ai``), host+path
+    (``api.deepinfra.com/v1/openai``), or a full URL
+    (``https://api.cerebras.ai/v1``). Hostnames must match exactly
+    (case-insensitive); if the registered endpoint has a non-trivial path,
+    the api_base path must start with it on a segment boundary.
+
+    The naive ``endpoint in api_base`` shape lets a caller pass
+    ``https://attacker.com/api.groq.com/openai/v1`` to coerce the proxy
+    into reading the server's GROQ_API_KEY from the environment and
+    forwarding it to the attacker's host as a Bearer credential.
+    """
+
+    def _parse(value: str):
+        # Ensure urlparse sees a scheme so it populates hostname / path.
+        normalized = value if "://" in value else f"https://{value}"
+        return urlparse(normalized)
+
+    parsed_endpoint = _parse(endpoint)
+    parsed_url = _parse(api_base)
+
+    endpoint_host = (parsed_endpoint.hostname or "").lower()
+    url_host = (parsed_url.hostname or "").lower()
+    if not endpoint_host or endpoint_host != url_host:
+        return False
+
+    endpoint_path = parsed_endpoint.path.rstrip("/")
+    if not endpoint_path:
+        return True
+    url_path = parsed_url.path.rstrip("/")
+    return url_path == endpoint_path or url_path.startswith(endpoint_path + "/")
 
 
 def _is_non_openai_azure_model(model: str) -> bool:
@@ -31,6 +70,25 @@ def _is_azure_claude_model(model: str) -> bool:
         return "claude" in model_lower or model_lower.startswith("claude")
     except Exception:
         return False
+
+
+_CLAUDE_PATTERN = re.compile(r"^claude-[a-z]+-\d+-\d+(?:-\d{8})?$", re.IGNORECASE)
+
+
+def _matches_claude_model_pattern(model: str) -> bool:
+    """
+    Check if a model string matches the Claude model naming pattern.
+
+    Matches patterns like:
+    - claude-opus-4-7
+    - claude-sonnet-4-6
+    - claude-haiku-4-5
+    - claude-opus-5-1-20270101 (with optional date suffix)
+
+    This allows future Claude models to be routed to the Anthropic provider
+    without requiring updates to model_prices_and_context_window.json.
+    """
+    return _CLAUDE_PATTERN.match(model) is not None
 
 
 def handle_cohere_chat_model_custom_llm_provider(
@@ -210,7 +268,7 @@ def get_llm_provider(  # noqa: PLR0915
         # check if api base is a known openai compatible endpoint
         if api_base:
             for endpoint in litellm.openai_compatible_endpoints:
-                if endpoint in api_base:
+                if _endpoint_matches_api_base(endpoint, api_base):
                     if endpoint == "api.perplexity.ai":
                         custom_llm_provider = "perplexity"
                         dynamic_api_key = get_secret_str("PERPLEXITYAI_API_KEY")
@@ -315,6 +373,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.lambda.ai/v1":
                         custom_llm_provider = "lambda_ai"
                         dynamic_api_key = get_secret_str("LAMBDA_API_KEY")
+                    elif endpoint == "https://api.inceptionlabs.ai/v1":
+                        custom_llm_provider = "inception"
+                        dynamic_api_key = get_secret_str("INCEPTION_API_KEY")
                     elif endpoint == "https://api.hyperbolic.xyz/v1":
                         custom_llm_provider = "hyperbolic"
                         dynamic_api_key = get_secret_str("HYPERBOLIC_API_KEY")
@@ -348,6 +409,7 @@ def get_llm_provider(  # noqa: PLR0915
             or "ft:gpt-3.5-turbo" in model
             or "ft:gpt-4" in model  # catches ft:gpt-4-0613, ft:gpt-4o
             or model in litellm.openai_image_generation_models
+            or model.startswith("gpt-image")
             or model in litellm.openai_video_generation_models
         ):
             custom_llm_provider = "openai"
@@ -359,6 +421,9 @@ def get_llm_provider(  # noqa: PLR0915
                 custom_llm_provider = "anthropic_text"
             else:
                 custom_llm_provider = "anthropic"
+        ## anthropic - pattern-based matching for future Claude models
+        elif _matches_claude_model_pattern(model):
+            custom_llm_provider = "anthropic"
         ## cohere
         elif model in litellm.cohere_models or model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"
@@ -582,6 +647,23 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://integrate.api.nvidia.com/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("NVIDIA_NIM_API_KEY")
+    elif custom_llm_provider == "nvidia_riva":
+        # NVIDIA Riva is gRPC-based; api_base must be a host:port like
+        # `grpc.nvcf.nvidia.com:443` or `localhost:50051`. There is no
+        # public-default endpoint, so we do not fill one in here.
+        api_base = api_base or get_secret_str("NVIDIA_RIVA_API_BASE")  # type: ignore
+        # Fall back to NVIDIA_NIM_API_KEY because users running both NVCF
+        # services typically reuse the same nvapi-* key.
+        dynamic_api_key = (
+            api_key
+            or get_secret_str("NVIDIA_RIVA_API_KEY")
+            or get_secret_str("NVIDIA_NIM_API_KEY")
+        )
+    elif custom_llm_provider == "soniox":
+        api_base = (
+            api_base or get_secret_str("SONIOX_API_BASE") or "https://api.soniox.com"
+        )
+        dynamic_api_key = api_key or get_secret_str("SONIOX_API_KEY")
     elif custom_llm_provider == "cerebras":
         api_base = (
             api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
@@ -878,6 +960,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.LambdaAIChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "inception":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.InceptionChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "hyperbolic":

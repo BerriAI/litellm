@@ -42,8 +42,10 @@ class TestProcessAudioFile:
         assert result.filename == "audio.wav"
         assert result.content_type == "audio/wav"
 
-    def test_process_file_path_input(self):
-        """Test processing file path input"""
+    def test_process_pathlib_input(self):
+        """pathlib.Path is a Python-level type HTTP form values can't fabricate."""
+        from pathlib import Path
+
         test_content = b"test audio content"
 
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
@@ -51,14 +53,21 @@ class TestProcessAudioFile:
             temp_file_path = temp_file.name
 
         try:
-            result = process_audio_file(temp_file_path)
+            result = process_audio_file(Path(temp_file_path))
 
             assert isinstance(result, ProcessedAudioFile)
             assert result.file_content == test_content
             assert result.filename == os.path.basename(temp_file_path)
-            assert result.content_type == "audio/mpeg"  # .mp3 should map to audio/mpeg
+            assert result.content_type == "audio/mpeg"
         finally:
             os.unlink(temp_file_path)
+
+    def test_process_bare_str_path_rejected(self):
+        """Bare str paths are rejected — when this runs in a proxy request
+        handler the value is attacker-controlled, and opening it as a path
+        is an arbitrary local file read."""
+        with pytest.raises(ValueError, match="does not accept bare str inputs"):
+            process_audio_file("/etc/passwd")
 
     def test_process_tuple_input_with_bytes(self):
         """Test processing tuple input with bytes content"""
@@ -73,8 +82,10 @@ class TestProcessAudioFile:
         assert result.filename == filename
         assert result.content_type == "audio/wav"
 
-    def test_process_tuple_input_with_file_path(self):
-        """Test processing tuple input with file path content"""
+    def test_process_tuple_input_with_pathlib_content(self):
+        """Tuple input with pathlib.Path content is allowed; bare str content is not."""
+        from pathlib import Path
+
         test_content = b"test audio content"
 
         with tempfile.NamedTemporaryFile(suffix=".flac", delete=False) as temp_file:
@@ -83,7 +94,7 @@ class TestProcessAudioFile:
 
         try:
             filename = "custom_name.flac"
-            audio_tuple = (filename, temp_file_path)
+            audio_tuple = (filename, Path(temp_file_path))
 
             result = process_audio_file(audio_tuple)
 

@@ -376,6 +376,7 @@ ignored_keys = [
     "metadata.error_information",
     "metadata.attempted_retries",
     "metadata.max_retries",
+    "metadata.eval_information",
 ]
 
 MODEL_LIST = [
@@ -420,6 +421,26 @@ def reset_router_callbacks():
     litellm.logging_callback_manager._reset_all_callbacks()
     yield
     litellm.logging_callback_manager._reset_all_callbacks()
+
+
+@pytest.fixture(autouse=True)
+def reset_proxy_auth_globals(monkeypatch):
+    """
+    Pin proxy auth-related globals to a known baseline so tests don't inherit
+    leaked state (master_key, prisma_client, custom auth, cached tokens) from
+    earlier tests. Individual tests can still override via their own
+    monkeypatch calls — those run after this fixture and revert first.
+    """
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps, "master_key", None)
+    monkeypatch.setattr(ps, "user_custom_auth", None)
+    monkeypatch.setattr(ps, "general_settings", {})
+    try:
+        ps.user_api_key_cache.in_memory_cache.cache_dict.clear()
+    except AttributeError:
+        pass
 
 
 @pytest.mark.asyncio
@@ -758,6 +779,233 @@ async def test_ui_view_spend_logs_sort_by_request_duration_ms(client, monkeypatc
         data = response.json()
         actual_ids = [log["request_id"] for log in data["data"]]
         assert actual_ids == ["req_fast", "req_slow"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sort_order,expected_request_ids",
+    [
+        ("asc", ["req_anthropic", "req_gpt35", "req_gpt4"]),
+        ("desc", ["req_gpt4", "req_gpt35", "req_anthropic"]),
+    ],
+)
+async def test_ui_view_spend_logs_sort_by_model(
+    client, monkeypatch, sort_order, expected_request_ids
+):
+    """Test that model is accepted as a valid sort_by field and orders alphabetically."""
+    base_logs = [
+        {
+            "request_id": "req_gpt4",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:00+00:00",
+            "endTime": "2025-01-01T00:00:01+00:00",
+            "model": "gpt-4",
+        },
+        {
+            "request_id": "req_anthropic",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:01+00:00",
+            "endTime": "2025-01-01T00:00:02+00:00",
+            "model": "claude-3-opus",
+        },
+        {
+            "request_id": "req_gpt35",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:02+00:00",
+            "endTime": "2025-01-01T00:00:03+00:00",
+            "model": "gpt-3.5-turbo",
+        },
+    ]
+
+    async def mock_count(*args, **kwargs):
+        return len(base_logs)
+
+    async def mock_query_raw(sql_query, *params):
+        assert "model" in sql_query
+        # model is non-nullable in the schema, so NULLS LAST should NOT be
+        # appended — only ttft_ms gets that clause. This guards against
+        # accidentally widening the change to all sort columns.
+        assert "NULLS LAST" not in sql_query
+        reverse = "DESC" in sql_query
+        sorted_logs = sorted(
+            base_logs, key=lambda x: x.get("model", ""), reverse=reverse
+        )
+        page_size = params[-2] if len(params) >= 2 else 50
+        skip = params[-1] if len(params) >= 1 else 0
+        return sorted_logs[skip : skip + page_size]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+                "sort_by": "model",
+                "sort_order": sort_order,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        actual_ids = [log["request_id"] for log in data["data"]]
+        assert actual_ids == expected_request_ids
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_sort_by_ttft_ms(client, monkeypatch):
+    """sort_by=ttft_ms orders streaming rows by TTFT and pushes non-streaming rows last (NULLS LAST)."""
+    # req_fast_stream: TTFT = 100ms (streaming)
+    # req_slow_stream: TTFT = 2000ms (streaming)
+    # req_no_stream:   completionStartTime == endTime (non-streaming, treated as NULL)
+    # req_null_stream: completionStartTime is null (non-streaming, NULL)
+    base_logs = [
+        {
+            "request_id": "req_fast_stream",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:00+00:00",
+            "completionStartTime": "2025-01-01T00:00:00.100000+00:00",
+            "endTime": "2025-01-01T00:00:01+00:00",
+            "model": "gpt-4",
+            "_ttft_ms": 100,
+        },
+        {
+            "request_id": "req_slow_stream",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:02+00:00",
+            "completionStartTime": "2025-01-01T00:00:04+00:00",
+            "endTime": "2025-01-01T00:00:05+00:00",
+            "model": "gpt-4",
+            "_ttft_ms": 2000,
+        },
+        {
+            "request_id": "req_no_stream",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:06+00:00",
+            "completionStartTime": "2025-01-01T00:00:07+00:00",
+            "endTime": "2025-01-01T00:00:07+00:00",
+            "model": "gpt-4",
+            "_ttft_ms": None,
+        },
+        {
+            "request_id": "req_null_stream",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:08+00:00",
+            "completionStartTime": None,
+            "endTime": "2025-01-01T00:00:09+00:00",
+            "model": "gpt-4",
+            "_ttft_ms": None,
+        },
+    ]
+
+    async def mock_count(*args, **kwargs):
+        return len(base_logs)
+
+    async def mock_query_raw(sql_query, *params):
+        # Endpoint must compute TTFT inline and use NULLS LAST.
+        assert "completionStartTime" in sql_query
+        assert "NULLS LAST" in sql_query
+        reverse = "DESC" in sql_query
+        non_null = [r for r in base_logs if r["_ttft_ms"] is not None]
+        nulls = [r for r in base_logs if r["_ttft_ms"] is None]
+        non_null.sort(key=lambda x: x["_ttft_ms"], reverse=reverse)
+        sorted_logs = non_null + nulls
+        page_size = params[-2] if len(params) >= 2 else 50
+        skip = params[-1] if len(params) >= 1 else 0
+        return [
+            {k: v for k, v in row.items() if k != "_ttft_ms"}
+            for row in sorted_logs[skip : skip + page_size]
+        ]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        # asc: fast stream, slow stream, then NULLs (non-streaming) last
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+                "sort_by": "ttft_ms",
+                "sort_order": "asc",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        actual_ids = [log["request_id"] for log in response.json()["data"]]
+        assert actual_ids[:2] == ["req_fast_stream", "req_slow_stream"]
+        assert set(actual_ids[2:]) == {"req_no_stream", "req_null_stream"}
+
+        # desc: slow stream, fast stream, then NULLs still last
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+                "sort_by": "ttft_ms",
+                "sort_order": "desc",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        actual_ids = [log["request_id"] for log in response.json()["data"]]
+        assert actual_ids[:2] == ["req_slow_stream", "req_fast_stream"]
+        assert set(actual_ids[2:]) == {"req_no_stream", "req_null_stream"}
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -1150,14 +1398,14 @@ async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
 async def test_ui_view_spend_logs_unauthorized(client):
     # Test without authorization header
     response = client.get("/spend/logs/ui")
-    assert response.status_code == 401 or response.status_code == 403
+    assert response.status_code in (401, 403), response.text
 
     # Test with invalid authorization
     response = client.get(
         "/spend/logs/ui",
         headers={"Authorization": "Bearer invalid-token"},
     )
-    assert response.status_code == 401 or response.status_code == 403
+    assert response.status_code in (401, 403), response.text
 
 
 @pytest.mark.asyncio
@@ -1369,6 +1617,71 @@ async def test_ui_view_spend_logs_with_model_id(client, monkeypatch):
         assert data["total"] == 1
         assert len(data["data"]) == 1
         assert data["data"][0]["model_id"] == "deployment-id-1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_model_group(client, monkeypatch):
+    """Test that the model_group query param filters spend logs by model group."""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "model_group": "gpt-3.5-turbo",
+            "status": "success",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4-0613",
+            "model_group": "gpt-4",
+            "status": "success",
+        },
+    ]
+
+    def filter_by_model_group(where):
+        if "model_group" in where and where["model_group"] == "gpt-4":
+            return [mock_spend_logs[1]]
+        return mock_spend_logs
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_model_group),
+    )
+
+    start_date, end_date = _default_date_range()
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "model_group": "gpt-4",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model_group"] == "gpt-4"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -2935,5 +3248,360 @@ async def test_view_spend_logs_date_range_hashes_sk_api_key(client, monkeypatch)
         where = mock_client.db.captured_where
         assert where is not None
         assert where["api_key"] == "hashed::sk-raw-admin-token"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+class _SpendScopeMockPrismaClient:
+
+    def __init__(self, get_data_returns=None, find_many_returns=None):
+        self._get_data_returns = (
+            get_data_returns if get_data_returns is not None else []
+        )
+        self._find_many_returns = (
+            find_many_returns if find_many_returns is not None else []
+        )
+        self.get_data_calls = []
+        self.find_many_calls = []
+
+        client = self
+
+        class _VerificationTokenTable:
+            async def find_many(self, where=None, order=None, include=None):
+                client.find_many_calls.append(
+                    {"where": where, "order": order, "include": include}
+                )
+                return client._find_many_returns
+
+        class _DB:
+            def __init__(self):
+                self.litellm_verificationtoken = _VerificationTokenTable()
+
+        self.db = _DB()
+
+    async def get_data(self, table_name=None, query_type=None, **kwargs):
+        self.get_data_calls.append(
+            {"table_name": table_name, "query_type": query_type, **kwargs}
+        )
+        if query_type == "find_unique":
+            return self._get_data_returns[0] if self._get_data_returns else None
+        return self._get_data_returns
+
+
+@pytest.mark.asyncio
+async def test_spend_key_fn_proxy_admin_returns_all_keys(client, monkeypatch):
+    """Admins keep their existing full-table view of /spend/keys."""
+    mock_keys = [
+        {"token": "hashed-a", "user_id": "alice", "spend": 10.0},
+        {"token": "hashed-b", "user_id": "bob", "spend": 5.0},
+    ]
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=mock_keys)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        # Admin path: goes through get_data (full table), never the scoped find_many
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["table_name"] == "key"
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_all"
+        assert mock_prisma.find_many_calls == []
+        assert response.json() == mock_keys
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_key_fn_proxy_admin_view_only_returns_all_keys(client, monkeypatch):
+    """View-only admins are still admins for this endpoint."""
+    mock_keys = [{"token": "hashed-a", "user_id": "alice"}]
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=mock_keys)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, user_id="admin_viewer"
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert mock_prisma.find_many_calls == []
+        assert len(mock_prisma.get_data_calls) == 1
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY],
+)
+async def test_spend_key_fn_internal_user_scoped_to_own_keys(client, monkeypatch, role):
+    """Both internal-user roles must only see keys they own."""
+    caller_owned_keys = [
+        {"token": "hashed-mine-1", "user_id": "alice", "spend": 2.0},
+        {"token": "hashed-mine-2", "user_id": "alice", "spend": 1.0},
+    ]
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=caller_owned_keys)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=role, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        # Non-admin path goes through the same get_data helper as admin,
+        # but with a user_id scope so only the caller's rows come back.
+        assert mock_prisma.find_many_calls == []
+        assert len(mock_prisma.get_data_calls) == 1
+        call = mock_prisma.get_data_calls[0]
+        assert call["table_name"] == "key"
+        assert call["query_type"] == "find_all"
+        assert call["user_id"] == "alice"
+        assert response.json() == caller_owned_keys
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_key_fn_internal_user_without_user_id_returns_empty(
+    client, monkeypatch
+):
+    """
+    A non-admin key with no user_id has no tenant scope. Returning the full
+    table would re-introduce the leak; return an empty list instead.
+    """
+    mock_prisma = _SpendScopeMockPrismaClient(
+        get_data_returns=[{"token": "do-not-leak"}],
+        find_many_returns=[{"token": "do-not-leak"}],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id=None
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert response.json() == []
+        assert mock_prisma.get_data_calls == []
+        assert mock_prisma.find_many_calls == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_proxy_admin_returns_all_users_without_user_id(
+    client, monkeypatch
+):
+    """Admins keep their existing full-table view of /spend/users."""
+    mock_users = [
+        {"user_id": "alice", "user_email": "alice@example.com", "spend": 1.0},
+        {"user_id": "bob", "user_email": "bob@example.com", "spend": 2.0},
+    ]
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=mock_users)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["table_name"] == "user"
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_all"
+        assert response.json() == mock_users
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_proxy_admin_can_query_specific_user_id(
+    client, monkeypatch
+):
+    """Admins can still target a specific user_id."""
+    mock_user = {
+        "user_id": "carol",
+        "user_email": "carol@example.com",
+        "spend": 7.0,
+    }
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[mock_user])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    try:
+        response = client.get(
+            "/spend/users",
+            params={"user_id": "carol"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_unique"
+        assert mock_prisma.get_data_calls[0]["user_id"] == "carol"
+        assert response.json() == [mock_user]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY],
+)
+async def test_spend_user_fn_internal_user_scoped_without_user_id(
+    client, monkeypatch, role
+):
+    """No user_id supplied -> must query the caller's own row, not the table."""
+    own_row = {"user_id": "alice", "user_email": "alice@example.com", "spend": 3.0}
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[own_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=role, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_unique"
+        assert mock_prisma.get_data_calls[0]["user_id"] == "alice"
+        assert response.json() == [own_row]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_internal_user_supplying_other_user_id_returns_403(
+    client, monkeypatch
+):
+    """
+    An internal user passing user_id=victim must be rejected outright, not
+    silently rewritten. A 403 makes the attempt observable in logs.
+    """
+    leaked_victim_row = {
+        "user_id": "victim",
+        "user_email": "victim@example.com",
+        "spend": 999.0,
+    }
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[leaked_victim_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users",
+            params={"user_id": "victim"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+        assert mock_prisma.get_data_calls == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_internal_user_supplying_own_user_id_is_allowed(
+    client, monkeypatch
+):
+    """
+    Passing your own user_id explicitly is fine — the 403 only fires when
+    the supplied id differs from the caller's.
+    """
+    own_row = {"user_id": "alice", "user_email": "alice@example.com", "spend": 3.0}
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[own_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users",
+            params={"user_id": "alice"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_unique"
+        assert mock_prisma.get_data_calls[0]["user_id"] == "alice"
+        assert response.json() == [own_row]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_internal_user_without_user_id_returns_empty(
+    client, monkeypatch
+):
+    """
+    A non-admin key with no user_id has no tenant scope -> return empty,
+    never the full table. Same defensive contract as /spend/keys.
+    """
+    mock_prisma = _SpendScopeMockPrismaClient(
+        get_data_returns=[{"user_id": "do-not-leak"}]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, user_id=None
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert response.json() == []
+        assert mock_prisma.get_data_calls == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_strips_password_field(client, monkeypatch):
+    """
+    Existing password-redaction behavior must be preserved on the scoped
+    path so we don't regress a separate disclosure when adding the fix.
+    """
+    own_row = {
+        "user_id": "alice",
+        "user_email": "alice@example.com",
+        "password": "hashed-password-must-not-leak",
+        "spend": 1.0,
+    }
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[own_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body) == 1
+        assert "password" not in body[0]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)

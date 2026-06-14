@@ -201,13 +201,14 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         # Remove bedrock/ prefix if present
         if model_id.startswith("bedrock/"):
             model_id = model_id[8:]  # Remove "bedrock/" prefix
+        encoded_model_id = self.encode_model_id(model_id=model_id)
 
         base_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        endpoint = f"{base_url}/model/{model_id}/count-tokens"
+        endpoint = f"{base_url}/model/{encoded_model_id}/count-tokens"
 
         return endpoint
 

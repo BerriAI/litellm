@@ -32,6 +32,19 @@ from litellm.utils import (
 # Adds the parent directory to the system path
 
 
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
@@ -196,6 +209,72 @@ def test_get_optional_params_image_gen_filters_empty_values():
         extra_body={},
     )
     assert optional_params == {}
+
+
+def test_gpt_image_provider_detection_covers_existing_family():
+    for image_model in ("gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5"):
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(model=image_model)
+
+        assert model == image_model
+        assert custom_llm_provider == "openai"
+
+
+def test_gpt_image_2_provider_and_model_info(local_model_cost_map):
+
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(model="gpt-image-2")
+
+    assert model == "gpt-image-2"
+    assert custom_llm_provider == "openai"
+
+    model_info = litellm.get_model_info(model="gpt-image-2")
+    assert model_info["litellm_provider"] == "openai"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["input_cost_per_token"] == 5e-06
+    assert model_info["input_cost_per_image_token"] == 8e-06
+    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_image_token"] == 3e-05
+    assert (
+        "/v1/images/generations"
+        in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
+    )
+    assert (
+        "/v1/images/edits" in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
+    )
+    assert model_info["supports_vision"] is True
+    assert model_info["supports_pdf_input"] is True
+
+
+def test_gpt_image_2_snapshot_model_info(local_model_cost_map):
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model="gpt-image-2-2026-04-21"
+    )
+
+    assert model == "gpt-image-2-2026-04-21"
+    assert custom_llm_provider == "openai"
+
+    model_info = litellm.get_model_info(model="gpt-image-2-2026-04-21")
+    assert model_info["litellm_provider"] == "openai"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["output_cost_per_image_token"] == 3e-05
+
+
+def test_azure_gpt_image_2_model_info(local_model_cost_map):
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model="azure/gpt-image-2"
+    )
+
+    assert model == "gpt-image-2"
+    assert custom_llm_provider == "azure"
+
+    model_info = litellm.get_model_info(
+        model="gpt-image-2", custom_llm_provider="azure"
+    )
+    assert model_info["litellm_provider"] == "azure"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["input_cost_per_token"] == 5e-06
+    assert model_info["input_cost_per_image_token"] == 8e-06
+    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_image_token"] == 3e-05
 
 
 def test_all_model_configs():
@@ -613,6 +692,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
             "type": "object",
             "properties": {
                 "supports_computer_use": {"type": "boolean"},
+                "tool_use_system_prompt_tokens": {"type": "number"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
@@ -627,6 +707,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_audio_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_per_audio_token": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
+                "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -657,6 +738,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "regional_processing_uplift_multiplier_eu": {"type": "number"},
+                "regional_processing_uplift_multiplier_us": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -675,6 +758,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_dbu_cost_per_token": {"type": "number"},
                 "annotation_cost_per_page": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
+                "ocr_cost_per_credit": {"type": "number"},
                 "code_interpreter_cost_per_session": {"type": "number"},
                 "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
@@ -769,12 +853,19 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "uses_embed_content": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
                 "supports_minimal_reasoning_effort": {"type": "boolean"},
+                "supports_low_reasoning_effort": {"type": "boolean"},
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
+                "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_sampling_params": {"type": "boolean"},
                 "supports_service_tier": {"type": "boolean"},
                 "supports_preset": {"type": "boolean"},
-                "tool_use_system_prompt_tokens": {"type": "number"},
+                "supports_output_config": {"type": "boolean"},
+                "bedrock_output_config_effort_ceiling": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "max", "xhigh"],
+                },
                 "tpm": {"type": "number"},
                 "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
@@ -813,6 +904,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                     "additionalProperties": False,
                 },
+                "web_search_billing_unit": {
+                    "type": "string",
+                    "enum": ["per_prompt", "per_query"],
+                },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
                     "type": "array",
@@ -835,6 +930,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},
+                "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
                 "tiered_pricing": {
                     "type": "array",
@@ -1053,6 +1149,34 @@ def test_check_provider_match():
     assert litellm.utils._check_provider_match(model_info, "openai") is False
 
 
+def test_check_provider_match_none_value_matches_any_provider():
+    """
+    A ``litellm_provider`` of None must be treated the same as a missing
+    key: both mean "no provider constraint" and should match any
+    ``custom_llm_provider``.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/28336.
+    Before the fix, ``register_model`` persisted ``litellm_provider: None``
+    via ``get_model_info`` for deployments registered without a provider
+    (e.g. ``Router.add_deployment``), which caused ``_check_provider_match``
+    to drop custom pricing intermittently.
+    """
+    # Missing key already returned True; None must behave identically.
+    assert litellm.utils._check_provider_match({}, "openai") is True
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, "openai")
+        is True
+    )
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, "anthropic")
+        is True
+    )
+    # When custom_llm_provider is also None nothing constrains the match.
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
+    )
+
+
 def test_get_provider_rerank_config():
     """
     Test the get_provider_rerank_config function for various providers
@@ -1174,7 +1298,7 @@ def test_get_model_info_shows_supports_computer_use():
     "model, custom_llm_provider",
     [
         ("gpt-3.5-turbo", "openai"),
-        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
         ("gemini-2.5-pro", "vertex_ai"),
     ],
 )
@@ -1320,7 +1444,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
             ),
             (
@@ -1618,7 +1742,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -1705,7 +1829,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -1717,7 +1841,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -1855,7 +1979,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -1887,7 +2011,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -1974,7 +2098,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -1986,7 +2110,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -2124,7 +2248,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -2156,7 +2280,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -2243,7 +2367,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -2255,7 +2379,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -2393,7 +2517,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -2732,6 +2856,128 @@ def test_generate_gcp_iam_access_token_import_error():
         assert "pip install google-cloud-iam" in str(exc_info.value)
 
 
+def test_generate_azure_ad_redis_token():
+    """Test _generate_azure_ad_redis_token with mocked Azure credential."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "azure-access-token-12345"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = Mock()
+    mock_azure_identity.ManagedIdentityCredential = Mock()
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token()
+
+        assert result == expected_token
+        mock_credential.get_token.assert_called_once_with(
+            "https://redis.azure.com/.default"
+        )
+
+
+def test_generate_azure_ad_redis_token_service_principal():
+    """Test _generate_azure_ad_redis_token with service principal credentials."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "sp-access-token-67890"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    mock_client_secret_credential = Mock(return_value=mock_credential)
+
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock()
+    mock_azure_identity.ClientSecretCredential = mock_client_secret_credential
+    mock_azure_identity.ManagedIdentityCredential = Mock()
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token(
+            azure_client_id="test-client-id",
+            azure_tenant_id="test-tenant-id",
+            azure_client_secret="test-secret",
+        )
+
+        assert result == expected_token
+        mock_client_secret_credential.assert_called_once_with(
+            client_id="test-client-id",
+            tenant_id="test-tenant-id",
+            client_secret="test-secret",
+        )
+
+
+def test_generate_azure_ad_redis_token_import_error():
+    """Test that _generate_azure_ad_redis_token raises ImportError when azure-identity is missing."""
+    from unittest.mock import patch
+    from litellm._redis import _generate_azure_ad_redis_token
+
+    with patch.dict("sys.modules", {"azure.identity": None}):
+        with pytest.raises(ImportError) as exc_info:
+            _generate_azure_ad_redis_token()
+
+        assert "azure-identity is required" in str(exc_info.value)
+
+
+def test_redis_client_logic_azure_ad_auth():
+    """Test that _get_redis_client_logic sets up Azure AD auth when REDIS_AZURE_AD_TOKEN=true.
+
+    Mocks ``azure.identity`` via ``sys.modules`` so the test does not require
+    the real ``azure-identity`` package to be installed in the CI environment.
+    """
+    from unittest.mock import Mock, patch
+
+    mock_credential = Mock()
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ManagedIdentityCredential = Mock(return_value=mock_credential)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _get_redis_client_logic
+
+        redis_kwargs = _get_redis_client_logic(
+            host="myredis.redis.cache.windows.net",
+            port="6380",
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+        assert "redis_connect_func" in redis_kwargs
+        # Marker for async paths to detect Azure AD auth
+        assert hasattr(redis_kwargs["redis_connect_func"], "_azure_redis_ad_token")
+        assert redis_kwargs["redis_connect_func"]._azure_redis_ad_token is True
+        # Live credential object (not raw secret) is exposed for async paths
+        assert hasattr(redis_kwargs["redis_connect_func"], "_azure_credential")
+        # Raw credentials must NOT be exposed on the function
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_client_secret")
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_client_id")
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_tenant_id")
+
+        # Azure-specific kwargs should be removed from the dict passed to Redis
+        assert "azure_redis_ad_token" not in redis_kwargs
+        assert "azure_client_id" not in redis_kwargs
+
+
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
@@ -2792,6 +3038,38 @@ def test_model_info_for_openrouter_kimi_k2_5():
     assert model_info["supports_tool_choice"] is True
 
     print("openrouter kimi-k2.5 model info", model_info)
+
+
+def test_gemini_embedding_2_ga_in_cost_map():
+    """GA and Vertex preview gemini-embedding-2 entries align with multimodal unit pricing."""
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    for key, provider in (
+        ("gemini/gemini-embedding-2", "gemini"),
+        ("vertex_ai/gemini-embedding-2", "vertex_ai"),
+        ("vertex_ai/gemini-embedding-2-preview", "vertex_ai"),
+        ("gemini-embedding-2", "vertex_ai-embedding-models"),
+    ):
+        info = model_cost.get(key)
+        assert (
+            info is not None
+        ), f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == provider
+        assert info.get("mode") == "embedding"
+        assert info.get("supports_multimodal") is True
+        assert info.get("input_cost_per_token") == 2e-07
+        assert info.get("input_cost_per_image") == 0.00012
+        assert info.get("input_cost_per_audio_per_second") == 0.00016
+        assert info.get("input_cost_per_video_per_second") == 0.00079
+        if provider in ("vertex_ai-embedding-models", "vertex_ai"):
+            assert (
+                info.get("uses_embed_content") is True
+            ), f"{key} must have uses_embed_content=true for correct Vertex AI routing"
 
 
 def test_gemini_lyria_3_preview_models_in_cost_map():
@@ -3868,3 +4146,51 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+class TestBedrockBaseModelLabelKeepsTools:
+    """Regression for #29618: a Bedrock deployment whose ``base_model`` is a friendly
+    label must not silently drop ``tools``/``tool_choice`` under ``drop_params``."""
+
+    TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+    def test_base_model_label_keeps_tools_with_drop_params(self):
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            custom_llm_provider="bedrock",
+            base_model="claude-haiku-4-5",
+            tools=self.TOOLS,
+            tool_choice="auto",
+            drop_params=True,
+        )
+
+        assert "tools" in result
+        assert "tool_choice" in result
+
+    def test_base_model_label_alone_drops_tools(self):
+        """Without the real model id the label resolves to no tool support, so passing
+        the label as ``model`` is exactly what dropped tools before the fix."""
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="claude-haiku-4-5",
+            custom_llm_provider="bedrock",
+            tools=self.TOOLS,
+            tool_choice="auto",
+            drop_params=True,
+        )
+
+        assert "tools" not in result

@@ -25,7 +25,8 @@ import {
   Text,
 } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Popover, Skeleton, Tooltip } from "antd";
+import { Popover, Skeleton, Tooltip, Typography } from "antd";
+import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
@@ -49,9 +50,7 @@ interface TeamVirtualKeysTableProps {
 export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
   const { accessToken } = useAuthorized();
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: "created_at", desc: true },
-  ]);
+  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
   const [tablePagination, setTablePagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 50,
@@ -172,9 +171,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const { organizationIds } = teamFilterOptions;
           if (!organizationIds.length) return [];
           const lower = searchText.toLowerCase();
-          const filtered = lower
-            ? organizationIds.filter((id) => id.toLowerCase().includes(lower))
-            : organizationIds;
+          const filtered = lower ? organizationIds.filter((id) => id.toLowerCase().includes(lower)) : organizationIds;
           return filtered.map((id) => ({ label: id, value: id }));
         },
       },
@@ -185,9 +182,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         searchFn: async (searchText: string) => {
           const { keyAliases } = teamFilterOptions;
           const lower = searchText.toLowerCase();
-          const filtered = lower
-            ? keyAliases.filter((alias) => alias.toLowerCase().includes(lower))
-            : keyAliases;
+          const filtered = lower ? keyAliases.filter((alias) => alias.toLowerCase().includes(lower)) : keyAliases;
           return filtered.map((alias) => ({ label: alias, value: alias }));
         },
       },
@@ -199,10 +194,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const { userIds } = teamFilterOptions;
           const lower = searchText.toLowerCase();
           const filtered = lower
-            ? userIds.filter(
-                (u) =>
-                  u.id.toLowerCase().includes(lower) || u.email.toLowerCase().includes(lower),
-              )
+            ? userIds.filter((u) => u.id.toLowerCase().includes(lower) || u.email.toLowerCase().includes(lower))
             : userIds;
           return filtered.map((u) => ({
             label: u.email ? `${u.id} (${u.email})` : u.id,
@@ -251,10 +243,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const width = info.cell.column.getSize();
           return (
             <Tooltip title={value}>
-              <span
-                className="font-mono text-xs truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-              >
+              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
                 {value ?? "-"}
               </span>
             </Tooltip>
@@ -289,10 +278,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const width = info.cell.column.getSize();
           return (
             <Tooltip title={value}>
-              <span
-                className="font-mono text-xs truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-              >
+              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
                 {value ?? "-"}
               </span>
             </Tooltip>
@@ -311,10 +297,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const width = info.cell.column.getSize();
           return (
             <Tooltip title={displayValue}>
-              <span
-                className="font-mono text-xs truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-              >
+              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
                 {displayValue ?? "-"}
               </span>
             </Tooltip>
@@ -339,18 +322,55 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         size: 70,
         enableSorting: false,
         cell: (info) => {
-          const value = info.getValue() as string | null;
-          const displayValue = value === "default_user_id" ? "Default Proxy Admin" : value;
+          const userId = info.getValue() as string | null;
+          if (!userId) return "-";
+          const { created_by_user } = info.row.original;
+          const userAlias = created_by_user?.user_alias ?? null;
+          const userEmail = created_by_user?.user_email ?? null;
+          const isDefaultAdmin = userId === "default_user_id";
+          const displayValue = userAlias || userEmail || userId;
           const width = info.cell.column.getSize();
+
+          const popoverContent = (
+            <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
+              {[
+                { label: "User Alias", value: userAlias },
+                { label: "User Email", value: userEmail },
+                { label: "User ID", value: userId },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex flex-col min-w-0">
+                  <span className="text-gray-400">{label}</span>
+                  {value ? (
+                    <Typography.Text className="font-mono text-xs" ellipsis={{ tooltip: value }} copyable>
+                      {value}
+                    </Typography.Text>
+                  ) : (
+                    <span className="font-mono">-</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+
+          if (isDefaultAdmin && !userAlias && !userEmail) {
+            return (
+              <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
+                <span className="cursor-default">
+                  <DefaultProxyAdminTag userId={userId} />
+                </span>
+              </Popover>
+            );
+          }
+
           return (
-            <Tooltip title={displayValue}>
+            <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
               <span
-                className="font-mono text-xs truncate block"
+                className="font-mono text-xs truncate block cursor-default"
                 style={{ maxWidth: width, overflow: "hidden" }}
               >
-                {displayValue ?? "-"}
+                {displayValue}
               </span>
-            </Tooltip>
+            </Popover>
           );
         },
       },
@@ -541,8 +561,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
 
   const handleSortingChange = useCallback(
     (updaterOrValue: React.SetStateAction<SortingState>) => {
-      const newSorting =
-        typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
+      const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
       setSorting(newSorting);
       if (newSorting?.length > 0) {
         const sortState = newSorting[0];
@@ -652,23 +671,15 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                               cursor: header.column.getCanSort() ? "pointer" : "default",
                             }}
                             onMouseEnter={() => {
-                              const resizer = document.querySelector(
-                                `[data-header-id="${header.id}"] .resizer`,
-                              );
+                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
                               if (resizer) (resizer as HTMLElement).style.opacity = "0.5";
                             }}
                             onMouseLeave={() => {
-                              const resizer = document.querySelector(
-                                `[data-header-id="${header.id}"] .resizer`,
-                              );
+                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
                               if (resizer && !header.column.getIsResizing())
                                 (resizer as HTMLElement).style.opacity = "0";
                             }}
-                            onClick={
-                              header.column.getCanSort()
-                                ? header.column.getToggleSortingHandler()
-                                : undefined
-                            }
+                            onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
                           >
                             <div className="flex items-center justify-between gap-2">
                               <div className="flex items-center">

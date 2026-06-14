@@ -2,13 +2,16 @@
 ## Helper utils for the management endpoints (keys/users/teams)
 from datetime import datetime
 from functools import wraps
-from typing import List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm._uuid import uuid
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
     BudgetNewRequest,
     DeleteCustomerRequest,
@@ -140,6 +143,69 @@ async def handle_budget_for_entity(
         return existing_budget_id
 
 
+# Fields on LiteLLM_BudgetTable that represent the budget's *configuration*
+# (i.e. the values an admin sets). We copy these when cloning a team's
+# default member-budget into an individual member-budget so that the new
+# row starts with the same limits as the default.
+_CLONABLE_BUDGET_FIELDS: Tuple[str, ...] = (
+    "max_budget",
+    "soft_budget",
+    "max_parallel_requests",
+    "tpm_limit",
+    "rpm_limit",
+    "model_max_budget",
+    "budget_duration",
+    "allowed_models",
+)
+
+
+async def _clone_team_default_budget_for_member(
+    prisma_client: PrismaClient,
+    default_team_budget_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str,
+) -> Optional[str]:
+    """
+    Create a new budget row that copies the values from the team's default
+    member budget. Returns the new budget_id, or None if the default budget
+    no longer exists in the DB.
+
+    Used when adding a new team member without an explicit per-member budget,
+    so the member starts with the team default's values but gets their own
+    private budget row (which can be edited independently).
+    """
+    default_budget = await prisma_client.db.litellm_budgettable.find_unique(
+        where={"budget_id": default_team_budget_id}
+    )
+    if default_budget is None:
+        return None
+
+    default_budget_dict = default_budget.model_dump()
+    cloned_data: dict = {
+        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+        "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+    }
+    for field in _CLONABLE_BUDGET_FIELDS:
+        value = default_budget_dict.get(field)
+        if value is None:
+            continue
+        # Skip empty list defaults (e.g. allowed_models = []) so the cloned
+        # row matches the "no value set" shape rather than carrying a default.
+        if isinstance(value, list) and len(value) == 0:
+            continue
+        cloned_data[field] = value
+
+    # Start the member's budget window at clone time, not the pool's reset
+    # timestamp — otherwise a member joining mid-cycle inherits a stale reset.
+    if cloned_data.get("budget_duration"):
+        cloned_data["budget_reset_at"] = get_budget_reset_time(
+            cloned_data["budget_duration"]
+        )
+
+    new_budget = await prisma_client.db.litellm_budgettable.create(data=cloned_data)
+    return new_budget.budget_id
+
+
 async def add_new_member(
     new_member: Member,
     max_budget_in_team: Optional[float],
@@ -221,8 +287,20 @@ async def add_new_member(
         response = await prisma_client.db.litellm_budgettable.create(data=budget_data)
 
         _budget_id = response.budget_id
+    elif default_team_budget_id is not None:
+        # No per-member budget was provided, but the team has a default member
+        # budget. Clone the default budget into a new row for this user so that
+        # later edits to one member's budget do not bleed into other members.
+        # If the default no longer exists in the DB, fall back to no budget.
+        _budget_id = await _clone_team_default_budget_for_member(
+            prisma_client=prisma_client,
+            default_team_budget_id=default_team_budget_id,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
     else:
-        _budget_id = default_team_budget_id
+        # No per-member budget and no team default → member gets no budget.
+        _budget_id = None
 
     if _budget_id and returned_user is not None and returned_user.user_id is not None:
         _returned_team_membership = (
@@ -359,6 +437,144 @@ async def send_management_endpoint_alert(
             )
 
 
+def _redacted_env_var(entry: Any) -> dict:
+    get = entry.get if isinstance(entry, dict) else lambda k: getattr(entry, k, None)
+    return {
+        "name": get("name"),
+        "scope": get("scope"),
+        "description": get("description"),
+        "value": "",
+    }
+
+
+def _redact_record_env_vars(record: Any) -> Any:
+    """Return ``record`` with its ``env_vars[].value`` blanked.
+
+    Copies rather than mutating, because the record aliases the live response
+    object that is also returned to the caller. Records without an ``env_vars``
+    list are returned unchanged.
+    """
+    env_vars = (
+        record.get("env_vars")
+        if isinstance(record, dict)
+        else getattr(record, "env_vars", None)
+    )
+    if not isinstance(env_vars, list):
+        return record
+    redacted = [_redacted_env_var(entry) for entry in env_vars]
+    if isinstance(record, dict):
+        return {**record, "env_vars": redacted}
+    if isinstance(record, BaseModel):
+        return record.model_copy(update={"env_vars": redacted})
+    return record
+
+
+def _redact_env_var_values(response: dict) -> None:
+    """Blank ``env_vars[].value`` in a management response before telemetry.
+
+    MCP endpoints return decrypted ``scope="global"`` env var values so the admin
+    UI can pre-fill the edit form; those values are upstream credentials and must
+    not be serialized verbatim into OTEL spans, where an observability user could
+    read them. The values surface both at the top level (single-server
+    create/update) and nested under ``items`` (the submissions queue), so both are
+    scrubbed. Names, scopes, and descriptions are kept so traces stay useful.
+    """
+    if isinstance(response.get("env_vars"), list):
+        response["env_vars"] = [
+            _redacted_env_var(entry) for entry in response["env_vars"]
+        ]
+
+    items = response.get("items")
+    if isinstance(items, list):
+        response["items"] = [_redact_record_env_vars(item) for item in items]
+
+
+async def _emit_management_endpoint_otel_span(
+    func: Callable,
+    kwargs: dict,
+    parent_otel_span: Any,
+    start_time: datetime,
+    end_time: datetime,
+    result: Any = None,
+    exception: Optional[Exception] = None,
+) -> None:
+    """Stamp + end the parent OTEL SERVER span for a management endpoint.
+
+    Routes the request/response (or exception) through the OTEL success/failure
+    hook. Falls back to ``func.__name__`` for the route when the handler has no
+    ``http_request`` param — endpoints like ``/key/generate`` never receive one,
+    and gating the hook on it leaked their SERVER span (created in auth, never
+    ended → never exported). Always emitting keeps both success and failure
+    paths consistent.
+    """
+    from litellm.proxy.proxy_server import open_telemetry_logger
+
+    if open_telemetry_logger is None:
+        return
+
+    # Under V2 OTel, management endpoints are ordinary FastAPI routes already
+    # spanned by the mounted instrumentor — there is no management hook to fire, so
+    # skip the payload build entirely. The legacy logger still needs the hook.
+    if is_otel_v2_enabled():
+        return
+
+    http_request: Optional[Request] = kwargs.get("http_request")
+    if http_request is not None:
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+            get_request_route,
+        )
+
+        route = get_request_route(http_request)
+        request_body: dict = await _read_request_body(request=http_request)
+    else:
+        route = func.__name__
+        request_body = {}
+
+    _CREDENTIAL_FIELDS = frozenset(
+        {
+            "key",
+            "token",
+            "api_key",
+            "secret",
+            "password",
+            "access_token",
+            "refresh_token",
+            "private_key",
+            "service_account_key",
+        }
+    )
+
+    _response: Optional[dict] = None
+    if exception is None and result is not None:
+        try:
+            raw = dict(result)
+            _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
+            _redact_env_var_values(_response)
+        except Exception:
+            _response = None
+
+    logging_payload = ManagementEndpointLoggingPayload(
+        route=route,
+        request_data=request_body,
+        response=_response,
+        start_time=start_time,
+        end_time=end_time,
+        exception=exception,
+    )
+
+    if exception is None:
+        await open_telemetry_logger.async_management_endpoint_success_hook(
+            logging_payload=logging_payload,
+            parent_otel_span=parent_otel_span,
+        )
+    else:
+        await open_telemetry_logger.async_management_endpoint_failure_hook(
+            logging_payload=logging_payload,
+            parent_otel_span=parent_otel_span,
+        )
+
+
 def management_endpoint_wrapper(func):
     """
     This wrapper does the following:
@@ -370,13 +586,10 @@ def management_endpoint_wrapper(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
         start_time = datetime.now()
-        _http_request: Optional[Request] = None
         try:
             result = await func(*args, **kwargs)
             end_time = datetime.now()
             try:
-                if kwargs is None:
-                    kwargs = {}
                 user_api_key_dict: UserAPIKeyAuth = (
                     kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
                 )
@@ -386,31 +599,16 @@ def management_endpoint_wrapper(func):
                     user_api_key_dict=user_api_key_dict,
                     function_name=func.__name__,
                 )
-                _http_request = kwargs.get("http_request", None)
                 parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
                 if parent_otel_span is not None:
-                    from litellm.proxy.proxy_server import open_telemetry_logger
-
-                    if open_telemetry_logger is not None:
-                        if _http_request:
-                            _route = _http_request.url.path
-                            _request_body: dict = await _read_request_body(
-                                request=_http_request
-                            )
-                            _response = dict(result) if result is not None else None
-
-                            logging_payload = ManagementEndpointLoggingPayload(
-                                route=_route,
-                                request_data=_request_body,
-                                response=_response,
-                                start_time=start_time,
-                                end_time=end_time,
-                            )
-
-                            await open_telemetry_logger.async_management_endpoint_success_hook(  # type: ignore
-                                logging_payload=logging_payload,
-                                parent_otel_span=parent_otel_span,
-                            )
+                    await _emit_management_endpoint_otel_span(
+                        func=func,
+                        kwargs=kwargs,
+                        parent_otel_span=parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                        result=result,
+                    )
 
                 # Delete updated/deleted info from cache
                 _delete_api_key_from_cache(kwargs=kwargs)
@@ -426,35 +624,27 @@ def management_endpoint_wrapper(func):
         except Exception as e:
             end_time = datetime.now()
 
-            if kwargs is None:
-                kwargs = {}
             user_api_key_dict: UserAPIKeyAuth = (
                 kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
             )
             parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
             if parent_otel_span is not None:
-                from litellm.proxy.proxy_server import open_telemetry_logger
-
-                if open_telemetry_logger is not None:
-                    _http_request = kwargs.get("http_request")
-                    if _http_request:
-                        _route = _http_request.url.path
-                        _request_body: dict = await _read_request_body(
-                            request=_http_request
-                        )
-                        logging_payload = ManagementEndpointLoggingPayload(
-                            route=_route,
-                            request_data=_request_body,
-                            response=None,
-                            start_time=start_time,
-                            end_time=end_time,
-                            exception=e,
-                        )
-
-                        await open_telemetry_logger.async_management_endpoint_failure_hook(  # type: ignore
-                            logging_payload=logging_payload,
-                            parent_otel_span=parent_otel_span,
-                        )
+                try:
+                    await _emit_management_endpoint_otel_span(
+                        func=func,
+                        kwargs=kwargs,
+                        parent_otel_span=parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                        exception=e,
+                    )
+                except Exception as otel_exc:
+                    # Non-Blocking Exception - never let OTEL failures swallow
+                    # the original management-endpoint exception.
+                    verbose_logger.debug(
+                        "Error emitting OTEL span in management endpoint wrapper failure path: %s",
+                        str(otel_exc),
+                    )
 
             raise e
 

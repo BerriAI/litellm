@@ -63,7 +63,7 @@ const CodeInterpreterTool: React.FC<CodeInterpreterToolProps> = ({
           className={enabled && isOpenAI ? "bg-blue-500" : ""}
         />
       </div>
-      
+
       {!isOpenAI && (
         <div className="mt-2 pt-2 border-t border-gray-200">
           <div className="flex items-start gap-2">

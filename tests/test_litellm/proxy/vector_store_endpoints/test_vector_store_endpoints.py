@@ -16,9 +16,13 @@ import litellm
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
+    index_create,
+)
+from litellm.proxy.vector_store_files_endpoints.endpoints import (
+    _update_request_data_with_model_routing_hint,
 )
 from litellm.proxy.vector_store_endpoints.management_endpoints import (
     _check_vector_store_access,
@@ -33,7 +37,35 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
     is_allowed_to_call_vector_store_files_endpoint,
 )
+from litellm.types.vector_stores import IndexCreateRequest
 from litellm.types.utils import LlmProviders
+
+
+def _serialize_litellm_params(litellm_params):
+    """Serialize ``litellm_params`` to a string for substring assertions.
+
+    The redact helper preserves the persisted shape — string in, string
+    out; dict in, dict out — so callers that just want to assert "this
+    secret never appears" need a single text representation either way.
+    """
+    import json
+
+    if isinstance(litellm_params, str):
+        return litellm_params
+    return json.dumps(litellm_params or {})
+
+
+@pytest.fixture(autouse=True)
+def _reset_embedding_config_cache():
+    """The use-time embedding-config resolver caches results in process
+    memory across calls. Reset it before every test so the resolver
+    actually exercises the router/DB path under test instead of returning
+    a value cached by an earlier test."""
+    from litellm.proxy.vector_store_endpoints import management_endpoints
+
+    management_endpoints._embedding_config_cache = None
+    yield
+    management_endpoints._embedding_config_cache = None
 
 
 @pytest.mark.asyncio
@@ -115,7 +147,311 @@ def test_router_vector_store_file_delete_passes_correct_args():
         assert call_kwargs["custom_llm_provider"] == "openai"
 
 
-def test_update_request_data_with_litellm_managed_vector_store_registry():
+@pytest.mark.asyncio
+async def test_vector_store_file_list_resolves_credentials_from_model_query_param():
+    request = MagicMock(spec=Request)
+    request.query_params = {"model": "team-openai"}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.get_deployment_credentials_with_provider.return_value = {
+        "api_key": "sk-team-openai",
+        "api_base": "https://api.openai.com/v1",
+        "custom_llm_provider": "openai",
+        "model": "openai/gpt-4o-mini",
+    }
+
+    data = {
+        "vector_store_id": "vs_123",
+        "limit": "20",
+    }
+
+    result = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+    )
+
+    assert result["api_key"] == "sk-team-openai"
+    assert result["api_base"] == "https://api.openai.com/v1"
+    assert result["model"] == "openai/gpt-4o-mini"
+    assert "custom_llm_provider" not in result
+    llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
+        model_id="team-openai"
+    )
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_resolves_single_openai_team_deployment():
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.get_deployment_credentials_with_provider.return_value = {
+        "api_key": "sk-team-openai",
+        "api_base": "https://api.openai.com/v1",
+        "custom_llm_provider": "openai",
+        "model": "openai/gpt-4o-mini",
+    }
+
+    data = {"vector_store_id": "vs_123"}
+    user_api_key_dict = UserAPIKeyAuth(team_models=["team-openai"])
+
+    result = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["api_key"] == "sk-team-openai"
+    assert result["api_base"] == "https://api.openai.com/v1"
+    assert result["model"] == "openai/gpt-4o-mini"
+    assert "custom_llm_provider" not in result
+    llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
+        model_id="team-openai"
+    )
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_wildcard_model_hint_falls_back_to_team_deployment():
+    request = MagicMock(spec=Request)
+    request.query_params = {"model": "openai/*"}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.model_group_alias = {}
+    llm_router.get_deployment_credentials_with_provider.side_effect = [
+        None,
+        None,
+        {
+            "api_key": "sk-team-openai",
+            "api_base": "https://api.openai.com/v1",
+            "custom_llm_provider": "openai",
+            "model": "openai/gpt-4o-mini",
+        },
+    ]
+
+    data = {"vector_store_id": "vs_123", "model": "openai/*"}
+    user_api_key_dict = UserAPIKeyAuth(team_models=["openai/*", "team-openai"])
+
+    result = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["api_key"] == "sk-team-openai"
+    assert result["api_base"] == "https://api.openai.com/v1"
+    assert result["model"] == "openai/gpt-4o-mini"
+    assert "custom_llm_provider" not in result
+    assert llm_router.get_deployment_credentials_with_provider.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_authorizes_wildcard_query_param_before_credentials():
+    from litellm.proxy.auth.auth_checks import ProxyException
+
+    request = MagicMock(spec=Request)
+    request.query_params = {"model": "openai/*"}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.model_group_alias = {}
+    data = {"vector_store_id": "vs_123"}
+    user_api_key_dict = UserAPIKeyAuth(
+        models=["restricted-deployment"],
+        team_models=["openai/*"],
+    )
+
+    with pytest.raises(ProxyException):
+        await _update_request_data_with_model_routing_hint(
+            data=data,
+            request=request,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    llm_router.get_deployment_credentials_with_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_uses_single_team_model_for_router_routing():
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.get_model_access_groups.return_value = {}
+    llm_router.get_deployment_credentials_with_provider.return_value = None
+
+    data = {"vector_store_id": "vs_123"}
+    user_api_key_dict = UserAPIKeyAuth(
+        team_id="team-123",
+        team_models=["provider/*", "all-proxy-models"],
+    )
+
+    result = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["model"] == "provider/*"
+    assert "api_key" not in result
+    assert "api_base" not in result
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_authorizes_inferred_team_model():
+    from litellm.proxy.auth.auth_checks import ProxyException
+
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.model_group_alias = {}
+    llm_router.get_deployment_credentials_with_provider.return_value = {
+        "api_key": "sk-team-openai",
+        "api_base": "https://api.openai.com/v1",
+        "custom_llm_provider": "openai",
+        "model": "openai/gpt-4o-mini",
+    }
+
+    data = {"vector_store_id": "vs_123"}
+    user_api_key_dict = UserAPIKeyAuth(
+        models=["restricted-deployment"],
+        team_models=["team-openai"],
+    )
+
+    with pytest.raises(ProxyException):
+        await _update_request_data_with_model_routing_hint(
+            data=data,
+            request=request,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_does_not_guess_ambiguous_team_deployment():
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.get_deployment_credentials_with_provider.side_effect = [
+        {
+            "api_key": "sk-team-openai-1",
+            "custom_llm_provider": "openai",
+            "model": "openai/gpt-4o-mini",
+        },
+        {
+            "api_key": "sk-team-openai-2",
+            "custom_llm_provider": "openai",
+            "model": "openai/gpt-4.1-mini",
+        },
+    ]
+
+    data = {"vector_store_id": "vs_123"}
+    user_api_key_dict = UserAPIKeyAuth(team_models=["team-openai-1", "team-openai-2"])
+
+    result = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert "api_key" not in result
+    assert "api_base" not in result
+    assert llm_router.get_deployment_credentials_with_provider.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_does_not_override_existing_credentials():
+    request = MagicMock(spec=Request)
+    request.query_params = {"model": "team-openai"}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    data = {
+        "vector_store_id": "vs_123",
+        "api_key": "sk-explicit",
+        "api_base": "https://example.com/v1",
+    }
+
+    result = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+    )
+
+    assert result["api_key"] == "sk-explicit"
+    assert result["api_base"] == "https://example.com/v1"
+    llm_router.get_deployment_credentials_with_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_requires_explicit_openai_provider_for_team_fallback():
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.get_deployment_credentials_with_provider.return_value = {
+        "api_key": "sk-unknown-provider",
+        "api_base": "https://example.com/v1",
+        "model": "gpt-4o",
+    }
+
+    data = {"vector_store_id": "vs_123"}
+    user_api_key_dict = UserAPIKeyAuth(team_models=["team-deployment"])
+
+    result = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert "api_key" not in result
+    assert "api_base" not in result
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_authorizes_model_query_param_before_credentials():
+    from litellm.proxy.auth.auth_checks import ProxyException
+
+    request = MagicMock(spec=Request)
+    request.query_params = {"model": "restricted-deployment"}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.model_group_alias = {}
+    data = {"vector_store_id": "vs_123"}
+    user_api_key_dict = UserAPIKeyAuth(
+        models=["allowed-deployment"],
+        team_models=["allowed-deployment"],
+    )
+
+    with pytest.raises(ProxyException):
+        await _update_request_data_with_model_routing_hint(
+            data=data,
+            request=request,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    llm_router.get_deployment_credentials_with_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_request_data_with_litellm_managed_vector_store_registry():
     """
     Test that _update_request_data_with_litellm_managed_vector_store_registry
     correctly updates request data with vector store registry information.
@@ -139,7 +475,7 @@ def test_update_request_data_with_litellm_managed_vector_store_registry():
 
     # Test with vector store registry
     with patch.object(litellm, "vector_store_registry", mock_registry):
-        result = _update_request_data_with_litellm_managed_vector_store_registry(
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
             data=data, vector_store_id=vector_store_id
         )
 
@@ -155,15 +491,105 @@ def test_update_request_data_with_litellm_managed_vector_store_registry():
             vector_store_id="test_store_id"
         )
 
-    # Test with no vector store registry
-    with patch.object(litellm, "vector_store_registry", None):
+    # Test with no vector store registry or DB fallback
+    with (
+        patch.object(litellm, "vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
         original_data = {"existing_key": "existing_value"}
-        result = _update_request_data_with_litellm_managed_vector_store_registry(
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
             data=original_data, vector_store_id=vector_store_id
         )
 
         # Verify data remains unchanged when no registry
         assert result == original_data
+
+
+@pytest.mark.asyncio
+async def test_update_request_data_resolves_embedding_config_at_use_time():
+    """When the persisted vector store row carries only a
+    ``litellm_embedding_model`` reference (the new behaviour after
+    moving the auto-resolve out of write time), the request-handling
+    layer must resolve the embedding config so the downstream embed
+    call still has ``api_key`` / ``api_base`` / ``api_version``. The
+    resolved config lives in this per-request data dict only — never
+    persisted."""
+    mock_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "test_store",
+        "custom_llm_provider": "azure_ai",
+        "litellm_params": {
+            "litellm_embedding_model": "azure/text-embedding-3-large",
+            # Note: no litellm_embedding_config persisted
+        },
+    }
+
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = (
+        mock_vector_store
+    )
+
+    resolved = {
+        "api_key": "use-time-resolved-key",
+        "api_base": "https://my-azure.example",
+        "api_version": "2024-09-01",
+    }
+
+    with (
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch(
+            "litellm.proxy.vector_store_endpoints.endpoints._resolve_embedding_config",
+            new=AsyncMock(return_value=resolved),
+        ),
+    ):
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={}, vector_store_id="test_store"
+        )
+
+    assert result["litellm_embedding_model"] == "azure/text-embedding-3-large"
+    assert result["litellm_embedding_config"] == resolved
+
+
+@pytest.mark.asyncio
+async def test_update_request_data_passes_through_legacy_embedding_config():
+    """A vector store row created by an older proxy version may already
+    carry a fully-resolved ``litellm_embedding_config`` in its persisted
+    ``litellm_params`` (the very leak this PR closes). Those legacy rows
+    must still work — the use-time resolver skips re-resolution when
+    the config is already present so the embed call keeps succeeding."""
+    legacy_config = {
+        "api_key": "legacy-cleartext-key",
+        "api_base": "https://legacy-azure.example",
+        "api_version": "2024-01-01",
+    }
+    mock_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "legacy_store",
+        "custom_llm_provider": "azure_ai",
+        "litellm_params": {
+            "litellm_embedding_model": "azure/text-embedding-3-large",
+            "litellm_embedding_config": legacy_config,
+        },
+    }
+
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = (
+        mock_vector_store
+    )
+
+    resolve_mock = AsyncMock()
+
+    with (
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch(
+            "litellm.proxy.vector_store_endpoints.endpoints._resolve_embedding_config",
+            new=resolve_mock,
+        ),
+    ):
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={}, vector_store_id="legacy_store"
+        )
+
+    assert result["litellm_embedding_config"] == legacy_config
+    resolve_mock.assert_not_awaited()
 
 
 class TestCheckVectorStorePermission:
@@ -560,14 +986,147 @@ class TestIsAllowedToCallVectorStoreEndpoint:
             "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
             return_value=mock_provider_config,
         ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.OPENAI,
+                    index_name="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+
+    def test_delete_index_requires_admin(self):
+        """Non-admin users must not delete managed search indexes via pass-through."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "DELETE"
+        mock_request.url.path = "/azure_ai/indexes/my-index"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = {
+            "allowed_vector_store_indexes": [
+                {"index_name": "my-index", "index_permissions": ["read", "write"]}
+            ]
+        }
+        mock_user_api_key.team_metadata = None
+
+        mock_provider_config = MagicMock()
+        mock_provider_config.get_vector_store_endpoints_by_type.return_value = {
+            "read": [("GET", "/docs/search"), ("POST", "/docs/search")],
+            "write": [("PUT", "/docs")],
+        }
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_provider_config,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.AZURE_AI,
+                    index_name="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can delete" in exc_info.value.detail
+
+    def test_delete_index_allowed_for_admin(self):
+        """Proxy admins can delete managed search indexes via pass-through."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "DELETE"
+        mock_request.url.path = "/azure_ai/indexes/my-index"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = LitellmUserRoles.PROXY_ADMIN
+
+        mock_provider_config = MagicMock()
+        mock_provider_config.get_vector_store_endpoints_by_type.return_value = {
+            "read": [("GET", "/docs/search"), ("POST", "/docs/search")],
+            "write": [("PUT", "/docs")],
+        }
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_provider_config,
+        ):
             result = is_allowed_to_call_vector_store_endpoint(
-                provider=LlmProviders.OPENAI,
+                provider=LlmProviders.AZURE_AI,
                 index_name="my-index",
                 request=mock_request,
                 user_api_key_dict=mock_user_api_key,
             )
 
-        assert result is None
+        assert result is True
+
+    def test_update_index_requires_admin_with_update_message(self):
+        """Non-admin users get an update-specific message for index replacement."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "PUT"
+        mock_request.url.path = "/azure_ai/indexes/my-index"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = {
+            "allowed_vector_store_indexes": [
+                {"index_name": "my-index", "index_permissions": ["read", "write"]}
+            ]
+        }
+        mock_user_api_key.team_metadata = None
+
+        mock_provider_config = MagicMock()
+        mock_provider_config.get_vector_store_endpoints_by_type.return_value = {
+            "read": [("GET", "/docs/search"), ("POST", "/docs/search")],
+            "write": [("PUT", "/docs")],
+        }
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_provider_config,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.AZURE_AI,
+                    index_name="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can update" in exc_info.value.detail
+
+    def test_index_name_prefix_does_not_match_lifecycle_request(self):
+        """An index name that is only a path prefix must not trigger lifecycle checks."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "DELETE"
+        mock_request.url.path = "/azure_ai/indexes/my-index-archive"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = None
+        mock_user_api_key.team_metadata = None
+
+        mock_provider_config = MagicMock()
+        mock_provider_config.get_vector_store_endpoints_by_type.return_value = {
+            "read": [],
+            "write": [],
+        }
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_provider_config,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.AZURE_AI,
+                    index_name="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins" not in exc_info.value.detail
 
     def test_team_metadata_permissions(self):
         """Test that team metadata permissions work."""
@@ -682,6 +1241,81 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         assert exc_info.value.status_code == 403
 
 
+class TestIndexCreate:
+    @pytest.mark.asyncio
+    async def test_index_create_requires_admin(self):
+        """Non-admin users must not register managed vector store indexes."""
+        request = IndexCreateRequest(
+            index_name="test-index",
+            litellm_params={
+                "vector_store_index": "real-index",
+                "vector_store_name": "azure-ai-search",
+            },
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_response = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await index_create(
+                request=mock_request,
+                index_create_request=request,
+                fastapi_response=mock_response,
+                user_api_key_dict=UserAPIKeyAuth(
+                    token="sk-test",
+                    key_name="sk-...test",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can create" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_index_create_allowed_for_admin(self):
+        """Proxy admins can register managed vector store indexes."""
+        create_request = IndexCreateRequest(
+            index_name="test-index",
+            litellm_params={
+                "vector_store_index": "real-index",
+                "vector_store_name": "azure-ai-search",
+            },
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_response = MagicMock()
+        mock_row = MagicMock()
+        mock_row.model_dump.return_value = {
+            "index_name": "test-index",
+            "litellm_params": create_request.litellm_params.model_dump(),
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_managedvectorstoreindextable.find_unique = AsyncMock(
+            return_value=None
+        )
+        mock_prisma.db.litellm_managedvectorstoreindextable.create = AsyncMock(
+            return_value=mock_row
+        )
+
+        with patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma,
+        ):
+            result = await index_create(
+                request=mock_request,
+                index_create_request=create_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=UserAPIKeyAuth(
+                    token="sk-test",
+                    key_name="sk-...test",
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    user_id="admin-user",
+                ),
+            )
+
+        assert result["index_name"] == "test-index"
+        mock_prisma.db.litellm_managedvectorstoreindextable.create.assert_awaited_once()
+
+
 class TestIsAllowedToCallVectorStoreFilesEndpoint:
     def _mock_provider_config(self):
         provider_config = MagicMock()
@@ -785,7 +1419,22 @@ class TestVectorStoreManagementEndpointsExist:
         - POST /vector_store/info
         - POST /vector_store/update
         """
+        import importlib
+
+        from litellm.proxy._lazy_features import LAZY_FEATURES
         from litellm.proxy.proxy_server import app
+
+        # Force-register the lazy vector_store_management routes so the
+        # assertions can find them.
+        already_registered = any(
+            getattr(r, "path", None) == "/vector_store/new" for r in app.routes
+        )
+        if not already_registered:
+            for feat in LAZY_FEATURES:
+                if feat.name == "vector_store_management":
+                    module = importlib.import_module(feat.module_path)
+                    feat.register_fn(app, module)
+                    break
 
         # Define expected endpoints
         expected_endpoints = [
@@ -1398,20 +2047,25 @@ async def test_new_vector_store_auto_resolves_embedding_config():
         )
 
     assert result["status"] == "success"
-    # Verify that embedding config was resolved and included in the create call
+    # Auto-resolve no longer happens at create time — the persisted row
+    # carries only the model reference, never the resolved cleartext
+    # credential. Resolution now happens at request-handling time inside
+    # ``_update_request_data_with_litellm_managed_vector_store_registry``,
+    # where the resolved config lives in per-request memory and is never
+    # written to the database.
     litellm_params_json = captured_create_data.get("litellm_params")
     assert litellm_params_json is not None
     litellm_params_dict = json.loads(litellm_params_json)
-    assert "litellm_embedding_config" in litellm_params_dict
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_key"] == "resolved-api-key"
-    )
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_base"]
-        == "https://api.openai.com"
-    )
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-01-01"
+    assert "litellm_embedding_config" not in litellm_params_dict
+    assert litellm_params_dict["litellm_embedding_model"] == "text-embedding-ada-002"
+
+    # The response must also not echo a cleartext credential — even on
+    # the create response, where redaction guards against caller-supplied
+    # cleartext or pre-existing rows that were created by an earlier
+    # proxy version.
+    response_vs = result["vector_store"]
+    assert "resolved-api-key" not in _serialize_litellm_params(
+        response_vs.get("litellm_params")
     )
 
 
@@ -1560,6 +2214,43 @@ async def test_resolve_embedding_config_tries_router_then_db():
 
 
 @pytest.mark.asyncio
+async def test_resolve_embedding_config_caches_result():
+    """The first lookup should hit the router/DB; subsequent lookups for
+    the same model name should return the cached value without touching
+    the router or the database."""
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    mock_prisma_client = MagicMock()
+    mock_router = MagicMock()
+
+    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
+    mock_litellm_params.api_key = "router-api-key"
+    mock_litellm_params.api_base = "https://router-api-base.com"
+    mock_litellm_params.api_version = None
+
+    mock_deployment = MagicMock(spec=Deployment)
+    mock_deployment.litellm_params = mock_litellm_params
+    mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
+
+    first = await _resolve_embedding_config(
+        embedding_model="cached-model",
+        prisma_client=mock_prisma_client,
+        llm_router=mock_router,
+    )
+    assert first is not None
+    assert mock_router.get_deployment_by_model_group_name.call_count == 1
+
+    second = await _resolve_embedding_config(
+        embedding_model="cached-model",
+        prisma_client=mock_prisma_client,
+        llm_router=mock_router,
+    )
+    assert second == first
+    # Router (and by extension the DB) was not consulted again.
+    assert mock_router.get_deployment_by_model_group_name.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_resolve_embedding_config_falls_back_to_db():
     """Test that _resolve_embedding_config falls back to DB when router doesn't have the model."""
     mock_prisma_client = MagicMock()
@@ -1668,28 +2359,41 @@ async def test_new_vector_store_auto_resolves_from_router():
         )
 
     assert result["status"] == "success"
-    # Verify that embedding config was resolved from router and included in the create call
+    # Resolution against the router happens at request-handling time now,
+    # not at row creation. The persisted ``litellm_params`` carries only
+    # the model reference, never the cleartext credential.
     litellm_params_json = captured_create_data.get("litellm_params")
     assert litellm_params_json is not None
     litellm_params_dict = json.loads(litellm_params_json)
-    assert "litellm_embedding_config" in litellm_params_dict
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_key"]
-        == "router-resolved-api-key"
+    assert "litellm_embedding_config" not in litellm_params_dict
+    assert litellm_params_dict["litellm_embedding_model"] == "config-embedding-model"
+
+    response_vs = result["vector_store"]
+    assert "router-resolved-api-key" not in _serialize_litellm_params(
+        response_vs.get("litellm_params")
     )
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_base"]
-        == "https://router-resolved-base.com"
-    )
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-03-01"
-    )
+
+
+def _stub_user_api_key(
+    *,
+    team_id=None,
+    user_role=None,
+    object_permission=None,
+    object_permission_id=None,
+    team_object_permission_id=None,
+):
+    user = UserAPIKeyAuth(team_id=team_id, user_role=user_role)
+    user.object_permission = object_permission
+    user.object_permission_id = object_permission_id
+    user.team_object_permission_id = team_object_permission_id
+    return user
 
 
 class TestCheckVectorStoreAccess:
     """Test suite for _check_vector_store_access function."""
 
-    def test_access_granted_when_no_team_id(self):
+    @pytest.mark.asyncio
+    async def test_access_granted_when_no_team_id(self):
         """Test that access is granted when vector store has no team_id (legacy behavior)."""
         vector_store: LiteLLM_ManagedVectorStore = {
             "vector_store_id": "test-store",
@@ -1697,13 +2401,12 @@ class TestCheckVectorStoreAccess:
             # No team_id field
         }
 
-        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
-        mock_user_api_key.team_id = "team-123"
-
-        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        user = _stub_user_api_key(team_id="team-123")
+        result = await _check_vector_store_access(vector_store, user)
         assert result is True
 
-    def test_access_granted_when_team_ids_match(self):
+    @pytest.mark.asyncio
+    async def test_access_granted_when_team_ids_match(self):
         """Test that access is granted when user's team_id matches vector store's team_id."""
         vector_store: LiteLLM_ManagedVectorStore = {
             "vector_store_id": "test-store",
@@ -1711,13 +2414,12 @@ class TestCheckVectorStoreAccess:
             "team_id": "team-123",
         }
 
-        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
-        mock_user_api_key.team_id = "team-123"
-
-        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        user = _stub_user_api_key(team_id="team-123")
+        result = await _check_vector_store_access(vector_store, user)
         assert result is True
 
-    def test_access_denied_when_team_ids_dont_match(self):
+    @pytest.mark.asyncio
+    async def test_access_denied_when_team_ids_dont_match(self):
         """Test that access is denied when user's team_id doesn't match vector store's team_id."""
         vector_store: LiteLLM_ManagedVectorStore = {
             "vector_store_id": "test-store",
@@ -1725,13 +2427,12 @@ class TestCheckVectorStoreAccess:
             "team_id": "team-123",
         }
 
-        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
-        mock_user_api_key.team_id = "team-456"
-
-        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        user = _stub_user_api_key(team_id="team-456")
+        result = await _check_vector_store_access(vector_store, user)
         assert result is False
 
-    def test_access_denied_when_vector_store_has_team_id_but_user_doesnt(self):
+    @pytest.mark.asyncio
+    async def test_access_denied_when_vector_store_has_team_id_but_user_doesnt(self):
         """Test that access is denied when vector store has team_id but user doesn't."""
         vector_store: LiteLLM_ManagedVectorStore = {
             "vector_store_id": "test-store",
@@ -1739,10 +2440,8 @@ class TestCheckVectorStoreAccess:
             "team_id": "team-123",
         }
 
-        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
-        mock_user_api_key.team_id = None
-
-        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        user = _stub_user_api_key(team_id=None)
+        result = await _check_vector_store_access(vector_store, user)
         assert result is False
 
 
@@ -1870,3 +2569,274 @@ async def test_create_vector_store_in_db_raises_when_no_db():
 
     assert exc_info.value.status_code == 500
     assert "database not connected" in exc_info.value.detail.lower()
+
+
+class TestRedactSensitiveLitellmParams:
+    """
+    ``litellm_params`` on a managed vector store carries the upstream
+    provider credential (OpenAI ``api_key``, AWS ``aws_secret_access_key``,
+    GCP ``vertex_credentials``, etc.). The list/info endpoints must redact
+    those values before returning them to any caller — including read-only
+    users and narrowly-scoped keys.
+    """
+
+    def test_redacts_well_known_credential_keys(self):
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params = {
+            "api_key": "sk-real-openai-key-12345",
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "vertex_credentials": (
+                '{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----..."}'
+            ),
+            "azure_authorization_token": "Bearer eyJhbGciOi...",
+        }
+        out = _redact_sensitive_litellm_params(params)
+        for k in params:
+            assert (
+                out[k] == REDACTED_BY_LITELM_STRING
+            ), f"{k} should be redacted, got {out[k]!r}"
+
+    def test_preserves_non_sensitive_keys(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params = {
+            "api_base": "https://api.openai.com/v1",
+            "model": "text-embedding-3-large",
+            "region": "us-east-1",
+            "vector_store_id": "vs_abc123",
+            "api_version": "2023-05-15",
+        }
+        out = _redact_sensitive_litellm_params(params)
+        for k, v in params.items():
+            assert out[k] == v, f"{k} should be preserved verbatim"
+
+    def test_handles_none_and_empty(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        assert _redact_sensitive_litellm_params(None) is None
+        assert _redact_sensitive_litellm_params({}) == {}
+
+    def test_redaction_does_not_mutate_input_litellm_params(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        original = {
+            "api_key": "sk-real-openai-key-12345",
+            "api_base": "https://api.openai.com/v1",
+        }
+        snapshot = dict(original)
+        _redact_sensitive_litellm_params(original)
+        assert original == snapshot, "input dict must not be mutated"
+
+    def test_redacts_nested_credentials_in_embedding_config(self):
+        """
+        ``/vector_store/new`` and ``/vector_store/update`` auto-resolve
+        ``litellm_embedding_config`` from the model registry and store it
+        as a nested dict inside ``litellm_params``. The nested dict carries
+        its own ``api_key`` / ``aws_*`` / ``vertex_credentials``, and a
+        non-recursive redactor would leak them.
+        """
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params = {
+            "model": "openai/text-embedding-3-large",
+            "api_base": "https://api.openai.com/v1",
+            "litellm_embedding_config": {
+                "api_key": "sk-nested-secret",
+                "api_base": "https://nested.example.com",
+                "vertex_credentials": '{"private_key":"-----BEGIN..."}',
+            },
+        }
+        out = _redact_sensitive_litellm_params(params)
+        nested = out["litellm_embedding_config"]
+        assert nested["api_key"] == REDACTED_BY_LITELM_STRING
+        assert nested["vertex_credentials"] == REDACTED_BY_LITELM_STRING
+        assert nested["api_base"] == "https://nested.example.com"
+        # Top-level non-secrets preserved
+        assert out["api_base"] == "https://api.openai.com/v1"
+        assert out["model"] == "openai/text-embedding-3-large"
+
+    def test_redacts_json_string_litellm_params(self):
+        """
+        The in-memory registry occasionally holds ``litellm_params`` as a
+        JSON-serialized string rather than a dict. The redactor must parse,
+        redact, and re-serialize so callers don't get the raw string back.
+        """
+        import json as _json
+
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params_json = _json.dumps(
+            {
+                "api_key": "sk-secret-from-json-string",
+                "api_base": "https://api.openai.com/v1",
+            }
+        )
+        out = _redact_sensitive_litellm_params(params_json)
+        assert isinstance(out, str)
+        parsed = _json.loads(out)
+        assert parsed["api_key"] == REDACTED_BY_LITELM_STRING
+        assert parsed["api_base"] == "https://api.openai.com/v1"
+
+    def test_redacts_unparseable_string_litellm_params(self):
+        """
+        If ``litellm_params`` is a string that isn't valid JSON, the
+        redactor must NOT echo the value back verbatim — it could contain
+        opaque credential material.
+        """
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        out = _redact_sensitive_litellm_params(
+            "this is not json but might contain a secret"
+        )
+        assert out == REDACTED_BY_LITELM_STRING
+
+
+class TestUpdateVectorStoreAccessControlAndRedaction:
+    """
+    ``/vector_store/update`` previously skipped per-store access control
+    (only the premium-feature gate ran), letting any authenticated
+    premium principal mutate *any* vector store. It also returned the
+    full DB row including ``litellm_params``, leaking provider
+    credentials to the caller. Both are fixed at the endpoint level.
+    """
+
+    @pytest.mark.asyncio
+    async def test_update_denied_when_caller_cannot_access_store(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            update_vector_store,
+        )
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump = MagicMock(
+            return_value={
+                "vector_store_id": "vs_other_team",
+                "team_id": "team-A",
+                "litellm_params": {"api_key": "sk-team-A-secret"},
+            }
+        )
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+
+        with (
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await update_vector_store(
+                    data=VectorStoreUpdateRequest(
+                        vector_store_id="vs_other_team",
+                        vector_store_description="hijacked",
+                    ),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        user_id="attacker", team_id="team-B"
+                    ),
+                )
+        assert exc_info.value.status_code == 403
+        # The attacker must NOT see the existing credential in the
+        # error message either.
+        assert "sk-team-A-secret" not in str(exc_info.value.detail)
+        # And the DB update must not have been called.
+        mock_prisma_client.db.litellm_managedvectorstorestable.update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_response_redacts_litellm_params(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            update_vector_store,
+        )
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump = MagicMock(
+            return_value={
+                "vector_store_id": "vs_owned",
+                "team_id": "team-A",
+                "litellm_params": {
+                    "api_key": "sk-real-openai-key-123",
+                    "api_base": "https://api.openai.com/v1",
+                },
+            }
+        )
+        updated_row = MagicMock()
+        updated_row.model_dump = MagicMock(
+            return_value={
+                "vector_store_id": "vs_owned",
+                "team_id": "team-A",
+                "vector_store_description": "new desc",
+                "litellm_params": {
+                    "api_key": "sk-real-openai-key-123",
+                    "api_base": "https://api.openai.com/v1",
+                },
+            }
+        )
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+        mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(
+            return_value=updated_row
+        )
+
+        with (
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.vector_store_registry", None),
+        ):
+            response = await update_vector_store(
+                data=VectorStoreUpdateRequest(
+                    vector_store_id="vs_owned",
+                    vector_store_description="new desc",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="owner", team_id="team-A"),
+            )
+
+        params = response["vector_store"]["litellm_params"]
+        assert params["api_key"] == REDACTED_BY_LITELM_STRING
+        assert params["api_base"] == "https://api.openai.com/v1"

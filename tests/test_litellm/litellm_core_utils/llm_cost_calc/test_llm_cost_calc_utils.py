@@ -328,6 +328,224 @@ def test_generic_cost_per_token_gpt54_above_272k_tokens():
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
 
+def test_generic_cost_per_token_gpt55():
+    """gpt-5.5: base pricing — $5/1M input, $30/1M output, $0.50/1M cached input."""
+    model = "gpt-5.5"
+    custom_llm_provider = "openai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+
+    # Sanity-check the map values match OpenAI's published pricing.
+    assert model_cost_map["input_cost_per_token"] == 5e-6
+    assert model_cost_map["output_cost_per_token"] == 3e-5
+    assert model_cost_map["cache_read_input_token_cost"] == 5e-7
+    assert model_cost_map["litellm_provider"] == "openai"
+    assert model_cost_map["mode"] == "chat"
+    # gpt-5.5 inherits GPT-5.4's long-context window + tiered pricing.
+    assert model_cost_map["max_input_tokens"] == 1050000
+    assert model_cost_map["input_cost_per_token_above_272k_tokens"] == 1e-5
+    assert model_cost_map["output_cost_per_token_above_272k_tokens"] == 4.5e-5
+
+    prompt_tokens = 1000
+    completion_tokens = 500
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * prompt_tokens, 10
+    )
+    assert round(completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token"] * completion_tokens, 10
+    )
+
+
+def test_generic_cost_per_token_gpt55_pro():
+    """gpt-5.5-pro: responses-only model — $30/1M input, $180/1M output, $3/1M cached input."""
+    model = "gpt-5.5-pro"
+    custom_llm_provider = "openai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+
+    # Sanity-check the map values match OpenAI's published pricing.
+    assert model_cost_map["input_cost_per_token"] == 3e-5
+    assert model_cost_map["output_cost_per_token"] == 1.8e-4
+    assert model_cost_map["cache_read_input_token_cost"] == 3e-6
+    assert model_cost_map["litellm_provider"] == "openai"
+    # gpt-5.5-pro is a responses-only model (no /v1/chat/completions endpoint).
+    assert model_cost_map["mode"] == "responses"
+    assert "/v1/chat/completions" not in model_cost_map["supported_endpoints"]
+    assert "/v1/responses" in model_cost_map["supported_endpoints"]
+    # Inherits GPT-5.4-pro's long-context window + tiered pricing.
+    assert model_cost_map["max_input_tokens"] == 1050000
+    assert model_cost_map["input_cost_per_token_above_272k_tokens"] == 6e-5
+    assert model_cost_map["output_cost_per_token_above_272k_tokens"] == 2.7e-4
+
+    prompt_tokens = 1000
+    completion_tokens = 500
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * prompt_tokens, 10
+    )
+    assert round(completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token"] * completion_tokens, 10
+    )
+
+
+@pytest.mark.parametrize(
+    "model,expected_none,expected_xhigh,expected_minimal",
+    [
+        # Verified against OpenAI's live API on 2026-04-24:
+        #   gpt-5.5   -> supports: none, low, medium, high, xhigh
+        #   gpt-5.5-pro -> supports: medium, high, xhigh
+        # Neither supports "minimal"; gpt-5.5-pro additionally does not support "none".
+        # The JSON must reflect this so LiteLLM rejects unsupported values locally
+        # (or drops them with drop_params=True) instead of round-tripping to OpenAI
+        # for a 400.
+        ("gpt-5.5", True, True, False),
+        ("gpt-5.5-2026-04-23", True, True, False),
+        ("gpt-5.5-pro", False, True, False),
+        ("gpt-5.5-pro-2026-04-23", False, True, False),
+    ],
+)
+def test_gpt55_reasoning_effort_flags_match_live_openai_api(
+    model, expected_none, expected_xhigh, expected_minimal
+):
+    """Pin reasoning_effort capability flags to OpenAI's actual API contract.
+
+    Observed via `POST /v1/chat/completions` with reasoning_effort=minimal:
+    ``Unsupported value: 'reasoning_effort' does not support 'minimal' with
+    this model``. gpt-5.5-pro additionally rejects 'none' and 'low'.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    m = litellm.model_cost[model]
+    assert (
+        m.get("supports_none_reasoning_effort") is expected_none
+    ), f"{model}: supports_none_reasoning_effort expected {expected_none}"
+    assert (
+        m.get("supports_xhigh_reasoning_effort") is expected_xhigh
+    ), f"{model}: supports_xhigh_reasoning_effort expected {expected_xhigh}"
+    assert (
+        m.get("supports_minimal_reasoning_effort") is expected_minimal
+    ), f"{model}: supports_minimal_reasoning_effort expected {expected_minimal}"
+
+
+@pytest.mark.parametrize(
+    "base_model,dated_model",
+    [
+        ("gpt-5.5", "gpt-5.5-2026-04-23"),
+        ("gpt-5.5-pro", "gpt-5.5-pro-2026-04-23"),
+    ],
+)
+def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(
+    base_model, dated_model
+):
+    """Dated snapshots must carry the same reasoning_effort capability flags as
+    their non-dated counterparts.
+
+    Regression guard: ``supports_{none,minimal,xhigh}_reasoning_effort`` gate
+    downstream routing in ``OpenAIGPT5Config`` — a missing flag is treated as
+    ``False`` for opt-in levels (e.g. ``xhigh``), which silently diverges
+    behavior between ``gpt-5.5`` and ``gpt-5.5-2026-04-23``. Pinning to a
+    dated variant must never lose capabilities relative to the base alias.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    base = litellm.model_cost[base_model]
+    dated = litellm.model_cost[dated_model]
+
+    for flag in (
+        "supports_none_reasoning_effort",
+        "supports_minimal_reasoning_effort",
+        "supports_xhigh_reasoning_effort",
+    ):
+        assert dated.get(flag) == base.get(flag), (
+            f"{dated_model} has {flag}={dated.get(flag)!r}, "
+            f"but {base_model} has {flag}={base.get(flag)!r}. "
+            f"Dated snapshots must inherit the base model's reasoning_effort "
+            f"capability profile."
+        )
+
+
+@pytest.mark.parametrize(
+    "model,expected_mode,expected_input,expected_output,expected_cache_read",
+    [
+        ("azure/gpt-5.5", "chat", 5e-6, 3e-5, 5e-7),
+        ("azure/gpt-5.5-2026-04-23", "chat", 5e-6, 3e-5, 5e-7),
+        ("azure/gpt-5.5-pro", "responses", 3e-5, 1.8e-4, 3e-6),
+        ("azure/gpt-5.5-pro-2026-04-23", "responses", 3e-5, 1.8e-4, 3e-6),
+    ],
+)
+def test_azure_gpt55_entries_present_with_correct_pricing(
+    model, expected_mode, expected_input, expected_output, expected_cache_read
+):
+    """Day-0 Azure entries for GPT-5.5 mirror the OpenAI pricing structure.
+
+    Pricing parity with openai/gpt-5.5* (verified against OpenAI's pricing page
+    on 2026-04-24): $5/$30 input/output per 1M for chat, $30/$180 for pro.
+    Cache discount is 10% of input.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    m = litellm.model_cost[model]
+    assert m["litellm_provider"] == "azure"
+    assert m["mode"] == expected_mode
+    assert m["input_cost_per_token"] == expected_input
+    assert m["output_cost_per_token"] == expected_output
+    assert m["cache_read_input_token_cost"] == expected_cache_read
+    # Long-context window inherited from gpt-5.4 / openai gpt-5.5.
+    assert m["max_input_tokens"] == 1050000
+    assert m["max_output_tokens"] == 128000
+
+
+@pytest.mark.parametrize(
+    "model,expected_none,expected_minimal,expected_xhigh",
+    [
+        # Mirror live OpenAI API contract (verified via openai/gpt-5.5* on
+        # 2026-04-24): chat accepts {none, low, medium, high, xhigh} but NOT
+        # minimal; pro accepts {medium, high, xhigh} only.
+        # NOTE: openai/gpt-5.5* entries currently set supports_minimal=true on
+        # main (pre #26456). Once that PR lands, OpenAI + Azure flags align.
+        ("azure/gpt-5.5", True, False, True),
+        ("azure/gpt-5.5-pro", False, False, True),
+    ],
+)
+def test_azure_gpt55_reasoning_effort_flags_match_live_openai_api(
+    model, expected_none, expected_minimal, expected_xhigh
+):
+    """Azure entries pin reasoning_effort flags to OpenAI's actual API contract."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    m = litellm.model_cost[model]
+    assert m.get("supports_none_reasoning_effort") is expected_none
+    assert m.get("supports_minimal_reasoning_effort") is expected_minimal
+    assert m.get("supports_xhigh_reasoning_effort") is expected_xhigh
+
+
 def test_generic_cost_per_token_anthropic_prompt_caching():
     model = "claude-sonnet-4@20250514"
     usage = Usage(
@@ -1200,3 +1418,123 @@ def test_image_count_prevents_text_tokens_fallback():
         f"got {prompt_cost}. text_tokens fallback may be double-charging."
     )
     assert completion_cost == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Data-residency (OpenAI regional processing) tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _local_model_cost_map():
+    prev_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    prev_model_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        yield
+    finally:
+        litellm.model_cost = prev_model_cost
+        if prev_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = prev_env
+
+
+@pytest.mark.parametrize("data_residency", ["eu", "us"])
+def test_data_residency_applies_uplift(data_residency, _local_model_cost_map):
+    """gpt-5 should apply the regional processing uplift multiplier when
+    data_residency is set."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    base = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+    regional = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=data_residency,
+    )
+
+    base_total = base[0] + base[1]
+    regional_total = regional[0] + regional[1]
+
+    assert base_total > 0
+    assert regional_total == pytest.approx(base_total * 1.10, rel=1e-9)
+    assert regional[0] == pytest.approx(base[0] * 1.10, rel=1e-9)
+    assert regional[1] == pytest.approx(base[1] * 1.10, rel=1e-9)
+
+
+def test_data_residency_no_uplift_for_unmarked_model(_local_model_cost_map):
+    """A model without a regional_processing_uplift_multiplier_* entry should
+    fall back to base pricing, not error."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    base = generic_cost_per_token(
+        model="gpt-3.5-turbo",
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+    with_residency = generic_cost_per_token(
+        model="gpt-3.5-turbo",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency="eu",
+    )
+
+    assert base == with_residency
+
+
+def test_data_residency_none_no_uplift(_local_model_cost_map):
+    """data_residency=None should be a no-op even for models with a multiplier."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    base = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+    explicit_none = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=None,
+    )
+
+    assert base == explicit_none
+
+
+def test_data_residency_composes_with_service_tier(_local_model_cost_map):
+    """The uplift multiplies the priority-tier cost, not the standard one."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    priority_base = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="priority",
+    )
+    priority_eu = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="priority",
+        data_residency="eu",
+    )
+
+    priority_base_total = priority_base[0] + priority_base[1]
+    priority_eu_total = priority_eu[0] + priority_eu[1]
+
+    assert priority_base_total > 0
+    assert priority_eu_total == pytest.approx(priority_base_total * 1.10, rel=1e-9)

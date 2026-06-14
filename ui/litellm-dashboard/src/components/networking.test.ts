@@ -404,3 +404,51 @@ describe("individualModelHealthCheckCall", () => {
     expect(parsed.searchParams.get("model_id")).toBe("id/with/slashes");
   });
 });
+
+describe("teamInfoCall", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should URL-encode team_id query param to handle special characters safely", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue(JSON.stringify({ team_id: "team with spaces & special?chars" })),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    const teamID = "team with spaces & special?chars";
+    await Networking.teamInfoCall("token", teamID);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as Request).url;
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+
+    expect(urlStr).toContain("/team/info");
+    // Special characters are encoded (not present raw) and round-trip back to the original
+    expect(urlStr).not.toContain("team with spaces");
+    expect(parsed.searchParams.get("team_id")).toBe(teamID);
+  });
+
+  it("should not append team_id when teamID is null", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue("{}"),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.teamInfoCall("token", null);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+    expect(parsed.searchParams.has("team_id")).toBe(false);
+  });
+});

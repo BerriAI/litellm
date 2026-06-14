@@ -9,6 +9,7 @@ from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
     CompletionTokensDetailsWrapper,
+    DataResidency,
     ImageResponse,
     ModelInfo,
     PassthroughCallTypes,
@@ -28,6 +29,17 @@ _IMAGE_RESPONSE_CALL_TYPES = frozenset(
         CallTypes.aimage_edit.value,
     }
 )
+
+# Pre-resolved DataResidency enum values for fast membership checks
+_VALID_DATA_RESIDENCIES = frozenset(r.value for r in DataResidency)
+
+
+def _get_token_detail_value(details: object, key: str) -> Optional[int]:
+    if isinstance(details, dict):
+        value = details.get(key)
+    else:
+        value = getattr(details, key, None)
+    return value if isinstance(value, int) else None
 
 
 def _is_above_128k(tokens: float) -> bool:
@@ -617,11 +629,46 @@ def _calculate_input_cost(
     return prompt_cost
 
 
+def _get_regional_uplift_multiplier(
+    model_info: ModelInfo, data_residency: Optional[str]
+) -> float:
+    """
+    Resolve the per-model regional-processing uplift multiplier for a given
+    data-residency region.
+
+    OpenAI applies a flat percentage uplift (e.g. +10%) on all token costs for
+    requests served from a regionalized hostname (eu./us.api.openai.com). The
+    multiplier is stored on the model entry as
+    ``regional_processing_uplift_multiplier_<region>`` (e.g. 1.10).
+
+    Returns 1.0 (no uplift) when ``data_residency`` is ``None`` or when the
+    model has no multiplier configured for the given region.
+    """
+    if data_residency is None:
+        return 1.0
+    residency = data_residency.lower()
+    if residency not in _VALID_DATA_RESIDENCIES:
+        return 1.0
+    multiplier = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
+    if multiplier is None:
+        return 1.0
+    try:
+        return float(cast(float, multiplier))
+    except (TypeError, ValueError):
+        verbose_logger.exception(
+            "Invalid regional_processing_uplift_multiplier_%s for model; "
+            "defaulting to 1.0",
+            residency,
+        )
+        return 1.0
+
+
 def generic_cost_per_token(  # noqa: PLR0915
     model: str,
     usage: Usage,
     custom_llm_provider: str,
     service_tier: Optional[str] = None,
+    data_residency: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -631,6 +678,8 @@ def generic_cost_per_token(  # noqa: PLR0915
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
+        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us"),
+          used to apply the per-model regional-processing uplift multiplier.
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -684,7 +733,7 @@ def generic_cost_per_token(  # noqa: PLR0915
             - cache_creation
             - image_tokens
         )
-        # Clamp to zero: inconsistent streaming usage 
+        # Clamp to zero: inconsistent streaming usage
         if text_tokens < 0:
             text_tokens = 0
         prompt_tokens_details["text_tokens"] = text_tokens
@@ -781,6 +830,14 @@ def generic_cost_per_token(  # noqa: PLR0915
         )
         completion_cost += float(image_tokens) * _output_cost_per_image_token
 
+    ## REGIONAL DATA-RESIDENCY UPLIFT
+    # Applied as a flat multiplier across all token costs for the request
+    # when the upstream is a regionalized OpenAI host (eu./us.api.openai.com).
+    uplift = _get_regional_uplift_multiplier(model_info, data_residency)
+    if uplift != 1.0:
+        prompt_cost *= uplift
+        completion_cost *= uplift
+
     return prompt_cost, completion_cost
 
 
@@ -821,17 +878,47 @@ def calculate_image_response_cost_from_usage(
             cached_tokens=0,
         )
 
+    output_tokens_details = getattr(usage, "completion_tokens_details", None)
+    if output_tokens_details is None:
+        output_tokens_details = getattr(usage, "output_tokens_details", None)
+
+    if output_tokens_details is None:
+        completion_tokens_details = CompletionTokensDetailsWrapper(
+            text_tokens=0,
+            image_tokens=completion_tokens,
+            reasoning_tokens=0,
+            audio_tokens=0,
+        )
+    else:
+        text_tokens = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
+        image_tokens = (
+            _get_token_detail_value(output_tokens_details, "image_tokens") or 0
+        )
+        audio_tokens = (
+            _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
+        )
+        reasoning_tokens = (
+            _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
+        )
+        known_output_tokens = (
+            text_tokens + image_tokens + audio_tokens + reasoning_tokens
+        )
+        if completion_tokens > known_output_tokens:
+            text_tokens += completion_tokens - known_output_tokens
+
+        completion_tokens_details = CompletionTokensDetailsWrapper(
+            text_tokens=text_tokens,
+            image_tokens=image_tokens,
+            reasoning_tokens=reasoning_tokens,
+            audio_tokens=audio_tokens,
+        )
+
     normalized_usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
         prompt_tokens_details=prompt_tokens_details,
-        completion_tokens_details=CompletionTokensDetailsWrapper(
-            text_tokens=0,
-            image_tokens=completion_tokens,
-            reasoning_tokens=0,
-            audio_tokens=0,
-        ),
+        completion_tokens_details=completion_tokens_details,
     )
 
     prompt_cost, completion_cost = generic_cost_per_token(
@@ -982,9 +1069,9 @@ class CostCalculatorUtils:
                 image_response=completion_response,
             )
         elif custom_llm_provider == litellm.LlmProviders.OPENAI.value:
-            # Check if this is a gpt-image model (token-based pricing)
+            # gpt-image models use token-based pricing.
             model_lower = model.lower()
-            if "gpt-image-1" in model_lower:
+            if "gpt-image" in model_lower:
                 from litellm.llms.openai.image_generation.cost_calculator import (
                     cost_calculator as openai_gpt_image_cost_calculator,
                 )
@@ -1004,9 +1091,9 @@ class CostCalculatorUtils:
                 optional_params=optional_params,
             )
         elif custom_llm_provider == litellm.LlmProviders.AZURE.value:
-            # Check if this is a gpt-image model (token-based pricing)
+            # gpt-image models use token-based pricing.
             model_lower = model.lower()
-            if "gpt-image-1" in model_lower:
+            if "gpt-image" in model_lower:
                 from litellm.llms.openai.image_generation.cost_calculator import (
                     cost_calculator as openai_gpt_image_cost_calculator,
                 )

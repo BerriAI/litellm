@@ -91,6 +91,19 @@ def test_get_litellm_model_cost_map_returns_cost_map():
     )
 
 
+def test_public_ai_hub_info_is_public_by_default(monkeypatch):
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
+
+    response = client.get("/public/model_hub/info")
+
+    assert response.status_code == 200, response.text
+
+
 def test_watsonx_provider_fields():
     """Test that Watsonx provider has all required credential fields including multiple auth options."""
     app = FastAPI()
@@ -166,9 +179,9 @@ def test_anthropic_provider_fields_support_byok():
         "Anthropic api_key must be optional so admins can configure BYOK models "
         "without entering a key. See BYOK tutorial."
     )
-    assert fields_by_key["api_key"].get("tooltip"), (
-        "Anthropic api_key must have a tooltip explaining the BYOK use case."
-    )
+    assert fields_by_key["api_key"].get(
+        "tooltip"
+    ), "Anthropic api_key must have a tooltip explaining the BYOK use case."
     assert "api_base" in fields_by_key, (
         "Anthropic provider form must expose api_base so cloud customers "
         "can override the upstream URL without env var access."
@@ -176,16 +189,16 @@ def test_anthropic_provider_fields_support_byok():
     api_base_field = fields_by_key["api_base"]
     assert api_base_field["required"] is False
     assert api_base_field["field_type"] == "text"
-    assert api_base_field.get("tooltip"), (
-        "api_base should have a tooltip explaining it is optional."
-    )
+    assert api_base_field.get(
+        "tooltip"
+    ), "api_base should have a tooltip explaining it is optional."
 
     # UI forms render fields in credential_fields order; api_base should come first
     # so an admin sees the URL override before the key field.
     field_order = [f["key"] for f in anthropic["credential_fields"]]
-    assert field_order.index("api_base") < field_order.index("api_key"), (
-        "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
-    )
+    assert field_order.index("api_base") < field_order.index(
+        "api_key"
+    ), "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
 
 
 def test_hunyuan_provider_fields():
@@ -478,6 +491,70 @@ def test_public_model_hub_mixed_health_statuses():
 
 
 # ---------------------------------------------------------------------------
+# /public/agent_hub
+# ---------------------------------------------------------------------------
+
+
+def test_public_agent_hub_rewrites_upstream_url_to_proxy():
+    """Public agent hub must not leak the upstream backend URL retained on the
+    stored card. The ``url`` field has to be overwritten with the proxy
+    ``/a2a/{agent_id}`` entrypoint, matching the well-known card endpoint, so
+    an unauthenticated client cannot call the backend directly."""
+    from litellm.types.agents import AgentResponse
+
+    upstream_url = "https://upstream.internal.example.com/a2a"
+    agent = AgentResponse(
+        agent_id="agent-123",
+        agent_name="public-agent",
+        agent_card_params={"name": "public-agent", "url": upstream_url},
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_registry = MagicMock()
+    mock_registry.get_public_agent_list.return_value = [agent]
+
+    with (
+        patch("litellm.public_agent_groups", ["agent-123"]),
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ),
+    ):
+        response = client.get("/public/agent_hub")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload) == 1
+    card = payload[0]
+    assert upstream_url not in card.get("url", "")
+    assert card["url"].endswith("/a2a/agent-123")
+
+
+def test_public_agent_hub_returns_empty_when_no_public_groups():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_registry = MagicMock()
+    mock_registry.get_public_agent_list.return_value = []
+
+    with (
+        patch("litellm.public_agent_groups", None),
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ),
+    ):
+        response = client.get("/public/agent_hub")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+# ---------------------------------------------------------------------------
 # /public/endpoints
 # ---------------------------------------------------------------------------
 
@@ -653,3 +730,67 @@ def test_clean_display_name_strips_suffix():
 def test_clean_display_name_passthrough_when_no_suffix():
     assert _clean_display_name("OpenAI") == "OpenAI"
     assert _clean_display_name("") == ""
+
+
+def test_public_mcp_hub_returns_only_whitelisted_servers():
+    """Regression: /public/mcp_hub must gate strictly on
+    litellm.public_mcp_servers, mirroring /public/model_hub and
+    /public/agent_hub. Servers with available_on_public_internet=True that
+    are not on the whitelist must not leak."""
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.proxy._types import MCPTransport
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    listed = MCPServer(
+        server_id="listed",
+        name="listed",
+        server_name="listed",
+        transport=MCPTransport.http,
+        available_on_public_internet=True,
+    )
+
+    mock_manager = MagicMock()
+    mock_manager.get_public_mcp_servers.return_value = [listed]
+
+    with (
+        patch("litellm.public_mcp_servers", ["listed"]),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        response = client.get("/public/mcp_hub")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["server_id"] for item in data] == ["listed"]
+    app.dependency_overrides.clear()
+
+
+def test_public_mcp_hub_returns_empty_when_whitelist_unset():
+    """When no servers have been published via /v1/mcp/make_public, the
+    hub returns an empty list (matches /public/agent_hub behavior)."""
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    mock_manager = MagicMock()
+    mock_manager.get_public_mcp_servers.return_value = []
+
+    with (
+        patch("litellm.public_mcp_servers", None),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        response = client.get("/public/mcp_hub")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    app.dependency_overrides.clear()

@@ -10,6 +10,7 @@ from litellm.proxy._types import (
     hash_token,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 
 router = APIRouter()
 
@@ -194,7 +195,8 @@ async def list_jwt_key_mappings(
 ):
     from litellm.proxy.proxy_server import prisma_client
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Admin Viewer follows the read-parity rule.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403, detail="Only proxy admins can list JWT key mappings"
         )
@@ -233,7 +235,8 @@ async def info_jwt_key_mapping(
 ):
     from litellm.proxy.proxy_server import prisma_client
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Admin Viewer follows the read-parity rule.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403, detail="Only proxy admins can get JWT key mapping info"
         )

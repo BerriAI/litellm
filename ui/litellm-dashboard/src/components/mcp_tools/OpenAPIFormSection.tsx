@@ -61,11 +61,7 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
 
   return (
     <>
-      <OpenAPIQuickPicker
-        accessToken={accessToken}
-        selectedName={selectedPreset}
-        onSelect={handlePresetSelect}
-      />
+      <OpenAPIQuickPicker accessToken={accessToken} selectedName={selectedPreset} onSelect={handlePresetSelect} />
 
       <Form.Item
         label={

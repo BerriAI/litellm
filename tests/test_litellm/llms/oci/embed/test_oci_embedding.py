@@ -76,7 +76,7 @@ class TestOCIEmbeddingConfig:
         assert "embedText" in url
 
     def test_get_complete_url_custom_api_base(self):
-        """test_get_complete_url returns api_base as-is when provided."""
+        """test_get_complete_url treats api_base as a base URL and appends the embedText path."""
         config = OCIEmbeddingConfig()
         custom_base = "https://custom.oci.example.com/embed"
         url = config.get_complete_url(
@@ -86,7 +86,7 @@ class TestOCIEmbeddingConfig:
             optional_params={},
             litellm_params={},
         )
-        assert url == custom_base
+        assert url == f"{custom_base}/20231130/actions/embedText"
 
     def test_get_supported_openai_params(self):
         """test_get_supported_openai_params returns expected params list."""
@@ -96,7 +96,7 @@ class TestOCIEmbeddingConfig:
         assert "encoding_format" not in params
 
     def test_map_openai_params_dimensions(self):
-        """test dimensions is mapped correctly."""
+        """test dimensions is mapped to outputDimensions (OCI API field name)."""
         config = OCIEmbeddingConfig()
         optional_params = {}
         result = config.map_openai_params(
@@ -105,7 +105,8 @@ class TestOCIEmbeddingConfig:
             model=TEST_MODEL_NAME,
             drop_params=False,
         )
-        assert result["dimensions"] == 512
+        assert result["outputDimensions"] == 512
+        assert "dimensions" not in result
 
     def test_validate_environment_with_credentials(self, supplied_params):
         """test validate_environment returns content-type and user-agent headers when credentials are supplied."""
@@ -122,13 +123,15 @@ class TestOCIEmbeddingConfig:
         assert "litellm" in result["user-agent"]
 
     def test_validate_environment_missing_credentials(self):
-        """test validate_environment raises Exception with 'Missing required parameters' when credentials are incomplete."""
+        """test validate_environment raises OCIError when required credentials are missing."""
+        from litellm.llms.oci.common_utils import OCIError
+
         config = OCIEmbeddingConfig()
         incomplete_params = {
             "oci_user": "ocid1.user.oc1..xxx",
             # Missing oci_fingerprint, oci_tenancy, oci_key/oci_key_file, oci_compartment_id
         }
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(OCIError, match="Missing required parameters"):
             config.validate_environment(
                 headers={},
                 model=TEST_MODEL,
@@ -136,7 +139,6 @@ class TestOCIEmbeddingConfig:
                 optional_params=incomplete_params,
                 litellm_params={},
             )
-        assert "Missing required parameters" in str(excinfo.value)
 
     def test_validate_environment_with_signer(self):
         """test validate_environment passes when oci_signer is provided."""
@@ -234,13 +236,15 @@ class TestOCIEmbeddingConfig:
         assert result["inputs"] == ["Hello world"]
 
     def test_transform_embedding_request_token_list_raises(self):
-        """test token-array inputs raise ValueError instead of silent conversion."""
+        """test token-array inputs raise OCIError instead of silent conversion."""
+        from litellm.llms.oci.common_utils import OCIError
+
         config = OCIEmbeddingConfig()
         optional_params = {
             "oci_compartment_id": TEST_COMPARTMENT_ID,
         }
         with patch.object(config, "sign_request", return_value=({}, "{}")):
-            with pytest.raises(ValueError, match="does not support token-array"):
+            with pytest.raises(OCIError, match="does not support token-array"):
                 config.transform_embedding_request(
                     model=TEST_MODEL_NAME,
                     input=[[1234, 5678]],
@@ -264,6 +268,10 @@ class TestOCIEmbeddingConfig:
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=mock_logging,
+            api_key=None,
+            request_data={},
+            optional_params={},
+            litellm_params={},
         )
 
         assert isinstance(result, EmbeddingResponse)
@@ -296,6 +304,10 @@ class TestOCIEmbeddingConfig:
                 raw_response=mock_response,
                 model_response=model_response,
                 logging_obj=mock_logging,
+                api_key=None,
+                request_data={},
+                optional_params={},
+                litellm_params={},
             )
 
     def test_model_prices_embedding_models(self):

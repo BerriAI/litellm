@@ -122,7 +122,7 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
 def _make_upload_file(data: bytes, filename: str = "test.png") -> MagicMock:
     """Return a mock UploadFile whose read/close methods are async."""
     upload = MagicMock()
-    upload.read = AsyncMock(return_value=data)
+    upload.read = AsyncMock(side_effect=[data, b""])
     upload.close = AsyncMock()
     upload.filename = filename
     return upload

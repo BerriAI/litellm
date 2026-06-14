@@ -6,14 +6,28 @@ from typing_extensions import (
     TypedDict,
 )
 
+from litellm.types.llms.openai import EmbeddingInput
 
-class FunctionResponse(TypedDict):
-    name: str
+# Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
+# opt-in for combined embeddings — a provider-specific extension of the
+# OpenAI-faithful EmbeddingInput shape.
+GeminiEmbeddingInput = Union[EmbeddingInput, List[List[str]]]
+
+
+class FunctionResponse(TypedDict, total=False):
+    # `id` correlates this response with the originating `functionCall` part.
+    # Supported on Google AI Studio Gemini 3.5+; Vertex AI rejects this field.
+    id: str
+    name: Required[str]
     response: Optional[dict]
+    parts: List["FunctionResponsePartType"]
 
 
-class FunctionCall(TypedDict):
-    name: str
+class FunctionCall(TypedDict, total=False):
+    # `id` correlates the corresponding `functionResponse` on Google AI Studio
+    # Gemini 3.5+. Vertex AI and older Gemini models omit/reject this field.
+    id: str
+    name: Required[str]
     args: Optional[dict]
 
 
@@ -27,6 +41,11 @@ class BlobType(TypedDict, total=False):
     data: Required[str]
 
 
+class FunctionResponsePartType(TypedDict, total=False):
+    inline_data: BlobType
+    file_data: FileDataType
+
+
 class PartType(TypedDict, total=False):
     text: str
     inline_data: BlobType
@@ -38,8 +57,11 @@ class PartType(TypedDict, total=False):
     media_resolution: Literal["low", "medium", "high"]
 
 
-class HttpxFunctionCall(TypedDict):
-    name: str
+class HttpxFunctionCall(TypedDict, total=False):
+    # `id` correlates the corresponding `functionResponse` on Google AI Studio
+    # Gemini 3.5+. Vertex AI and older Gemini models omit/reject this field.
+    id: str
+    name: Required[str]
     args: dict
 
 
@@ -224,6 +246,7 @@ class GenerationConfig(TypedDict, total=False):
     response_mime_type: Literal["text/plain", "application/json"]
     response_schema: dict
     response_json_schema: dict
+    responseFormat: dict
     seed: int
     responseLogprobs: bool
     logprobs: int
@@ -515,8 +538,9 @@ class Instance(TypedDict, total=False):
     video: InstanceVideo
 
 
-class VertexMultimodalEmbeddingRequest(TypedDict):
-    instances: List[Instance]
+class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
+    instances: Required[List[Instance]]
+    parameters: dict
 
 
 class VideoEmbedding(TypedDict):

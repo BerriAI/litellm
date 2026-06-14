@@ -1,6 +1,8 @@
 import json
 from typing import Any, Dict, Optional
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -543,6 +545,78 @@ class TestListToolsRestAPI:
         assert result["error"] is None
         assert result["message"] == "Successfully retrieved tools"
 
+    @pytest.mark.parametrize("upstream_status", [401, 403])
+    async def test_upstream_auth_failure_surfaces_status_and_challenge(
+        self, monkeypatch, upstream_status
+    ):
+        """A single-server pass-through request whose upstream rejects the token
+        must surface the upstream status (401 or 403) plus its WWW-Authenticate
+        challenge, not collapse into a 200 ``unexpected_error`` body."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "passthrough"
+            allowed_tools = None
+            mcp_info = {"server_name": "passthrough"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        challenge = 'Bearer resource_metadata="https://upstream/.well-known"'
+
+        async def fake_get_tools(*args, **kwargs):
+            raise MCPUpstreamAuthError(
+                status_code=upstream_status,
+                www_authenticate=challenge,
+                server_name="passthrough",
+            )
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="server-1",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == upstream_status
+        assert exc_info.value.headers == {"www-authenticate": challenge}
+
     async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
         """When server_id is a name string, it should be resolved to its UUID
         and used for the tools lookup when the UUID is in allowed_server_ids."""
@@ -793,6 +867,25 @@ class TestCallToolRestAPI:
         monkeypatch.setattr(
             "litellm.proxy.proxy_server.add_litellm_data_to_request",
             fake_add_litellm_data_to_request,
+            raising=False,
+        )
+
+        mock_server = MagicMock()
+        mock_server.server_id = "server-1"
+
+        def fake_get_mcp_server_by_id(server_id):
+            return mock_server if server_id == "server-1" else None
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            fake_get_mcp_server_by_id,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_name",
+            lambda *args, **kwargs: None,
             raising=False,
         )
 
@@ -1376,3 +1469,209 @@ class TestEndpointRoleChecks:
             user_api_key_dict=user_key,
         )
         assert result["status"] == "ok"
+
+
+class TestPreviewOpenAPITools:
+    """Verify the OpenAPI preview endpoint emits provider-safe tool names.
+
+    Regression: GitHub's OpenAPI spec uses tag-namespaced operationIds like
+    `actions/download-job-logs-for-workflow-run` which contain '/'. The
+    preview must sanitize so what the dashboard shows matches what gets
+    registered (and what makes it past LLM provider tool-name validation).
+    """
+
+    pytestmark = pytest.mark.asyncio
+
+    async def test_preview_sanitizes_slash_in_operation_id(self, monkeypatch):
+        import re
+
+        async def fake_load_spec(spec_path):  # noqa: ANN001
+            return {
+                "paths": {
+                    "/repos/{owner}/{repo}/actions/jobs/{job_id}/logs": {
+                        "get": {
+                            "operationId": (
+                                "actions/download-job-logs-for-workflow-run"
+                            ),
+                            "summary": "Download job logs",
+                        }
+                    },
+                    "/repos/{owner}/{repo}/pulls/{pull_number}/files": {
+                        "get": {
+                            "operationId": "pulls/list-files",
+                            "summary": "List files",
+                        }
+                    },
+                }
+            }
+
+        from litellm.proxy._experimental.mcp_server import (
+            openapi_to_mcp_generator,
+        )
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator,
+            "load_openapi_spec_async",
+            fake_load_spec,
+            raising=False,
+        )
+
+        payload = NewMCPServerRequest(
+            server_name="github_openapi_mcp",
+            spec_path="https://example.invalid/openapi.json",
+            transport="http",
+        )
+        request = _build_request()
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result.get("error") is None, result
+        names = [t["name"] for t in result["tools"]]
+        anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+        for name in names:
+            assert anthropic_re.match(
+                name
+            ), f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+        assert "actions_download-job-logs-for-workflow-run" in names
+        assert "pulls_list-files" in names
+
+    async def test_preview_method_order_matches_registration(self, monkeypatch):
+        """Preview must iterate HTTP methods in the same order as
+        register_tools_from_openapi, otherwise collision-disambiguation
+        suffixes (_2, _3, ...) get assigned to different operations and the
+        dashboard shows names that differ from what's actually registered.
+        """
+        from litellm.proxy._experimental.mcp_server import (
+            openapi_to_mcp_generator,
+        )
+
+        spec = {
+            "paths": {
+                "/items/{id}": {
+                    "delete": {
+                        "operationId": "items/delete",
+                        "summary": "Delete item",
+                    },
+                    "patch": {
+                        "operationId": "items.delete",
+                        "summary": "Soft-delete item",
+                    },
+                }
+            }
+        }
+
+        async def fake_load_spec(spec_path):  # noqa: ANN001
+            return spec
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator,
+            "load_openapi_spec_async",
+            fake_load_spec,
+            raising=False,
+        )
+
+        payload = NewMCPServerRequest(
+            server_name="collision_openapi_mcp",
+            spec_path="https://example.invalid/openapi.json",
+            transport="http",
+        )
+        request = _build_request()
+        from litellm.proxy._types import LitellmUserRoles
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert result.get("error") is None, result
+        preview_summary_to_name = {t["description"]: t["name"] for t in result["tools"]}
+
+        registered_summary_to_name: dict = {}
+
+        def fake_create_tool_function(
+            path, method, operation, base_url
+        ):  # noqa: ANN001
+            def _f():
+                return None
+
+            return _f
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator,
+            "create_tool_function",
+            fake_create_tool_function,
+        )
+
+        class _StubRegistry:
+            def register_tool(
+                self, name, description, input_schema, handler
+            ):  # noqa: ANN001
+                registered_summary_to_name[description] = name
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator,
+            "global_mcp_tool_registry",
+            _StubRegistry(),
+        )
+
+        openapi_to_mcp_generator.register_tools_from_openapi(
+            spec, base_url="https://example.invalid"
+        )
+
+        assert preview_summary_to_name == registered_summary_to_name, (
+            f"preview {preview_summary_to_name} != "
+            f"registered {registered_summary_to_name} — method iteration "
+            "order is out of sync, so collision suffixes (_2, _3, ...) "
+            "land on different operations"
+        )
+
+
+class TestConnectionErrorMessage:
+    """The test-connection endpoints turn raw transport errors into messages.
+
+    The message is returned to an admin in an API response, so it must explain
+    the failure without echoing the raw header value, which can carry a secret
+    (e.g. ``Authorization: Bearer <token>``).
+    """
+
+    def test_local_protocol_error_is_actionable_and_redacted(self):
+        secret = "Bearer sk-super-secret-token"
+        exc = httpx.LocalProtocolError(f"Illegal header value b' {secret}'")
+
+        message = rest_endpoints._connection_error_message(exc)
+
+        assert "header" in message.lower()
+        assert secret not in message
+
+    def test_connect_error_points_at_reachability(self):
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectError("All connection attempts failed")
+        )
+        assert "unreachable" in message.lower()
+
+    def test_timeout_error_message(self):
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectTimeout("timed out")
+        )
+        assert "unreachable" in message.lower()
+
+    def test_http_status_error_includes_status_code(self):
+        response = httpx.Response(status_code=503)
+        exc = httpx.HTTPStatusError(
+            "server error",
+            request=httpx.Request("POST", "http://x/"),
+            response=response,
+        )
+        message = rest_endpoints._connection_error_message(exc)
+        assert "503" in message
+
+    def test_unknown_error_falls_back_to_generic(self):
+        message = rest_endpoints._connection_error_message(RuntimeError("weird"))
+        assert "weird" not in message
+        assert "proxy logs" in message.lower()

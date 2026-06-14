@@ -9,11 +9,7 @@ interface S3VectorsConfigProps {
   onParamsChange: (params: Record<string, any>) => void;
 }
 
-const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
-  accessToken,
-  providerParams,
-  onParamsChange,
-}) => {
+const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({ accessToken, providerParams, onParamsChange }) => {
   const [embeddingModels, setEmbeddingModels] = useState<ModelGroup[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
 
@@ -86,9 +82,7 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
         }
         required
         validateStatus={
-          providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3
-            ? "error"
-            : undefined
+          providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3 ? "error" : undefined
         }
         help={
           providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3
@@ -175,9 +169,7 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
           size="large"
           showSearch
           loading={isLoadingModels}
-          filterOption={(input, option) =>
-            (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-          }
+          filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
           options={embeddingModels.map((model) => ({
             value: model.model_group,
             label: model.model_group,

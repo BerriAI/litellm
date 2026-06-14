@@ -1,5 +1,5 @@
 """
-Contains utils used by OpenAI compatible endpoints 
+Contains utils used by OpenAI compatible endpoints
 """
 
 from typing import Optional, Set
@@ -29,6 +29,7 @@ def remove_sensitive_info_from_deployment(
     deployment_dict["litellm_params"].pop("api_key", None)
     deployment_dict["litellm_params"].pop("client_secret", None)
     deployment_dict["litellm_params"].pop("vertex_credentials", None)
+    deployment_dict["litellm_params"].pop("vertex_ai_credentials", None)
     deployment_dict["litellm_params"].pop("aws_access_key_id", None)
     deployment_dict["litellm_params"].pop("aws_secret_access_key", None)
 

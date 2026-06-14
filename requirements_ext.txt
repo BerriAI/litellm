@@ -1,0 +1,6 @@
+objgraph==3.6.2
+# rsa
+pycryptodome==3.23.0
+rsa==4.9.1
+prance==25.4.8.0
+openapi-spec-validator==0.7.2

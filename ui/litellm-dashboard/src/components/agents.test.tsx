@@ -15,9 +15,7 @@ vi.mock("./agents/add_agent_form", () => ({
 }));
 
 vi.mock("./agents/agent_card_grid", () => ({
-  default: ({ isAdmin }: { isAdmin: boolean }) => (
-    <div data-testid="agent-card-grid" data-is-admin={String(isAdmin)} />
-  ),
+  default: ({ isAdmin }: { isAdmin: boolean }) => <div data-testid="agent-card-grid" data-is-admin={String(isAdmin)} />,
 }));
 
 // Note: agents.tsx no longer uses AgentCardGrid — it renders a Table directly.

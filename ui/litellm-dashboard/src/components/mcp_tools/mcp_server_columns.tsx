@@ -75,9 +75,7 @@ const HealthStatusBadge: React.FC<{
         onClick={isClickable ? () => onRecheck(server.server_id) : undefined}
       >
         <span>{isHovered && isClickable ? "↻" : getStatusIcon(status)}</span>
-        {isHovered && isClickable
-          ? "Recheck"
-          : status.charAt(0).toUpperCase() + status.slice(1)}
+        {isHovered && isClickable ? "Recheck" : status.charAt(0).toUpperCase() + status.slice(1)}
       </span>
     </Tooltip>
   );
@@ -120,7 +118,9 @@ export const mcpServerColumns = (
               src={logoUrl}
               alt={`${name ?? "MCP"} logo`}
               className="h-5 w-5 rounded object-contain flex-shrink-0"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
             />
           ) : null}
           <span>{name}</span>
@@ -200,9 +200,7 @@ export const mcpServerColumns = (
                 <span className="inline-flex items-center text-xs font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 border border-gray-200 truncate max-w-[140px]">
                   {groups[0]}
                 </span>
-                {groups.length > 1 && (
-                  <span className="text-xs text-gray-400 font-medium">+{groups.length - 1}</span>
-                )}
+                {groups.length > 1 && <span className="text-xs text-gray-400 font-medium">+{groups.length - 1}</span>}
               </div>
             </Tooltip>
           );

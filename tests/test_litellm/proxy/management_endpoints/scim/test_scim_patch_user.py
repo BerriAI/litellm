@@ -42,6 +42,9 @@ async def test_patch_user_updates_fields():
     mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
     mock_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    # active=False triggers cascading key-block. No keys here, so return [].
+    mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_verificationtoken.update_many = AsyncMock(return_value=None)
 
     # Mock the transformation function to return a proper SCIMUser
     mock_scim_user = SCIMUser(
@@ -194,6 +197,8 @@ async def test_patch_user_deprovision_without_path():
     mock_client.db = mock_db
     mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
+    mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_verificationtoken.update_many = AsyncMock(return_value=None)
 
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
@@ -271,6 +276,8 @@ async def test_patch_user_multiple_fields_without_path():
     mock_client.db = mock_db
     mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
+    mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_verificationtoken.update_many = AsyncMock(return_value=None)
 
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],

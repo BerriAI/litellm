@@ -5,6 +5,7 @@ This test suite ensures that all Vertex AI endpoints properly handle the 'global
 which uses a different URL format than regional endpoints.
 
 Regional: https://{region}-aiplatform.googleapis.com/...
+Multi-region: https://aiplatform.{geo}.rep.googleapis.com/...
 Global: https://aiplatform.googleapis.com/...
 """
 
@@ -30,6 +31,8 @@ class TestVertexBaseURL:
             ("europe-west1", "https://europe-west1-aiplatform.googleapis.com"),
             ("asia-northeast1", "https://asia-northeast1-aiplatform.googleapis.com"),
             ("global", "https://aiplatform.googleapis.com"),
+            ("us", "https://aiplatform.us.rep.googleapis.com"),
+            ("eu", "https://aiplatform.eu.rep.googleapis.com"),
         ],
     )
     def test_get_vertex_base_url(self, vertex_location, expected_base_url):

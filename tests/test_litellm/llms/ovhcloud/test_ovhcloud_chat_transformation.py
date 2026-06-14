@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from litellm.llms.ovhcloud.utils import OVHCloudException
+from litellm.utils import get_optional_params
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -144,6 +145,38 @@ class TestOVHCloudConfig:
         assert error.message == "Test error"
         assert error.status_code == 400
 
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "Meta-Llama-3_3-70B-Instruct",
+            "Meta-Llama-3_1-70B-Instruct",
+            "Mixtral-8x7B-Instruct-v0.1",
+            "gpt-oss-120b",
+            "some-model-not-in-the-cost-map",
+        ],
+    )
+    def test_tools_not_filtered_by_static_model_map(self, model):
+        """
+        OVHCloud AI Endpoints are OpenAI-compatible; tools/tool_choice must pass
+        through for any model. The server is responsible for rejecting unsupported
+        tool calls — LiteLLM must not strip them based on a stale static catalog.
+        """
+
+        params = get_optional_params(
+            model=model,
+            custom_llm_provider="ovhcloud",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "x", "parameters": {}},
+                }
+            ],
+            tool_choice="auto",
+        )
+
+        assert "tools" in params
+        assert "tool_choice" in params
+
 
 def test_ovhcloud_integration():
     import os
@@ -259,3 +292,78 @@ def test_ovhcloud_with_custom_base_url():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestOVHCloudReasoningFieldMigration:
+    """Tests for OVHCloud reasoning_content -> reasoning field migration."""
+
+    def test_streaming_new_reasoning_field(self):
+        """New `reasoning` field should be mapped to `reasoning_content`."""
+        handler = OVHCloudChatCompletionStreamingHandler(
+            streaming_response=iter([]),
+                        sync_stream=True,
+        )
+        chunk = {
+            "id": "test-id",
+            "created": 1234567890,
+            "model": "test-model",
+            "choices": [
+                {
+                    "delta": {
+                        "role": "assistant",
+                        "reasoning": "Let me think...",
+                    },
+                    "index": 0,
+                }
+            ],
+        }
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0]["delta"]["reasoning_content"] == "Let me think..."
+
+    def test_streaming_legacy_reasoning_content_unchanged(self):
+        """Legacy `reasoning_content` field should pass through untouched."""
+        handler = OVHCloudChatCompletionStreamingHandler(
+            streaming_response=iter([]),
+                        sync_stream=True,
+        )
+        chunk = {
+            "id": "test-id",
+            "created": 1234567890,
+            "model": "test-model",
+            "choices": [
+                {
+                    "delta": {
+                        "role": "assistant",
+                        "reasoning_content": "Already correct field.",
+                    },
+                    "index": 0,
+                }
+            ],
+        }
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0]["delta"]["reasoning_content"] == "Already correct field."
+
+    def test_streaming_both_fields_legacy_wins(self):
+        """When both fields present, existing `reasoning_content` is not overwritten."""
+        handler = OVHCloudChatCompletionStreamingHandler(
+            streaming_response=iter([]),
+                        sync_stream=True,
+        )
+        chunk = {
+            "id": "test-id",
+            "created": 1234567890,
+            "model": "test-model",
+            "choices": [
+                {
+                    "delta": {
+                        "reasoning": "new field",
+                        "reasoning_content": "legacy field",
+                    },
+                    "index": 0,
+                }
+            ],
+        }
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0]["delta"]["reasoning_content"] == "legacy field"
+
+

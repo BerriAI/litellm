@@ -88,6 +88,7 @@ export enum Providers {
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
   Snowflake = "Snowflake",
+  Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
@@ -104,6 +105,7 @@ export enum Providers {
   WATSONX_TEXT = "Watsonx Text",
   xAI = "xAI",
   XINFERENCE = "Xinference",
+  ZAI = "Z.AI (Zhipu AI)",
 }
 
 export const provider_map: Record<string, string> = {
@@ -197,6 +199,7 @@ export const provider_map: Record<string, string> = {
   Sambanova: "sambanova",
   SAP: "sap",
   Snowflake: "snowflake",
+  Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
@@ -213,6 +216,7 @@ export const provider_map: Record<string, string> = {
   WATSONX_TEXT: "watsonx_text",
   xAI: "xai",
   XINFERENCE: "xinference",
+  ZAI: "zai",
 };
 
 const asset_logos_folder = "../ui/assets/logos/";
@@ -288,6 +292,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
   [Providers.SAP]: `${asset_logos_folder}sap.png`,
   [Providers.Snowflake]: `${asset_logos_folder}snowflake.svg`,
+  [Providers.Soniox]: `${asset_logos_folder}soniox.svg`,
   [Providers.TEXT_COMPLETION_CODESTRAL]: `${asset_logos_folder}mistral.svg`,
   [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
   [Providers.TOPAZ]: `${asset_logos_folder}topaz.svg`,
@@ -372,6 +377,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "watsonx/ibm/granite-3-3-8b-instruct";
   } else if (selectedProvider === Providers.Cursor) {
     return "cursor/claude-4-sonnet";
+  } else if (selectedProvider === Providers.ZAI) {
+    return "zai/glm-4.5";
   } else {
     return "gpt-3.5-turbo";
   }
@@ -391,7 +398,9 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
         const litellmProvider = (value as any)["litellm_provider"];
         if (
           litellmProvider === custom_llm_provider ||
-          (typeof litellmProvider === "string" && litellmProvider.includes(custom_llm_provider))
+          (typeof litellmProvider === "string" &&
+            (litellmProvider.startsWith(`${custom_llm_provider}_`) ||
+              litellmProvider.startsWith(`${custom_llm_provider}-`)))
         ) {
           providerModels.push(key);
         }

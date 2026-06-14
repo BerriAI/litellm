@@ -36,9 +36,7 @@ export const getMarketplaceTableColumns = (
             </div>
             {/* Show description on mobile */}
             <div className="md:hidden">
-              <Text className="text-xs text-gray-600">
-                {plugin.description || "No description"}
-              </Text>
+              <Text className="text-xs text-gray-600">{plugin.description || "No description"}</Text>
             </div>
           </div>
         );
@@ -52,11 +50,7 @@ export const getMarketplaceTableColumns = (
       cell: ({ row }) => {
         const plugin = row.original;
 
-        return (
-          <Text className="text-xs line-clamp-2">
-            {plugin.description || "-"}
-          </Text>
-        );
+        return <Text className="text-xs line-clamp-2">{plugin.description || "-"}</Text>;
       },
       meta: {
         className: "hidden md:table-cell",

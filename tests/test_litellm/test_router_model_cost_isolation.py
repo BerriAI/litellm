@@ -7,8 +7,10 @@ and one has explicit zero-cost pricing in model_info, the other deployment
 should still use the built-in pricing.
 """
 
+import copy
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -18,6 +20,17 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.utils import _invalidate_model_cost_lowercase_map
+
+
+def _restore_model_cost_entries(original_entries):
+    for key, value in original_entries.items():
+        if value is None:
+            litellm.model_cost.pop(key, None)
+        else:
+            litellm.model_cost[key] = value
+    _invalidate_model_cost_lowercase_map()
 
 
 def test_should_not_pollute_shared_key_with_zero_cost_pricing():
@@ -266,3 +279,126 @@ def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
         f"Order should not matter. Expected {builtin_output_cost}, "
         f"got {info_std_2['output_cost_per_token']}"
     )
+
+
+def test_responses_prefix_stripped_alias_registered_for_model_list():
+    """
+    Register ``litellm.model_cost`` under the backend key with ``responses/`` and
+    under the stripped key (``responses_api_bridge_check`` removes that segment).
+    """
+    uid = "responses-strip-alias-test-a1b2c3d4"
+    Router(
+        model_list=[
+            {
+                "model_name": "azure-responses-strip-test",
+                "litellm_params": {
+                    "model": "responses/gpt-strip-test-a1b2c3d4",
+                    "custom_llm_provider": "azure",
+                    "api_key": "fake-key-strip",
+                },
+                "model_info": {
+                    "id": uid,
+                    "supports_native_streaming": True,
+                },
+            }
+        ],
+    )
+    assert "azure/responses/gpt-strip-test-a1b2c3d4" in litellm.model_cost
+    assert "azure/gpt-strip-test-a1b2c3d4" in litellm.model_cost
+    assert (
+        litellm.model_cost["azure/gpt-strip-test-a1b2c3d4"].get(
+            "supports_native_streaming"
+        )
+        is True
+    )
+
+
+def test_responses_prefix_stripped_alias_registered_for_add_deployment():
+    """Dynamic ``add_deployment`` must mirror ``_create_deployment`` registration."""
+    uid = "add-dep-responses-strip-e5f6a7b8"
+    router = Router(model_list=[])
+    deployment = Deployment(
+        model_name="dyn-responses-strip",
+        litellm_params=LiteLLM_Params(
+            model="responses/gpt-add-strip-e5f6a7b8",
+            custom_llm_provider="azure",
+            api_key="fake-key-add",
+        ),
+        model_info=ModelInfo(id=uid, supports_native_streaming=True),
+    )
+    router.add_deployment(deployment=deployment)
+    assert "azure/responses/gpt-add-strip-e5f6a7b8" in litellm.model_cost
+    assert "azure/gpt-add-strip-e5f6a7b8" in litellm.model_cost
+    assert (
+        litellm.model_cost["azure/gpt-add-strip-e5f6a7b8"].get(
+            "supports_native_streaming"
+        )
+        is True
+    )
+
+
+def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
+    """
+    ChatGPT aliases that share the same backend model should not be able to
+    downgrade the shared backend key from responses -> chat during router setup.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    backend_model = "chatgpt/gpt-5.4"
+    model_keys = {
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+        "chatgpt-shared-mode-base": copy.deepcopy(
+            litellm.model_cost.get("chatgpt-shared-mode-base")
+        ),
+        "chatgpt-shared-mode-alias": copy.deepcopy(
+            litellm.model_cost.get("chatgpt-shared-mode-alias")
+        ),
+    }
+
+    try:
+        backend_entry = copy.deepcopy(model_keys[backend_model]) or {}
+        backend_entry["litellm_provider"] = "chatgpt"
+        backend_entry["mode"] = "responses"
+        litellm.model_cost[backend_model] = backend_entry
+        _invalidate_model_cost_lowercase_map()
+
+        router = Router(model_list=[])
+        with patch.object(
+            Router, "_add_deployment", lambda self, deployment: deployment
+        ):
+            router._create_deployment(
+                deployment_info={},
+                _model_name="chatgpt/gpt-5.4",
+                _litellm_params={
+                    "model": "gpt-5.4",
+                    "custom_llm_provider": "chatgpt",
+                },
+                _model_info={
+                    "id": "chatgpt-shared-mode-base",
+                    "mode": "responses",
+                },
+            )
+            router._create_deployment(
+                deployment_info={},
+                _model_name="chatgpt/gpt-5.4-medium",
+                _litellm_params={
+                    "model": "gpt-5.4",
+                    "custom_llm_provider": "chatgpt",
+                },
+                _model_info={
+                    "id": "chatgpt-shared-mode-alias",
+                    "mode": "chat",
+                },
+            )
+
+        assert litellm.model_cost[backend_model]["mode"] == "responses"
+        assert "mode" in litellm.model_cost[backend_model]
+
+        bridge_model_info, bridge_model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="chatgpt",
+        )
+        assert bridge_model == "gpt-5.4"
+        assert bridge_model_info["mode"] == "responses"
+    finally:
+        _restore_model_cost_entries(model_keys)

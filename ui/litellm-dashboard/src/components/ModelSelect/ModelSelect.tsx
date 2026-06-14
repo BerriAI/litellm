@@ -54,7 +54,10 @@ const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextAr
 
   team: ({ allProxyModels, selectedOrganization, userModels }) => {
     if (selectedOrganization) {
-      if (selectedOrganization.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) || selectedOrganization.models.length === 0) {
+      if (
+        selectedOrganization.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
+        selectedOrganization.models.length === 0
+      ) {
         return allProxyModels;
       }
       return allProxyModels.filter((model) => selectedOrganization.models.includes(model));
@@ -100,10 +103,11 @@ export const ModelSelect = (props: ModelSelectProps) => {
   const isSpecialOption = (value: string) => MODEL_SELECT_SPECIAL_VALUES_ARRAY.some((sv) => sv.value === value);
   const hasSpecialOptionSelected = value.some(isSpecialOption);
   const isLoading = isLoadingAllProxyModels || isLoadingTeam || isLoadingOrganization || isCurrentUserLoading;
-  const organizationHasAllProxyModels = organization?.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) || organization?.models.length === 0;
+  const organizationHasAllProxyModels =
+    organization?.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
+    organization?.models.length === 0;
   const shouldShowAllProxyModels =
-    showAllProxyModelsOverride ||
-    (organizationHasAllProxyModels && includeSpecialOptions) || context === "global";
+    showAllProxyModelsOverride || (organizationHasAllProxyModels && includeSpecialOptions) || context === "global";
 
   if (isLoading) {
     return <Skeleton.Input active block />;
@@ -141,53 +145,55 @@ export const ModelSelect = (props: ModelSelectProps) => {
       onChange={handleChange}
       style={style}
       options={[
-        includeSpecialOptions
-          ? {
-            label: <span>Special Options</span>,
-            title: "Special Options",
-            options: [
-              ...(shouldShowAllProxyModels
-                ? [
+        ...(includeSpecialOptions
+          ? [
+              {
+                label: <span>Special Options</span>,
+                title: "Special Options",
+                options: [
+                  ...(shouldShowAllProxyModels
+                    ? [
+                        {
+                          label: <span>All Proxy Models</span>,
+                          value: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
+                          disabled:
+                            value.length > 0 &&
+                            value.some(
+                              (v) => isSpecialOption(v) && v !== MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
+                            ),
+                          key: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
+                        },
+                      ]
+                    : []),
                   {
-                    label: <span>All Proxy Models</span>,
-                    value: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
+                    label: <span>No Default Models</span>,
+                    value: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
                     disabled:
                       value.length > 0 &&
-                      value.some(
-                        (v) => isSpecialOption(v) && v !== MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
-                      ),
-                    key: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
+                      value.some((v) => isSpecialOption(v) && v !== MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value),
+                    key: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
                   },
-                ]
-                : []),
-              {
-                label: <span>No Default Models</span>,
-                value: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
-                disabled:
-                  value.length > 0 &&
-                  value.some((v) => isSpecialOption(v) && v !== MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value),
-                key: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
+                ],
               },
-            ],
-          }
-          : [],
+            ]
+          : []),
         ...(wildcard.length > 0
           ? [
-            {
-              label: <span>Wildcard Options</span>,
-              title: "Wildcard Options",
-              options: wildcard.map((model) => {
-                const provider = model.replace("/*", "");
-                const capitalizedProvider = provider.charAt(0).toUpperCase() + provider.slice(1);
+              {
+                label: <span>Wildcard Options</span>,
+                title: "Wildcard Options",
+                options: wildcard.map((model) => {
+                  const provider = model.replace("/*", "");
+                  const capitalizedProvider = provider.charAt(0).toUpperCase() + provider.slice(1);
 
-                return {
-                  label: <span>{`All ${capitalizedProvider} models`}</span>,
-                  value: model,
-                  disabled: hasSpecialOptionSelected,
-                };
-              }),
-            },
-          ]
+                  return {
+                    label: <span>{`All ${capitalizedProvider} models`}</span>,
+                    value: model,
+                    disabled: hasSpecialOptionSelected,
+                  };
+                }),
+              },
+            ]
           : []),
         {
           label: <span>Models</span>,
