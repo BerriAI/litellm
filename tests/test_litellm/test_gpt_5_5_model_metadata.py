@@ -63,4 +63,6 @@ def test_azure_ai_gpt_5_5_backup_matches_main():
         backup_cost = json.load(f)
 
     for model in ("azure_ai/gpt-5.5", "azure_ai/gpt-5.5-2026-04-23"):
-        assert backup_cost.get(model) == main_cost.get(model)
+        assert backup_cost.get(model) == main_cost.get(
+            model
+        ), f"{model} differs between main and backup model cost maps"
