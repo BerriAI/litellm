@@ -1305,7 +1305,7 @@ def test_get_model_info_forward_custom_tier_thresholds():
     must survive get_model_info instead of being silently dropped when N
     is not one of the hard-coded values (128k/200k/272k/512k).
 
-    See: https://github.com/ylcnymn/litellm/issues/30344
+    See: https://github.com/BerriAI/litellm/issues/30344
     """
     import litellm
     from litellm.utils import _get_model_info_helper
@@ -1325,13 +1325,18 @@ def test_get_model_info_forward_custom_tier_thresholds():
         }
     })
 
-    info = litellm.get_model_info(model=model_name, custom_llm_provider="openai")
+    try:
+        info = litellm.get_model_info(model=model_name, custom_llm_provider="openai")
 
-    # The custom tier must survive round-trip through get_model_info
-    assert info.get(custom_tier_key) == 9e-6, (
-        f"Custom tier '{custom_tier_key}' was dropped by get_model_info; "
-        f"got {info.get(custom_tier_key)}"
-    )
+        # The custom tier must survive round-trip through get_model_info
+        assert info.get(custom_tier_key) == 9e-6, (
+            f"Custom tier '{custom_tier_key}' was dropped by get_model_info; "
+            f"got {info.get(custom_tier_key)}"
+        )
+    finally:
+        # Teardown: remove the test model from global state
+        if hasattr(litellm, "model_cost"):
+            litellm.model_cost.pop(model_name, None)
 
 
 @pytest.mark.parametrize(
