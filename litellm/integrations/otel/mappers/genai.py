@@ -7,7 +7,8 @@ Each span kind declares its schema as a flat ``attribute key -> extractor``
 table: one lambda per mapping operation, applied against the typed span data.
 """
 
-from typing import Callable
+import json
+from typing import Callable, Mapping
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import collect, drop_none
@@ -80,6 +81,14 @@ class GenAIMapper:
         LiteLLM.REQUEST_STREAMING: lambda d: d.is_streaming,
     }
 
+    # Prompt/response content, serialized into the OTel GenAI message schema.
+    # Populated only when content capture is enabled — otherwise ``messages_in``
+    # and ``choices_out`` arrive empty and these resolve to ``None``.
+    _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
+        GenAI.INPUT_MESSAGES: lambda d: _input_messages(d.messages_in),
+        GenAI.OUTPUT_MESSAGES: lambda d: _output_messages(d.choices_out),
+    }
+
     _TOOL_ATTRS: dict[str, Callable[[ToolDefinition], AttrValue | None]] = {
         "name": lambda t: t.name,
         "description": lambda t: t.description or None,
@@ -137,17 +146,21 @@ class GenAIMapper:
 
     @classmethod
     def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
-        attrs = collect(cls._LLM_CALL_ATTRS, data)
-        attrs.update(
-            drop_none(
-                {
-                    f"gen_ai.tool.{idx}.{suffix}": extract(tool)
-                    for idx, tool in enumerate(data.tools)
-                    for suffix, extract in cls._TOOL_ATTRS.items()
-                }
-            )
+        return {
+            **collect(cls._LLM_CALL_ATTRS, data),
+            **collect(cls._BLOB_ATTRS, data),
+            **cls._tools(data),
+        }
+
+    @classmethod
+    def _tools(cls, data: LLMCallSpanData) -> AttributeMap:
+        return drop_none(
+            {
+                f"gen_ai.tool.{idx}.{suffix}": extract(tool)
+                for idx, tool in enumerate(data.tools)
+                for suffix, extract in cls._TOOL_ATTRS.items()
+            }
         )
-        return attrs
 
     @classmethod
     def _guardrail(cls, data: GuardrailSpanData) -> AttributeMap:
@@ -171,3 +184,108 @@ class GenAIMapper:
             }
         )
         return attrs
+
+
+# --- OTel GenAI message serialization ---------------------------------------- #
+#
+# ``gen_ai.input.messages`` / ``gen_ai.output.messages`` carry a list of
+# ``{"role", "parts": [...]}`` objects, where each part is a typed fragment
+# (``text``, ``tool_call``, ``tool_call_response``). Spans can't hold nested
+# structures, so the list is serialized to a JSON string (the convention's
+# documented fallback). Output messages add the choice's ``finish_reason``.
+
+
+def _input_messages(messages: tuple[Mapping[str, object], ...]) -> str | None:
+    return json.dumps([_input_message(m) for m in messages]) if messages else None
+
+
+def _output_messages(choices: tuple[Mapping[str, object], ...]) -> str | None:
+    return json.dumps([_output_message(c) for c in choices]) if choices else None
+
+
+def _input_message(message: Mapping[str, object]) -> Mapping[str, object]:
+    return _prune({"role": _as_str(message.get("role")), "parts": _parts(message)})
+
+
+def _output_message(choice: Mapping[str, object]) -> Mapping[str, object]:
+    message = _as_mapping(choice.get("message"))
+    return _prune(
+        {
+            "role": _as_str(message.get("role")) or "assistant",
+            "parts": _parts(message),
+            "finish_reason": _as_str(choice.get("finish_reason")),
+        }
+    )
+
+
+def _parts(message: Mapping[str, object]) -> list[Mapping[str, object]]:
+    if message.get("role") == "tool":
+        return [_tool_response_part(message)]
+    return [
+        *_text_parts(message.get("content")),
+        *_tool_call_parts(message.get("tool_calls")),
+    ]
+
+
+def _text_parts(content: object) -> list[Mapping[str, object]]:
+    if isinstance(content, str):
+        return [{"type": "text", "content": content}] if content else []
+    if not isinstance(content, list):
+        return []
+    texts = (
+        part.get("text")
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "text"
+    )
+    return [{"type": "text", "content": t} for t in texts if isinstance(t, str) and t]
+
+
+def _tool_call_parts(tool_calls: object) -> list[Mapping[str, object]]:
+    if not isinstance(tool_calls, list):
+        return []
+    return [_tool_call_part(c) for c in tool_calls if isinstance(c, dict)]
+
+
+def _tool_call_part(call: Mapping[str, object]) -> Mapping[str, object]:
+    function = _as_mapping(call.get("function"))
+    return _prune(
+        {
+            "type": "tool_call",
+            "id": _as_str(call.get("id")),
+            "name": _as_str(function.get("name")),
+            "arguments": _maybe_json(function.get("arguments")),
+        }
+    )
+
+
+def _tool_response_part(message: Mapping[str, object]) -> Mapping[str, object]:
+    return _prune(
+        {
+            "type": "tool_call_response",
+            "id": _as_str(message.get("tool_call_id")),
+            "result": message.get("content"),
+        }
+    )
+
+
+def _maybe_json(value: object) -> object:
+    """Parse a JSON-string ``arguments`` blob into structured form; pass through
+    anything that isn't valid JSON so the raw value survives."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except ValueError:
+        return value
+
+
+def _as_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _prune(values: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in values.items() if value is not None}

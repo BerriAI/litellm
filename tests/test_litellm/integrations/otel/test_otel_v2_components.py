@@ -2,6 +2,8 @@
 baggage helpers, metrics, the typed coercion helpers, mapper branches, span-name
 builders, and the registry validator's failure paths. Needs the OTel SDK."""
 
+import json
+
 import pytest
 
 pytest.importorskip("opentelemetry")
@@ -280,6 +282,128 @@ def test_genai_mapper_cost_breakdown_absent():
         k.startswith(LiteLLM.COST_PREFIX) and k != f"{LiteLLM.COST_PREFIX}total"
         for k in attrs
     )
+
+
+def _llm_call_with_content(**overrides):
+    base = dict(
+        operation=GenAIOperation.CHAT,
+        provider="openai",
+        request_model="gpt-4o",
+        response_model="gpt-4o-2024",
+        response_id="resp_1",
+        request_params=LLMRequestParams(),
+        usage=LLMUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        finish_reasons=("stop",),
+        error=None,
+        response_cost=None,
+        server=None,
+        identity=RequestIdentity(call_id="c1"),
+        messages_in=(
+            {"role": "system", "content": "Be concise."},
+            {"role": "user", "content": "Weather in Paris?"},
+        ),
+        choices_out=(
+            {
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "Sunny."},
+            },
+        ),
+    )
+    base.update(overrides)
+    return LLMCallSpanData(**base)
+
+
+def test_genai_mapper_input_messages_use_parts_schema():
+    attrs = GenAIMapper().map(_llm_call_with_content())
+    assert json.loads(attrs[GenAI.INPUT_MESSAGES]) == [
+        {"role": "system", "parts": [{"type": "text", "content": "Be concise."}]},
+        {"role": "user", "parts": [{"type": "text", "content": "Weather in Paris?"}]},
+    ]
+
+
+def test_genai_mapper_output_messages_carry_finish_reason():
+    attrs = GenAIMapper().map(_llm_call_with_content())
+    assert json.loads(attrs[GenAI.OUTPUT_MESSAGES]) == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "Sunny."}],
+            "finish_reason": "stop",
+        }
+    ]
+
+
+def test_genai_mapper_omits_messages_when_content_not_captured():
+    # Capture off → payload builds empty tuples → no message attributes stamped.
+    attrs = GenAIMapper().map(_llm_call_with_content(messages_in=(), choices_out=()))
+    assert GenAI.INPUT_MESSAGES not in attrs
+    assert GenAI.OUTPUT_MESSAGES not in attrs
+
+
+def test_genai_mapper_multimodal_keeps_text_parts_only():
+    data = _llm_call_with_content(
+        messages_in=(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe "},
+                    {"type": "image_url", "image_url": {"url": "data:..."}},
+                    {"type": "text", "text": "this"},
+                ],
+            },
+        )
+    )
+    (message,) = json.loads(GenAIMapper().map(data)[GenAI.INPUT_MESSAGES])
+    assert message["parts"] == [
+        {"type": "text", "content": "describe "},
+        {"type": "text", "content": "this"},
+    ]
+
+
+def test_genai_mapper_assistant_tool_call_becomes_tool_call_part():
+    data = _llm_call_with_content(
+        choices_out=(
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_42",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city": "Paris"}',
+                            },
+                        }
+                    ],
+                },
+            },
+        )
+    )
+    (message,) = json.loads(GenAIMapper().map(data)[GenAI.OUTPUT_MESSAGES])
+    assert message["finish_reason"] == "tool_calls"
+    # ``arguments`` is parsed from the JSON-string blob into structured form.
+    assert message["parts"] == [
+        {
+            "type": "tool_call",
+            "id": "call_42",
+            "name": "get_weather",
+            "arguments": {"city": "Paris"},
+        }
+    ]
+
+
+def test_genai_mapper_tool_result_message_becomes_response_part():
+    data = _llm_call_with_content(
+        messages_in=(
+            {"role": "tool", "tool_call_id": "call_42", "content": "21C and sunny"},
+        )
+    )
+    (message,) = json.loads(GenAIMapper().map(data)[GenAI.INPUT_MESSAGES])
+    assert message["role"] == "tool"
+    assert message["parts"] == [
+        {"type": "tool_call_response", "id": "call_42", "result": "21C and sunny"}
+    ]
 
 
 def test_llm_cost_from_breakdown_maps_costbreakdown_keys():
