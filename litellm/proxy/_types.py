@@ -2397,6 +2397,17 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "`statement_cache_size`). Keys here override any default LiteLLM sets."
         ),
     )
+    database_disable_prepared_statements: Optional[bool] = Field(
+        None,
+        description=(
+            "Disable server-side prepared statements by setting Prisma's "
+            "`pgbouncer=true` URL param. Use this for pgbouncer transaction-pooling "
+            "deployments, or to prevent the 'cached plan must not change result "
+            "type' error that pooled connections hit during rolling schema "
+            "migrations. An explicit `pgbouncer` in `database_extra_connection_params` "
+            "takes precedence."
+        ),
+    )
     database_type: Optional[Literal["dynamo_db"]] = Field(
         None, description="to use dynamodb instead of postgres db"
     )
@@ -2532,6 +2543,24 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_required_fields: Optional[List[str]] = Field(
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
+    )
+    disable_budget_reservation: Optional[bool] = Field(
+        None,
+        description=(
+            "If True, disables the optimistic per-request budget reservation "
+            "introduced in v1.84.0. "
+            "WARNING: This weakens hard budget enforcement. Without the reservation, "
+            "a burst of concurrent requests from a single key can each pass the "
+            "read-time spend check before any of them is charged, allowing a "
+            "configured budget to be exceeded under high concurrency. "
+            "Budgets are still evaluated on every request at read time, so "
+            "an already-exhausted budget is still rejected. "
+            "Enable only if your deployment is experiencing phantom "
+            "BudgetExceededError responses caused by leaked reservations "
+            "(see GitHub issue #27639). "
+            "A proxy-level WARNING is logged on every request while this flag "
+            "is active as a reminder that hard enforcement is relaxed."
+        ),
     )
 
 

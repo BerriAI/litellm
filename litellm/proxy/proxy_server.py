@@ -10907,16 +10907,26 @@ def get_direct_access_models(
     return direct_access_models
 
 
-async def get_all_team_and_direct_access_models(
+def _filter_models_to_user_accessible(all_models: List[Dict]) -> List[Dict]:
+    """Keep only deployments the caller can use via direct access or team membership."""
+    return [
+        _model
+        for _model in all_models
+        if _model.get("model_info", {}).get("direct_access", False)
+        or _model.get("model_info", {}).get("access_via_team_ids", [])
+    ]
+
+
+async def _populate_team_access_on_models(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     llm_router: Router,
     all_models: List[Dict],
 ) -> List[Dict]:
     """
-    Get all models across all teams user is in.
+    Populate `model_info.access_via_team_ids` and `model_info.direct_access`
+    without filtering the model list.
     """
-
     user_teams: Optional[Union[List[str], Literal["*"]]] = None
     direct_access_models: List[str] = []
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
@@ -10935,7 +10945,6 @@ async def get_all_team_and_direct_access_models(
                 user_db_object=user_object,
                 llm_router=llm_router,
             )
-    ## ADD ACCESS_VIA_TEAM_IDS TO ALL MODELS
     if user_teams is not None:
         team_models = await get_all_team_models(
             user_teams=user_teams,
@@ -10958,21 +10967,31 @@ async def get_all_team_and_direct_access_models(
                         model_id, []
                     )
 
-    ## ADD DIRECT_ACCESS TO RELEVANT MODELS
-
+    direct_access_model_ids = set(direct_access_models)
     for _model in all_models:
         model_id = _model.get("model_info", {}).get("id", None)
-        if model_id is not None and model_id in direct_access_models:
-            _model["model_info"]["direct_access"] = True
+        if model_id is not None:
+            _model["model_info"]["direct_access"] = model_id in direct_access_model_ids
 
-    ## FILTER OUT MODELS THAT ARE NOT IN DIRECT_ACCESS_MODELS OR ACCESS_VIA_TEAM_IDS - only show user models they can call
-    all_models = [
-        _model
-        for _model in all_models
-        if _model.get("model_info", {}).get("direct_access", False)
-        or _model.get("model_info", {}).get("access_via_team_ids", [])
-    ]
     return all_models
+
+
+async def get_all_team_and_direct_access_models(
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    llm_router: Router,
+    all_models: List[Dict],
+) -> List[Dict]:
+    """
+    Get all models across all teams user is in.
+    """
+    all_models = await _populate_team_access_on_models(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        llm_router=llm_router,
+        all_models=all_models,
+    )
+    return _filter_models_to_user_accessible(all_models)
 
 
 def _enrich_model_info_with_litellm_data(
@@ -11081,6 +11100,22 @@ async def _get_caller_byok_team_scope(
     if user_row is None:
         return set()
     return set(user_row.teams or [])
+
+
+def _byok_row_outside_caller_teams(
+    model_info_dict: Dict[str, Any], allowed_team_ids: Optional[Set[str]]
+) -> bool:
+    """Whether a team BYOK row belongs to a team the caller is not a member of.
+
+    `team_id` is only set on team BYOK rows; non-team rows fall through
+    unaffected. `allowed_team_ids is None` means no scoping (e.g. admins).
+    """
+    if allowed_team_ids is None:
+        return False
+    team_id = model_info_dict.get("team_id")
+    if team_id is None:
+        return False
+    return team_id not in allowed_team_ids
 
 
 # Hard cap on rows the DB-side BYOK search may pull when results need to be
@@ -11204,15 +11239,7 @@ async def _apply_search_filter_to_models(
     )
 
     def _is_byok_outside_caller_teams(model_info_dict: Dict[str, Any]) -> bool:
-        # `team_id` is only set on team BYOK rows. Non-team rows fall
-        # through unaffected — they are gated by other paths (router
-        # membership, direct_access, include_team_models).
-        if allowed_team_ids is None:
-            return False
-        team_id = model_info_dict.get("team_id")
-        if team_id is None:
-            return False
-        return team_id not in allowed_team_ids
+        return _byok_row_outside_caller_teams(model_info_dict, allowed_team_ids)
 
     def _model_matches_search(m: Dict[str, Any]) -> bool:
         # Team BYOK models persist an internal `model_name`
@@ -11875,6 +11902,9 @@ async def model_info_v2(
     # Update total count to include agents
     search_total_count = len(all_models)
 
+    # Translate `model_name` to the public name for team-scoped rows.
+    all_models = [_translate_model_name_for_response(m) for m in all_models]
+
     return _paginate_models_response(
         all_models=all_models,
         page=page,
@@ -12309,6 +12339,99 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
+def _deployment_matches_allowed_model_names(
+    model: Dict[str, Any], allowed_model_names: Set[str]
+) -> bool:
+    """Match a router deployment against allowed public model names.
+
+    Team-scoped rows store an internal routing key in ``model_name``; callers
+    with key/team restrictions still refer to the public name in
+    ``model_info.team_public_model_name``.
+    """
+    if model.get("model_name") in allowed_model_names:
+        return True
+    model_info = model.get("model_info")
+    if not isinstance(model_info, dict):
+        return False
+    team_public_model_name = model_info.get("team_public_model_name")
+    return (
+        isinstance(team_public_model_name, str)
+        and team_public_model_name in allowed_model_names
+    )
+
+
+def _get_v1_model_info_allowed_model_names(
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router,
+) -> Optional[Set[str]]:
+    """Return key/team allowlisted public model names, or None if unrestricted."""
+    model_access_groups = llm_router.get_model_access_groups()
+    proxy_model_list = llm_router.get_model_names()
+    key_models = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    team_models = get_team_models(
+        team_models=user_api_key_dict.team_models,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    if not key_models and not team_models:
+        return None
+    return set(
+        get_complete_model_list(
+            key_models=key_models,
+            team_models=team_models,
+            proxy_model_list=proxy_model_list,
+            user_model=user_model,
+            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+            llm_router=llm_router,
+            return_wildcard_routes=False,
+        )
+    )
+
+
+def _filter_v1_model_info_deployments(
+    all_models: List[dict],
+    allowed_model_names: Optional[Set[str]],
+) -> List[dict]:
+    if allowed_model_names is None:
+        return all_models
+    return [
+        model
+        for model in all_models
+        if _deployment_matches_allowed_model_names(model, allowed_model_names)
+    ]
+
+
+def _translate_model_name_for_response(model: dict) -> dict:
+    """For team-scoped DB rows, replace `model_name` with the public name
+    in `model_info.team_public_model_name` before returning. The DB column
+    and the in-memory router index keep the internal mangled name
+    (`model_name_{team_id}_{uuid}`) as the routing key -- this swap is a
+    presentation-layer concern. Returns a shallow copy; never mutates.
+
+    Without this swap the internal name leaks into `/v1/model/info` and
+    `/v2/model/info`, the dashboard binds its edit form to it, and a
+    non-rename save round-trips the internal name back -- corrupting
+    `team_public_model_name` and the team ACL (see issue #28382).
+    """
+    if not isinstance(model, dict):
+        return model
+    model_info = model.get("model_info") or {}
+    if not isinstance(model_info, dict):
+        return model
+    team_public = model_info.get("team_public_model_name")
+    team_id = model_info.get("team_id")
+    if not team_public or not team_id:
+        return model
+    current = model.get("model_name") or ""
+    if not current.startswith(f"model_name_{team_id}_"):
+        return model
+    return {**model, "model_name": team_public}
+
+
 def _get_proxy_model_info(model: dict) -> dict:
     # provided model_info in config.yaml
     model_info = model.get("model_info", {})
@@ -12349,7 +12472,7 @@ def _get_proxy_model_info(model: dict) -> dict:
         deployment_dict=model, excluded_keys={"litellm_credential_name"}
     )
 
-    return model
+    return _translate_model_name_for_response(model)
 
 
 @router.get(
@@ -12365,6 +12488,14 @@ def _get_proxy_model_info(model: dict) -> dict:
 async def model_info_v1(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_model_id: Optional[str] = None,
+    include_team_models: Optional[bool] = fastapi.Query(
+        False,
+        description="When true, filter to deployments the caller can use via direct access or team membership.",
+    ),
+    teamId: Optional[str] = fastapi.Query(
+        None,
+        description="Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids",
+    ),
 ):
     """
     Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)
@@ -12374,6 +12505,11 @@ async def model_info_v1(  # noqa: PLR0915
 
         - When litellm_model_id is passed, it will return the info for that specific model
         - When litellm_model_id is not passed, it will return the info for all models
+        - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
+        - teamId: Filter to models accessible by the given team.
+
+    Each model in the list response includes `model_info.access_via_team_ids` and
+    `model_info.direct_access` when the proxy database is connected.
 
     Returns:
         Returns a dictionary containing information about each model.
@@ -12399,6 +12535,12 @@ async def model_info_v1(  # noqa: PLR0915
     ```
     """
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router, user_model
+
+    # Unit tests call this handler directly; FastAPI normally resolves Query defaults.
+    if not isinstance(include_team_models, bool):
+        include_team_models = False
+    if not isinstance(teamId, str):
+        teamId = None
 
     if user_model is not None:
         # user is trying to get specific model from litellm router
@@ -12436,6 +12578,14 @@ async def model_info_v1(  # noqa: PLR0915
             },
         )
 
+    if prisma_client is None and (
+        include_team_models or (teamId is not None and teamId.strip())
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
     if litellm_model_id is not None:
         # user is trying to get specific model from litellm router
         deployment_info = llm_router.get_deployment(model_id=litellm_model_id)
@@ -12449,48 +12599,82 @@ async def model_info_v1(  # noqa: PLR0915
         _deployment_info_dict = _get_proxy_model_info(
             model=deployment_info.model_dump(exclude_none=True)
         )
-        return {"data": [_deployment_info_dict]}
+        single_model_list: List[dict] = [_deployment_info_dict]
+        if prisma_client is not None:
+            single_model_list = await _populate_team_access_on_models(
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                llm_router=llm_router,
+                all_models=single_model_list,
+            )
+            if include_team_models:
+                single_model_list = _filter_models_to_user_accessible(single_model_list)
+            if teamId is not None and teamId.strip():
+                single_model_list = await _filter_models_by_team_id(
+                    all_models=single_model_list,
+                    team_id=teamId.strip(),
+                    prisma_client=prisma_client,
+                    llm_router=llm_router,
+                    user_api_key_dict=user_api_key_dict,
+                )
+        return {"data": single_model_list}
 
-    all_models: List[dict] = []
-    model_access_groups: Dict[str, List[str]] = defaultdict(list)
-    ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
-    if llm_router is None:
-        proxy_model_list = []
-    else:
-        proxy_model_list = llm_router.get_model_names()
-        model_access_groups = llm_router.get_model_access_groups()
-    key_models = get_key_models(
+    # Return router deployments (same source as /v2/model/info), not wildcard-
+    # expanded model names from get_complete_model_list(). Team-scoped rows
+    # use internal routing keys (model_name_{team_id}_{uuid}) and were omitted
+    # when v1 resolved models only via public model_name strings.
+    all_models: List[dict] = copy.deepcopy(llm_router.model_list)
+    allowed_model_names = _get_v1_model_info_allowed_model_names(
         user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
-    team_models = get_team_models(
-        team_models=user_api_key_dict.team_models,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
-    all_models_str = get_complete_model_list(
-        key_models=key_models,
-        team_models=team_models,
-        proxy_model_list=proxy_model_list,
-        user_model=user_model,
-        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         llm_router=llm_router,
     )
 
-    if len(all_models_str) > 0:
-        _relevant_models = []
-        for model in all_models_str:
-            router_models = llm_router.get_model_list(model_name=model)
-            if router_models is not None:
-                _relevant_models.extend(router_models)
-        if llm_model_list is not None:
-            all_models = copy.deepcopy(_relevant_models)  # type: ignore
-        else:
-            all_models = []
+    all_models = _filter_v1_model_info_deployments(
+        all_models=all_models,
+        allowed_model_names=allowed_model_names,
+    )
 
-    for in_place_model in all_models:
-        in_place_model = _get_proxy_model_info(model=in_place_model)
+    # Team BYOK deployments carry an internal routing key and other teams'
+    # public name/team_id/api_base; drop the ones the caller cannot access so
+    # listing the full router model_list does not leak cross-team metadata.
+    allowed_team_ids = await _get_caller_byok_team_scope(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+    all_models = [
+        model
+        for model in all_models
+        if not _byok_row_outside_caller_teams(
+            model.get("model_info") or {}, allowed_team_ids
+        )
+    ]
+
+    if prisma_client is not None:
+        all_models = await _populate_team_access_on_models(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+            all_models=all_models,
+        )
+
+    if include_team_models:
+        all_models = _filter_models_to_user_accessible(all_models)
+
+    all_models = [
+        _translate_model_name_for_response(
+            _enrich_model_info_with_litellm_data(model=model, llm_router=llm_router)
+        )
+        for model in all_models
+    ]
+
+    if teamId is not None and teamId.strip():
+        all_models = await _filter_models_by_team_id(
+            all_models=all_models,
+            team_id=teamId.strip(),
+            prisma_client=cast(PrismaClient, prisma_client),
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
