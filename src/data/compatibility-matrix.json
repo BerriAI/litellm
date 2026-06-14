@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "generated_at": "2026-05-21T06:19:19Z",
+  "generated_at": "2026-06-14T06:18:49Z",
   "litellm_version": "v1.83.14-stable",
   "claude_code_version": "2.1.126",
   "providers": [
@@ -22,7 +22,8 @@
           "status": "pass"
         },
         "bedrock_converse": {
-          "status": "pass"
+          "status": "fail",
+          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
         },
         "vertex_ai": {
           "status": "pass"
@@ -43,7 +44,8 @@
           "status": "pass"
         },
         "bedrock_converse": {
-          "status": "pass"
+          "status": "fail",
+          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
         },
         "vertex_ai": {
           "status": "pass"
@@ -64,7 +66,8 @@
           "status": "pass"
         },
         "bedrock_converse": {
-          "status": "pass"
+          "status": "fail",
+          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
         },
         "vertex_ai": {
           "status": "pass"
@@ -107,7 +110,8 @@
           "status": "pass"
         },
         "bedrock_converse": {
-          "status": "pass"
+          "status": "fail",
+          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
         },
         "vertex_ai": {
           "status": "pass"
@@ -130,7 +134,7 @@
         },
         "bedrock_converse": {
           "status": "fail",
-          "error": "[claude-opus-4-7-bedrock-converse] no `thinking` content block observed in stream-json events"
+          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
         },
         "vertex_ai": {
           "status": "fail",
@@ -262,7 +266,8 @@
           "status": "pass"
         },
         "bedrock_converse": {
-          "status": "pass"
+          "status": "fail",
+          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
         },
         "vertex_ai": {
           "status": "pass"
@@ -324,12 +329,10 @@
           "status": "pass"
         },
         "bedrock_invoke": {
-          "status": "fail",
-          "error": "[claude-opus-4-7-bedrock-invoke] claude CLI failed: exit=1; (no diagnostic output)"
+          "status": "pass"
         },
         "bedrock_converse": {
-          "status": "fail",
-          "error": "[claude-opus-4-7-bedrock-converse] claude returned empty assistant text"
+          "status": "pass"
         },
         "vertex_ai": {
           "status": "pass"
