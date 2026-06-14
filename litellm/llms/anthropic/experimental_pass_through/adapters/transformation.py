@@ -408,14 +408,14 @@ class LiteLLMAnthropicMessagesAdapter:
                             and b.get("type") == "text"
                             and (b.get("text") or "").strip()
                         ):
-                            text_block: Dict[str, Any] = {
+                            sys_text_block: Dict[str, Any] = {
                                 "type": "text",
                                 "text": b["text"],
                             }
                             self._add_cache_control_if_applicable(
-                                b, text_block, model or ""
+                                b, sys_text_block, model or ""
                             )
-                            text_blocks.append(text_block)
+                            text_blocks.append(sys_text_block)
                     if text_blocks:
                         new_messages.append(
                             ChatCompletionSystemMessage(

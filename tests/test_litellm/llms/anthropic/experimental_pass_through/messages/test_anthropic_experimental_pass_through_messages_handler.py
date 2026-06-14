@@ -772,3 +772,46 @@ def test_handler_passes_through_mid_system_on_supported_model_for_mantle(
     )
     assert any(m.get("role") == "system" for m in msgs)
     assert not opt.get("system")
+
+
+def test_handler_merges_leading_system_after_existing_string_system():
+    opt, msgs = _capture_base_llm_call(
+        "bedrock/invoke/us.anthropic.claude-opus-4-8",
+        [
+            {"role": "system", "content": "In-array sys."},
+            {"role": "user", "content": "Hi"},
+        ],
+        system="Top-level sys.",
+    )
+    assert opt.get("system") == [
+        {"type": "text", "text": "Top-level sys."},
+        {"type": "text", "text": "In-array sys."},
+    ]
+    assert all(m.get("role") != "system" for m in msgs)
+
+
+def test_handler_merges_leading_system_after_empty_string_system():
+    opt, msgs = _capture_base_llm_call(
+        "bedrock/invoke/us.anthropic.claude-opus-4-8",
+        [
+            {"role": "system", "content": "In-array sys."},
+            {"role": "user", "content": "Hi"},
+        ],
+        system="   ",
+    )
+    assert opt.get("system") == [{"type": "text", "text": "In-array sys."}]
+
+
+def test_handler_merges_leading_system_after_existing_list_system():
+    opt, msgs = _capture_base_llm_call(
+        "bedrock/invoke/us.anthropic.claude-opus-4-8",
+        [
+            {"role": "system", "content": "In-array sys."},
+            {"role": "user", "content": "Hi"},
+        ],
+        system=[{"type": "text", "text": "Top-level sys."}],
+    )
+    assert opt.get("system") == [
+        {"type": "text", "text": "Top-level sys."},
+        {"type": "text", "text": "In-array sys."},
+    ]
