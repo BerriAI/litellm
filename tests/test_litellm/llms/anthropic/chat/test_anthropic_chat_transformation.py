@@ -1960,6 +1960,54 @@ def test_translate_system_message_preserves_cache_control():
     assert result[0]["cache_control"] == {"type": "ephemeral"}
 
 
+def test_translate_system_message_skips_whitespace_only_string_content():
+    """
+    Whitespace-only system content (e.g. "   ") must be dropped — Anthropic
+    rejects it with "system: text content blocks must contain non-whitespace
+    text", while OpenAI accepts it. The proxy should normalize across providers.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/28706
+    """
+    config = AnthropicConfig()
+
+    messages = [
+        {"role": "system", "content": "   "},
+        {"role": "user", "content": "say hi"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert len(result) == 0
+    assert all(m["role"] != "system" for m in messages)
+
+
+def test_translate_system_message_skips_whitespace_only_list_content():
+    """
+    Whitespace-only text blocks inside a list-form system message must be
+    filtered out, while sibling non-whitespace blocks are preserved.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/28706
+    """
+    config = AnthropicConfig()
+
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "   "},
+                {"type": "text", "text": "Valid content"},
+                {"type": "text", "text": "\n\t  "},
+            ],
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "Valid content"
+
+
 # ============ Dynamic max_tokens Tests ============
 
 
@@ -2513,14 +2561,14 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
     )
 
     # thinking must be set (adaptive for 4.6+)
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "adaptive"
     # output_config must carry the mapped effort
-    assert "output_config" in result, (
-        f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "output_config" in result
+    ), f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["output_config"]["effort"] == "low"
 
 
@@ -2532,7 +2580,9 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
         {"effort": "low", "summary": "concise"},
     ],
 )
-def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_effort_value):
+def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(
+    reasoning_effort_value,
+):
     """
     Non-adaptive (pre-4.6) branch: dict-shape reasoning_effort must still map
     to ``thinking.type='enabled'`` + ``budget_tokens``. ``output_config`` must
@@ -2547,9 +2597,9 @@ def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_ef
         drop_params=False,
     )
 
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "enabled"
     assert "budget_tokens" in result["thinking"]
     assert result["thinking"]["budget_tokens"] > 0
@@ -2582,12 +2632,12 @@ def test_reasoning_effort_unparseable_dict_is_dropped(bad_value):
         model="claude-sonnet-4-6-20260219",
         drop_params=False,
     )
-    assert "thinking" not in result, (
-        f"thinking should not be set for bad value {bad_value!r}"
-    )
-    assert "output_config" not in result, (
-        f"output_config should not be set for bad value {bad_value!r}"
-    )
+    assert (
+        "thinking" not in result
+    ), f"thinking should not be set for bad value {bad_value!r}"
+    assert (
+        "output_config" not in result
+    ), f"output_config should not be set for bad value {bad_value!r}"
 
 
 @pytest.mark.parametrize(
