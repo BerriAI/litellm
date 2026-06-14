@@ -1113,9 +1113,6 @@ def _coerce_user_id_to_str(value: Any) -> Optional[str]:
 def get_end_user_id_from_request_body(
     request_body: dict, request_headers: Optional[dict] = None
 ) -> Optional[str]:
-    if litellm.disable_end_user_cost_tracking:
-        return None
-
     # Import general_settings here to avoid potential circular import issues at module level
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
