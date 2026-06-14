@@ -267,9 +267,7 @@ def _get_token_base_cost(
             try:
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
                 threshold_str = key.split("_above_")[1].split("_tokens")[0]
-                threshold = float(threshold_str.replace("k", "")) * (
-                    1000 if "k" in threshold_str else 1
-                )
+                threshold = _parse_above_token_threshold(key)
                 if usage.prompt_tokens > threshold:
                     # Prefer a service_tier-specific above-threshold key when available,
                     # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
