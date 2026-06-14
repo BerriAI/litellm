@@ -221,7 +221,6 @@ ci = [
     "blockbuster==1.5.26",
     "beautifulsoup4==4.14.3",
     "pylint==4.0.5",
-    "pyright==1.1.408",
     "langchain-mcp-adapters==0.2.1",
     "langchain-openai==1.1.14",
     "langgraph==1.0.10",
