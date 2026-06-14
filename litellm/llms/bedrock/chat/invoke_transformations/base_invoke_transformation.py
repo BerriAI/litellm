@@ -1,8 +1,19 @@
 import copy
 import json
 import time
+from dataclasses import dataclass, replace
 from functools import partial
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast, get_args
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+    get_args,
+)
 
 import httpx
 
@@ -24,6 +35,15 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     _get_httpx_client,
 )
+from litellm.types.llms.bedrock import (
+    BedrockInvokeAI21Request,
+    BedrockInvokeCohereChatRequest,
+    BedrockInvokeCohereCompletionRequest,
+    BedrockInvokeLlamaRequest,
+    BedrockInvokeMistralRequest,
+    BedrockInvokeTitanInferenceParams,
+    BedrockInvokeTitanRequest,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
@@ -36,6 +56,62 @@ else:
     LiteLLMLoggingObj = Any
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+
+@dataclass(frozen=True, slots=True)
+class BedrockInvokeCohereParams:
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    return_likelihood: Optional[str] = None
+    p: Optional[float] = None
+    k: Optional[int] = None
+    stop_sequences: Optional[List[str]] = None
+    num_generations: Optional[int] = None
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    truncate: Optional[str] = None
+    stream: Optional[bool] = None
+    tools: Optional[List[Dict[str, object]]] = None
+    tool_results: Optional[List[Dict[str, object]]] = None
+    seed: Optional[int] = None
+    force_single_step: Optional[bool] = None
+
+
+@dataclass(frozen=True, slots=True)
+class BedrockInvokeAI21Params:
+    maxTokens: Optional[int] = None
+    temperature: Optional[float] = None
+    topP: Optional[float] = None
+    stopSequences: Optional[List[str]] = None
+    frequencyPenalty: Optional[Dict[str, object]] = None
+    frequencePenalty: Optional[Dict[str, object]] = None
+    presencePenalty: Optional[Dict[str, object]] = None
+    countPenalty: Optional[Dict[str, object]] = None
+
+
+@dataclass(frozen=True, slots=True)
+class BedrockInvokeMistralParams:
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[float] = None
+    stop: Optional[List[str]] = None
+
+
+@dataclass(frozen=True, slots=True)
+class BedrockInvokeTitanParams:
+    maxTokenCount: Optional[int] = None
+    stopSequences: Optional[List[str]] = None
+    temperature: Optional[float] = None
+    topP: Optional[int] = None
+
+
+@dataclass(frozen=True, slots=True)
+class BedrockInvokeLlamaParams:
+    max_gen_len: Optional[int] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    topP: Optional[float] = None
 
 
 class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
@@ -134,11 +210,325 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=fake_stream,
         )
 
-    def _apply_config_to_params(self, config: dict, inference_params: dict) -> None:
-        """Apply config values to inference_params if not already set."""
-        for k, v in config.items():
-            if k not in inference_params:
-                inference_params[k] = v
+    @staticmethod
+    def _get_param_value(optional_params: dict, config: dict, key: str) -> object:
+        if key in optional_params:
+            return copy.deepcopy(optional_params[key])
+        return copy.deepcopy(config.get(key))
+
+    @staticmethod
+    def _drop_none(data: Dict[str, object]) -> Dict[str, object]:
+        return {key: value for key, value in data.items() if value is not None}
+
+    def _parse_cohere_params(
+        self, optional_params: dict, config: dict
+    ) -> BedrockInvokeCohereParams:
+        return BedrockInvokeCohereParams(
+            max_tokens=cast(
+                Optional[int],
+                self._get_param_value(optional_params, config, "max_tokens"),
+            ),
+            temperature=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "temperature"),
+            ),
+            return_likelihood=cast(
+                Optional[str],
+                self._get_param_value(optional_params, config, "return_likelihood"),
+            ),
+            p=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "p"),
+            ),
+            k=cast(
+                Optional[int],
+                self._get_param_value(optional_params, config, "k"),
+            ),
+            stop_sequences=cast(
+                Optional[List[str]],
+                self._get_param_value(optional_params, config, "stop_sequences"),
+            ),
+            num_generations=cast(
+                Optional[int],
+                self._get_param_value(optional_params, config, "num_generations"),
+            ),
+            frequency_penalty=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "frequency_penalty"),
+            ),
+            presence_penalty=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "presence_penalty"),
+            ),
+            truncate=cast(
+                Optional[str],
+                self._get_param_value(optional_params, config, "truncate"),
+            ),
+            stream=cast(
+                Optional[bool],
+                self._get_param_value(optional_params, config, "stream"),
+            ),
+            tools=cast(
+                Optional[List[Dict[str, object]]],
+                self._get_param_value(optional_params, config, "tools"),
+            ),
+            tool_results=cast(
+                Optional[List[Dict[str, object]]],
+                self._get_param_value(optional_params, config, "tool_results"),
+            ),
+            seed=cast(
+                Optional[int],
+                self._get_param_value(optional_params, config, "seed"),
+            ),
+            force_single_step=cast(
+                Optional[bool],
+                self._get_param_value(optional_params, config, "force_single_step"),
+            ),
+        )
+
+    def _parse_ai21_params(
+        self, optional_params: dict, config: dict
+    ) -> BedrockInvokeAI21Params:
+        return BedrockInvokeAI21Params(
+            maxTokens=cast(
+                Optional[int],
+                self._get_param_value(optional_params, config, "maxTokens"),
+            ),
+            temperature=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "temperature"),
+            ),
+            topP=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "topP"),
+            ),
+            stopSequences=cast(
+                Optional[List[str]],
+                self._get_param_value(optional_params, config, "stopSequences"),
+            ),
+            frequencyPenalty=cast(
+                Optional[Dict[str, object]],
+                self._get_param_value(optional_params, config, "frequencyPenalty"),
+            ),
+            frequencePenalty=cast(
+                Optional[Dict[str, object]],
+                self._get_param_value(optional_params, config, "frequencePenalty"),
+            ),
+            presencePenalty=cast(
+                Optional[Dict[str, object]],
+                self._get_param_value(optional_params, config, "presencePenalty"),
+            ),
+            countPenalty=cast(
+                Optional[Dict[str, object]],
+                self._get_param_value(optional_params, config, "countPenalty"),
+            ),
+        )
+
+    def _parse_mistral_params(
+        self, optional_params: dict, config: dict
+    ) -> BedrockInvokeMistralParams:
+        return BedrockInvokeMistralParams(
+            max_tokens=cast(
+                Optional[int],
+                self._get_param_value(optional_params, config, "max_tokens"),
+            ),
+            temperature=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "temperature"),
+            ),
+            top_p=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "top_p"),
+            ),
+            top_k=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "top_k"),
+            ),
+            stop=cast(
+                Optional[List[str]],
+                self._get_param_value(optional_params, config, "stop"),
+            ),
+        )
+
+    def _parse_titan_params(
+        self, optional_params: dict, config: dict
+    ) -> BedrockInvokeTitanParams:
+        return BedrockInvokeTitanParams(
+            maxTokenCount=cast(
+                Optional[int],
+                self._get_param_value(optional_params, config, "maxTokenCount"),
+            ),
+            stopSequences=cast(
+                Optional[List[str]],
+                self._get_param_value(optional_params, config, "stopSequences"),
+            ),
+            temperature=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "temperature"),
+            ),
+            topP=cast(
+                Optional[int],
+                self._get_param_value(optional_params, config, "topP"),
+            ),
+        )
+
+    def _parse_llama_params(
+        self, optional_params: dict, config: dict
+    ) -> BedrockInvokeLlamaParams:
+        return BedrockInvokeLlamaParams(
+            max_gen_len=cast(
+                Optional[int],
+                self._get_param_value(optional_params, config, "max_gen_len"),
+            ),
+            temperature=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "temperature"),
+            ),
+            top_p=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "top_p"),
+            ),
+            topP=cast(
+                Optional[float],
+                self._get_param_value(optional_params, config, "topP"),
+            ),
+        )
+
+    @staticmethod
+    def _build_cohere_chat_request(
+        prompt: str,
+        inference_params: BedrockInvokeCohereParams,
+        chat_history: Optional[List[Dict[str, object]]],
+    ) -> BedrockInvokeCohereChatRequest:
+        request: Dict[str, object] = {
+            "message": prompt,
+            **AmazonInvokeConfig._cohere_params_to_wire_dict(inference_params),
+        }
+        if chat_history is not None:
+            request["chat_history"] = chat_history
+        return cast(BedrockInvokeCohereChatRequest, request)
+
+    @staticmethod
+    def _build_cohere_completion_request(
+        prompt: str,
+        inference_params: BedrockInvokeCohereParams,
+    ) -> BedrockInvokeCohereCompletionRequest:
+        return cast(
+            BedrockInvokeCohereCompletionRequest,
+            {
+                "prompt": prompt,
+                **AmazonInvokeConfig._cohere_params_to_wire_dict(inference_params),
+            },
+        )
+
+    @staticmethod
+    def _build_ai21_request(
+        prompt: str,
+        inference_params: BedrockInvokeAI21Params,
+    ) -> BedrockInvokeAI21Request:
+        return cast(
+            BedrockInvokeAI21Request,
+            {
+                "prompt": prompt,
+                **AmazonInvokeConfig._drop_none(
+                    {
+                        "maxTokens": inference_params.maxTokens,
+                        "temperature": inference_params.temperature,
+                        "topP": inference_params.topP,
+                        "stopSequences": inference_params.stopSequences,
+                        "frequencyPenalty": inference_params.frequencyPenalty,
+                        "frequencePenalty": inference_params.frequencePenalty,
+                        "presencePenalty": inference_params.presencePenalty,
+                        "countPenalty": inference_params.countPenalty,
+                    }
+                ),
+            },
+        )
+
+    @staticmethod
+    def _build_mistral_request(
+        prompt: str,
+        inference_params: BedrockInvokeMistralParams,
+    ) -> BedrockInvokeMistralRequest:
+        return cast(
+            BedrockInvokeMistralRequest,
+            {
+                "prompt": prompt,
+                **AmazonInvokeConfig._drop_none(
+                    {
+                        "max_tokens": inference_params.max_tokens,
+                        "temperature": inference_params.temperature,
+                        "top_p": inference_params.top_p,
+                        "top_k": inference_params.top_k,
+                        "stop": inference_params.stop,
+                    }
+                ),
+            },
+        )
+
+    @staticmethod
+    def _build_titan_request(
+        prompt: str,
+        inference_params: BedrockInvokeTitanParams,
+    ) -> BedrockInvokeTitanRequest:
+        return BedrockInvokeTitanRequest(
+            inputText=prompt,
+            textGenerationConfig=cast(
+                BedrockInvokeTitanInferenceParams,
+                AmazonInvokeConfig._drop_none(
+                    {
+                        "maxTokenCount": inference_params.maxTokenCount,
+                        "stopSequences": inference_params.stopSequences,
+                        "temperature": inference_params.temperature,
+                        "topP": inference_params.topP,
+                    }
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _build_llama_request(
+        prompt: str,
+        inference_params: BedrockInvokeLlamaParams,
+    ) -> BedrockInvokeLlamaRequest:
+        return cast(
+            BedrockInvokeLlamaRequest,
+            {
+                "prompt": prompt,
+                **AmazonInvokeConfig._drop_none(
+                    {
+                        "max_gen_len": inference_params.max_gen_len,
+                        "temperature": inference_params.temperature,
+                        "top_p": inference_params.top_p,
+                        "topP": inference_params.topP,
+                    }
+                ),
+            },
+        )
+
+    @staticmethod
+    def _cohere_params_to_wire_dict(
+        inference_params: BedrockInvokeCohereParams,
+    ) -> Dict[str, object]:
+        return AmazonInvokeConfig._drop_none(
+            {
+                "max_tokens": inference_params.max_tokens,
+                "temperature": inference_params.temperature,
+                "return_likelihood": inference_params.return_likelihood,
+                "p": inference_params.p,
+                "k": inference_params.k,
+                "stop_sequences": inference_params.stop_sequences,
+                "num_generations": inference_params.num_generations,
+                "frequency_penalty": inference_params.frequency_penalty,
+                "presence_penalty": inference_params.presence_penalty,
+                "truncate": inference_params.truncate,
+                "stream": inference_params.stream,
+                "tools": inference_params.tools,
+                "tool_results": inference_params.tool_results,
+                "seed": inference_params.seed,
+                "force_single_step": inference_params.force_single_step,
+            }
+        )
 
     def transform_request(
         self,
@@ -162,31 +552,39 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             provider=provider,
             custom_prompt_dict=custom_prompt_dict,
         )
-        inference_params = copy.deepcopy(optional_params)
-        inference_params = {
-            k: v
-            for k, v in inference_params.items()
-            if k not in self.aws_authentication_params
-        }
-        request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
-                ## LOAD CONFIG
                 config = litellm.AmazonCohereChatConfig().get_config()
-                self._apply_config_to_params(config, inference_params)
-                _data = {"message": prompt, **inference_params}
-                if chat_history is not None:
-                    _data["chat_history"] = chat_history
-                request_data = _data
+                cohere_inference_params = self._parse_cohere_params(
+                    optional_params=optional_params,
+                    config=config,
+                )
+                return cast(
+                    dict,
+                    self._build_cohere_chat_request(
+                        prompt=prompt,
+                        inference_params=cohere_inference_params,
+                        chat_history=chat_history,
+                    ),
+                )
             else:
-                ## LOAD CONFIG
                 config = litellm.AmazonCohereConfig.get_config()
-                self._apply_config_to_params(config, inference_params)
+                cohere_inference_params = self._parse_cohere_params(
+                    optional_params=optional_params,
+                    config=config,
+                )
                 if stream is True:
-                    inference_params["stream"] = (
-                        True  # cohere requires stream = True in inference params
+                    cohere_inference_params = replace(
+                        cohere_inference_params,
+                        stream=True,
                     )
-                request_data = {"prompt": prompt, **inference_params}
+                return cast(
+                    dict,
+                    self._build_cohere_completion_request(
+                        prompt=prompt,
+                        inference_params=cohere_inference_params,
+                    ),
+                )
         elif provider == "anthropic":
             transformed_request = (
                 litellm.AmazonAnthropicClaudeConfig().transform_request(
@@ -208,28 +606,57 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 headers=headers,
             )
         elif provider == "ai21":
-            ## LOAD CONFIG
             config = litellm.AmazonAI21Config.get_config()
-            self._apply_config_to_params(config, inference_params)
-            request_data = {"prompt": prompt, **inference_params}
+            ai21_inference_params = self._parse_ai21_params(
+                optional_params=optional_params,
+                config=config,
+            )
+            return cast(
+                dict,
+                self._build_ai21_request(
+                    prompt=prompt,
+                    inference_params=ai21_inference_params,
+                ),
+            )
         elif provider == "mistral":
-            ## LOAD CONFIG
             config = litellm.AmazonMistralConfig.get_config()
-            self._apply_config_to_params(config, inference_params)
-            request_data = {"prompt": prompt, **inference_params}
+            mistral_inference_params = self._parse_mistral_params(
+                optional_params=optional_params,
+                config=config,
+            )
+            return cast(
+                dict,
+                self._build_mistral_request(
+                    prompt=prompt,
+                    inference_params=mistral_inference_params,
+                ),
+            )
         elif provider == "amazon":  # amazon titan
-            ## LOAD CONFIG
             config = litellm.AmazonTitanConfig.get_config()
-            self._apply_config_to_params(config, inference_params)
-            request_data = {
-                "inputText": prompt,
-                "textGenerationConfig": inference_params,
-            }
+            titan_inference_params = self._parse_titan_params(
+                optional_params=optional_params,
+                config=config,
+            )
+            return cast(
+                dict,
+                self._build_titan_request(
+                    prompt=prompt,
+                    inference_params=titan_inference_params,
+                ),
+            )
         elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
-            ## LOAD CONFIG
             config = litellm.AmazonLlamaConfig.get_config()
-            self._apply_config_to_params(config, inference_params)
-            request_data = {"prompt": prompt, **inference_params}
+            llama_inference_params = self._parse_llama_params(
+                optional_params=optional_params,
+                config=config,
+            )
+            return cast(
+                dict,
+                self._build_llama_request(
+                    prompt=prompt,
+                    inference_params=llama_inference_params,
+                ),
+            )
         elif provider == "twelvelabs":
             return litellm.AmazonTwelveLabsPegasusConfig().transform_request(
                 model=model,
@@ -254,8 +681,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     provider, model
                 ),
             )
-
-        return request_data
 
     def transform_response(  # noqa: PLR0915
         self,

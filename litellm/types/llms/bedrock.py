@@ -432,6 +432,86 @@ class BedrockInvokeNovaRequest(TypedDict, total=False):
     guardrailConfig: Optional[GuardrailConfigBlock]
 
 
+class BedrockInvokeCohereCompletionRequest(TypedDict, total=False):
+    prompt: Required[str]
+    max_tokens: int
+    temperature: float
+    return_likelihood: str
+    p: float
+    k: int
+    stop_sequences: List[str]
+    num_generations: int
+    frequency_penalty: float
+    presence_penalty: float
+    truncate: str
+    stream: bool
+    tools: List[Dict[str, object]]
+    tool_results: List[Dict[str, object]]
+    seed: int
+    force_single_step: bool
+
+
+class BedrockInvokeCohereChatRequest(TypedDict, total=False):
+    message: Required[str]
+    chat_history: List[Dict[str, object]]
+    max_tokens: int
+    temperature: float
+    return_likelihood: str
+    p: float
+    k: int
+    stop_sequences: List[str]
+    num_generations: int
+    frequency_penalty: float
+    presence_penalty: float
+    truncate: str
+    stream: bool
+    tools: List[Dict[str, object]]
+    tool_results: List[Dict[str, object]]
+    seed: int
+    force_single_step: bool
+
+
+class BedrockInvokeAI21Request(TypedDict, total=False):
+    prompt: Required[str]
+    maxTokens: int
+    temperature: float
+    topP: float
+    stopSequences: List[str]
+    frequencyPenalty: Dict[str, object]
+    frequencePenalty: Dict[str, object]
+    presencePenalty: Dict[str, object]
+    countPenalty: Dict[str, object]
+
+
+class BedrockInvokeMistralRequest(TypedDict, total=False):
+    prompt: Required[str]
+    max_tokens: int
+    temperature: float
+    top_p: float
+    top_k: float
+    stop: List[str]
+
+
+class BedrockInvokeTitanInferenceParams(TypedDict, total=False):
+    maxTokenCount: int
+    stopSequences: List[str]
+    temperature: float
+    topP: int
+
+
+class BedrockInvokeTitanRequest(TypedDict):
+    inputText: str
+    textGenerationConfig: BedrockInvokeTitanInferenceParams
+
+
+class BedrockInvokeLlamaRequest(TypedDict, total=False):
+    prompt: Required[str]
+    max_gen_len: int
+    temperature: float
+    top_p: float
+    topP: float
+
+
 class GenericStreamingChunk(TypedDict):
     text: Required[str]
     tool_use: Optional[ChatCompletionToolCallChunk]
