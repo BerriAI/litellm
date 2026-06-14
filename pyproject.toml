@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.85.5"
+version = "1.85.6"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -117,7 +117,7 @@ proxy-runtime = [
     "mangum==0.17.0",
     "azure-ai-contentsafety==1.0.0",
     "azure-storage-file-datalake==12.20.0",
-    "pypdf==6.10.2; python_version < '3.14'",
+    "pypdf==6.13.1; python_version < '3.14'",
     "llm-sandbox==0.3.39",
     "detect-secrets==1.5.0",
 ]
@@ -221,6 +221,10 @@ requires = ["uv_build==0.11.8"]
 build-backend = "uv_build"
 
 [tool.uv]
+constraint-dependencies = [
+    "tornado>=6.5.6",
+    "aiohttp>=3.13.5,<3.14",
+]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
 exclude-newer = "3 days"
@@ -250,7 +254,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.85.5"
+version = "1.85.6"
 version_files = [
     "pyproject.toml:^version",
 ]
