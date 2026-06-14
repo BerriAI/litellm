@@ -11945,7 +11945,7 @@ async def test_prepare_key_update_data_budget_duration_valid_sets_reset():
 async def test_info_key_fn_includes_model_max_budget_usage(monkeypatch):
     """
     /key/info should include model_max_budget_usage showing current-period spend
-    for each model that has a per-model budget configured.
+    for each model that has a per-model budget configured, sourced from SpendLogs.
     """
     from unittest.mock import AsyncMock, MagicMock
 
@@ -11979,15 +11979,8 @@ async def test_info_key_fn_includes_model_max_budget_usage(monkeypatch):
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         return_value=mock_key_info
     )
-
-    mock_limiter = MagicMock()
-    mock_limiter.get_current_period_spend = AsyncMock(
-        return_value={
-            "gpt-4o": {"current_spend": 0.23, "budget_limit": 0.50, "time_period": "1d"}
-        }
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.model_max_budget_limiter", mock_limiter
+    mock_prisma_client.db.query_raw = AsyncMock(
+        return_value=[{"model": "gpt-4o", "total_spend": 0.23}]
     )
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -12005,10 +11998,7 @@ async def test_info_key_fn_includes_model_max_budget_usage(monkeypatch):
     assert usage["gpt-4o"]["current_spend"] == 0.23
     assert usage["gpt-4o"]["budget_limit"] == 0.50
     assert usage["gpt-4o"]["time_period"] == "1d"
-    mock_limiter.get_current_period_spend.assert_awaited_once_with(
-        user_api_key_hash=test_key_token,
-        model_max_budget=model_max_budget,
-    )
+    mock_prisma_client.db.query_raw.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -12043,12 +12033,7 @@ async def test_info_key_fn_no_model_max_budget_skips_usage(monkeypatch):
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         return_value=mock_key_info
     )
-
-    mock_limiter = MagicMock()
-    mock_limiter.get_current_period_spend = AsyncMock()
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.model_max_budget_limiter", mock_limiter
-    )
+    mock_prisma_client.db.query_raw = AsyncMock()
 
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -12061,7 +12046,7 @@ async def test_info_key_fn_no_model_max_budget_skips_usage(monkeypatch):
     )
 
     assert "model_max_budget_usage" not in result["info"]
-    mock_limiter.get_current_period_spend.assert_not_awaited()
+    mock_prisma_client.db.query_raw.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -12089,19 +12074,13 @@ async def test_info_key_fn_v2_includes_model_max_budget_usage(monkeypatch):
         "model_max_budget": model_max_budget,
         "user_id": "user-v2",
         "team_id": None,
+        "litellm_budget_table": None,
     }
     mock_key.dict.return_value = mock_key.model_dump.return_value
 
     mock_prisma_client.get_data = AsyncMock(return_value=[mock_key])
-
-    mock_limiter = MagicMock()
-    mock_limiter.get_current_period_spend = AsyncMock(
-        return_value={
-            "gpt-4o": {"current_spend": 0.55, "budget_limit": 1.00, "time_period": "7d"}
-        }
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.model_max_budget_limiter", mock_limiter
+    mock_prisma_client.db.query_raw = AsyncMock(
+        return_value=[{"model": "gpt-4o", "total_spend": 0.55}]
     )
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -12121,9 +12100,186 @@ async def test_info_key_fn_v2_includes_model_max_budget_usage(monkeypatch):
     assert usage["gpt-4o"]["current_spend"] == 0.55
     assert usage["gpt-4o"]["budget_limit"] == 1.00
     assert usage["gpt-4o"]["time_period"] == "7d"
-    mock_limiter.get_current_period_spend.assert_awaited_once_with(
-        user_api_key_hash=test_key_token,
-        model_max_budget=model_max_budget,
+    mock_prisma_client.db.query_raw.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_budget_table_fallback(monkeypatch):
+    """When model_max_budget is empty on the key but set in litellm_budget_table,
+    /key/info should still populate model_max_budget_usage, reading spend from SpendLogs."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    test_key_token = "hashed_token_budget_table_test"
+    budget_table_model_max_budget = {
+        "bedrock/anthropic.claude-opus-4": {"max_budget": 5, "budget_duration": "30d"},
+    }
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = test_key_token
+    mock_key_info.object_permission_id = None
+    mock_key_info.user_id = "user-bt"
+    mock_key_info.team_id = None
+    mock_key_info.litellm_budget_table = None
+    mock_key_info.model_dump.return_value = {
+        "token": test_key_token,
+        "model_max_budget": {},
+        "user_id": "user-bt",
+        "team_id": None,
+        "object_permission_id": None,
+        "litellm_budget_table": {
+            "budget_id": "bt-123",
+            "budget_duration": "30d",
+            "budget_reset_at": "2026-07-01T00:00:00+00:00",
+            "model_max_budget": budget_table_model_max_budget,
+        },
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+    mock_prisma_client.db.query_raw = AsyncMock(
+        return_value=[
+            {"model": "bedrock/anthropic.claude-opus-4", "total_spend": 1.20}
+        ]
     )
 
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-test-bt-key",
+    )
 
+    result = await info_key_fn(
+        key="sk-test-bt-key",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert "model_max_budget_usage" in result["info"]
+    usage = result["info"]["model_max_budget_usage"]
+    assert usage["bedrock/anthropic.claude-opus-4"]["current_spend"] == 1.20
+    assert usage["bedrock/anthropic.claude-opus-4"]["budget_limit"] == 5
+    assert usage["bedrock/anthropic.claude-opus-4"]["time_period"] == "30d"
+    mock_prisma_client.db.query_raw.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_v2_budget_table_fallback(monkeypatch):
+    """When model_max_budget is empty on the key but set in litellm_budget_table,
+    /v2/key/info should still populate model_max_budget_usage from SpendLogs."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import KeyRequest, LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        info_key_fn_v2,
+    )
+
+    test_key_token = "hashed_token_v2_bt_test"
+    budget_table_model_max_budget = {
+        "bedrock/anthropic.claude-opus-4": {"max_budget": 5, "budget_duration": "30d"},
+    }
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_key = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key.token = test_key_token
+    mock_key.user_id = "user-v2-bt"
+    mock_key.team_id = None
+    mock_key.model_dump.return_value = {
+        "token": test_key_token,
+        "model_max_budget": {},
+        "user_id": "user-v2-bt",
+        "team_id": None,
+        "litellm_budget_table": {
+            "budget_id": "bt-456",
+            "budget_duration": "30d",
+            "budget_reset_at": "2026-07-01T00:00:00+00:00",
+            "model_max_budget": budget_table_model_max_budget,
+        },
+    }
+    mock_key.dict.return_value = mock_key.model_dump.return_value
+
+    mock_prisma_client.get_data = AsyncMock(return_value=[mock_key])
+    mock_prisma_client.db.query_raw = AsyncMock(
+        return_value=[
+            {"model": "bedrock/anthropic.claude-opus-4", "total_spend": 2.50}
+        ]
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin-v2-bt",
+    )
+
+    result = await info_key_fn_v2(
+        data=KeyRequest(keys=[test_key_token]),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert len(result["info"]) == 1
+    key_info = result["info"][0]
+    assert "model_max_budget_usage" in key_info
+    usage = key_info["model_max_budget_usage"]
+    assert usage["bedrock/anthropic.claude-opus-4"]["current_spend"] == 2.50
+    mock_prisma_client.db.query_raw.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_provider_prefix_spend_fallback(monkeypatch):
+    """SpendLogs model 'gpt-4o' matches budget key 'openai/gpt-4o' via suffix match."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    test_key_token = "hashed_token_prefix_test"
+    model_max_budget = {
+        "openai/gpt-4o": {"budget_limit": 2.00, "time_period": "7d"},
+    }
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = test_key_token
+    mock_key_info.object_permission_id = None
+    mock_key_info.user_id = "user-prefix"
+    mock_key_info.team_id = None
+    mock_key_info.litellm_budget_table = None
+    mock_key_info.model_dump.return_value = {
+        "token": test_key_token,
+        "model_max_budget": model_max_budget,
+        "user_id": "user-prefix",
+        "team_id": None,
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+    # SpendLogs stores model without provider prefix
+    mock_prisma_client.db.query_raw = AsyncMock(
+        return_value=[{"model": "gpt-4o", "total_spend": 0.75}]
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-prefix-test",
+    )
+
+    result = await info_key_fn(
+        key="sk-prefix-test",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert "model_max_budget_usage" in result["info"]
+    usage = result["info"]["model_max_budget_usage"]
+    assert usage["openai/gpt-4o"]["current_spend"] == 0.75

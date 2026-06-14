@@ -237,7 +237,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 key_budget_config=budget_config,
             )
             result[model] = ModelMaxBudgetUsageEntry(
-                current_spend=current_spend or 0.0,
+                current_spend=round(current_spend or 0.0, 4),
                 budget_limit=budget_config.max_budget,
                 time_period=budget_config.budget_duration,
             )

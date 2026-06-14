@@ -3225,6 +3225,123 @@ async def delete_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+def _compute_budget_period_start(
+    budget_reset_at: Optional[Any],
+    budget_duration: Optional[str],
+) -> Optional[datetime]:
+    if budget_reset_at is None or budget_duration is None:
+        return None
+    try:
+        reset_dt = (
+            budget_reset_at
+            if isinstance(budget_reset_at, datetime)
+            else datetime.fromisoformat(str(budget_reset_at))
+        )
+        return reset_dt - timedelta(seconds=duration_in_seconds(budget_duration))
+    except Exception:
+        return None
+
+
+async def _query_model_spend_for_period(
+    api_key_hash: str,
+    period_start: datetime,
+    period_end: datetime,
+    prisma_client: PrismaClient,
+) -> Dict[str, float]:
+    try:
+        rows = await prisma_client.db.query_raw(
+            """
+            SELECT
+                COALESCE(NULLIF(model_group, ''), model) AS model,
+                SUM(spend)::float AS total_spend
+            FROM "LiteLLM_SpendLogs"
+            WHERE api_key = $1
+              AND "startTime" >= ($2::timestamptz AT TIME ZONE 'UTC')
+              AND "startTime" <  ($3::timestamptz AT TIME ZONE 'UTC')
+            GROUP BY COALESCE(NULLIF(model_group, ''), model)
+            """,
+            api_key_hash,
+            period_start.isoformat(),
+            period_end.isoformat(),
+        )
+        return {row["model"]: row["total_spend"] for row in rows}
+    except Exception as e:
+        verbose_proxy_logger.warning("_query_model_spend_for_period failed: %s", str(e))
+        return {}
+
+
+async def _build_model_max_budget_usage(
+    api_key_hash: str,
+    model_max_budget: Dict[str, Dict],
+    budget_table: Optional[Dict],
+    prisma_client: Optional[PrismaClient],
+) -> Dict[str, Any]:
+    from litellm.proxy.hooks.model_max_budget_limiter import ModelMaxBudgetUsageEntry
+
+    if prisma_client is None:
+        return {}
+
+    bt = budget_table if isinstance(budget_table, dict) else {}
+    budget_reset_at = bt.get("budget_reset_at")
+    period_start = _compute_budget_period_start(
+        budget_reset_at, bt.get("budget_duration")
+    )
+
+    if period_start is not None:
+        if isinstance(budget_reset_at, datetime):
+            period_end: datetime = budget_reset_at
+        else:
+            try:
+                period_end = datetime.fromisoformat(str(budget_reset_at))
+            except Exception:
+                period_end = datetime.now(tz=timezone.utc)
+    else:
+        max_seconds = 0
+        for budget_info in model_max_budget.values():
+            bc = BudgetConfig(**budget_info)
+            if bc.budget_duration:
+                try:
+                    max_seconds = max(
+                        max_seconds, duration_in_seconds(bc.budget_duration)
+                    )
+                except Exception:
+                    pass
+        if max_seconds == 0:
+            return {}
+        now = datetime.now(tz=timezone.utc)
+        period_start = now - timedelta(seconds=max_seconds)
+        period_end = now
+
+    model_spend_map = await _query_model_spend_for_period(
+        api_key_hash=api_key_hash,
+        period_start=period_start,
+        period_end=period_end,
+        prisma_client=prisma_client,
+    )
+
+    result: Dict[str, ModelMaxBudgetUsageEntry] = {}
+    for model, budget_info in model_max_budget.items():
+        budget_config = BudgetConfig(**budget_info)
+        if budget_config.budget_duration is None:
+            continue
+        spend = model_spend_map.get(model)
+        if spend is None:
+            model_suffix = model.split("/", 1)[-1] if "/" in model else model
+            for log_model, log_spend in model_spend_map.items():
+                log_suffix = (
+                    log_model.split("/", 1)[-1] if "/" in log_model else log_model
+                )
+                if log_suffix == model_suffix:
+                    spend = log_spend
+                    break
+        result[model] = ModelMaxBudgetUsageEntry(
+            current_spend=round(spend or 0.0, 4),
+            budget_limit=budget_config.max_budget,
+            time_period=budget_config.budget_duration,
+        )
+    return result
+
+
 @router.post(
     "/v2/key/info",
     tags=["key management"],
@@ -3286,8 +3403,6 @@ async def info_key_fn_v2(
         if not key_info:
             return {"key": data.keys, "info": []}
 
-        from litellm.proxy.proxy_server import model_max_budget_limiter
-
         filtered_key_info = []
         for k in key_info:
             if not await _can_user_query_key_info(
@@ -3303,12 +3418,17 @@ async def info_key_fn_v2(
             k_token_hash = k_dict.pop("token", None)
 
             model_max_budget = k_dict.get("model_max_budget") or {}
+            budget_table = k_dict.get("litellm_budget_table") or {}
+            if not model_max_budget and isinstance(budget_table, dict):
+                model_max_budget = budget_table.get("model_max_budget") or {}
             if model_max_budget and k_token_hash:
-                k_dict["model_max_budget_usage"] = (
-                    await model_max_budget_limiter.get_current_period_spend(
-                        user_api_key_hash=k_token_hash,
-                        model_max_budget=model_max_budget,
-                    )
+                k_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
+                    api_key_hash=k_token_hash,
+                    model_max_budget=model_max_budget,
+                    budget_table=(
+                        budget_table if isinstance(budget_table, dict) else None
+                    ),
+                    prisma_client=prisma_client,
                 )
 
             filtered_key_info.append(k_dict)
@@ -3396,14 +3516,15 @@ async def info_key_fn(
         key_token_hash = key_info.pop("token")
 
         model_max_budget = key_info.get("model_max_budget") or {}
+        budget_table = key_info.get("litellm_budget_table") or {}
+        if not model_max_budget and isinstance(budget_table, dict):
+            model_max_budget = budget_table.get("model_max_budget") or {}
         if model_max_budget and key_token_hash:
-            from litellm.proxy.proxy_server import model_max_budget_limiter
-
-            key_info["model_max_budget_usage"] = (
-                await model_max_budget_limiter.get_current_period_spend(
-                    user_api_key_hash=key_token_hash,
-                    model_max_budget=model_max_budget,
-                )
+            key_info["model_max_budget_usage"] = await _build_model_max_budget_usage(
+                api_key_hash=key_token_hash,
+                model_max_budget=model_max_budget,
+                budget_table=budget_table if isinstance(budget_table, dict) else None,
+                prisma_client=prisma_client,
             )
 
         # Attach object_permission if object_permission_id is set
