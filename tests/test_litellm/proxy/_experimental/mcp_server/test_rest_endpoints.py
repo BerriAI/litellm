@@ -1,6 +1,6 @@
 import json
 from typing import Any, Dict, Optional
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -1068,6 +1068,101 @@ class TestCallToolRestAPI:
         assert captured["name"] == "demo-tool"
         assert captured["arguments"] == {"foo": "bar"}
         assert captured["allowed_mcp_servers"] == [stub_server]
+
+    async def test_fires_failure_logging_when_tool_call_raises(self, monkeypatch):
+        """
+        Regression: the REST tool-call endpoint bypasses the @client decorator
+        that drives failure logging for the JSON-RPC path, so it must fire
+        async_failure_handler itself when execute_mcp_tool raises. Otherwise no
+        OTel MCP tool-call span is emitted for failed dashboard-initiated calls.
+        """
+        from litellm.types.utils import CallTypes
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        stub_server = StubServer()
+
+        logging_obj = MagicMock()
+        logging_obj.async_failure_handler = AsyncMock()
+
+        async def fake_common_processing(self, **kwargs):
+            return self.data, logging_obj
+
+        tool_error = ValueError("upstream tool blew up")
+
+        async def fake_execute_mcp_tool(**kwargs):
+            raise tool_error
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_config",
+            {},
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic",
+            fake_common_processing,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "execute_mcp_tool",
+            fake_execute_mcp_tool,
+            raising=False,
+        )
+
+        request_payload = {
+            "server_id": "server-1",
+            "name": "demo-tool",
+            "arguments": {"foo": "bar"},
+        }
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body=request_payload,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(
+                request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 500
+        logging_obj.async_failure_handler.assert_awaited_once()
+        assert logging_obj.async_failure_handler.await_args.args[0] is tool_error
+        assert logging_obj.call_type == CallTypes.call_mcp_tool.value
 
 
 class TestGetToolsForSingleServer:

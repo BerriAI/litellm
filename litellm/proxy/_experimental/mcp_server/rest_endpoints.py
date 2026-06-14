@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import traceback
 from datetime import datetime
 from typing import (
     Any,
@@ -757,7 +758,7 @@ if MCP_AVAILABLE:
             }
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
-    async def call_tool_rest_api(
+    async def call_tool_rest_api(  # noqa: PLR0915
         request: Request,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
@@ -854,20 +855,33 @@ if MCP_AVAILABLE:
                     target_server, user_api_key_dict
                 )
 
-            # Call execute_mcp_tool directly (permission checks already done)
-            result = await execute_mcp_tool(
-                name=tool_name,
-                arguments=tool_arguments,
-                allowed_mcp_servers=allowed_mcp_servers,
-                start_time=datetime.now(),
-                user_api_key_auth=data.get("user_api_key_auth"),
-                mcp_auth_header=data.get("mcp_auth_header"),
-                mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
-                oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
-                raw_headers=data.get("raw_headers"),
-                litellm_logging_obj=data.get("litellm_logging_obj"),
-                requested_server_id=canonical_server_id,
-            )
+            # Call execute_mcp_tool directly (permission checks already done).
+            # This endpoint bypasses the @client decorator that wraps
+            # call_mcp_tool, so it fires failure logging here the way @client does
+            # for the JSON-RPC path; execute_mcp_tool drives the success side.
+            start_time = datetime.now()
+            try:
+                result = await execute_mcp_tool(
+                    name=tool_name,
+                    arguments=tool_arguments,
+                    allowed_mcp_servers=allowed_mcp_servers,
+                    start_time=start_time,
+                    user_api_key_auth=data.get("user_api_key_auth"),
+                    mcp_auth_header=data.get("mcp_auth_header"),
+                    mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
+                    oauth2_headers=user_oauth_extra_headers
+                    or data.get("oauth2_headers"),
+                    raw_headers=data.get("raw_headers"),
+                    litellm_logging_obj=logging_obj,
+                    requested_server_id=canonical_server_id,
+                )
+            except Exception as e:
+                if logging_obj is not None:
+                    logging_obj.call_type = CallTypes.call_mcp_tool.value
+                    await logging_obj.async_failure_handler(
+                        e, traceback.format_exc(), start_time, datetime.now()
+                    )
+                raise
             return result
         except MCPMissingUserEnvVarsError as e:
             verbose_logger.info(
