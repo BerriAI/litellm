@@ -170,9 +170,15 @@ MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
     | (set(_MCP_STDIO_EXTRA_COMMANDS.split(",")) - {""})
 )
 
+# MCP OAuth2 Token Exchange (OBO) Defaults
+MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE = int(
+    os.getenv("MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE", "500")
+)
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
+    "x-litellm-adaptive-router-model",
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -210,6 +216,12 @@ DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET = int(
 DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET", 4096)
 )
+DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET = int(
+    os.getenv("DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET", 8192)
+)
+DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET = int(
+    os.getenv("DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET", 16384)
+)
 MAX_TOKEN_TRIMMING_ATTEMPTS = int(
     os.getenv("MAX_TOKEN_TRIMMING_ATTEMPTS", 10)
 )  # Maximum number of attempts to trim the message
@@ -232,6 +244,16 @@ AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(
 )
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
+# TCP keep-alive (SO_KEEPALIVE) — opt-in. Required when running behind NAT/LBs
+# whose idle timeout is shorter than provider response timeouts (e.g. AWS NAT
+# Gateway: 350s vs OpenAI/Azure: 600s). Without this, the kernel sends nothing
+# during a long provider call and the NAT reaps the flow before the response
+# arrives. Enabling SO_KEEPALIVE makes the kernel emit TCP probes that reset
+# the NAT idle timer.
+AIOHTTP_SO_KEEPALIVE = os.getenv("AIOHTTP_SO_KEEPALIVE", "False").lower() == "true"
+AIOHTTP_TCP_KEEPIDLE = int(os.getenv("AIOHTTP_TCP_KEEPIDLE", 60))
+AIOHTTP_TCP_KEEPINTVL = int(os.getenv("AIOHTTP_TCP_KEEPINTVL", 30))
+AIOHTTP_TCP_KEEPCNT = int(os.getenv("AIOHTTP_TCP_KEEPCNT", 5))
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
 # Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)
 # Reference: https://github.com/aio-libs/aiohttp/blob/master/aiohttp/connector.py#L74-L78
@@ -397,6 +419,8 @@ BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
 BEDROCK_MIN_THINKING_BUDGET_TOKENS = int(
     os.getenv("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
 )
+# Anthropic's Messages API rejects thinking.budget_tokens < 1024.
+ANTHROPIC_MIN_THINKING_BUDGET_TOKENS = 1024
 REPLICATE_POLLING_DELAY_SECONDS = float(
     os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
 )
@@ -417,9 +441,6 @@ CACHED_STREAMING_CHUNK_DELAY = float(os.getenv("CACHED_STREAMING_CHUNK_DELAY", 0
 AUDIO_SPEECH_CHUNK_SIZE = int(
     os.getenv("AUDIO_SPEECH_CHUNK_SIZE", 8192)
 )  # chunk_size for audio speech streaming. Balance between latency and memory usage
-MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
-    os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 512)
-)
 DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
 #### Networking settings ####
 # Sentinel used when `REQUEST_TIMEOUT` is unset: `litellm.request_timeout` keeps this
@@ -573,6 +594,7 @@ LITELLM_CHAT_PROVIDERS = [
     "volcengine",
     "codestral",
     "text-completion-codestral",
+    "text-completion-inception",
     "deepseek",
     "sambanova",
     "maritalk",
@@ -608,6 +630,7 @@ LITELLM_CHAT_PROVIDERS = [
     "oci",
     "morph",
     "lambda_ai",
+    "inception",
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
@@ -664,6 +687,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "extra_headers",
     "thinking",
     "web_search_options",
+    "include_server_side_tool_invocations",
     "service_tier",
     "prompt_cache_key",
     "prompt_cache_retention",
@@ -725,6 +749,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "verbosity": None,
     "thinking": None,
     "web_search_options": None,
+    "include_server_side_tool_invocations": None,
     "service_tier": None,
     "safety_identifier": None,
     "prompt_cache_key": None,
@@ -759,6 +784,7 @@ openai_compatible_endpoints: List = [
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
     "https://api.synthetic.new/openai/v1",
+    "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
     "https://nano-gpt.com/api/v1",
     "https://api.poe.com/v1",
@@ -766,6 +792,7 @@ openai_compatible_endpoints: List = [
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
+    "https://api.inceptionlabs.ai/v1",
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
@@ -808,6 +835,7 @@ openai_compatible_providers: List = [
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
+    "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
@@ -821,6 +849,7 @@ openai_compatible_providers: List = [
     "helicone",
     "morph",
     "lambda_ai",
+    "inception",
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
@@ -843,6 +872,7 @@ openai_text_completion_compatible_providers: List = (
         "moonshot",
         "publicai",
         "synthetic",
+        "tensormesh",
         "apertis",
         "nano-gpt",
         "poe",
@@ -856,6 +886,7 @@ openai_text_completion_compatible_providers: List = (
 _openai_like_providers: List = [
     "predibase",
     "databricks",
+    "lemonade",
     "watsonx",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
@@ -1135,6 +1166,8 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5",
+    "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
     "anthropic.claude-opus-4-6-v1",
@@ -1391,6 +1424,17 @@ except (ValueError, TypeError):
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
+# Stable identifier substituted in place of the master key on UserAPIKeyAuth
+# objects so the master key (or its hash) never propagates to spend logs,
+# Prometheus metrics, audit trails, or any other downstream consumer.
+LITELLM_PROXY_MASTER_KEY_ALIAS = "litellm_proxy_master_key"
+
+# Marker placed in ``model_call_details`` on a synthetic ``Logging`` object that
+# records a proxy-gate error (auth/rate-limit rejection) for a request that never
+# reached an upstream provider. Tracing callbacks key off it to avoid fabricating
+# an LLM-call span for a call that did not happen. See
+# ``ProxyLogging._handle_logging_proxy_only_error``.
+LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL = "litellm_no_upstream_llm_call"
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
@@ -1404,12 +1448,22 @@ LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS = int(
     os.getenv("LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS", 600)
 )  # 10 minutes default — caps the deadlock window if a pod crashes mid-rotation
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
+LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED = os.getenv(
+    "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED", "false"
+)
+LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS = int(
+    os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS", 86400)
+)  # 24 hours default
+LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE = int(
+    os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE", 1000)
+)
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
+CLI_SSO_SESSION_TTL_SECONDS = 600
 CLI_JWT_TOKEN_NAME = "cli-jwt-token"
 # Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
 CLI_JWT_EXPIRATION_HOURS = int(
@@ -1417,6 +1471,12 @@ CLI_JWT_EXPIRATION_HOURS = int(
     or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS")
     or 24
 )
+# Comma-separated allowlisted OIDC claim map for CLI SSO polling, e.g.
+# "employment_type->acme_employment_type,org_info.department->department"
+CLI_SSO_CLAIM_MAP = (
+    os.getenv("CLI_SSO_CLAIM_MAP") or os.getenv("LITELLM_CLI_SSO_CLAIM_MAP") or ""
+)
+CLI_SSO_CLAIM_MAX_SCALAR_LENGTH = 1024
 
 ########################### UI SESSION DURATION ###########################
 # Duration for UI login session (username/password, SSO, invitation links). Format: "30s", "30m", "24h", "7d"
@@ -1433,10 +1493,20 @@ CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
 )
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
 KEY_ROTATION_JOB_NAME = "litellm_key_rotation_job"
+EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME = "litellm_expired_ui_session_key_cleanup_job"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
+SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(
+    os.getenv("SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3)
+)
+SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = float(
+    os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
+)
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
+SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = int(
+    os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000)
+)
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute
@@ -1533,6 +1603,15 @@ DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
 DEFAULT_ACCESS_GROUP_CACHE_TTL = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
+# Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
+# callers from forcing a DB query per request for unknown names, while bounding
+# staleness so a transient DB error (which surfaces as an empty list) cannot
+# hide a real group for long.
+DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL = 10
+# Maximum number of comma-separated MCP server / access-group tokens accepted
+# in a single ``/{name1,name2,...}/mcp`` URL. Bounds the per-request DB / cache
+# fan-out an authenticated caller can trigger by stuffing the path with tokens.
+DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS = 16
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST = [

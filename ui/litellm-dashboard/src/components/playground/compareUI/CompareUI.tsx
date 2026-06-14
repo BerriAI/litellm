@@ -90,7 +90,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isLoadingAgents, setIsLoadingAgents] = useState(false);
   const [selectedEndpoint, setSelectedEndpoint] = useState<EndpointIdType>(DEFAULT_ENDPOINT);
-  
+
   // Derived state from endpoint config
   const endpointConfig = getEndpointConfig(selectedEndpoint);
   const isA2AMode = isAgentEndpoint(selectedEndpoint);
@@ -106,9 +106,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
   );
   const [customApiKey, setCustomApiKey] = useState("");
   const [debouncedCustomApiKey, setDebouncedCustomApiKey] = useState("");
-  const [customProxyBaseUrl] = useState<string>(
-    () => sessionStorage.getItem("customProxyBaseUrl") || ""
-  );
+  const [customProxyBaseUrl] = useState<string>(() => sessionStorage.getItem("customProxyBaseUrl") || "");
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedCustomApiKey(customApiKey);
@@ -718,16 +716,13 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-gray-600">Endpoint</span>
-              <Select 
-                value={selectedEndpoint} 
+              <Select
+                value={selectedEndpoint}
                 onChange={(value) => setSelectedEndpoint(value as EndpointIdType)}
                 className="w-56"
               >
                 {getAvailableEndpoints().map((endpoint) => (
-                  <Select.Option 
-                    key={endpoint.value} 
-                    value={endpoint.value}
-                  >
+                  <Select.Option key={endpoint.value} value={endpoint.value}>
                     {endpoint.label}
                   </Select.Option>
                 ))}

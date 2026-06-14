@@ -1,12 +1,15 @@
 #### CRUD ENDPOINTS for UI Settings #####
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
+from pydantic import ConfigDict, ValidationError, create_model
+from pydantic.fields import FieldInfo
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.proxy.management_endpoints.ui_sso import (
@@ -16,6 +19,16 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 )
 
 router = APIRouter()
+
+# SSO secret fields returned by /get/sso_settings. These are masked on read so
+# the UI can show "(set)" without ever transporting the plaintext OAuth secret
+# off the server, matching the write-once + masked-on-read contract used for
+# the HashiCorp Vault config override.
+_SSO_SENSITIVE_FIELDS: Set[str] = {
+    "google_client_secret",
+    "microsoft_client_secret",
+    "generic_client_secret",
+}
 
 
 class IPAddress(BaseModel):
@@ -75,6 +88,8 @@ class UIThemeSettingsResponse(SettingsResponse):
 class UISettings(BaseModel):
     """Configuration for UI-specific flags"""
 
+    model_config = ConfigDict(extra="allow")
+
     disable_model_add_for_internal_users: bool = Field(
         default=False,
         description="If true, internal users cannot add models from the UI",
@@ -93,6 +108,11 @@ class UISettings(BaseModel):
     require_auth_for_public_ai_hub: bool = Field(
         default=False,
         description="If true, requires authentication for accessing the public AI Hub.",
+    )
+
+    allow_public_health_readiness_details: bool = Field(
+        default=False,
+        description="If true, returns the legacy detailed payload from the unauthenticated /health/readiness endpoint.",
     )
 
     forward_client_headers_to_llm_api: bool = Field(
@@ -115,11 +135,6 @@ class UISettings(BaseModel):
             "BYOK (clients bring their own API key). Independent of the "
             "client-headers toggle — enable only the one(s) you need."
         ),
-    )
-
-    enable_projects_ui: bool = Field(
-        default=False,
-        description="If enabled, shows the Projects feature in the UI sidebar and the project field in key management.",
     )
 
     disable_agents_for_internal_users: bool = Field(
@@ -152,6 +167,11 @@ class UISettings(BaseModel):
         description="If true, users cannot specify custom key values. All keys must be auto-generated.",
     )
 
+    disable_key_generate_for_org_admin: bool = Field(
+        default=False,
+        description="If true, org admins cannot generate API keys via /key/generate.",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -165,27 +185,85 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
+    "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
-    "enable_projects_ui",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
     "scope_user_search_to_org",
     "disable_custom_api_keys",
+    "disable_key_generate_for_org_admin",
 }
 
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS = [
+    "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
+    "disable_key_generate_for_org_admin",
 ]
+
+# Extension point: packages outside OSS (e.g. litellm_enterprise) can
+# contribute additional UI settings fields at import time. Each entry
+# maps a field name to a (annotation, FieldInfo) tuple in pydantic
+# create_model's field-definitions format. Registering a field also
+# appends it to ALLOWED_UI_SETTINGS_FIELDS so GET/PATCH pass it through.
+#
+# The annotation is typed ``Any`` because pydantic field annotations
+# include generics like ``Optional[int]`` / ``List[str]`` that are not
+# instances of ``type`` — so tightening this to ``type`` would reject
+# valid inputs.
+_EXTRA_UI_SETTINGS_FIELDS: Dict[str, Tuple[Any, FieldInfo]] = {}
+
+# Settings OSS knows about as enterprise-gated. If a caller sends one of
+# these keys and no extension package has registered it, the PATCH
+# endpoint returns 403 instead of silently dropping the value, so the
+# client gets a clear signal that the feature requires LiteLLM Enterprise.
+_ENTERPRISE_ONLY_UI_SETTINGS: Set[str] = {"enable_projects_ui"}
+
+# Memoized effective class; invalidated on registration.
+_EFFECTIVE_UI_SETTINGS_CLASS: Optional[Type[UISettings]] = None
+
+
+def register_extra_ui_setting(name: str, annotation: Any, field: FieldInfo) -> None:
+    """Register an additional UI settings field contributed by an extension package.
+
+    ``field`` must be a ``FieldInfo`` instance — construct it directly
+    (e.g. ``FieldInfo(default=..., description=...)``) rather than via
+    the ``pydantic.Field`` factory, whose stub reports the default's
+    type instead of ``FieldInfo`` and trips mypy at the call site.
+    """
+    global _EFFECTIVE_UI_SETTINGS_CLASS
+    _EXTRA_UI_SETTINGS_FIELDS[name] = (annotation, field)
+    ALLOWED_UI_SETTINGS_FIELDS.add(name)
+    _EFFECTIVE_UI_SETTINGS_CLASS = None
+
+
+def _get_effective_ui_settings_class() -> Type[UISettings]:
+    """Return UISettings with any extension-registered fields merged in.
+
+    Memoized — pydantic ``create_model`` runs metaclass + schema work
+    each call, so we cache until a new registration invalidates it.
+    """
+    global _EFFECTIVE_UI_SETTINGS_CLASS
+    if _EFFECTIVE_UI_SETTINGS_CLASS is not None:
+        return _EFFECTIVE_UI_SETTINGS_CLASS
+    if not _EXTRA_UI_SETTINGS_FIELDS:
+        return UISettings
+    _EFFECTIVE_UI_SETTINGS_CLASS = create_model(  # type: ignore[call-overload]
+        "EffectiveUISettings",
+        __base__=UISettings,
+        __doc__=UISettings.__doc__,
+        **_EXTRA_UI_SETTINGS_FIELDS,
+    )
+    return _EFFECTIVE_UI_SETTINGS_CLASS
 
 
 class MCPSemanticFilterSettings(BaseModel):
@@ -661,8 +739,9 @@ async def get_sso_settings():
 
     schema = TypeAdapter(SSOConfig).json_schema(by_alias=True)
 
-    # Convert to dict for response
-    sso_dict = sso_config.model_dump()
+    # Convert to dict for response, masking OAuth client secrets so plaintext
+    # is never sent to the UI.
+    sso_dict = mask_sensitive_keys(sso_config.model_dump(), _SSO_SENSITIVE_FIELDS)
 
     # Add descriptions to the response
     result = {
@@ -1155,7 +1234,7 @@ async def get_ui_settings():
 
     return await _get_settings_with_schema(
         settings_key="ui_settings",
-        settings_class=UISettings,
+        settings_class=_get_effective_ui_settings_class(),
         config=config,
     )
 
@@ -1166,7 +1245,8 @@ async def get_ui_settings():
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_ui_settings(
-    settings: UISettings, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+    settings_body: Dict[str, Any] = Body(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Update UI-specific configuration flags.
@@ -1193,8 +1273,33 @@ async def update_ui_settings(
             },
         )
 
+    # Validate against the same effective class GET advertises, so
+    # enterprise-registered fields are typed consistently on both sides.
+    effective_cls = _get_effective_ui_settings_class()
+    try:
+        settings = effective_cls.model_validate(settings_body)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
+
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict = settings.model_dump(exclude_unset=True)
+
+    # Reject enterprise-only settings up front so the caller gets a clear
+    # signal instead of a silent drop.
+    blocked_enterprise_keys = sorted(
+        (settings_dict.keys() & _ENTERPRISE_ONLY_UI_SETTINGS)
+        - ALLOWED_UI_SETTINGS_FIELDS
+    )
+    if blocked_enterprise_keys:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": (
+                    f"Setting(s) {blocked_enterprise_keys} are a LiteLLM "
+                    "Enterprise feature and are not available on this build."
+                )
+            },
+        )
 
     # Enforce allowlist and drop anything unexpected
     incoming = {

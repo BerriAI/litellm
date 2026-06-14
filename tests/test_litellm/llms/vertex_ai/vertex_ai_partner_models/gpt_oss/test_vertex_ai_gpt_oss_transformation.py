@@ -118,7 +118,7 @@ async def test_vertex_ai_gpt_oss_simple_request():
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
         ) as mock_http_handler,
         patch(
-            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels._ensure_access_token",
             return_value=("fake-token", "pathrise-convert-1606954137718"),
         ),
         patch.dict(
@@ -217,7 +217,7 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
         ) as mock_http_handler,
         patch(
-            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels._ensure_access_token",
             return_value=("fake-token", "pathrise-convert-1606954137718"),
         ),
         patch.dict(

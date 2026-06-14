@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy._experimental.mcp_server.auth import token_exchange
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
@@ -50,12 +51,23 @@ class MCPOAuth2TokenCache(InMemoryCache):
     def _get_lock(self, server_id: str) -> asyncio.Lock:
         return self._locks.setdefault(server_id, asyncio.Lock())
 
-    async def async_get_token(self, server: "MCPServer") -> Optional[str]:
+    @staticmethod
+    def _has_client_credentials_config(server: "MCPServer") -> bool:
+        return bool(server.client_id and server.client_secret and server.token_url)
+
+    async def async_get_token(
+        self,
+        server: "MCPServer",
+        *,
+        require_client_credentials_flow: bool = True,
+    ) -> Optional[str]:
         """Return a valid access token, fetching or refreshing as needed.
 
         Returns ``None`` when the server lacks client credentials config.
         """
-        if not server.has_client_credentials:
+        if require_client_credentials_flow and not server.has_client_credentials:
+            return None
+        if not self._has_client_credentials_config(server):
             return None
 
         server_id = server.server_id
@@ -263,16 +275,38 @@ mcp_per_user_token_cache = MCPPerUserTokenCache()
 async def resolve_mcp_auth(
     server: "MCPServer",
     mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+    subject_token: Optional[str] = None,
 ) -> Optional[Union[str, Dict[str, str]]]:
     """Resolve the auth value for an MCP server.
 
     Priority:
     1. ``mcp_auth_header`` — per-request/per-user override
-    2. OAuth2 client_credentials token — auto-fetched and cached
-    3. ``server.authentication_token`` — static token from config/DB
+    2. OAuth2 Token Exchange (OBO / RFC 8693) — exchange user token for scoped token
+    3. OAuth2 client_credentials token — auto-fetched and cached
+    4. ``server.authentication_token`` — static token from config/DB
     """
     if mcp_auth_header:
         return mcp_auth_header
+    if server.has_token_exchange_config:
+        if subject_token:
+            return await token_exchange.mcp_token_exchange_handler.exchange_token(
+                subject_token, server
+            )
+        # No subject_token — fall back to client_credentials using the same client
+        # credentials and token_url so M2M scenarios still work.
+        if server.client_id and server.client_secret and server.token_url:
+            return await mcp_oauth2_token_cache.async_get_token(
+                server,
+                require_client_credentials_flow=False,
+            )
+        # OBO configured but no subject_token and missing client credentials — warn
+        # rather than silently proceeding unauthenticated.
+        verbose_logger.warning(
+            "MCP server '%s' is configured for token exchange (OBO) but no subject_token "
+            "was provided and client credentials (client_id/client_secret/token_url) are "
+            "incomplete. The request will proceed without authentication.",
+            server.server_id,
+        )
     if server.has_client_credentials:
         return await mcp_oauth2_token_cache.async_get_token(server)
     return server.authentication_token

@@ -14,16 +14,13 @@ import {
   Switch,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
-import {
-  getGeneralSettingsCall,
-  updateConfigFieldSetting,
-  deleteConfigFieldSetting,
-} from "./networking";
+import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "./networking";
 import { InputNumber } from "antd";
 import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 
 import RouterSettings from "./router_settings";
 import Fallbacks from "./Settings/RouterSettings/Fallbacks/Fallbacks";
+import RoutingGroups from "./routing_groups";
 interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -110,25 +107,19 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
       <TabGroup className="h-[75vh] w-full">
         <TabList variant="line" defaultValue="1" className="px-8 pt-4">
           <Tab value="1">Loadbalancing</Tab>
-          <Tab value="2">Fallbacks</Tab>
-          <Tab value="3">General</Tab>
+          <Tab value="2">Routing Groups</Tab>
+          <Tab value="3">Fallbacks</Tab>
+          <Tab value="4">General</Tab>
         </TabList>
         <TabPanels className="px-8 py-6">
           <TabPanel>
-            <RouterSettings
-              accessToken={accessToken}
-              userRole={userRole}
-              userID={userID}
-              modelData={modelData}
-            />
+            <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} modelData={modelData} />
           </TabPanel>
           <TabPanel>
-            <Fallbacks
-              accessToken={accessToken}
-              userRole={userRole}
-              userID={userID}
-              modelData={modelData}
-            />
+            <RoutingGroups />
+          </TabPanel>
+          <TabPanel>
+            <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} modelData={modelData} />
           </TabPanel>
           <TabPanel>
             <Card>

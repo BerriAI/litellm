@@ -360,11 +360,15 @@ class TestProxySettingEndpoints:
         assert "proxy_base_url" in values
         assert "user_email" in values
 
-        # Verify values match our mock config
+        # Verify non-secret values match our mock config. OAuth client
+        # secrets are masked on read so the GET response never carries
+        # plaintext credentials.
         assert values["google_client_id"] == "test_google_client_id"
-        assert values["google_client_secret"] == "test_google_client_secret"
+        assert values["google_client_secret"] != "test_google_client_secret"
+        assert "*" in values["google_client_secret"]
         assert values["microsoft_client_id"] == "test_microsoft_client_id"
-        assert values["microsoft_client_secret"] == "test_microsoft_client_secret"
+        assert values["microsoft_client_secret"] != "test_microsoft_client_secret"
+        assert "*" in values["microsoft_client_secret"]
         assert values["proxy_base_url"] == "https://example.com"
         assert values["user_email"] == "admin@example.com"
 
@@ -868,6 +872,7 @@ class TestProxySettingEndpoints:
         mock_db_record = MagicMock()
         mock_db_record.ui_settings = {
             "disable_model_add_for_internal_users": True,
+            "require_auth_for_public_ai_hub": True,
             "unexpected_flag": True,
         }
         mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(
@@ -880,13 +885,64 @@ class TestProxySettingEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["values"]["disable_model_add_for_internal_users"] is True
+        assert data["values"]["require_auth_for_public_ai_hub"] is True
         assert "unexpected_flag" not in data["values"]
         assert (
             "disable_model_add_for_internal_users" in data["field_schema"]["properties"]
         )
+        assert "require_auth_for_public_ai_hub" in data["field_schema"]["properties"]
         mock_prisma.db.litellm_uisettings.find_unique.assert_called_once_with(
             where={"id": "ui_settings"}
         )
+
+    def test_get_ui_settings_schema_description_preserved_with_extensions(
+        self, mock_auth, monkeypatch
+    ):
+        """The UI renders ``schema.description`` as a header paragraph.
+        When an extension package registers extra fields, the effective
+        class is built via ``create_model`` — which drops the base
+        class docstring unless we pass ``__doc__`` explicitly."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from pydantic.fields import FieldInfo
+
+        from litellm.proxy.ui_crud_endpoints import proxy_setting_endpoints
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            _EXTRA_UI_SETTINGS_FIELDS,
+            ALLOWED_UI_SETTINGS_FIELDS,
+            register_extra_ui_setting,
+        )
+
+        # Snapshot + restore extension registry so the test doesn't leak.
+        original_fields = dict(_EXTRA_UI_SETTINGS_FIELDS)
+        original_allowed = set(ALLOWED_UI_SETTINGS_FIELDS)
+        monkeypatch.setattr(
+            proxy_setting_endpoints, "_EFFECTIVE_UI_SETTINGS_CLASS", None
+        )
+
+        try:
+            register_extra_ui_setting(
+                "test_extension_flag", bool, FieldInfo(default=False)
+            )
+
+            mock_prisma = MagicMock()
+            mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+            monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+            response = client.get("/get/ui_settings")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert (
+                data["field_schema"]["description"]
+                == "Configuration for UI-specific flags"
+            )
+        finally:
+            _EXTRA_UI_SETTINGS_FIELDS.clear()
+            _EXTRA_UI_SETTINGS_FIELDS.update(original_fields)
+            ALLOWED_UI_SETTINGS_FIELDS.clear()
+            ALLOWED_UI_SETTINGS_FIELDS.update(original_allowed)
+            proxy_setting_endpoints._EFFECTIVE_UI_SETTINGS_CLASS = None
 
     @pytest.mark.parametrize(
         "user_role",
@@ -1021,6 +1077,43 @@ class TestProxySettingEndpoints:
         assert "unsupported_flag" not in stored_settings
         assert stored_settings["disable_model_add_for_internal_users"] is False
 
+    def test_update_ui_settings_preserves_public_ai_hub_auth_flag(
+        self, mock_auth, monkeypatch
+    ):
+        """Public AI Hub auth is an existing UI setting and must remain writable."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        payload = {"require_auth_for_public_ai_hub": True}
+
+        try:
+            response = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["settings"]["require_auth_for_public_ai_hub"] is True
+
+        call_args = mock_prisma.db.litellm_uisettings.upsert.call_args
+        stored_settings = json.loads(call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored_settings["require_auth_for_public_ai_hub"] is True
+
     def test_update_ui_settings_persists_forward_llm_provider_auth_headers(
         self, mock_auth, monkeypatch
     ):
@@ -1098,6 +1191,90 @@ class TestProxySettingEndpoints:
         assert response.status_code == 200
         assert general_settings.get("forward_llm_provider_auth_headers") is True
 
+    def test_update_ui_settings_syncs_public_health_readiness_details_to_general_settings(
+        self, mock_auth, monkeypatch
+    ):
+        """Public readiness details flag must be synced so the health route sees it."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        general_settings: dict = {}
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        payload = {"allow_public_health_readiness_details": True}
+
+        try:
+            response = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert general_settings.get("allow_public_health_readiness_details") is True
+
+    def test_update_ui_settings_persists_and_syncs_disable_key_generate_for_org_admin(
+        self, mock_auth, monkeypatch
+    ):
+        """disable_key_generate_for_org_admin must be allowlisted, persisted, and synced to general_settings."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        general_settings: dict = {}
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        flag_name = "disable_key_generate_for_org_admin"
+        payload = {flag_name: True}
+
+        try:
+            response = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["settings"][flag_name] is True
+
+        # Persisted in DB
+        call_args = mock_prisma.db.litellm_uisettings.upsert.call_args
+        stored_settings = json.loads(call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored_settings[flag_name] is True
+
+        # Synced into general_settings so the enforcement helper sees it
+        assert general_settings.get(flag_name) is True
+
     def test_get_sso_settings_from_database(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):
@@ -1148,10 +1325,12 @@ class TestProxySettingEndpoints:
         assert "values" in data
         assert "field_schema" in data
 
-        # Verify decrypted values are returned
+        # Verify decrypted values are returned. OAuth client secrets are
+        # masked on read so plaintext is never sent to the UI.
         values = data["values"]
         assert values["google_client_id"] == "decrypted_google_id"
-        assert values["google_client_secret"] == "decrypted_google_secret"
+        assert values["google_client_secret"] != "decrypted_google_secret"
+        assert "*" in values["google_client_secret"]
         assert values["microsoft_client_id"] == "decrypted_microsoft_id"
         assert values["proxy_base_url"] == "https://decrypted.example.com"
 

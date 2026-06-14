@@ -216,6 +216,22 @@ class TestVertexAIRerankTransform:
         )
         assert request_data_default["ignoreRecordDetailsInResponse"] == False
 
+    def test_transform_rerank_request_user_labels_from_metadata(self):
+        """Discovery Engine Rank API uses userLabels (string map) for billing."""
+        optional_params = {
+            "query": "q",
+            "documents": ["a", "b"],
+        }
+        request_data = self.config.transform_rerank_request(
+            model=self.model,
+            optional_rerank_params=optional_params,
+            headers={},
+            litellm_params={
+                "metadata": {"requester_metadata": {"app": "litellm", "tier": "1"}}
+            },
+        )
+        assert request_data["userLabels"] == {"app": "litellm", "tier": "1"}
+
     def test_transform_rerank_request_missing_required_params(self):
         """Test that transform_rerank_request handles missing required parameters."""
         # Test missing query

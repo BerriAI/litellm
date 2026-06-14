@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union
 
 import httpx
 
@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
 )
+from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
@@ -26,6 +27,7 @@ from ...openai.chat.gpt_transformation import (
 
 
 class XAIChatConfig(OpenAIGPTConfig):
+
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return "xai"
@@ -34,7 +36,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("XAI_API_KEY")
+        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
         return api_base, dynamic_api_key
 
     def get_supported_openai_params(self, model: str) -> list:
@@ -43,6 +45,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             "logprobs",
             "max_tokens",
             "n",
+            "parallel_tool_calls",
             "presence_penalty",
             "response_format",
             "seed",
@@ -222,7 +225,78 @@ class XAIChatConfig(OpenAIGPTConfig):
             self._enhance_usage_with_xai_web_search_fields(response, raw_response_json)
         except Exception as e:
             verbose_logger.debug(f"Error extracting X.AI web search usage: {e}")
+
+        self._fold_reasoning_tokens_into_completion(response)
+        self._normalize_openai_compatible_usage_totals(getattr(response, "usage", None))
         return response
+
+    @staticmethod
+    def _fold_reasoning_tokens_into_completion(
+        target: Union[ModelResponse, Usage, Dict[str, Any], None],
+    ) -> None:
+        """Reconcile xAI Usage to the OpenAI invariant.
+
+        xAI accounts ``reasoning_tokens`` separately from
+        ``completion_tokens`` while still summing them into ``total_tokens``.
+        OpenAI's contract (o1/o3) folds reasoning into ``completion_tokens``,
+        so fold here to keep ``total = prompt + completion``. Idempotent.
+
+        Accepts a ``ModelResponse`` (non-streaming), a ``Usage`` object, or a
+        raw usage ``dict`` (streaming chunk) so streaming and non-streaming
+        paths stay in sync.
+        """
+        if target is None:
+            return
+
+        if isinstance(target, ModelResponse):
+            usage: Union[Usage, Dict[str, Any], None] = getattr(target, "usage", None)
+        else:
+            usage = target
+        if usage is None:
+            return
+
+        if isinstance(usage, dict):
+            details = usage.get("completion_tokens_details") or {}
+            if isinstance(details, dict):
+                reasoning_tokens = int(details.get("reasoning_tokens") or 0)
+            else:
+                reasoning_tokens = int(getattr(details, "reasoning_tokens", 0) or 0)
+            if reasoning_tokens <= 0:
+                return
+
+            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+            total_tokens = int(usage.get("total_tokens") or 0)
+
+            if total_tokens == prompt_tokens + completion_tokens:
+                return
+
+            # Guard against double-counting if xAI changes accounting.
+            if total_tokens != prompt_tokens + completion_tokens + reasoning_tokens:
+                return
+
+            usage["completion_tokens"] = completion_tokens + reasoning_tokens
+            return
+
+        details = getattr(usage, "completion_tokens_details", None)
+        reasoning_tokens = (
+            int(getattr(details, "reasoning_tokens", 0) or 0) if details else 0
+        )
+        if reasoning_tokens <= 0:
+            return
+
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
+
+        if total_tokens == prompt_tokens + completion_tokens:
+            return
+
+        # Guard against double-counting if xAI changes accounting.
+        if total_tokens != prompt_tokens + completion_tokens + reasoning_tokens:
+            return
+
+        usage.completion_tokens = completion_tokens + reasoning_tokens
 
     def _enhance_usage_with_xai_web_search_fields(
         self, model_response: ModelResponse, raw_response_json: dict
@@ -248,6 +322,25 @@ class XAIChatConfig(OpenAIGPTConfig):
             setattr(usage, "num_sources_used", int(num_sources_used))
             verbose_logger.debug(f"X.AI web search sources used: {num_sources_used}")
 
+    @staticmethod
+    def _normalize_openai_compatible_usage_totals(
+        usage: Union[Usage, Dict[str, Any], None],
+    ) -> None:
+        if usage is None:
+            return
+        if isinstance(usage, dict):
+            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+            expected_total = prompt_tokens + completion_tokens
+            if int(usage.get("total_tokens") or 0) < expected_total:
+                usage["total_tokens"] = expected_total
+            return
+        prompt_tokens = int(usage.prompt_tokens or 0)
+        completion_tokens = int(usage.completion_tokens or 0)
+        expected_total = prompt_tokens + completion_tokens
+        if int(usage.total_tokens or 0) < expected_total:
+            usage.total_tokens = expected_total
+
 
 class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
@@ -267,5 +360,9 @@ class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
             # xAI sends usage in a chunk with empty choices array
             # Add a dummy choice with empty delta to ensure proper processing
             chunk["choices"] = [{"index": 0, "delta": {}, "finish_reason": None}]
+
+        if "usage" in chunk and chunk["usage"] is not None:
+            XAIChatConfig._fold_reasoning_tokens_into_completion(chunk["usage"])
+            XAIChatConfig._normalize_openai_compatible_usage_totals(chunk["usage"])
 
         return super().chunk_parser(chunk)

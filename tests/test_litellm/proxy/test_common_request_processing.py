@@ -3,12 +3,14 @@ import datetime
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -26,6 +28,48 @@ from litellm.proxy.utils import ProxyLogging
 
 
 class TestProxyBaseLLMRequestProcessing:
+    @pytest.mark.asyncio
+    async def test_base_passthrough_process_llm_request_preserves_litellm_headers_for_non_streaming_response(
+        self, monkeypatch
+    ):
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+
+        async def fake_base_process_llm_request(**kwargs):
+            passthrough_response = kwargs["fastapi_response"]
+            passthrough_response.headers["x-litellm-call-id"] = "test-call-id"
+            passthrough_response.headers["x-litellm-version"] = "test-version"
+            return httpx.Response(
+                status_code=200,
+                content=b'{"ok":true}',
+                headers={
+                    "content-type": "application/json",
+                    "x-amzn-requestid": "bedrock-request-id",
+                },
+            )
+
+        monkeypatch.setattr(
+            processing_obj,
+            "base_process_llm_request",
+            fake_base_process_llm_request,
+        )
+
+        result = await processing_obj.base_passthrough_process_llm_request(
+            request=MagicMock(spec=Request),
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=MagicMock(),
+            model="bedrock-test-model",
+        )
+
+        assert result.status_code == 200
+        assert result.body == b'{"ok":true}'
+        assert result.headers["x-amzn-requestid"] == "bedrock-request-id"
+        assert result.headers["x-litellm-call-id"] == "test-call-id"
+        assert result.headers["x-litellm-version"] == "test-version"
+
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_pre_call_hook_receives_litellm_call_id(
         self, monkeypatch
@@ -217,6 +261,141 @@ class TestProxyBaseLLMRequestProcessing:
             LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
                 headers_with_invalid
             )
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_from_llm_response(self):
+        """
+        Google native :generateContent uses this helper instead of base_process_llm_request;
+        ensure x-litellm-* headers and callback hooks merge like the main proxy path.
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        class _FakeGenaiResponse:
+            _hidden_params = {
+                "model_id": "deployment-model-id",
+                "cache_key": "ck-test",
+                "api_base": "https://generativelanguage.googleapis.com/v1beta",
+                "response_cost": 0.001,
+                "additional_headers": {"llm_provider-ratelimit-requests": "1000"},
+            }
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-id-test"
+
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value={"x-ratelimit-remaining-requests": "999"}
+        )
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_FakeGenaiResponse(),
+            request_data={"model": "gemini/gemini-1.5-flash"},
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="9.9.9",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-call-id"] == "call-id-test"
+        assert headers["x-litellm-model-id"] == "deployment-model-id"
+        assert headers["x-litellm-version"] == "9.9.9"
+        assert headers["llm_provider-ratelimit-requests"] == "1000"
+        assert headers["x-ratelimit-remaining-requests"] == "999"
+        proxy_logging_obj.post_call_response_headers_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_streaming_style_iterator(self):
+        """AsyncGoogleGenAIGenerateContentStreamingIterator sets _hidden_params at init; headers must propagate."""
+
+        class _FakeStreamLike:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            _hidden_params = {
+                "model_id": "stream-model-id",
+                "api_base": "https://generativelanguage.googleapis.com/v1beta",
+                "cache_key": "",
+                "response_cost": "",
+                "additional_headers": {"llm_provider-x": "y"},
+            }
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "cid-stream"
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_FakeStreamLike(),
+            request_data={"model": "gemini/gemini-2.0-flash"},
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="1.0.0",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-model-id"] == "stream-model-id"
+        assert headers["x-litellm-model-api-base"] == (
+            "https://generativelanguage.googleapis.com/v1beta"
+        )
+        assert headers["llm_provider-x"] == "y"
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_no_hidden_params_metadata_fallback(
+        self,
+    ):
+        """When response has no _hidden_params, model_id can still come from litellm_metadata."""
+
+        class _BareResponse:
+            pass
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "cid-meta"
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_BareResponse(),
+            request_data={
+                "model": "gemini/gemini-1.5-flash",
+                "litellm_metadata": {"model_info": {"id": "meta-model-id"}},
+            },
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="1.0.0",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-model-id"] == "meta-model-id"
 
     @pytest.mark.asyncio
     async def test_add_litellm_data_to_request_with_stream_timeout_header(self):
@@ -1079,6 +1258,31 @@ class TestCommonRequestProcessingHelpers:
         )
         assert response.headers["x-custom-header"] == "TestValue"
 
+    async def test_create_streaming_response_disables_proxy_buffering(self):
+        """Regression for #28384: every StreamingResponse create_response returns
+        must carry the headers that stop nginx/ingress/Envoy from buffering the
+        SSE stream into one batch, while preserving caller-supplied headers."""
+
+        async def normal_stream():
+            yield 'data: {"content": "part"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        async def empty_stream():
+            if False:  # never yields -> StopAsyncIteration
+                yield
+
+        error_stream = AsyncMock()
+        error_stream.__anext__.side_effect = ValueError("boom")
+
+        for generator in (normal_stream(), empty_stream(), error_stream):
+            response = await create_response(
+                generator, "text/event-stream", {"X-Custom-Header": "keep"}
+            )
+            assert isinstance(response, StreamingResponse)
+            assert response.headers["x-accel-buffering"] == "no"
+            assert response.headers["cache-control"] == "no-cache"
+            assert response.headers["x-custom-header"] == "keep"
+
     async def test_create_streaming_response_non_default_status_code(self):
         async def mock_generator():
             yield 'data: {"content": "data"}\n\n'
@@ -1138,8 +1342,17 @@ class TestCommonRequestProcessingHelpers:
             yield 'data: {"content": "chunk 3"}\n\n'
             yield "data: [DONE]\n\n"
 
-        # Patch the tracer in the common_request_processing module
-        with patch("litellm.proxy.common_request_processing.tracer", mock_tracer):
+        # Patch the tracer in the common_request_processing module. The
+        # per-chunk span is gated on _DD_STREAMING_TRACE_ENABLED (resolved at
+        # import from the real tracer, a NullTracer by default), so enable it
+        # explicitly to exercise the tracing path.
+        with (
+            patch("litellm.proxy.common_request_processing.tracer", mock_tracer),
+            patch(
+                "litellm.proxy.common_request_processing._DD_STREAMING_TRACE_ENABLED",
+                True,
+            ),
+        ):
             response = await create_response(mock_generator(), "text/event-stream", {})
 
             assert response.status_code == 200
@@ -1158,13 +1371,6 @@ class TestCommonRequestProcessingHelpers:
             assert mock_tracer.trace.call_count == 4
 
             # Verify that each call was made with the correct operation name
-            expected_calls = [
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-            ]
-
             actual_calls = mock_tracer.trace.call_args_list
             assert len(actual_calls) == 4
 
@@ -1173,6 +1379,40 @@ class TestCommonRequestProcessingHelpers:
                 assert (
                     args[0] == "streaming.chunk.yield"
                 ), f"Call {i} should have operation name 'streaming.chunk.yield', got {args[0]}"
+
+    async def test_create_streaming_response_skips_dd_trace_when_disabled(self):
+        """When DD tracing is disabled (the default), the per-chunk span
+        context manager is skipped entirely but all chunks still stream."""
+        from unittest.mock import patch
+
+        mock_tracer = MagicMock()
+
+        async def mock_generator():
+            yield 'data: {"content": "chunk 1"}\n\n'
+            yield 'data: {"content": "chunk 2"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        with (
+            patch("litellm.proxy.common_request_processing.tracer", mock_tracer),
+            patch(
+                "litellm.proxy.common_request_processing._DD_STREAMING_TRACE_ENABLED",
+                False,
+            ),
+        ):
+            response = await create_response(mock_generator(), "text/event-stream", {})
+
+            assert response.status_code == 200
+
+            content = await self.consume_stream(response)
+
+            # All chunks stream through unchanged ...
+            assert content == [
+                'data: {"content": "chunk 1"}\n\n',
+                'data: {"content": "chunk 2"}\n\n',
+                "data: [DONE]\n\n",
+            ]
+            # ... but no per-chunk span was created.
+            assert mock_tracer.trace.call_count == 0
 
     async def test_create_streaming_response_dd_trace_with_error_chunk(self):
         """
@@ -2179,3 +2419,77 @@ class TestHandleLLMApiExceptionBase64Truncation:
         # But base64 is truncated everywhere
         assert large_base64 not in log_output
         assert "base64_data truncated" in log_output
+
+
+class TestAsyncStreamingDataGeneratorFastPath:
+    """Fast/slow path branching in async_streaming_data_generator."""
+
+    @staticmethod
+    async def _aiter(items):
+        for item in items:
+            yield item
+
+    @pytest.mark.asyncio
+    async def test_fast_path_skips_per_chunk_hook(self, monkeypatch):
+        """With no callbacks/guardrails/cost-injection, chunks pass through
+        unchanged and the per-chunk hook is NOT awaited."""
+        monkeypatch.setattr(litellm, "callbacks", [])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        hook_spy = AsyncMock(side_effect=lambda **kw: kw["response"])
+        monkeypatch.setattr(
+            proxy_logging_obj, "async_post_call_streaming_hook", hook_spy
+        )
+
+        chunks = [b"event: a\ndata: {}\n\n", b"event: b\ndata: {}\n\n"]
+        out = [
+            c
+            async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=self._aiter(chunks),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                request_data={"model": "claude-x"},
+                proxy_logging_obj=proxy_logging_obj,
+                serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+                serialize_error=lambda e: "data: error\n\n",
+            )
+        ]
+
+        assert out == chunks  # bytes pass through return_sse_chunk untouched
+        hook_spy.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_slow_path_runs_per_chunk_hook(self, monkeypatch):
+        """A callback that overrides async_post_call_streaming_hook forces the
+        slow path and the per-chunk hook is invoked."""
+
+        class _StreamingCb(CustomLogger):
+            async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+                return response
+
+        cb = _StreamingCb()
+        monkeypatch.setattr(litellm, "callbacks", [cb])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        hook_spy = AsyncMock(side_effect=lambda **kw: kw["response"])
+        monkeypatch.setattr(
+            proxy_logging_obj, "async_post_call_streaming_hook", hook_spy
+        )
+
+        out = [
+            c
+            async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=self._aiter([{"type": "message_stop"}]),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                request_data={"model": "claude-x"},
+                proxy_logging_obj=proxy_logging_obj,
+                serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+                serialize_error=lambda e: "data: error\n\n",
+            )
+        ]
+
+        assert len(out) == 1
+        hook_spy.assert_awaited_once()
+
+        ProxyLogging._callback_capabilities_cache.clear()

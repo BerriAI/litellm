@@ -86,9 +86,7 @@ describe("ProjectKeysTable", () => {
 
   it("should display '—' when the key alias is null", () => {
     // Provide a user_id so only the alias column shows "—" (not the owner column too)
-    renderWithProviders(
-      <ProjectKeysTable keys={[makeKey({ key_alias: null as any, user_id: "owner-1" })]} />
-    );
+    renderWithProviders(<ProjectKeysTable keys={[makeKey({ key_alias: null as any, user_id: "owner-1" })]} />);
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
@@ -110,17 +108,12 @@ describe("ProjectKeysTable", () => {
   });
 
   it("should display a formatted date in the Last Active column when last_active is provided", () => {
-    renderWithProviders(
-      <ProjectKeysTable keys={[makeKey({ last_active: "2024-06-15T10:00:00Z" })]} />
-    );
+    renderWithProviders(<ProjectKeysTable keys={[makeKey({ last_active: "2024-06-15T10:00:00Z" })]} />);
     expect(screen.queryByText("Never")).not.toBeInTheDocument();
   });
 
   it("should render multiple keys as separate rows", () => {
-    const keys = [
-      makeKey({ token: "tok-1", key_alias: "Key One" }),
-      makeKey({ token: "tok-2", key_alias: "Key Two" }),
-    ];
+    const keys = [makeKey({ token: "tok-1", key_alias: "Key One" }), makeKey({ token: "tok-2", key_alias: "Key Two" })];
     renderWithProviders(<ProjectKeysTable keys={keys} />);
     expect(screen.getByText("Key One")).toBeInTheDocument();
     expect(screen.getByText("Key Two")).toBeInTheDocument();

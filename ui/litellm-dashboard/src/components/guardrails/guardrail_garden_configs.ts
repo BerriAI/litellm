@@ -228,6 +228,12 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  cato_networks: {
+    provider: "Cato Networks",
+    guardrailNameSuggestion: "Cato Networks Guardrail",
+    mode: "pre_call",
+    defaultOn: false,
+  },
   prompt_security: {
     provider: "PromptSecurity",
     guardrailNameSuggestion: "Prompt Security",
@@ -273,6 +279,12 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
   promptguard: {
     provider: "Promptguard",
     guardrailNameSuggestion: "PromptGuard",
+    mode: "pre_call",
+    defaultOn: false,
+  },
+  xecguard: {
+    provider: "Xecguard",
+    guardrailNameSuggestion: "XecGuard",
     mode: "pre_call",
     defaultOn: false,
   },

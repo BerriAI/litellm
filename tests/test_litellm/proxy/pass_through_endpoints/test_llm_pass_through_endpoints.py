@@ -21,6 +21,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     bedrock_llm_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
+    get_vertex_base_url,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     openai_proxy_route,
@@ -29,6 +30,35 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vllm_proxy_route,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
+
+
+class TestVertexPassthroughGetVertexBaseUrl:
+    """Module-local get_vertex_base_url (trailing slash); rules match common_utils."""
+
+    @pytest.mark.parametrize(
+        "vertex_location, expected",
+        [
+            ("global", "https://aiplatform.googleapis.com/"),
+            ("us-central1", "https://us-central1-aiplatform.googleapis.com/"),
+            ("us", "https://aiplatform.us.rep.googleapis.com/"),
+            ("eu", "https://aiplatform.eu.rep.googleapis.com/"),
+        ],
+    )
+    def test_returns_base_with_trailing_slash(self, vertex_location, expected):
+        assert get_vertex_base_url(vertex_location) == expected
+
+    @pytest.mark.parametrize(
+        "vertex_location, expected_host",
+        [
+            ("global", "aiplatform.googleapis.com"),
+            ("us-central1", "us-central1-aiplatform.googleapis.com"),
+            ("us", "aiplatform.us.rep.googleapis.com"),
+            ("eu", "aiplatform.eu.rep.googleapis.com"),
+        ],
+    )
+    def test_websocket_host_strips_scheme(self, vertex_location, expected_host):
+        host = get_vertex_base_url(vertex_location).removeprefix("https://").rstrip("/")
+        assert host == expected_host
 
 
 class TestBaseOpenAIPassThroughHandler:
@@ -897,6 +927,176 @@ class TestVertexAIPassThroughHandler:
             # Verify model is set in kwargs
             assert "model" in result["kwargs"]
             assert result["kwargs"]["model"] == "textembedding-gecko@001"
+
+    def test_vertex_passthrough_handler_embed_content_response(self):
+        """
+        Test that vertex_passthrough_handler correctly handles :embedContent responses
+        and invokes cost/logging callbacks (regression for silent drop bug).
+        """
+        import datetime
+        from unittest.mock import Mock, patch
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        embed_content_response_data = {
+            "embedding": {
+                "values": [0.1, 0.2, 0.3, 0.4, 0.5],
+            }
+        }
+
+        mock_httpx_response = Mock()
+        mock_httpx_response.json.return_value = embed_content_response_data
+        mock_httpx_response.status_code = 200
+
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.litellm_call_id = "test-call-id-embed"
+        mock_logging_obj.model_call_details = {}
+
+        url_route = "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-001:embedContent"
+
+        start_time = datetime.datetime.now()
+        end_time = datetime.datetime.now()
+
+        with patch("litellm.completion_cost") as mock_completion_cost:
+            mock_completion_cost.return_value = 0.0002
+
+            result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                logging_obj=mock_logging_obj,
+                url_route=url_route,
+                result="test-result",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+            )
+
+        assert result is not None
+        assert (
+            result["result"] is not None
+        ), "result must not be None — logging callbacks need a non-null response"
+        assert "kwargs" in result
+        assert result["kwargs"].get("response_cost") == 0.0002
+        assert result["kwargs"].get("model") == "gemini-embedding-001"
+        assert result["kwargs"].get("custom_llm_provider") == "vertex_ai"
+        assert mock_logging_obj.model_call_details.get("response_cost") == 0.0002
+        mock_completion_cost.assert_called_once()
+
+    def test_vertex_passthrough_handler_batch_embed_contents_response(self):
+        """
+        Test that vertex_passthrough_handler correctly handles :batchEmbedContents responses.
+        """
+        import datetime
+        from unittest.mock import Mock, patch
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        batch_embed_response_data = {
+            "embeddings": [
+                {"values": [0.1, 0.2, 0.3]},
+                {"values": [0.4, 0.5, 0.6]},
+            ]
+        }
+
+        mock_httpx_response = Mock()
+        mock_httpx_response.json.return_value = batch_embed_response_data
+        mock_httpx_response.status_code = 200
+
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.litellm_call_id = "test-call-id-batch"
+        mock_logging_obj.model_call_details = {}
+
+        url_route = "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-001:batchEmbedContents"
+
+        start_time = datetime.datetime.now()
+        end_time = datetime.datetime.now()
+
+        with patch("litellm.completion_cost") as mock_completion_cost:
+            mock_completion_cost.return_value = 0.0003
+
+            result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                logging_obj=mock_logging_obj,
+                url_route=url_route,
+                result="test-result",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+            )
+
+        assert result is not None
+        assert (
+            result["result"] is not None
+        ), "result must not be None for batchEmbedContents"
+        assert result["kwargs"].get("response_cost") == 0.0003
+        assert result["kwargs"].get("model") == "gemini-embedding-001"
+        assert result["kwargs"].get("custom_llm_provider") == "vertex_ai"
+        mock_completion_cost.assert_called_once()
+
+    def test_vertex_passthrough_handler_embed_content_google_ai_studio_url(self):
+        """
+        Test that _handle_embed_content_response sets custom_llm_provider=gemini
+        when the URL is a generativelanguage.googleapis.com (Google AI Studio) endpoint.
+        """
+        import datetime
+        from unittest.mock import Mock, patch
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        embed_content_response_data = {
+            "embedding": {
+                "values": [0.1, 0.2, 0.3, 0.4, 0.5],
+            }
+        }
+
+        mock_httpx_response = Mock()
+        mock_httpx_response.json.return_value = embed_content_response_data
+        mock_httpx_response.status_code = 200
+
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.litellm_call_id = "test-call-id-gemini-studio"
+        mock_logging_obj.model_call_details = {}
+
+        # Google AI Studio URL (not Vertex AI)
+        url_route = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent"
+
+        start_time = datetime.datetime.now()
+        end_time = datetime.datetime.now()
+
+        with patch("litellm.completion_cost") as mock_completion_cost:
+            mock_completion_cost.return_value = 0.0001
+
+            result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                logging_obj=mock_logging_obj,
+                url_route=url_route,
+                result="test-result",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+            )
+
+        assert result is not None
+        assert result["result"] is not None
+        assert result["kwargs"].get("custom_llm_provider") == "gemini", (
+            "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
+        )
+        assert result["kwargs"].get("model") == "gemini-embedding-2-preview"
+        mock_completion_cost.assert_called_once()
 
 
 class TestVertexAIDiscoveryPassThroughHandler:

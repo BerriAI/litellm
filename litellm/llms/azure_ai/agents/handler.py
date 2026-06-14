@@ -36,6 +36,7 @@ from typing import (
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure_ai.agents.transformation import (
     AzureAIAgentsConfig,
     AzureAIAgentsError,
@@ -75,20 +76,29 @@ class AzureAIAgentsHandler:
     def _build_messages_url(
         self, api_base: str, thread_id: str, api_version: str
     ) -> str:
-        return f"{api_base}/threads/{thread_id}/messages?api-version={api_version}"
+        encoded_thread_id = encode_url_path_segment(thread_id, field_name="thread_id")
+        return (
+            f"{api_base}/threads/{encoded_thread_id}/messages?api-version={api_version}"
+        )
 
     def _build_runs_url(self, api_base: str, thread_id: str, api_version: str) -> str:
-        return f"{api_base}/threads/{thread_id}/runs?api-version={api_version}"
+        encoded_thread_id = encode_url_path_segment(thread_id, field_name="thread_id")
+        return f"{api_base}/threads/{encoded_thread_id}/runs?api-version={api_version}"
 
     def _build_run_status_url(
         self, api_base: str, thread_id: str, run_id: str, api_version: str
     ) -> str:
-        return f"{api_base}/threads/{thread_id}/runs/{run_id}?api-version={api_version}"
+        encoded_thread_id = encode_url_path_segment(thread_id, field_name="thread_id")
+        encoded_run_id = encode_url_path_segment(run_id, field_name="run_id")
+        return f"{api_base}/threads/{encoded_thread_id}/runs/{encoded_run_id}?api-version={api_version}"
 
     def _build_list_messages_url(
         self, api_base: str, thread_id: str, api_version: str
     ) -> str:
-        return f"{api_base}/threads/{thread_id}/messages?api-version={api_version}"
+        encoded_thread_id = encode_url_path_segment(thread_id, field_name="thread_id")
+        return (
+            f"{api_base}/threads/{encoded_thread_id}/messages?api-version={api_version}"
+        )
 
     def _build_create_thread_and_run_url(self, api_base: str, api_version: str) -> str:
         """URL for the create-thread-and-run endpoint (supports streaming)."""

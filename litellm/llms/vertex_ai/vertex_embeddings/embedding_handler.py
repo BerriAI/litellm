@@ -1,4 +1,4 @@
-from typing import Literal, Optional, Union
+from typing import Dict, Literal, Optional, Union
 
 import httpx
 
@@ -44,6 +44,7 @@ class VertexEmbedding(VertexBase):
         vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
+        litellm_params: Optional[Dict] = None,
     ) -> EmbeddingResponse:
         if aembedding is True:
             return self.async_embedding(  # type: ignore
@@ -61,6 +62,7 @@ class VertexEmbedding(VertexBase):
                 vertex_credentials=vertex_credentials,
                 gemini_api_key=gemini_api_key,
                 extra_headers=extra_headers,
+                litellm_params=litellm_params,
             )
 
         should_use_v1beta1_features = self.is_using_v1beta1_features(
@@ -92,7 +94,10 @@ class VertexEmbedding(VertexBase):
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
         vertex_request: VertexEmbeddingRequest = (
             litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
-                input=input, optional_params=optional_params, model=model
+                input=input,
+                optional_params=optional_params,
+                model=model,
+                litellm_params=litellm_params,
             )
         )
 
@@ -156,6 +161,7 @@ class VertexEmbedding(VertexBase):
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
         encoding=None,
+        litellm_params: Optional[Dict] = None,
     ) -> EmbeddingResponse:
         """
         Async embedding implementation
@@ -188,7 +194,10 @@ class VertexEmbedding(VertexBase):
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
         vertex_request: VertexEmbeddingRequest = (
             litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
-                input=input, optional_params=optional_params, model=model
+                input=input,
+                optional_params=optional_params,
+                model=model,
+                litellm_params=litellm_params,
             )
         )
 

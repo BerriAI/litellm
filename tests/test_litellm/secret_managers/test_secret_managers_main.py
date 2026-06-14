@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, normalize_nonempty_secret_str
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.DEBUG)
@@ -253,3 +253,17 @@ def test_unsupported_oidc_provider():
 
     with pytest.raises(ValueError, match="Unsupported OIDC provider"):
         get_secret(secret_name)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, None),
+        ("", None),
+        ("   \t\n", None),
+        ("abc", "abc"),
+        ("  xyz  ", "xyz"),
+    ],
+)
+def test_normalize_nonempty_secret_str(raw, expected):
+    assert normalize_nonempty_secret_str(raw) == expected

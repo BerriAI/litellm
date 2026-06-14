@@ -140,7 +140,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
 
         self.fallback_on_error = fallback_on_error
-        self.timeout = timeout
+        # Coerce defensively. The dashboard UI persists this field as a JSON
+        # string, and Pydantic extras (the path that splats model_dump into
+        # this handler) preserve whatever type the user supplied. A string
+        # value would otherwise reach httpx, which raises TypeError on its
+        # internal '<=' comparison and surfaces as a misleading api_error.
+        self.timeout = float(timeout) if timeout is not None else 10.0
 
         # Tri-state: None = not set (default-on for Anthropic), True = explicit on, False = explicit off
         self.experimental_use_latest_role_message_only: Optional[bool] = kwargs.get(

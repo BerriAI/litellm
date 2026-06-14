@@ -56,10 +56,7 @@ const MessageInput: React.FC<MessageInputProps> = ({
       </div>
 
       {isLoading && (
-        <TremorButton
-          onClick={onCancel}
-          className="bg-red-50 hover:bg-red-100 text-red-600 border-red-200"
-        >
+        <TremorButton onClick={onCancel} className="bg-red-50 hover:bg-red-100 text-red-600 border-red-200">
           Cancel
         </TremorButton>
       )}
@@ -68,4 +65,3 @@ const MessageInput: React.FC<MessageInputProps> = ({
 };
 
 export default MessageInput;
-

@@ -82,6 +82,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         model: str,
         api_key: Optional[str] = None,
         litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         final_api_key: Optional[str] = api_key or get_secret_str("RECRAFT_API_KEY")
         if not final_api_key:

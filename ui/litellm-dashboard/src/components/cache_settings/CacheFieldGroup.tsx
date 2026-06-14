@@ -21,7 +21,7 @@ const CacheFieldGroup: React.FC<CacheFieldGroupProps> = ({
     if (field.redis_type === null || field.redis_type === undefined) {
       return true;
     }
-    
+
     return field.redis_type === redisType;
   };
 
@@ -37,13 +37,7 @@ const CacheFieldGroup: React.FC<CacheFieldGroupProps> = ({
       <div className={`grid ${gridCols}`}>
         {visibleFields.map((field) => {
           const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
-          return (
-            <CacheFieldRenderer
-              key={field.field_name}
-              field={field}
-              currentValue={currentValue}
-            />
-          );
+          return <CacheFieldRenderer key={field.field_name} field={field} currentValue={currentValue} />;
         })}
       </div>
     </div>
@@ -51,4 +45,3 @@ const CacheFieldGroup: React.FC<CacheFieldGroupProps> = ({
 };
 
 export default CacheFieldGroup;
-

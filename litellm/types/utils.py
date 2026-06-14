@@ -107,9 +107,13 @@ class LiteLLMCommonStrings(Enum):
 SupportedCacheControls = ["ttl", "s-maxage", "no-cache", "no-store"]
 
 
-class CostPerToken(TypedDict):
-    input_cost_per_token: float
-    output_cost_per_token: float
+class CostPerToken(TypedDict, total=False):
+    # Required base rates — kept under total=False so we can mark them
+    # Required individually while leaving the cache rates NotRequired.
+    input_cost_per_token: Required[float]
+    output_cost_per_token: Required[float]
+    cache_read_input_token_cost: float
+    cache_creation_input_token_cost: float
 
 
 class ProviderField(TypedDict):
@@ -139,7 +143,15 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_reasoning: Optional[bool]
     supports_url_context: Optional[bool]
     supports_none_reasoning_effort: Optional[bool]
+    supports_minimal_reasoning_effort: Optional[bool]
+    supports_low_reasoning_effort: Optional[bool]
     supports_xhigh_reasoning_effort: Optional[bool]
+    supports_max_reasoning_effort: Optional[bool]
+    supports_output_config: Optional[bool]
+    supports_image_size: Optional[bool]
+    bedrock_output_config_effort_ceiling: Optional[
+        Literal["low", "medium", "high", "max", "xhigh"]
+    ]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -211,6 +223,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_priority: Optional[
         float
     ]  # OpenAI priority service tier pricing
+    regional_processing_uplift_multiplier_eu: Optional[
+        float
+    ]  # OpenAI EU data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
+    regional_processing_uplift_multiplier_us: Optional[
+        float
+    ]  # OpenAI US data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
@@ -236,6 +254,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     ocr_cost_per_page: Optional[float]  # for OCR models
+    ocr_cost_per_credit: Optional[float]  # for OCR models priced by credit
     annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
@@ -253,6 +272,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "chat",
             "audio_transcription",
             "responses",
+            "ocr",
         ]
     ]
     tpm: Optional[int]
@@ -822,6 +842,7 @@ API_ROUTE_TO_CALL_TYPES = {
     # Realtime API
     "/realtime": [CallTypes.arealtime],
     "/v1/realtime": [CallTypes.arealtime],
+    "/openai/v1/realtime": [CallTypes.arealtime],
     # Provider-specific routes
     "/anthropic/v1/messages": [CallTypes.anthropic_messages],
     # Google GenAI routes
@@ -2566,6 +2587,12 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     Cost per query for the MCP server tool call
     """
 
+    mcp_session_id: Optional[str]
+    """
+    The MCP `mcp-session-id` of the stateful session this tool call ran in, when
+    the client is driving a stateful session. Absent for stateless calls.
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """
@@ -2663,7 +2690,7 @@ class StandardLoggingHiddenParams(TypedDict):
     ]  # id of the model in the router, separates multiple models with the same name but different credentials
     cache_key: Optional[str]
     api_base: Optional[str]
-    response_cost: Optional[str]
+    response_cost: Optional[Union[str, float]]
     litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
     batch_models: Optional[List[str]]
@@ -2763,6 +2790,43 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     risk_score: Optional[float]
     """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
 
+    violation_categories: Optional[List[str]]
+    """Names of the policy items that intervened on this request (e.g. Bedrock
+    topic-policy topic names, content-policy filter types, PII entity types).
+    Populated by the provider hook before redaction so downstream loggers
+    (OTEL, Langfuse, ...) can filter by violation category without parsing
+    the raw guardrail_response blob. Empty/absent when the guardrail allowed
+    the request through."""
+
+    guardrail_action: Optional[str]
+    """Provider's raw top-level action string (e.g. Bedrock's ``GUARDRAIL_INTERVENED``
+    or ``NONE``). Populated by the provider hook so the OTEL integration can
+    surface it as a queryable span attribute without parsing the raw
+    guardrail_response blob."""
+
+
+class EvalVerdict(TypedDict, total=False):
+    criterion_name: str
+    score: float  # 0-100
+    reasoning: str
+    passed: bool
+    weight: int  # criterion weight (0-100) as configured in the guardrail
+
+
+class StandardLoggingEvalInformation(TypedDict, total=False):
+    eval_id: Optional[str]
+    eval_name: str
+    overall_score: float
+    passed: bool
+    judge_model: str
+    iteration: int
+    eval_error: Optional[str]
+    start_time: str
+    end_time: str
+    duration: float
+    verdicts: List[Any]
+    threshold: Optional[float]
+
 
 class GuardrailTracingDetail(TypedDict, total=False):
     """
@@ -2781,6 +2845,8 @@ class GuardrailTracingDetail(TypedDict, total=False):
     patterns_checked: Optional[int]
     alert_recipients: Optional[List[str]]
     risk_score: Optional[float]
+    violation_categories: Optional[List[str]]
+    guardrail_action: Optional[str]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -2857,6 +2923,7 @@ class StandardAuditLogPayload(TypedDict):
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
+    litellm_call_id: Optional[str]  # UUID returned in x-litellm-call-id response header
     call_type: str
     stream: Optional[bool]
     response_cost: float
@@ -3126,6 +3193,7 @@ all_litellm_params = (
         "allowed_openai_params",
         "litellm_session_id",
         "use_litellm_proxy",
+        "use_chat_completions_api",
         "prompt_label",
         "shared_session",
         "search_tool_name",
@@ -3193,6 +3261,7 @@ class LlmProviders(str, Enum):
     ANTHROPIC_TEXT = "anthropic_text"
     BYTEZ = "bytez"
     REPLICATE = "replicate"
+    REDUCTO = "reducto"
     RUNWAYML = "runwayml"
     AWS_POLLY = "aws_polly"
     HUGGINGFACE = "huggingface"
@@ -3226,6 +3295,8 @@ class LlmProviders(str, Enum):
     A2A = "a2a"
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
+    NVIDIA_RIVA = "nvidia_riva"
+    SONIOX = "soniox"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
@@ -3237,6 +3308,8 @@ class LlmProviders(str, Enum):
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
+    INCEPTION = "inception"
+    TEXT_COMPLETION_INCEPTION = "text-completion-inception"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
@@ -3296,19 +3369,23 @@ class LlmProviders(str, Enum):
     MANUS = "manus"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
+    SCALEWAY = "scaleway"
     LEMONADE = "lemonade"
     HUNYUAN = "hunyuan"
     HUNYUAN_MAAS = "hunyuan_maas"
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
+    LANGFLOW = "langflow"
     MINIMAX = "minimax"
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"
     NANOGPT = "nano-gpt"
     POE = "poe"
     CHUTES = "chutes"
+    NEOSANTARA = "neosantara"
     XIAOMI_MIMO = "xiaomi_mimo"
+    TENSORMESH = "tensormesh"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3349,6 +3426,8 @@ class SearchProviders(str, Enum):
     DUCKDUCKGO = "duckduckgo"
     SEARCHAPI = "searchapi"
     SERPER = "serper"
+    YOU_COM = "you_com"
+    APISERPENT = "apiserpent"
 
 
 # Create a set of all search provider values for quick lookup
@@ -3547,12 +3626,30 @@ class SpecialEnums(Enum):
         "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
     )
 
+    LITELLM_PASSTHROUGH_MANAGED_ID_COMPLETE_STR = (
+        "litellm_proxy:passthrough;provider:{};unified_id,{};raw_id,{}"
+    )
+
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
 
     FLEX = "flex"
     PRIORITY = "priority"
+
+
+class DataResidency(Enum):
+    """
+    OpenAI data-residency / regional-processing regions.
+
+    Inferred from the OpenAI api_base host (eu.api.openai.com -> EU,
+    us.api.openai.com -> US). Used to apply the regional-processing
+    cost uplift (see ``regional_processing_uplift_multiplier_<region>``
+    on ModelInfo).
+    """
+
+    US = "us"
+    EU = "eu"
 
 
 LLMResponseTypes = Union[

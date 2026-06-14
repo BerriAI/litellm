@@ -1,0 +1,131 @@
+name: "Mutation Test (manual)"
+
+# Manually-triggered mutation testing. Runs mutmut against the scope
+# configured in [tool.mutmut] in pyproject.toml (currently the
+# litellm/proxy/management_endpoints/ folder). Intended cadence is roughly
+# weekly — clicked from the Actions tab when someone wants a fresh report.
+#
+# Uploads a structured `mutation-report.md` (Meta ACH-style: original +
+# mutated function with `# MUTANT START`/`# MUTANT END` delimiters + the
+# existing tests + a task instruction) as a workflow artifact. Failures
+# do not block anything because nothing depends on this workflow.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutation:
+    name: Run mutmut
+    runs-on: ubuntu-latest
+    # Whole-folder mutation against ~15 files / ~7.5k LOC can take hours.
+    # 350 minutes is just under the GitHub-hosted job cap of 360 minutes.
+    timeout-minutes: 350
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
+
+      - name: Cache uv dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install dependencies
+        run: |
+          uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+
+      - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      # mutmut 3.x runs tests inside a `mutants/` sandbox where it injects
+      # mutation trampolines. uv installs the project as editable by default,
+      # which puts the original source dir on sys.path via a .pth file and
+      # shadows the sandbox copy — so tests would never exercise the mutated
+      # code. Reinstalling non-editable removes the .pth shadow.
+      - name: Reinstall litellm non-editable (so mutants/ is not shadowed)
+        run: |
+          uv pip uninstall litellm
+          uv pip install . --no-deps
+
+      # pytest-retry's pytest_configure hook crashes with
+      # `INTERNALERROR: no option named 'filtered_exceptions'` when invoked
+      # via mutmut's in-process pytest.main() call. The entry-point name
+      # doesn't normalize cleanly with `-p no:<name>`, so just remove the
+      # package outright. Reruns are wrong for mutation testing anyway —
+      # rerunning a "failed" mutant test would mask which mutants are killed.
+      - name: Remove pytest plugins that conflict with mutmut
+        run: |
+          uv pip uninstall pytest-retry || true
+
+      - name: Run mutmut
+        env:
+          # Make the mutants/ sandbox win over site-packages on sys.path so the
+          # trampolined files are imported instead of the installed copy.
+          PYTHONPATH: ${{ github.workspace }}/mutants
+        run: |
+          set -o pipefail
+          mkdir -p mutants
+          uv run --no-sync --with mutmut==3.5.0 mutmut run 2>&1 | tee mutmut-run.log
+
+      # Generate the structured report. The script embeds the enclosing
+      # function source for each survivor (via Python AST) and includes the
+      # existing test files, so an LLM agent has enough context to write
+      # killing tests without further file lookups. Modeled on Meta's ACH
+      # prompt template (arXiv 2501.12862).
+      - name: Generate detailed mutation report
+        if: always()
+        run: |
+          set +e
+          uv run --no-sync --with mutmut==3.5.0 mutmut export-cicd-stats > /dev/null 2>&1
+          uv run --no-sync --with mutmut==3.5.0 mutmut results > mutmut-results.txt 2>&1
+          uv run --no-sync python scripts/mutation_report.py
+          # The full report can be very long for big test files; the run-page
+          # summary cuts off at 1 MB. Append the head of the report (summary
+          # + survivor list) and link out to the artifact for the full body.
+          {
+            head -c 900000 mutation-report.md
+            echo ""
+            echo ""
+            echo "_Full report (with embedded function bodies and test files) is in the workflow artifact._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload mutmut artifacts
+        if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: mutmut-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            mutation-report.md
+            mutmut-results.txt
+            mutmut-run.log
+            mutants/mutmut-stats.json
+            mutants/mutmut-cicd-stats.json
+            mutants/litellm/proxy/management_endpoints/**/*.py
+          if-no-files-found: warn
+          retention-days: 14

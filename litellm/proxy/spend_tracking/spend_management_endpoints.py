@@ -21,7 +21,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -37,9 +36,18 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def spend_key_fn():
+async def spend_key_fn(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    View all keys created, ordered by spend
+    View keys created, ordered by spend.
+
+    - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see every key in
+      the database.
+    - All other callers (INTERNAL_USER / INTERNAL_USER_VIEW_ONLY, etc.) are
+      scoped to keys they own (``user_id == caller``). A caller with no
+      ``user_id`` has no scope and receives an empty list rather than the
+      full table.
 
     Example Request:
     ```
@@ -56,8 +64,17 @@ async def spend_key_fn():
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
-        return key_info
+        if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+            return await prisma_client.get_data(table_name="key", query_type="find_all")
+
+        caller_user_id = user_api_key_dict.user_id
+        if not caller_user_id:
+            return []
+        return await prisma_client.get_data(
+            table_name="key",
+            query_type="find_all",
+            user_id=caller_user_id,
+        )
 
     except Exception as e:
         raise HTTPException(
@@ -86,9 +103,19 @@ async def spend_user_fn(
         default=None,
         description="Get User Table row for user_id",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    View all users created, ordered by spend
+    View users created, ordered by spend.
+
+    - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see every user, or
+      a specific user when ``user_id`` is supplied.
+    - All other callers may only read their own row. If they supply a
+      ``user_id`` query parameter that does not match their authenticated
+      ``user_id`` the request is rejected with HTTP 403; supplying their
+      own id (or none at all) returns just their row. A caller with no
+      ``user_id`` on their key has no scope and receives an empty list
+      rather than the full table.
 
     Example Request:
     ```
@@ -110,6 +137,17 @@ async def spend_user_fn(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
+        if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+            caller_user_id = user_api_key_dict.user_id
+            if not caller_user_id:
+                return []
+            if user_id is not None and user_id != caller_user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": "Not authorized to view spend for another user."},
+                )
+            user_id = caller_user_id
+
         if user_id is not None:
             user_info = await prisma_client.get_data(
                 table_name="user", query_type="find_unique", user_id=user_id
@@ -124,6 +162,8 @@ async def spend_user_fn(
         _strip_password_from_users(result)
         return result
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1740,6 +1780,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default=None,
         description="Filter logs by model ID (litellm model deployment id)",
     ),
+    model_group: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by model group"
+    ),
     key_alias: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by key alias"
     ),
@@ -1754,7 +1797,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     ),
     sort_by: str = fastapi.Query(
         default="startTime",
-        description="Sort logs by field: spend, total_tokens, startTime, or endTime",
+        description="Sort logs by field: spend, total_tokens, startTime, endTime, request_duration_ms, model, or ttft_ms",
     ),
     sort_order: Optional[str] = fastapi.Query(
         default="desc",
@@ -1798,6 +1841,8 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         "startTime",
         "endTime",
         "request_duration_ms",
+        "model",
+        "ttft_ms",
     }
     if sort_by not in valid_sort_fields:
         raise ProxyException(
@@ -1815,7 +1860,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     try:
-        is_v2 = "/spend/logs/v2" in request.url.path
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+        is_v2 = "/spend/logs/v2" in get_request_route(request)
         formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
 
         def parse_date(date_str: str) -> datetime:
@@ -1868,6 +1916,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         if model_id is not None:
             where_conditions["model_id"] = model_id
+
+        if model_group is not None:
+            where_conditions["model_group"] = model_group
 
         # Build metadata filters
         metadata_filters = []
@@ -1992,6 +2043,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             ("request_id", "request_id"),
             ("model", "model"),
             ("model_id", "model_id"),
+            ("model_group", "model_group"),
             ("end_user", "end_user"),
         ]:
             val = where_conditions.get(wc_key)
@@ -2045,13 +2097,26 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             sql_params.append(f"%{error_message}%")
             p += 1
 
-        # Quote column names that need quoting in SQL
-        _sql_col = (
-            f'"{order_column}"'
-            if order_column in ("startTime", "endTime")
-            else order_column
-        )
+        # Build the ORDER BY expression. ttft_ms is computed from
+        # completionStartTime - startTime; non-streaming rows (where
+        # completionStartTime is null or equals endTime) yield NULL, so we
+        # append NULLS LAST in that case to keep them at the bottom regardless
+        # of direction. The other sort columns are non-null in the result set,
+        # so we leave the NULLS clause off and preserve their existing DESC
+        # semantics.
         _sql_dir = "ASC" if order_direction == "asc" else "DESC"
+        _nulls_clause = ""
+        if order_column == "ttft_ms":
+            _order_expr = (
+                'CASE WHEN "completionStartTime" IS NULL '
+                'OR "completionStartTime" = "endTime" THEN NULL '
+                'ELSE (EXTRACT(EPOCH FROM ("completionStartTime" - "startTime")) * 1000) END'
+            )
+            _nulls_clause = " NULLS LAST"
+        elif order_column in ("startTime", "endTime"):
+            _order_expr = f'"{order_column}"'
+        else:
+            _order_expr = order_column
 
         sql_query = f"""
             SELECT
@@ -2065,7 +2130,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                 COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
             FROM "LiteLLM_SpendLogs"
             WHERE {" AND ".join(sql_conditions)}
-            ORDER BY {_sql_col} {_sql_dir}
+            ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
             LIMIT ${p} OFFSET ${p + 1}
         """
         sql_params.extend([page_size, skip])
@@ -3064,7 +3129,11 @@ async def global_spend_models(
     return response
 
 
-@router.get("/provider/budgets", response_model=ProviderBudgetResponse)
+@router.get(
+    "/provider/budgets",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ProviderBudgetResponse,
+)
 async def provider_budgets() -> ProviderBudgetResponse:
     """
     Provider Budget Routing - Get Budget, Spend Details https://docs.litellm.ai/docs/proxy/provider_budget_routing
@@ -3127,18 +3196,12 @@ async def provider_budgets() -> ProviderBudgetResponse:
                 "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
             )
 
+        router_budget_logger = llm_router._get_router_deployment_budget_limiter()
+        if router_budget_logger is None:
+            raise ValueError("No router budget logger found")
+
         provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
         for _provider, _budget_info in provider_budget_config.items():
-            router_budget_logger = next(
-                (
-                    cb
-                    for cb in (llm_router.optional_callbacks or [])
-                    if isinstance(cb, RouterBudgetLimiting)
-                ),
-                None,
-            )
-            if router_budget_logger is None:
-                raise ValueError("No router budget logger found")
             _provider_spend = (
                 await router_budget_logger._get_current_provider_spend(_provider) or 0.0
             )
@@ -3165,16 +3228,14 @@ async def provider_budgets() -> ProviderBudgetResponse:
 async def get_spend_by_tags(
     prisma_client: PrismaClient, start_date=None, end_date=None
 ):
-    response = await prisma_client.db.query_raw(
-        """
+    response = await prisma_client.db.query_raw("""
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         COUNT(*) AS log_count,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
         GROUP BY individual_request_tag;
-        """
-    )
+        """)
 
     return response
 

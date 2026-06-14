@@ -450,3 +450,193 @@ async def test_semantic_filter_hook_skips_no_tools():
     # Should return None (no modification)
     assert result is None, "Hook should skip requests without tools"
     print("✅ Hook correctly skips requests without tools")
+
+
+class TestGetToolsByNames:
+    """
+    Regression coverage for SemanticMCPToolFilter._get_tools_by_names
+    name-matching behavior (issue #26078).
+
+    The canonical name stored in the router is what the proxy's MCP
+    registry emits (e.g. ``fc_web_search-firecrawl_scrape``). Some MCP
+    clients — notably opencode — wrap every tool name with their own
+    additive namespace prefix before sending it back in ``tools[]``, so
+    the incoming name is ``litellm_fc_web_search-firecrawl_scrape``.
+
+    Exact-equality matching against the canonical dropped every such
+    tool, the proxy forwarded ``tools: []`` with ``tool_choice: auto``,
+    and strict upstream providers returned 400.
+    """
+
+    def _make_filter(self):
+        from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+            SemanticMCPToolFilter,
+        )
+
+        return SemanticMCPToolFilter(
+            embedding_model="text-embedding-3-small",
+            litellm_router_instance=Mock(),
+            top_k=5,
+            similarity_threshold=0.3,
+            enabled=True,
+        )
+
+    def test_exact_match_unchanged(self):
+        """Incoming name equals canonical — the historical path still works."""
+        filter_instance = self._make_filter()
+        available_tools = [
+            {"name": "get_weather", "description": "fetch weather"},
+            {"name": "send_email", "description": "send mail"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            ["send_email"], available_tools
+        )
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == "send_email"
+
+    def test_client_prefix_with_underscore_separator(self):
+        """Client wraps canonical with ``<alias>_`` (opencode pattern)."""
+        filter_instance = self._make_filter()
+        canonical = "fc_web_search-firecrawl_scrape"
+        client_name = "litellm_" + canonical
+        available_tools = [{"name": client_name, "description": "scrape"}]
+
+        matched = filter_instance._get_tools_by_names(
+            [canonical], available_tools
+        )
+
+        assert len(matched) == 1
+        # Must return the incoming tool unchanged so the client-facing
+        # name survives, otherwise tool-call round-trips break client-side.
+        assert matched[0]["name"] == client_name
+
+    def test_client_prefix_with_dash_separator(self):
+        """Some clients use dash as alias separator; accept that too."""
+        filter_instance = self._make_filter()
+        canonical = "weather_svc-get_weather"
+        available_tools = [
+            {"name": "mcp-" + canonical, "description": "weather"}
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            [canonical], available_tools
+        )
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == "mcp-" + canonical
+
+    def test_suffix_without_separator_does_not_match(self):
+        """
+        A bare-substring suffix must not match — ``rain_gear`` is not a
+        namespaced version of canonical ``ear`` and the user would be
+        surprised to see it selected.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [{"name": "rain_gear", "description": "raincoat"}]
+
+        matched = filter_instance._get_tools_by_names(["ear"], available_tools)
+
+        assert matched == []
+
+    def test_exact_match_preferred_over_prefixed(self):
+        """
+        When both a bare canonical and a client-prefixed variant are
+        present, the bare one wins so ordering is stable.
+        """
+        filter_instance = self._make_filter()
+        canonical = "search"
+        available_tools = [
+            {"name": canonical, "description": "plain"},
+            {"name": "litellm_" + canonical, "description": "wrapped"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            [canonical], available_tools
+        )
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == canonical
+
+    def test_same_tool_not_returned_twice(self):
+        """
+        Two distinct canonicals that both suffix-match the same incoming
+        tool must not produce a duplicate in the output list.
+        ``fs-read_file`` and ``api-fs-read_file`` are both valid
+        separator-anchored suffixes of ``litellm_api-fs-read_file``.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [
+            {"name": "litellm_api-fs-read_file", "description": "read"}
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            ["fs-read_file", "api-fs-read_file"], available_tools
+        )
+
+        assert len(matched) == 1
+
+    def test_suffix_fallback_prefers_shortest_candidate(self):
+        """
+        When no exact match exists and several incoming tools
+        suffix-match the same canonical, the one closest in length to
+        the canonical (i.e. the least-wrapped) should be chosen.
+        """
+        filter_instance = self._make_filter()
+        canonical = "svc-search"
+        available_tools = [
+            {"name": "my_tag_" + canonical, "description": "tag search"},
+            {"name": "my_" + canonical, "description": "plain search"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            [canonical], available_tools
+        )
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == "my_" + canonical
+
+    def test_ordering_follows_router_output(self):
+        """Returned tools follow the order the semantic router chose."""
+        filter_instance = self._make_filter()
+        available_tools = [
+            {"name": "litellm_fs-read", "description": "read"},
+            {"name": "litellm_fs-write", "description": "write"},
+            {"name": "litellm_fs-delete", "description": "delete"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            ["fs-write", "fs-delete", "fs-read"], available_tools
+        )
+
+        names = [t["name"] for t in matched]
+        assert names == [
+            "litellm_fs-write",
+            "litellm_fs-delete",
+            "litellm_fs-read",
+        ]
+
+    def test_does_not_collide_with_local_function_on_unprefixed_canonical(self):
+        """
+        Guard against the collision @krrish-berri-2 flagged on #26117:
+        if the canonical name from the router is not server-prefixed
+        (i.e. does not contain ``MCP_TOOL_PREFIX_SEPARATOR``), suffix
+        matching must not kick in. Otherwise an unrelated local user
+        function whose name happens to end in the canonical substring
+        would be spuriously selected.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [
+            {
+                "name": "my_firecrawl_scrape",
+                "description": "unrelated local function",
+            },
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            ["firecrawl_scrape"],  # no MCP_TOOL_PREFIX_SEPARATOR in canonical
+            available_tools,
+        )
+
+        assert matched == []

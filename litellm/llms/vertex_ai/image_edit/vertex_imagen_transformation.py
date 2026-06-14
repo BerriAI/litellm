@@ -104,9 +104,15 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         model: str,
         api_key: Optional[str] = None,
         litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         headers = headers or {}
         litellm_params = litellm_params or {}
+
+        _api_base = litellm_params.get("api_base") or api_base
+        if _api_base is not None:
+            return headers
+
         vertex_project = (
             self.safe_get_vertex_ai_project(litellm_params)
             or self._resolve_vertex_project()
@@ -362,13 +368,16 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
             if stream_pos is not None:
                 image.seek(stream_pos)
             return data
-        if isinstance(image, (str, Path)):
-            path_obj = Path(image)
-            if not path_obj.exists():
-                raise ValueError(
-                    f"Mask/image path does not exist for Vertex AI Imagen image edit: {path_obj}"
-                )
-            return path_obj.read_bytes()
+        if isinstance(image, str):
+            raise ValueError(
+                "Unsupported image input: plain string values are not accepted for "
+                "Vertex AI Imagen image edit. Provide image bytes or a file-like object."
+            )
+        if isinstance(image, Path):
+            raise ValueError(
+                "Unsupported image input: filesystem paths are not accepted for "
+                "Vertex AI Imagen image edit. Provide image bytes or a file-like object."
+            )
         if hasattr(image, "read"):
             data = image.read()
             if isinstance(data, str):

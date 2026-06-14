@@ -6,12 +6,7 @@ import { Form, Input, Modal, Select, Spin, Table } from "antd";
 import React, { useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
-import {
-  deleteSearchTool,
-  fetchAvailableSearchProviders,
-  fetchSearchTools,
-  updateSearchTool,
-} from "../networking";
+import { deleteSearchTool, fetchAvailableSearchProviders, fetchSearchTools, updateSearchTool } from "../networking";
 import CreateSearchTool from "./CreateSearchTools";
 import { searchToolColumns } from "./SearchToolColumn";
 import { SearchToolView } from "./SearchToolView";
@@ -22,7 +17,6 @@ interface SearchToolsProps {
   userRole: string | null;
   userID: string | null;
 }
-
 
 const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID }) => {
   const {
@@ -38,10 +32,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     enabled: !!accessToken,
   }) as { data: SearchTool[]; isLoading: boolean; refetch: () => void };
 
-  const {
-    data: providersResponse,
-    isLoading: isLoadingProviders,
-  } = useQuery({
+  const { data: providersResponse, isLoading: isLoadingProviders } = useQuery({
     queryKey: ["searchProviders"],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
@@ -144,9 +135,11 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
           timeout: values.timeout ? parseFloat(values.timeout) : undefined,
           max_retries: values.max_retries ? parseInt(values.max_retries) : undefined,
         },
-        search_tool_info: values.description ? {
-          description: values.description,
-        } : undefined,
+        search_tool_info: values.description
+          ? {
+              description: values.description,
+            }
+          : undefined,
       };
 
       await updateSearchTool(accessToken, selectedToolId, searchToolData);
@@ -236,7 +229,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
             size="small"
           />
         </Spin>
-
       </div>
     );
 
@@ -250,14 +242,14 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         resourceInformation={
           toolToDelete
             ? [
-              { label: "Name", value: toolToDelete.search_tool_name },
-              { label: "ID", value: toolToDelete.search_tool_id, code: true },
-              {
-                label: "Provider",
-                value: providerInfo?.ui_friendly_name || toolToDelete.litellm_params.search_provider,
-              },
-              { label: "Description", value: toolToDelete.search_tool_info?.description || "-" },
-            ]
+                { label: "Name", value: toolToDelete.search_tool_name },
+                { label: "ID", value: toolToDelete.search_tool_id, code: true },
+                {
+                  label: "Provider",
+                  value: providerInfo?.ui_friendly_name || toolToDelete.litellm_params.search_provider,
+                },
+                { label: "Description", value: toolToDelete.search_tool_info?.description || "-" },
+              ]
             : []
         }
         onCancel={cancelDelete}

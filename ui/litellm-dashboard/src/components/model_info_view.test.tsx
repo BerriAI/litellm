@@ -250,6 +250,33 @@ describe("ModelInfoView", () => {
     });
   });
 
+  it("should pass model_info.id to disambiguate duplicate model_name deployments", async () => {
+    // Regression test: when two deployments share `model_name` (e.g.
+    // wildcard `openai/*` with different `api_base` values), the UI
+    // must forward the clicked row's `model_info.id` to the backend.
+    // Otherwise /health/test_connection silently probes deployments[0]
+    // instead of the deployment the user actually selected.
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+    });
+
+    const testButton = screen.getByRole("button", { name: /test connection/i });
+    await user.click(testButton);
+
+    await waitFor(() => {
+      expect(mockTestConnectionRequest).toHaveBeenCalled();
+    });
+
+    const callArgs = mockTestConnectionRequest.mock.calls[0];
+    // Signature: (accessToken, litellm_params, model_info, mode)
+    const modelInfoArg = callArgs[2] as Record<string, unknown>;
+    expect(modelInfoArg).toBeDefined();
+    expect(modelInfoArg.id).toBe("123");
+  });
+
   it("should display error notification when connection test fails", async () => {
     const user = userEvent.setup();
     mockTestConnectionRequest.mockRejectedValue(new Error("Connection failed"));
@@ -530,8 +557,7 @@ describe("ModelInfoView", () => {
       .getAllByRole("textbox")
       .find(
         (input) =>
-          input.tagName === "TEXTAREA" &&
-          (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
+          input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
       );
     expect(litellmParamsInput).toBeDefined();
     if (!litellmParamsInput) {
@@ -577,6 +603,34 @@ describe("ModelInfoView", () => {
 
     const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
     expect(updatePayload.litellm_params).not.toHaveProperty("vector_store_ids");
+  });
+
+  it("should not include input_cost_per_token or output_cost_per_token in update payload when user does not touch cost fields", async () => {
+    // Regression: editing a model without touching cost fields used to inject
+    // input_cost_per_token: 0 and output_cost_per_token: 0 into litellm_params,
+    // overriding the built-in pricing table from model_prices_and_context_window.json.
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params).not.toHaveProperty("input_cost_per_token");
+    expect(updatePayload.litellm_params).not.toHaveProperty("output_cost_per_token");
   });
 
   it("should display health check model field for wildcard models", async () => {
@@ -632,7 +686,6 @@ describe("ModelInfoView", () => {
       expect(screen.getByRole("button", { name: /edit auto router/i })).toBeInTheDocument();
     });
   });
-
 
   it("should display model access groups field", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });

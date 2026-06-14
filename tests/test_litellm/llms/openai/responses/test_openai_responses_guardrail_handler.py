@@ -995,3 +995,63 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
 
         # Should return the responses
         assert result == responses_so_far
+
+
+class TestGetStructuredMessages:
+    """Test the get_structured_messages method for Responses API handler."""
+
+    def test_should_convert_string_input_to_messages(self):
+        """Test that a simple string input is converted to OpenAI messages."""
+        handler = OpenAIResponsesHandler()
+        data = {"input": "What is the capital of France?"}
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert len(result) >= 1
+        found_user = False
+        for msg in result:
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                found_user = True
+                break
+        assert found_user, f"Expected a user message, got: {result}"
+
+    def test_should_convert_list_input_to_messages(self):
+        """Test that list input (ResponseInputParam) is converted to OpenAI messages."""
+        handler = OpenAIResponsesHandler()
+        data = {
+            "input": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+                {"role": "user", "content": "How are you?"},
+            ]
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert len(result) >= 3
+
+    def test_should_include_instructions_as_system_message(self):
+        """Test that instructions are included as a system message."""
+        handler = OpenAIResponsesHandler()
+        data = {
+            "input": "Roll a d20",
+            "instructions": "You are a helpful dungeon master.",
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        has_system = any(
+            isinstance(msg, dict) and msg.get("role") == "system" for msg in result
+        )
+        assert has_system, f"Expected system message from instructions, got: {result}"
+
+    def test_should_return_none_when_no_input(self):
+        """Test that None is returned when input key is missing."""
+        handler = OpenAIResponsesHandler()
+        data = {"model": "gpt-4o"}
+        result = handler.get_structured_messages(data)
+        assert result is None
+
+    def test_should_return_none_for_none_input(self):
+        """Test that None is returned when input is explicitly None."""
+        handler = OpenAIResponsesHandler()
+        data = {"input": None}
+        result = handler.get_structured_messages(data)
+        assert result is None
