@@ -12409,3 +12409,26 @@ async def test_build_model_max_budget_usage_skips_model_without_duration():
     )
     assert "gpt-4o" in result
     assert "gpt-3.5-turbo" not in result
+
+
+@pytest.mark.asyncio
+async def test_build_model_max_budget_usage_unparseable_duration_skipped():
+    """A truthy but unparseable budget_duration string is swallowed; max_seconds stays 0."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_model_max_budget_usage,
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    result = await _build_model_max_budget_usage(
+        api_key_hash="some-hash",
+        model_max_budget={
+            "gpt-4o": {"budget_limit": 1.0, "budget_duration": "not-valid"}
+        },
+        budget_table=None,
+        prisma_client=mock_prisma_client,
+    )
+    assert result == {}
+    mock_prisma_client.db.query_raw.assert_not_awaited()
