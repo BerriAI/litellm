@@ -6184,7 +6184,7 @@ def _get_model_info_helper(  # noqa: PLR0915
         # without a corresponding code change.
         for _k, _v in _model_info.items():
             if "_above_" in _k and _k not in result:
-                dict.__setitem__(result, _k, _v)  # type: ignore[literal-required]
+                dict.__setitem__(result, _k, _v)  # type: ignore[literal-required,index]
 
         return result
     except Exception as e:
