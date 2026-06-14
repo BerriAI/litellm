@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.litellm_core_utils.core_helpers import filter_internal_params
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -168,6 +169,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             for k, v in inference_params.items()
             if k not in self.aws_authentication_params
         }
+        inference_params = filter_internal_params(inference_params)
         request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
