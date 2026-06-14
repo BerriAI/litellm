@@ -3291,10 +3291,7 @@ async def _build_model_max_budget_usage(
         if isinstance(budget_reset_at, datetime):
             period_end: datetime = budget_reset_at
         else:
-            try:
-                period_end = datetime.fromisoformat(str(budget_reset_at))
-            except Exception:
-                period_end = datetime.now(tz=timezone.utc)
+            period_end = datetime.fromisoformat(str(budget_reset_at))
     else:
         max_seconds = 0
         for budget_info in model_max_budget.values():

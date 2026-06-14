@@ -11862,7 +11862,6 @@ async def test_ghsa_q775_default_team_id_does_not_grant_session_token_exemption(
         assert "cannot exceed" in msg.lower()
 
 
-
 @pytest.mark.asyncio
 async def test_prepare_key_update_data_budget_duration_null_clears_fields():
     """
@@ -12106,7 +12105,8 @@ async def test_info_key_fn_v2_includes_model_max_budget_usage(monkeypatch):
 @pytest.mark.asyncio
 async def test_info_key_fn_budget_table_fallback(monkeypatch):
     """When model_max_budget is empty on the key but set in litellm_budget_table,
-    /key/info should still populate model_max_budget_usage, reading spend from SpendLogs."""
+    /key/info should still populate model_max_budget_usage, reading spend from SpendLogs.
+    """
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._types import LiteLLM_VerificationToken
@@ -12145,9 +12145,7 @@ async def test_info_key_fn_budget_table_fallback(monkeypatch):
         return_value=mock_key_info
     )
     mock_prisma_client.db.query_raw = AsyncMock(
-        return_value=[
-            {"model": "bedrock/anthropic.claude-opus-4", "total_spend": 1.20}
-        ]
+        return_value=[{"model": "bedrock/anthropic.claude-opus-4", "total_spend": 1.20}]
     )
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -12207,9 +12205,7 @@ async def test_info_key_fn_v2_budget_table_fallback(monkeypatch):
 
     mock_prisma_client.get_data = AsyncMock(return_value=[mock_key])
     mock_prisma_client.db.query_raw = AsyncMock(
-        return_value=[
-            {"model": "bedrock/anthropic.claude-opus-4", "total_spend": 2.50}
-        ]
+        return_value=[{"model": "bedrock/anthropic.claude-opus-4", "total_spend": 2.50}]
     )
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -12283,3 +12279,133 @@ async def test_info_key_fn_provider_prefix_spend_fallback(monkeypatch):
     assert "model_max_budget_usage" in result["info"]
     usage = result["info"]["model_max_budget_usage"]
     assert usage["openai/gpt-4o"]["current_spend"] == 0.75
+
+
+def test_compute_budget_period_start_invalid_duration():
+    """_compute_budget_period_start returns None when budget_duration can't be parsed."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _compute_budget_period_start,
+    )
+
+    result = _compute_budget_period_start(
+        budget_reset_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        budget_duration="not-a-valid-duration",
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_query_model_spend_for_period_db_error_returns_empty():
+    """_query_model_spend_for_period swallows DB exceptions and returns {}."""
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _query_model_spend_for_period,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=Exception("connection lost")
+    )
+
+    result = await _query_model_spend_for_period(
+        api_key_hash="some-hash",
+        period_start=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        period_end=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        prisma_client=mock_prisma_client,
+    )
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_build_model_max_budget_usage_no_prisma_returns_empty():
+    """_build_model_max_budget_usage returns {} immediately when prisma_client is None."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_model_max_budget_usage,
+    )
+
+    result = await _build_model_max_budget_usage(
+        api_key_hash="some-hash",
+        model_max_budget={"gpt-4o": {"budget_limit": 1.0, "time_period": "1d"}},
+        budget_table=None,
+        prisma_client=None,
+    )
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_build_model_max_budget_usage_datetime_reset_at():
+    """budget_reset_at stored as a datetime object (as Prisma returns it) is used directly."""
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_model_max_budget_usage,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        return_value=[{"model": "gpt-4o", "total_spend": 0.30}]
+    )
+
+    reset_dt = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    result = await _build_model_max_budget_usage(
+        api_key_hash="some-hash",
+        model_max_budget={"gpt-4o": {"budget_limit": 1.0, "time_period": "30d"}},
+        budget_table={"budget_reset_at": reset_dt, "budget_duration": "30d"},
+        prisma_client=mock_prisma_client,
+    )
+    assert result["gpt-4o"]["current_spend"] == 0.30
+    call_args = mock_prisma_client.db.query_raw.call_args
+    assert reset_dt.isoformat() in call_args.args
+
+
+@pytest.mark.asyncio
+async def test_build_model_max_budget_usage_no_duration_in_budget_returns_empty():
+    """Returns {} when no model in model_max_budget has a budget_duration (max_seconds=0)."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_model_max_budget_usage,
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    result = await _build_model_max_budget_usage(
+        api_key_hash="some-hash",
+        model_max_budget={"gpt-4o": {"budget_limit": 1.0}},
+        budget_table=None,
+        prisma_client=mock_prisma_client,
+    )
+    assert result == {}
+    mock_prisma_client.db.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_build_model_max_budget_usage_skips_model_without_duration():
+    """Models without budget_duration are omitted from the result."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_model_max_budget_usage,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        return_value=[{"model": "gpt-4o", "total_spend": 0.10}]
+    )
+
+    result = await _build_model_max_budget_usage(
+        api_key_hash="some-hash",
+        model_max_budget={
+            "gpt-4o": {"budget_limit": 1.0, "time_period": "1d"},
+            "gpt-3.5-turbo": {"budget_limit": 0.5},
+        },
+        budget_table=None,
+        prisma_client=mock_prisma_client,
+    )
+    assert "gpt-4o" in result
+    assert "gpt-3.5-turbo" not in result
