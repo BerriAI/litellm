@@ -311,7 +311,11 @@ def get_known_models_from_wildcard(
     suffix_appended_wildcard_models = []
     for model in wildcard_models:
         if not model.startswith(wildcard_provider_prefix):
-            model = f"{wildcard_provider_prefix}/{model}"
+            # Strip any existing provider prefix (e.g. "ollama/gemma3:1b" -> "gemma3:1b")
+            # before prepending the user-defined wildcard prefix.
+            # This prevents double prefixes like "ollama_server1/ollama/gemma3:1b"
+            _model = model.split("/", 1)[-1] if "/" in model else model
+            model = f"{wildcard_provider_prefix}/{_model}"
         suffix_appended_wildcard_models.append(model)
     return suffix_appended_wildcard_models or []
 

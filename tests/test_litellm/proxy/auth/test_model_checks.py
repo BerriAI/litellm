@@ -487,3 +487,69 @@ async def test_get_available_models_for_user_expands_query_team_wildcard(
     )
 
     assert "openai/gpt-4o-mini" in result
+
+
+def test_wildcard_expansion_handles_prefixed_provider_models(monkeypatch):
+    """
+    Regression test: when get_provider_models returns names with a provider prefix
+    (e.g. "ollama/gemma3:1b"), the wildcard expansion must NOT double-prefix them.
+    See: https://github.com/ylcnymn/litellm/issues/30358
+    """
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    # Case 1: provider models come back with a prefix (e.g. "ollama/gemma3:1b")
+    # and the user-defined model_name is different (e.g. "ollama_server1/*")
+    def fake_provider_with_prefix(provider, litellm_params=None):
+        return ["ollama/gemma3:1b"]
+
+    monkeypatch.setattr(model_checks, "get_provider_models", fake_provider_with_prefix)
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="ollama_server1/*",
+        litellm_params=LiteLLM_Params(
+            model="ollama_chat/*",
+            custom_llm_provider="ollama_chat",
+        ),
+    )
+
+    assert result == [
+        "ollama_server1/gemma3:1b"
+    ], f"Expected single prefix, got {result}"
+
+    # Case 2: provider models return raw names (no prefix) - existing behavior preserved
+    def fake_provider_raw(provider, litellm_params=None):
+        return ["gemma3:1b"]
+
+    monkeypatch.setattr(model_checks, "get_provider_models", fake_provider_raw)
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="ollama_server1/*",
+        litellm_params=LiteLLM_Params(
+            model="ollama_chat/*",
+            custom_llm_provider="ollama_chat",
+        ),
+    )
+
+    assert result == [
+        "ollama_server1/gemma3:1b"
+    ], f"Expected raw model prefixed, got {result}"
+
+    # Case 3: wildcard prefix matches the provider prefix - no double prefix
+    def fake_provider_matching(provider, litellm_params=None):
+        return ["ollama/gemma3:1b"]
+
+    monkeypatch.setattr(model_checks, "get_provider_models", fake_provider_matching)
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="ollama/*",
+        litellm_params=LiteLLM_Params(
+            model="ollama_chat/*",
+            custom_llm_provider="ollama_chat",
+        ),
+    )
+
+    assert result == [
+        "ollama/gemma3:1b"
+    ], f"Expected matching prefix preserved, got {result}"
