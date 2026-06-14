@@ -11,6 +11,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -181,6 +182,8 @@ def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_
     assert blocked_field in str(
         body
     ), f"Response should mention '{blocked_field}': {body}"
+
+
 class TestRagIngestSSRFBlocked:
     """
     aws_sts_endpoint and related credential-redirect fields must be rejected
@@ -222,7 +225,9 @@ class TestRagIngestSSRFBlocked:
         error_text = (
             detail.get("error", "") if isinstance(detail, dict) else str(detail)
         )
-        assert field in error_text, f"Error should name the offending field: {error_text}"
+        assert (
+            field in error_text
+        ), f"Error should name the offending field: {error_text}"
 
     def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user):
         with patch(
@@ -239,6 +244,102 @@ class TestRagIngestSSRFBlocked:
                     },
                 },
             )
-        assert response.status_code != 400, (
-            f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
+        assert (
+            response.status_code != 400
+        ), f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
+
+
+class TestMilvusCollectionNameAuthorization:
+    """
+    Milvus ingestion writes to `collection_name` (falling back to
+    `vector_store_id`). The proxy authorizes write targets by the
+    `vector_store_id` key, so a request that sets only `collection_name` must be
+    normalized so it is authorized as the vector store id - otherwise an
+    authenticated user could write into another team's managed collection with
+    the server's Milvus credentials.
+    """
+
+    def test_normalize_copies_collection_name_to_vector_store_id(self):
+        from litellm.proxy.rag_endpoints.endpoints import (
+            _normalize_collection_name_as_vector_store_id,
+        )
+
+        ingest_options = {
+            "vector_store": {
+                "custom_llm_provider": "milvus",
+                "collection_name": "other_team_collection",
+            }
+        }
+        _normalize_collection_name_as_vector_store_id(ingest_options)
+        assert (
+            ingest_options["vector_store"]["vector_store_id"] == "other_team_collection"
+        )
+
+    def test_normalize_does_not_override_existing_vector_store_id(self):
+        from litellm.proxy.rag_endpoints.endpoints import (
+            _normalize_collection_name_as_vector_store_id,
+        )
+
+        ingest_options = {
+            "vector_store": {
+                "custom_llm_provider": "milvus",
+                "collection_name": "col_a",
+                "vector_store_id": "vs_explicit",
+            }
+        }
+        _normalize_collection_name_as_vector_store_id(ingest_options)
+        assert ingest_options["vector_store"]["vector_store_id"] == "vs_explicit"
+
+    def test_normalize_ignores_non_milvus_providers(self):
+        from litellm.proxy.rag_endpoints.endpoints import (
+            _normalize_collection_name_as_vector_store_id,
+        )
+
+        ingest_options = {
+            "vector_store": {
+                "custom_llm_provider": "openai",
+                "collection_name": "col_a",
+            }
+        }
+        _normalize_collection_name_as_vector_store_id(ingest_options)
+        assert "vector_store_id" not in ingest_options["vector_store"]
+
+    def test_milvus_collection_name_is_authorized(self, client_internal_user):
+        async def fake_assert(vector_store_id, user_api_key_dict, **kwargs):
+            if vector_store_id == "other_team_collection":
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "Access denied"},
+                )
+            return None
+
+        with (
+            patch(
+                "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
+                new=AsyncMock(side_effect=fake_assert),
+            ),
+            patch(
+                "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+                new_callable=AsyncMock,
+                return_value={
+                    "vector_store_id": "other_team_collection",
+                    "file_id": "f",
+                },
+            ),
+        ):
+            response = client_internal_user.post(
+                "/v1/rag/ingest",
+                json={
+                    "file_url": "https://example.com/doc.pdf",
+                    "ingest_options": {
+                        "vector_store": {
+                            "custom_llm_provider": "milvus",
+                            "collection_name": "other_team_collection",
+                        }
+                    },
+                },
+            )
+        assert response.status_code == 403, (
+            "Milvus ingest targeting another team's collection via collection_name "
+            f"must be authorized and denied. Got: {response.status_code} {response.json()}"
         )

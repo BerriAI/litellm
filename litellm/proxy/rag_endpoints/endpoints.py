@@ -96,6 +96,29 @@ def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
     return vector_store_ids
 
 
+def _normalize_collection_name_as_vector_store_id(
+    ingest_options: Dict[str, Any],
+) -> None:
+    """
+    Normalize provider-native write targets to `vector_store_id` for authorization.
+
+    Some providers (e.g. Milvus) use `collection_name` as the write target and
+    only fall back to `vector_store_id`. The proxy authorizes targets by the
+    `vector_store_id` key, so a request that sets only `collection_name` would
+    bypass `assert_user_can_access_vector_store_id` and write into another team's
+    managed collection. Copy `collection_name` into `vector_store_id` when the
+    latter is absent so it is authorized as the vector store id.
+    """
+    vector_store_opts = ingest_options.get("vector_store")
+    if not isinstance(vector_store_opts, dict):
+        return
+    if vector_store_opts.get("custom_llm_provider") != "milvus":
+        return
+    collection_name = vector_store_opts.get("collection_name")
+    if collection_name and not vector_store_opts.get("vector_store_id"):
+        vector_store_opts["vector_store_id"] = collection_name
+
+
 async def _authorize_nested_vector_store_ids(
     payload: Any,
     user_api_key_dict: UserAPIKeyAuth,
@@ -417,6 +440,8 @@ async def parse_rag_ingest_request(
                         "Credentials must be configured server-side."
                     },
                 )
+
+    _normalize_collection_name_as_vector_store_id(ingest_options)
 
     return ingest_options, file_data, file_url, file_id
 
