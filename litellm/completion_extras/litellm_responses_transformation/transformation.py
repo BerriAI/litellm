@@ -1295,7 +1295,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
                 tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(
-                    id=output_item.get("call_id"),
+                    id=output_item.get("id") or output_item.get("call_id"),
                     index=tool_call_index,
                     type="function",
                     function=function_chunk,
@@ -1370,7 +1370,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
                 tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(
-                    id=output_item.get("call_id"),
+                    id=output_item.get("id") or output_item.get("call_id"),
                     index=tool_call_index,
                     type="function",
                     function=function_chunk,

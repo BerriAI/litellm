@@ -1601,7 +1601,7 @@ class LiteLLMCompletionResponsesConfig:
             function_dict["provider_specific_fields"] = provider_specific_fields
 
         tool_call_dict: Dict[str, Any] = {
-            "id": tool_call_item.call_id,
+            "id": getattr(tool_call_item, "id", None) or tool_call_item.call_id,
             "function": function_dict,
             "type": "function",
             "index": 0,
