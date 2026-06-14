@@ -226,6 +226,41 @@ PRs by ownership area (visible, non-vehicle set; total: 101)
   - Guardrails: 1
 ```
 
+## New Contributors
+
+* @someswar177 made their first contribution in https://github.com/BerriAI/litellm/pull/26585
+* @trexinc made their first contribution in https://github.com/BerriAI/litellm/pull/26597
+* @navnitshukla made their first contribution in https://github.com/BerriAI/litellm/pull/26609
+* @tanmay958 made their first contribution in https://github.com/BerriAI/litellm/pull/27580
+* @samagana made their first contribution in https://github.com/BerriAI/litellm/pull/27810
+* @DrishnaTrivedi made their first contribution in https://github.com/BerriAI/litellm/pull/28330
+* @brainsparker made their first contribution in https://github.com/BerriAI/litellm/pull/28370
+* @icep87 made their first contribution in https://github.com/BerriAI/litellm/pull/28846
+* @adriangomez24 made their first contribution in https://github.com/BerriAI/litellm/pull/29097
+* @zzw-math made their first contribution in https://github.com/BerriAI/litellm/pull/29325
+* @BeginnerRudy made their first contribution in https://github.com/BerriAI/litellm/pull/29392
+* @danisalvaa made their first contribution in https://github.com/BerriAI/litellm/pull/29394
+* @kapelame made their first contribution in https://github.com/BerriAI/litellm/pull/29412
+* @Zhao73 made their first contribution in https://github.com/BerriAI/litellm/pull/29419
+* @suleimanelkhoury made their first contribution in https://github.com/BerriAI/litellm/pull/29420
+* @aneeshsangvikar made their first contribution in https://github.com/BerriAI/litellm/pull/29427
+* @Ar-maan05 made their first contribution in https://github.com/BerriAI/litellm/pull/29483
+* @kingdoooo made their first contribution in https://github.com/BerriAI/litellm/pull/29490
+* @dan2k3k4 made their first contribution in https://github.com/BerriAI/litellm/pull/29508
+* @yanismiraoui made their first contribution in https://github.com/BerriAI/litellm/pull/29522
+* @josx made their first contribution in https://github.com/BerriAI/litellm/pull/29532
+* @1qh made their first contribution in https://github.com/BerriAI/litellm/pull/29561
+* @tin-berri made their first contribution in https://github.com/BerriAI/litellm/pull/29605
+* @mak2508 made their first contribution in https://github.com/BerriAI/litellm/pull/29606
+* @VANDRANKI made their first contribution in https://github.com/BerriAI/litellm/pull/29620
+* @andrey-dubnik made their first contribution in https://github.com/BerriAI/litellm/pull/29621
+* @ErRickow made their first contribution in https://github.com/BerriAI/litellm/pull/29646
+* @saswatds made their first contribution in https://github.com/BerriAI/litellm/pull/29650
+* @Dinesh-Girbide made their first contribution in https://github.com/BerriAI/litellm/pull/29655
+* @BWAAEEEK made their first contribution in https://github.com/BerriAI/litellm/pull/29660
+* @hectorc98 made their first contribution in https://github.com/BerriAI/litellm/pull/29672
+* @abhay23-AI made their first contribution in https://github.com/BerriAI/litellm/pull/29779
+
 ## Full Changelog
 
 https://github.com/BerriAI/litellm/compare/v1.88.0...v1.89.0
