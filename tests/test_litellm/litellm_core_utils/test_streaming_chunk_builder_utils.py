@@ -4,13 +4,12 @@ import sys
 
 import pytest
 
-from litellm.completion_extras.litellm_responses_transformation.transformation import GenericStreamingChunk
-
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
+from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
