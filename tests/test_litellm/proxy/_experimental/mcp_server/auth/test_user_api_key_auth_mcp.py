@@ -709,6 +709,101 @@ class TestMCPOAuth2AuthFlow:
                 == "Bearer atlassian-oauth2-access-token-xyz"
             )
 
+    async def test_oauth2_token_skips_litellm_validation_no_phantom_401(self):
+        """
+        Regression: an opaque OAuth2 token (non-LiteLLM bearer) on an OAuth2-mode
+        target must be passed through WITHOUT attempting LiteLLM-key validation.
+        That validation can only fail (virtual keys always start with 'sk-') and
+        its failure is emitted to observability as a 401 auth span, which surfaced
+        on tool calls that actually succeeded. Asserting ``user_api_key_auth`` is
+        never called pins that the doomed validation — and the phantom 401 — is
+        gone.
+        """
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/atlassian_mcp",
+            "headers": [
+                (b"authorization", b"Bearer eyJraWQ-opaque-oauth2-token"),
+            ],
+        }
+
+        async def fail_if_called(api_key, request):
+            raise AssertionError(
+                "user_api_key_auth must not be called for a non-sk bearer on an "
+                "OAuth2 target"
+            )
+
+        oauth2_server = MagicMock()
+        oauth2_server.auth_type = MCPAuth.oauth2
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=fail_if_called,
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = oauth2_server
+            (
+                auth_result,
+                _mcp_auth_header,
+                _mcp_servers,
+                _mcp_server_auth_headers,
+                oauth2_headers,
+                _raw_headers,
+            ) = await MCPRequestHandler.process_mcp_request(scope)
+
+        mock_auth.assert_not_called()
+        assert isinstance(auth_result, UserAPIKeyAuth)
+        # The opaque token is preserved for upstream forwarding.
+        assert (
+            oauth2_headers.get("Authorization") == "Bearer eyJraWQ-opaque-oauth2-token"
+        )
+
+    async def test_sk_bearer_on_oauth2_target_still_validates(self):
+        """
+        Backward compat: an 'sk-'-shaped bearer on an OAuth2 target is still
+        validated as a LiteLLM key (so it resolves the user for spend / rate
+        limits and stored-token injection) rather than being blindly passed
+        through. The passthrough-first shortcut only applies to non-'sk-' bearers.
+        """
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/atlassian_mcp",
+            "headers": [
+                (b"authorization", b"Bearer sk-litellm-valid-key"),
+            ],
+        }
+
+        async def mock_user_api_key_auth(api_key, request):
+            return UserAPIKeyAuth(api_key=api_key, user_id="test-user")
+
+        oauth2_server = MagicMock()
+        oauth2_server.auth_type = MCPAuth.oauth2
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth,
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = oauth2_server
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+
+        mock_auth.assert_called_once()
+        assert auth_result.user_id == "test-user"
+
     async def test_explicit_litellm_key_with_oauth2_authorization(self):
         """
         When both x-litellm-api-key AND Authorization header are present,
