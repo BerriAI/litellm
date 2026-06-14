@@ -9,11 +9,12 @@ from typing import List, Optional, Set
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
-    UI_TEAM_ID,
     UserAPIKeyAuth,
 )
+from litellm.repositories.table_repositories import AgentsRepository
 
 
 class AgentRequestHandler:
@@ -298,7 +299,7 @@ class AgentRequestHandler:
         agent_ids: Set[str] = set()
         if access_groups and prisma_client is not None:
             try:
-                agents = await prisma_client.db.litellm_agentstable.find_many(
+                agents = await AgentsRepository(prisma_client).table.find_many(
                     where={"agent_access_groups": {"hasSome": access_groups}}
                 )
                 for agent in agents:

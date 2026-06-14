@@ -24,7 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
 )
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
@@ -304,7 +304,7 @@ def get_logging_payload(  # noqa: PLR0915
     # BUG FIX: Don't overwrite api_key when standard_logging_payload is None
     # The api_key was already extracted from metadata (line 243) and hashed (lines 256-259)
     request_tags = (
-        json.dumps(metadata.get("tags", []))
+        safe_dumps(metadata.get("tags", []))
         if isinstance(metadata.get("tags", []), list)
         else "[]"
     )
@@ -312,7 +312,7 @@ def get_logging_payload(  # noqa: PLR0915
         standard_logging_payload is not None
         and standard_logging_payload.get("request_tags") is not None
     ):  # use 'tags' from standard logging payload instead
-        request_tags = json.dumps(standard_logging_payload["request_tags"])
+        request_tags = safe_dumps(standard_logging_payload["request_tags"])
 
     _model_id = metadata.get("model_info", {}).get("id", "")
     _model_group = metadata.get("model_group", "")
@@ -606,7 +606,7 @@ def _get_messages_for_spend_logs_payload(
                 messages = standard_logging_payload.get("messages")
                 if messages is not None:
                     try:
-                        return json.dumps(messages, default=str)
+                        return safe_dumps(messages)
                     except Exception:
                         return "{}"
     return "{}"
@@ -976,7 +976,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     perform_redaction(model_call_details=_request_body, result=None)
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
-            _request_body_json_str = json.dumps(_request_body, default=str)
+            _request_body_json_str = safe_dumps(_request_body)
             if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
                 verbose_proxy_logger.info(
                     "Spend Log: request body was truncated before storing in DB. %s",
@@ -1059,7 +1059,7 @@ def _get_response_for_spend_logs_payload(
         if sanitized_response is None:
             return "{}"
         if isinstance(sanitized_response, str):
-            result_str = sanitized_response
+            result_str = strip_null_bytes(sanitized_response)
         else:
             result_str = safe_dumps(sanitized_response)
         if LITELLM_TRUNCATED_PAYLOAD_FIELD in result_str:

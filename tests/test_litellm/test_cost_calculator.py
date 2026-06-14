@@ -12,13 +12,64 @@ from pydantic import BaseModel
 
 import litellm
 from litellm.cost_calculator import (
+    RealtimeAPITokenUsageProcessor,
     completion_cost,
+    cost_per_token,
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
+
+
+def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
+    """
+    Router/proxy configs may use deployment ids like openai/openai/<model>. Cost lookup must
+    resolve to model_prices keys (e.g. gpt-5.5), not fail or multiply prefixes.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    prompt_usd, completion_usd = cost_per_token(
+        model="openai/openai/gpt-5.5",
+        prompt_tokens=100,
+        completion_tokens=50,
+        custom_llm_provider="openai",
+    )
+
+    assert prompt_usd + completion_usd > 0
+
+
+def test_cost_per_token_non_string_model_does_not_hang():
+    """
+    The provider-prefix dedup loop must not spin forever when `model` is a
+    non-string object (e.g. a MagicMock from a mocked transport). It should
+    return or raise promptly instead of looping on a truthy `.startswith()`.
+    """
+    import threading
+    from unittest.mock import MagicMock
+
+    result: dict = {}
+
+    def _run():
+        try:
+            cost_per_token(
+                model=MagicMock(),
+                prompt_tokens=10,
+                completion_tokens=5,
+                custom_llm_provider="anthropic",
+            )
+            result["status"] = "returned"
+        except Exception:
+            result["status"] = "raised"
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+
+    assert not worker.is_alive(), "cost_per_token hung on a non-string model"
+    assert result.get("status") in ("returned", "raised")
 
 
 def test_completion_cost_uses_response_model_for_dynamic_routing():
@@ -334,8 +385,232 @@ def test_handle_realtime_stream_cost_calculation():
     )
     assert cost == 0.0  # No usage, no cost
 
+    
+def test_realtime_stream_combines_text_and_audio_token_details():
+    """Realtime response.done usage with input_token_details / output_token_details."""
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
 
-def test_custom_pricing_with_router_model_id():
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "total_tokens": 30,
+                    "input_token_details": {"text_tokens": 8, "audio_tokens": 2},
+                    "output_token_details": {"text_tokens": 12, "audio_tokens": 8},
+                }
+            },
+        },
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 5,
+                    "output_tokens": 15,
+                    "total_tokens": 20,
+                    "input_token_details": {"text_tokens": 3, "audio_tokens": 2},
+                    "output_token_details": {"text_tokens": 5, "audio_tokens": 10},
+                }
+            },
+        },
+    ]
+
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    assert combined.prompt_tokens_details is not None
+    assert combined.prompt_tokens_details.text_tokens == 11
+    assert combined.prompt_tokens_details.audio_tokens == 4
+
+    assert combined.completion_tokens_details is not None
+    assert combined.completion_tokens_details.text_tokens == 17
+    assert combined.completion_tokens_details.audio_tokens == 18
+
+
+def test_realtime_logging_object_allows_null_transcript_in_conversation_item_added():
+    results: OpenAIRealtimeStreamList = [
+        {
+            "type": "conversation.item.added",
+            "event_id": "event_added",
+            "item": {
+                "id": "item_123",
+                "type": "message",
+                "role": "assistant",
+                "status": "in_progress",
+                "content": [{"type": "audio", "transcript": None}],
+            },
+        },
+        {
+            "type": "response.done",
+            "event_id": "event_done",
+            "response": {
+                "id": "resp_123",
+                "object": "realtime.response",
+                "status": "completed",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            },
+        },
+    ]
+
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results
+    )
+    logging_result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+        usage=usage,
+        results=results,
+    )
+    assert logging_result.usage.total_tokens == 18
+    assert logging_result.results[0]["item"]["content"][0]["transcript"] is None
+    assert logging_result.results[0]["item"]["content"][0]["transcript"] is None
+
+
+def test_realtime_transcription_duration_cost(monkeypatch):
+    """
+    gpt-realtime-whisper transcription sessions are billed by input audio duration
+    ($0.017/min). The .completed events carry usage {type: duration, seconds: N};
+    cost must equal total_seconds * input_cost_per_second.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
+
+    results: OpenAIRealtimeStreamList = [
+        {
+            "type": "session.created",
+            "session": {
+                "type": "transcription",
+                "audio": {
+                    "input": {"transcription": {"model": "gpt-realtime-whisper"}}
+                },
+            },
+        },
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "hello",
+            "usage": {"type": "duration", "seconds": 60.0},
+        },
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "world",
+            "usage": {"type": "duration", "seconds": 30.0},
+        },
+    ]
+
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results
+    )
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined,
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-realtime-whisper",
+    )
+
+    # 90 seconds at $0.017/minute.
+    expected = 90.0 * (0.017 / 60)
+    assert abs(cost - expected) < 1e-9
+    assert cost > 0  # guards against the duration branch being dropped
+
+
+def test_realtime_transcription_duration_cost_resolves_model_from_litellm_name(
+    monkeypatch,
+):
+    """When no session event carries the ASR model, the litellm_model_name is used."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    results: OpenAIRealtimeStreamList = [
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "usage": {"type": "duration", "seconds": 120.0},
+        },
+    ]
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="azure",
+        litellm_model_name="azure/gpt-realtime-whisper",
+    )
+    assert abs(cost - 120.0 * (0.017 / 60)) < 1e-9
+
+
+def test_realtime_transcription_no_completed_events_is_zero(monkeypatch):
+    """A realtime stream without transcription completed events adds no extra cost."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import handle_realtime_transcription_cost_calculation
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-whisper"}},
+        {"type": "response.done", "response": {"usage": {}}},
+    ]
+    assert (
+        handle_realtime_transcription_cost_calculation(
+            results=results,
+            custom_llm_provider="openai",
+            litellm_model_name="gpt-realtime-whisper",
+        )
+        == 0.0
+    )
+
+
+def test_realtime_transcription_token_billed_fallback(monkeypatch):
+    """
+    Token-billed transcription models price by audio/text tokens. Verify the
+    fallback path multiplies audio tokens by the model's audio token cost.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import _transcription_usage_cost
+
+    # gpt-4o-transcribe: input_cost_per_audio_token = 2.5e-06, input_cost_per_token = 2.5e-06,
+    # output_cost_per_token = 1e-05
+    model_info = litellm.get_model_info(
+        model="gpt-4o-transcribe", custom_llm_provider="openai"
+    )
+    usage = {
+        "type": "tokens",
+        "input_tokens": 40,
+        "output_tokens": 10,
+        "total_tokens": 50,
+        "input_token_details": {"audio_tokens": 30, "text_tokens": 10},
+    }
+    cost = _transcription_usage_cost(usage, model_info)
+    expected = (
+        30 * 2.5e-06  # audio tokens
+        + 10 * 2.5e-06  # text tokens
+        + 10 * 1e-05  # output tokens
+    )
+    assert abs(cost - expected) < 1e-12
+
+
+def test_transcription_usage_cost_returns_zero_for_unknown_type():
+    """An unrecognized usage type yields 0 (safe fallback, no exception)."""
+    from litellm.cost_calculator import _transcription_usage_cost
+
+    assert _transcription_usage_cost({"type": "future_billing_type"}, {}) == 0.0
+    assert _transcription_usage_cost({}, {}) == 0.0
+
+
+def test_get_transcription_model_falls_back_to_session_model(monkeypatch):
+    """session.model is used when transcription-specific model fields are absent."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import _get_transcription_model_name_from_results
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-whisper"}},
+    ]
+    assert _get_transcription_model_name_from_results(results) == "gpt-realtime-whisper"
+
     from litellm import Router
 
     router = Router(
@@ -2070,11 +2345,11 @@ def test_gemini_3_1_flash_lite_pricing():
     ):
         model_info = litellm.model_cost.get(model_name)
         assert model_info is not None, f"Missing model pricing entry: {model_name}"
-        assert model_info["input_cost_per_token"] == 4.5e-07
-        assert model_info["input_cost_per_audio_token"] == 9e-07
-        assert model_info["output_cost_per_token"] == 2.7e-06
-        assert model_info["output_cost_per_reasoning_token"] == 2.7e-06
-        assert model_info["cache_read_input_token_cost"] == 4.5e-08
+        assert model_info["input_cost_per_token"] == 2.5e-07
+        assert model_info["input_cost_per_audio_token"] == 5e-07
+        assert model_info["output_cost_per_token"] == 1.5e-06
+        assert model_info["output_cost_per_reasoning_token"] == 1.5e-06
+        assert model_info["cache_read_input_token_cost"] == 2.5e-08
         assert model_info["max_input_tokens"] == 1048576
 
 

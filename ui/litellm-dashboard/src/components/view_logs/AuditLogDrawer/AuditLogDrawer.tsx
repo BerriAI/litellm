@@ -93,10 +93,7 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
   if (isUpdateAction && before_value && updated_values) {
     const changedBefore: Record<string, any> = {};
     const changedAfter: Record<string, any> = {};
-    const allKeys = new Set([
-      ...Object.keys(before_value),
-      ...Object.keys(updated_values),
-    ]);
+    const allKeys = new Set([...Object.keys(before_value), ...Object.keys(updated_values)]);
 
     allKeys.forEach((key) => {
       const bStr = JSON.stringify(before_value[key]);
@@ -123,14 +120,8 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
       }
     });
 
-    displayBefore =
-      Object.keys(changedBefore).length > 0
-        ? changedBefore
-        : { note: "No differing fields detected" };
-    displayAfter =
-      Object.keys(changedAfter).length > 0
-        ? changedAfter
-        : { note: "No differing fields detected" };
+    displayBefore = Object.keys(changedBefore).length > 0 ? changedBefore : { note: "No differing fields detected" };
+    displayAfter = Object.keys(changedAfter).length > 0 ? changedAfter : { note: "No differing fields detected" };
   }
 
   const renderValue = (label: string, value: Record<string, any> | null | undefined) => {
@@ -157,13 +148,19 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
             </div>
             <div className="px-3 py-3 space-y-1 text-xs">
               {value.token !== undefined && (
-                <p><span className="text-gray-500">Token:</span> {value.token ?? "N/A"}</p>
+                <p>
+                  <span className="text-gray-500">Token:</span> {value.token ?? "N/A"}
+                </p>
               )}
               {value.spend !== undefined && (
-                <p><span className="text-gray-500">Spend:</span> ${Number(value.spend).toFixed(6)}</p>
+                <p>
+                  <span className="text-gray-500">Spend:</span> ${Number(value.spend).toFixed(6)}
+                </p>
               )}
               {value.max_budget !== undefined && (
-                <p><span className="text-gray-500">Max Budget:</span> ${Number(value.max_budget).toFixed(6)}</p>
+                <p>
+                  <span className="text-gray-500">Max Budget:</span> ${Number(value.max_budget).toFixed(6)}
+                </p>
               )}
             </div>
           </div>
@@ -222,9 +219,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
       <div className="px-6 py-5">
         {/* Metadata */}
         <div className="bg-gray-50 border rounded-lg p-4 mb-5">
-          <p className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
-            Details
-          </p>
+          <p className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">Details</p>
           <MetadataRow label="Table" value={tableDisplay} />
           <MetadataRow
             label="Object ID"
@@ -234,10 +229,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
               </Text>
             }
           />
-          <MetadataRow
-            label="Changed By"
-            value={<DefaultProxyAdminTag userId={log.changed_by} />}
-          />
+          <MetadataRow label="Changed By" value={<DefaultProxyAdminTag userId={log.changed_by} />} />
           <MetadataRow
             label="API Key (Hash)"
             value={

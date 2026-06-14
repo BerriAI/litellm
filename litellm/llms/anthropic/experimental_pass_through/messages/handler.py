@@ -8,7 +8,17 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Coroutine,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -189,7 +199,7 @@ async def anthropic_messages(
     client: Optional[AsyncHTTPHandler] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+) -> Union[AnthropicMessagesResponse, Iterator[bytes], AsyncIterator[Any]]:
     """
     Async: Make llm api request in Anthropic /messages API spec.
 
@@ -219,9 +229,20 @@ async def anthropic_messages(
         **kwargs,
     )
 
-    # Extract modified parameters
+    # Extract modified parameters. Pop every named param of `anthropic_messages`
+    # that we may forward explicitly downstream, so we (a) honor pre-request hook
+    # overrides and (b) avoid duplicate-keyword conflicts when splatting `kwargs`
+    # into call sites that already pass these as named arguments.
     tools = request_kwargs.pop("tools", tools)
     stream = request_kwargs.pop("stream", stream)
+    metadata = request_kwargs.pop("metadata", metadata)
+    stop_sequences = request_kwargs.pop("stop_sequences", stop_sequences)
+    system = request_kwargs.pop("system", system)
+    temperature = request_kwargs.pop("temperature", temperature)
+    thinking = request_kwargs.pop("thinking", thinking)
+    tool_choice = request_kwargs.pop("tool_choice", tool_choice)
+    top_k = request_kwargs.pop("top_k", top_k)
+    top_p = request_kwargs.pop("top_p", top_p)
     # Propagate the provider derived inside pre-request hooks, if not already set.
     # The litellm_params dict may have been overwritten by **kwargs in
     # _execute_pre_request_hooks, so fall back to get_llm_provider() if needed.
@@ -255,8 +276,8 @@ async def anthropic_messages(
         return short_circuit_response
 
     # Run registered MessagesInterceptors (e.g. advisor orchestration loop).
-    # api_key and api_base are explicit params (not in **kwargs) so pass them
-    # explicitly so interceptor sub-calls can route to the same backend.
+    # Named params on `anthropic_messages` are bound to locals, not `**kwargs`,
+    # so forward them explicitly — otherwise interceptor sub-calls drop them.
     for interceptor in get_messages_interceptors():
         if interceptor.can_handle(tools, custom_llm_provider):
             return await interceptor.handle(
@@ -268,6 +289,14 @@ async def anthropic_messages(
                 custom_llm_provider=custom_llm_provider,
                 api_key=api_key,
                 api_base=api_base,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                top_k=top_k,
+                top_p=top_p,
                 **kwargs,
             )
 
@@ -346,8 +375,11 @@ def anthropic_messages_handler(
     **kwargs,
 ) -> Union[
     AnthropicMessagesResponse,
+    Iterator[bytes],
     AsyncIterator[Any],
-    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
+    Coroutine[
+        Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]]
+    ],
 ]:
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
@@ -456,9 +488,14 @@ def anthropic_messages_handler(
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 **_shared_kwargs
             )
+
+        # The in-gateway context_management polyfill runs inside
+        # ``async_anthropic_messages_handler`` so it can ``await`` the
+        # summarization model for ``compact_20260112``. ``context_management``
+        # is passed through as a regular kwarg.
         return (
             LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-                **_shared_kwargs
+                **_shared_kwargs,
             )
         )
 

@@ -57,6 +57,8 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         model: Optional[
             Literal["omni-moderation-latest", "text-moderation-latest"]
         ] = None,
+        streaming_end_of_stream_only: Optional[bool] = None,
+        streaming_sampling_rate: Optional[int] = None,
         **kwargs,
     ):
         """Initialize OpenAI Moderation guardrail handler."""
@@ -83,6 +85,17 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         self.api_base = api_base or "https://api.openai.com/v1"
         self.model: Literal["omni-moderation-latest", "text-moderation-latest"] = (
             model or "omni-moderation-latest"
+        )
+
+        # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook
+        # via getattr(guardrail_to_apply, "streaming_*", default).
+        self.streaming_end_of_stream_only: bool = (
+            False
+            if streaming_end_of_stream_only is None
+            else streaming_end_of_stream_only
+        )
+        self.streaming_sampling_rate: int = (
+            5 if streaming_sampling_rate is None else streaming_sampling_rate
         )
 
         if not self.api_key:

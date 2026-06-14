@@ -4,6 +4,7 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 
 import asyncio
 import base64
+import os
 from typing import (
     Any,
     Awaitable,
@@ -16,7 +17,6 @@ from typing import (
     TypeVar,
     Union,
 )
-
 import httpx
 from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
@@ -42,9 +42,8 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
-
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT
+from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
@@ -61,13 +60,33 @@ def to_basic_auth(auth_value: str) -> str:
     return base64.b64encode(auth_value.encode("utf-8")).decode()
 
 
+def _strip_header_whitespace(headers: Dict[str, str]) -> Dict[str, str]:
+    return {
+        (key.strip() if isinstance(key, str) else key): (
+            value.strip() if isinstance(value, str) else value
+        )
+        for key, value in headers.items()
+    }
+
+
+def _first_non_cancelled_cause(exc: BaseException) -> Optional[BaseException]:
+    queue: List[BaseException] = [exc]
+    while queue:
+        current = queue.pop(0)
+        nested = getattr(current, "exceptions", None)
+        if nested:
+            queue.extend(nested)
+        elif not isinstance(current, asyncio.CancelledError):
+            return current
+    return None
+
+
 TSessionResult = TypeVar("TSessionResult")
 
 
 class MCPSigV4Auth(httpx.Auth):
     """
     httpx Auth class that signs each request with AWS SigV4.
-
     This is used for MCP servers that require AWS SigV4 authentication,
     such as AWS Bedrock AgentCore MCP servers. httpx calls auth_flow()
     for every outgoing request, enabling per-request signature computation.
@@ -92,10 +111,8 @@ class MCPSigV4Auth(httpx.Auth):
                 "Missing botocore to use AWS SigV4 authentication. "
                 "Run 'pip install boto3'."
             )
-
         self.service_name = aws_service_name or "bedrock-agentcore"
         self.region_name = aws_region_name or "us-east-1"
-
         # Note: os.environ/ prefixed values are already resolved by
         # ProxyConfig._check_for_os_environ_vars() at config load time.
         # Values arrive here as plain strings.
@@ -143,20 +160,17 @@ class MCPSigV4Auth(httpx.Auth):
         session_name = (
             aws_session_name or f"litellm-mcp-{int(__import__('time').time())}"
         )
-
         sts_kwargs: dict = {"region_name": aws_region_name}
         if aws_access_key_id and aws_secret_access_key:
             sts_kwargs["aws_access_key_id"] = aws_access_key_id
             sts_kwargs["aws_secret_access_key"] = aws_secret_access_key
             if aws_session_token:
                 sts_kwargs["aws_session_token"] = aws_session_token
-
         sts_client = boto3.client("sts", **sts_kwargs)
         sts_response = sts_client.assume_role(
             RoleArn=aws_role_name,
             RoleSessionName=session_name,
         )
-
         sts_creds = sts_response["Credentials"]
         return Credentials(
             access_key=sts_creds["AccessKeyId"],
@@ -178,17 +192,14 @@ class MCPSigV4Auth(httpx.Auth):
             data=request.content,
             headers=dict(request.headers),
         )
-
         # Sign the request — SigV4Auth.add_auth() adds Authorization,
         # X-Amz-Date, and X-Amz-Security-Token (if session token present).
         # Host header is derived automatically from the URL.
         sigv4 = SigV4Auth(self.credentials, self.service_name, self.region_name)
         sigv4.add_auth(aws_request)
-
         # Copy SigV4 headers back to the httpx request
         for header_name, header_value in aws_request.headers.items():
             request.headers[header_name] = header_value
-
         yield request
 
 
@@ -198,6 +209,8 @@ class MCPClient:
       SSE and HTTP transports
       Authentication via Bearer token, Basic Auth, or API Key
       Tool calling with error handling and result parsing
+      Sampling callbacks for upstream server LLM requests
+      Elicitation callbacks for upstream server user-input requests
     """
 
     def __init__(
@@ -211,6 +224,9 @@ class MCPClient:
         extra_headers: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[VerifyTypes] = None,
         aws_auth: Optional[httpx.Auth] = None,
+        sampling_callback: Optional[Callable] = None,
+        elicitation_callback: Optional[Callable] = None,
+        logging_callback: Optional[Callable] = None,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -222,6 +238,9 @@ class MCPClient:
         self.ssl_verify: Optional[VerifyTypes] = ssl_verify
         self._aws_auth: Optional[httpx.Auth] = aws_auth
         self._last_initialize_instructions: Optional[str] = None
+        self._sampling_callback: Optional[Callable] = sampling_callback
+        self._elicitation_callback: Optional[Callable] = elicitation_callback
+        self._logging_callback: Optional[Callable] = logging_callback
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -231,23 +250,20 @@ class MCPClient:
     ) -> Tuple[Any, Optional[httpx.AsyncClient]]:
         """
         Create the appropriate transport context based on transport type.
-
         Returns:
             Tuple of (transport_context, http_client).
             http_client is only set for HTTP transport and needs cleanup.
         """
         http_client: Optional[httpx.AsyncClient] = None
-
         if self.transport_type == MCPTransport.stdio:
             if not self.stdio_config:
                 raise ValueError("stdio_config is required for stdio transport")
             server_params = StdioServerParameters(
                 command=self.stdio_config.get("command", ""),
                 args=self.stdio_config.get("args", []),
-                env=self.stdio_config.get("env", {}),
+                env=self._get_safe_stdio_env(self.stdio_config.get("env")),
             )
             return stdio_client(server_params), None
-
         if self.transport_type == MCPTransport.sse:
             headers = self._get_auth_headers()
             httpx_client_factory = self._create_httpx_client_factory()
@@ -260,14 +276,12 @@ class MCPClient:
                 ),
                 None,
             )
-
         # HTTP transport (default)
         if streamable_http_client is None:
             raise ImportError(
                 "streamable_http_client is not available. "
                 "Please install mcp with HTTP support."
             )
-
         headers = self._get_auth_headers()
         httpx_client_factory = self._create_httpx_client_factory()
         verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
@@ -281,6 +295,54 @@ class MCPClient:
         )
         return transport_ctx, http_client
 
+    def _get_safe_stdio_env(
+        self, provided_env: Optional[Dict[str, str]]
+    ) -> Optional[Dict[str, str]]:
+        """
+        Return a safe environment for the stdio subprocess.
+
+        If provided_env is set, we use it as-is.
+        If provided_env is None, we return a minimal allowlist from the parent environment
+        to avoid leaking sensitive LiteLLM keys (OPENAI_API_KEY, etc.) to sub-processes.
+        """
+        if provided_env is not None:
+            return provided_env
+
+        # Minimal allowlist of safe/standard environment variables
+        safe_keys = {
+            "PATH",
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "SHELL",
+            "LANG",
+            "LC_ALL",
+            # Node/Package manager caches
+            "NPM_CONFIG_CACHE",
+            "PNPM_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            # System info
+            "SYSTEMROOT",
+            "COMSPEC",
+            "PATHEXT",
+            "WINDIR",
+        }
+
+        safe_env = {}
+        for key in safe_keys:
+            if key in os.environ:
+                safe_env[key] = os.environ[key]
+
+        if "NPM_CONFIG_CACHE" not in safe_env:
+            safe_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
+
+        return safe_env
+
     async def _execute_session_operation(
         self,
         transport_ctx: Any,
@@ -288,13 +350,24 @@ class MCPClient:
     ) -> TSessionResult:
         """
         Execute an operation within a transport and session context.
-
         Handles entering/exiting contexts and running the operation.
+        Passes sampling/elicitation/logging callbacks to the ClientSession
+        so that upstream MCP servers can request LLM inference (sampling),
+        user input (elicitation), or send log messages.
         """
         transport = await transport_ctx.__aenter__()
+        in_flight_error: Optional[BaseException] = None
         try:
             read_stream, write_stream = transport[0], transport[1]
-            session_ctx = ClientSession(read_stream, write_stream)
+            # Build session kwargs with optional callbacks
+            session_kwargs: Dict[str, Any] = {}
+            if self._sampling_callback is not None:
+                session_kwargs["sampling_callback"] = self._sampling_callback
+            if self._elicitation_callback is not None:
+                session_kwargs["elicitation_callback"] = self._elicitation_callback
+            if self._logging_callback is not None:
+                session_kwargs["logging_callback"] = self._logging_callback
+            session_ctx = ClientSession(read_stream, write_stream, **session_kwargs)
             session = await session_ctx.__aenter__()
             try:
                 init_result = await session.initialize()
@@ -309,11 +382,21 @@ class MCPClient:
                     await session_ctx.__aexit__(None, None, None)
                 except BaseException as e:
                     verbose_logger.debug(f"Error during session context exit: {e}")
+        except BaseException as e:
+            in_flight_error = e
+            raise
         finally:
             try:
                 await transport_ctx.__aexit__(None, None, None)
-            except BaseException as e:
-                verbose_logger.debug(f"Error during transport context exit: {e}")
+            except BaseException as exit_error:
+                verbose_logger.debug(
+                    f"Error during transport context exit: {exit_error}"
+                )
+                root_cause = _first_non_cancelled_cause(exit_error)
+                if root_cause is not None and isinstance(
+                    in_flight_error, asyncio.CancelledError
+                ):
+                    raise root_cause from in_flight_error
 
     async def run_with_session(
         self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]
@@ -351,7 +434,6 @@ class MCPClient:
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
         headers = {}
-
         if self._mcp_auth_value:
             if isinstance(self._mcp_auth_value, str):
                 if self.auth_type == MCPAuth.bearer_token:
@@ -373,17 +455,14 @@ class MCPClient:
         # Note: aws_sigv4 auth is not handled here — SigV4 requires per-request
         # signing (including the body hash), so it uses httpx.Auth flow instead
         # of static headers. See MCPSigV4Auth and _create_httpx_client_factory().
-
         # update the headers with the extra headers
         if self.extra_headers:
             headers.update(self.extra_headers)
-
-        return headers
+        return _strip_header_whitespace(headers)
 
     def _create_httpx_client_factory(self) -> Callable[..., httpx.AsyncClient]:
         """
         Create a custom httpx client factory that uses LiteLLM's SSL configuration.
-
         This factory follows the same CA bundle path logic as http_handler.py:
         1. Check ssl_verify parameter (can be SSLContext, bool, or path to CA bundle)
         2. Check SSL_VERIFY environment variable
@@ -400,17 +479,14 @@ class MCPClient:
             """Create an httpx.AsyncClient with LiteLLM's SSL configuration."""
             # Get unified SSL configuration using the same logic as http_handler.py
             ssl_config = get_ssl_configuration(self.ssl_verify)
-
             verbose_logger.debug(
                 f"MCP client using SSL configuration: {type(ssl_config).__name__}"
             )
-
             # Use SigV4 auth if configured and no explicit auth provided.
             # The MCP SDK's sse_client and streamable_http_client call this
             # factory without passing auth=, so self._aws_auth is used.
             # For non-SigV4 clients, self._aws_auth is None — no behavior change.
             effective_auth = auth if auth is not None else self._aws_auth
-
             return httpx.AsyncClient(
                 headers=headers,
                 timeout=timeout,
@@ -421,8 +497,16 @@ class MCPClient:
 
         return factory
 
-    async def list_tools(self) -> List[MCPTool]:
-        """List available tools from the server."""
+    async def list_tools(self, raise_on_error: bool = False) -> List[MCPTool]:
+        """List available tools from the server.
+
+        Args:
+            raise_on_error: When True, re-raise exceptions instead of returning
+                an empty list. Used by the proxy's pass-through MCP flow so it
+                can surface upstream HTTP 401 responses as a proper 401 to the
+                MCP client (triggering the upstream OAuth flow) rather than
+                masking them as "connected, no tools".
+        """
         verbose_logger.debug(
             f"MCP client listing tools from {self.server_url or 'stdio'}"
         )
@@ -450,7 +534,6 @@ class MCPClient:
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
-
             # Check if it's a stream/connection error
             if "BrokenResourceError" in error_type or "Broken" in error_type:
                 verbose_logger.error(
@@ -458,6 +541,8 @@ class MCPClient:
                     "the MCP server may have crashed, disconnected, or timed out"
                 )
 
+            if raise_on_error:
+                raise
             # Return empty list instead of raising to allow graceful degradation
             return []
 
@@ -481,7 +566,6 @@ class MCPClient:
                 f"MCP Tool '{call_tool_request_params.name}' progress: "
                 f"{progress}/{total} ({percentage:.0f}%) - {message or ''}"
             )
-
             # Forward to Host if callback provided
             if host_progress_callback:
                 try:
@@ -504,14 +588,15 @@ class MCPClient:
             )
             return tool_result
         except asyncio.CancelledError:
-            verbose_logger.warning("MCP client tool call was cancelled")
+            verbose_logger.warning(
+                f"MCP client tool call timed out after {self.timeout}s for {self.server_url}"
+            )
             raise
         except Exception as e:
             import traceback
 
             error_trace = traceback.format_exc()
             verbose_logger.debug(f"MCP client tool call traceback:\n{error_trace}")
-
             # Log detailed error information
             error_type = type(e).__name__
             verbose_logger.error(
@@ -522,14 +607,12 @@ class MCPClient:
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
-
             # Check if it's a stream/connection error
             if "BrokenResourceError" in error_type or "Broken" in error_type:
                 verbose_logger.error(
                     "MCP client detected broken connection/stream - "
                     "the MCP server may have crashed, disconnected, or timed out."
                 )
-
             # Return a default error result instead of raising
             return MCPCallToolResult(
                 content=[
@@ -567,14 +650,12 @@ class MCPClient:
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
-
             # Check if it's a stream/connection error
             if "BrokenResourceError" in error_type or "Broken" in error_type:
                 verbose_logger.error(
                     "MCP client detected broken connection/stream during list_tools - "
                     "the MCP server may have crashed, disconnected, or timed out"
                 )
-
             # Return empty list instead of raising to allow graceful degradation
             return []
 
@@ -607,7 +688,6 @@ class MCPClient:
 
             error_trace = traceback.format_exc()
             verbose_logger.debug(f"MCP client get_prompt traceback:\n{error_trace}")
-
             # Log detailed error information
             error_type = type(e).__name__
             verbose_logger.error(
@@ -618,14 +698,12 @@ class MCPClient:
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
-
             # Check if it's a stream/connection error
             if "BrokenResourceError" in error_type or "Broken" in error_type:
                 verbose_logger.error(
                     "MCP client detected broken connection/stream during get_prompt - "
                     "the MCP server may have crashed, disconnected, or timed out."
                 )
-
             raise
 
     async def list_resources(self) -> list[Resource]:
@@ -657,14 +735,12 @@ class MCPClient:
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
-
             # Check if it's a stream/connection error
             if "BrokenResourceError" in error_type or "Broken" in error_type:
                 verbose_logger.error(
                     "MCP client detected broken connection/stream during list_resources - "
                     "the MCP server may have crashed, disconnected, or timed out"
                 )
-
             # Return empty list instead of raising to allow graceful degradation
             return []
 
@@ -699,14 +775,12 @@ class MCPClient:
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
-
             # Check if it's a stream/connection error
             if "BrokenResourceError" in error_type or "Broken" in error_type:
                 verbose_logger.error(
                     "MCP client detected broken connection/stream during list_resource_templates - "
                     "the MCP server may have crashed, disconnected, or timed out"
                 )
-
             # Return empty list instead of raising to allow graceful degradation
             return []
 
@@ -732,7 +806,6 @@ class MCPClient:
 
             error_trace = traceback.format_exc()
             verbose_logger.debug(f"MCP client read_resource traceback:\n{error_trace}")
-
             # Log detailed error information
             error_type = type(e).__name__
             verbose_logger.error(
@@ -743,12 +816,10 @@ class MCPClient:
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
-
             # Check if it's a stream/connection error
             if "BrokenResourceError" in error_type or "Broken" in error_type:
                 verbose_logger.error(
                     "MCP client detected broken connection/stream during read_resource - "
                     "the MCP server may have crashed, disconnected, or timed out."
                 )
-
             raise

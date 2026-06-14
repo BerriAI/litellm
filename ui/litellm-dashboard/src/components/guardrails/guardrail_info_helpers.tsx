@@ -123,6 +123,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "Azure Content Safety Text Moderation": `${asset_logos_folder}microsoft_azure.svg`,
   "Aporia AI": `${asset_logos_folder}aporia.png`,
   "PANW Prisma AIRS": `${asset_logos_folder}palo_alto_networks.jpeg`,
+  "Cisco AI Defense": `${asset_logos_folder}cisco.png`,
   "Noma Security": `${asset_logos_folder}noma_security.png`,
   "Javelin Guardrails": `${asset_logos_folder}javelin.png`,
   "Pillar Guardrail": `${asset_logos_folder}pillar.jpeg`,
@@ -131,6 +132,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "Lasso Guardrail": `${asset_logos_folder}lasso.png`,
   "Pangea Guardrail": `${asset_logos_folder}pangea.png`,
   "AIM Guardrail": `${asset_logos_folder}aim_security.jpeg`,
+  "Cato Networks Guardrail": `${asset_logos_folder}cato_networks.svg`,
   "OpenAI Moderation": `${asset_logos_folder}openai_small.svg`,
   EnkryptAI: `${asset_logos_folder}enkrypt_ai.avif`,
   "Prompt Security": `${asset_logos_folder}prompt_security.png`,
@@ -138,7 +140,7 @@ export const guardrailLogoMap: Record<string, string> = {
   XecGuard: `${asset_logos_folder}xecguard.svg`,
   "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
   "LiteLLM LLM as a Judge": `${asset_logos_folder}litellm_logo.jpg`,
-  "Akto": `${asset_logos_folder}akto.svg`,
+  Akto: `${asset_logos_folder}akto.svg`,
   "Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
 };
 

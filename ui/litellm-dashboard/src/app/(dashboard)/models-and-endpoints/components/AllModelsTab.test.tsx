@@ -21,7 +21,7 @@ vi.mock("@/components/molecules/notifications_manager", () => ({
 // Mock react-query
 const mockInvalidateQueries = vi.fn();
 vi.mock("@tanstack/react-query", async (importOriginal) => {
-  const actual = await importOriginal() as any;
+  const actual = (await importOriginal()) as any;
   return {
     ...actual,
     useQueryClient: () => ({
@@ -178,24 +178,30 @@ describe("AllModelsTab", () => {
       }),
     );
 
-    const modelData = createPaginatedModelData([
-      {
-        model_name: "gpt-4-accessible",
-        model_info: {
-          id: "model-1",
-          access_via_team_ids: ["team-456"],
-          access_groups: [],
+    const modelData = createPaginatedModelData(
+      [
+        {
+          model_name: "gpt-4-accessible",
+          model_info: {
+            id: "model-1",
+            access_via_team_ids: ["team-456"],
+            access_groups: [],
+          },
         },
-      },
-      {
-        model_name: "gpt-3.5-turbo-blocked",
-        model_info: {
-          id: "model-2",
-          access_via_team_ids: ["team-789"],
-          access_groups: [],
+        {
+          model_name: "gpt-3.5-turbo-blocked",
+          model_info: {
+            id: "model-2",
+            access_via_team_ids: ["team-789"],
+            access_groups: [],
+          },
         },
-      },
-    ], 2, 1, 1, 50);
+      ],
+      2,
+      1,
+      1,
+      50,
+    );
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
 
@@ -239,24 +245,30 @@ describe("AllModelsTab", () => {
       }),
     );
 
-    const modelData = createPaginatedModelData([
-      {
-        model_name: "gpt-4-sales",
-        model_info: {
-          id: "model-sales-1",
-          access_via_team_ids: [],
-          access_groups: ["sales-model-group"],
+    const modelData = createPaginatedModelData(
+      [
+        {
+          model_name: "gpt-4-sales",
+          model_info: {
+            id: "model-sales-1",
+            access_via_team_ids: [],
+            access_groups: ["sales-model-group"],
+          },
         },
-      },
-      {
-        model_name: "gpt-4-engineering",
-        model_info: {
-          id: "model-eng-1",
-          access_via_team_ids: [],
-          access_groups: ["engineering-model-group"],
+        {
+          model_name: "gpt-4-engineering",
+          model_info: {
+            id: "model-eng-1",
+            access_via_team_ids: [],
+            access_groups: ["engineering-model-group"],
+          },
         },
-      },
-    ], 2, 1, 1, 50);
+      ],
+      2,
+      1,
+      1,
+      50,
+    );
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
 
@@ -284,26 +296,32 @@ describe("AllModelsTab", () => {
       }),
     );
 
-    const modelData = createPaginatedModelData([
-      {
-        model_name: "gpt-4-personal",
-        model_info: {
-          id: "model-personal-1",
-          direct_access: true,
-          access_via_team_ids: [],
-          access_groups: [],
+    const modelData = createPaginatedModelData(
+      [
+        {
+          model_name: "gpt-4-personal",
+          model_info: {
+            id: "model-personal-1",
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+          },
         },
-      },
-      {
-        model_name: "gpt-4-team-only",
-        model_info: {
-          id: "model-team-1",
-          direct_access: false,
-          access_via_team_ids: ["team-123"],
-          access_groups: [],
+        {
+          model_name: "gpt-4-team-only",
+          model_info: {
+            id: "model-team-1",
+            direct_access: false,
+            access_via_team_ids: ["team-123"],
+            access_groups: [],
+          },
         },
-      },
-    ], 2, 1, 1, 50);
+      ],
+      2,
+      1,
+      1,
+      50,
+    );
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
 
@@ -330,38 +348,44 @@ describe("AllModelsTab", () => {
       }),
     );
 
-    const modelData = createPaginatedModelData([
-      {
-        model_name: "gpt-4-config",
-        litellm_model_name: "gpt-4-config",
-        provider: "openai",
-        model_info: {
-          id: "model-config-1",
-          db_model: false,
-          direct_access: true,
-          access_via_team_ids: [],
-          access_groups: [],
-          created_by: "user-123",
-          created_at: "2024-01-01",
-          updated_at: "2024-01-01",
+    const modelData = createPaginatedModelData(
+      [
+        {
+          model_name: "gpt-4-config",
+          litellm_model_name: "gpt-4-config",
+          provider: "openai",
+          model_info: {
+            id: "model-config-1",
+            db_model: false,
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
         },
-      },
-      {
-        model_name: "gpt-4-db",
-        litellm_model_name: "gpt-4-db",
-        provider: "openai",
-        model_info: {
-          id: "model-db-1",
-          db_model: true,
-          direct_access: true,
-          access_via_team_ids: [],
-          access_groups: [],
-          created_by: "user-123",
-          created_at: "2024-01-01",
-          updated_at: "2024-01-01",
+        {
+          model_name: "gpt-4-db",
+          litellm_model_name: "gpt-4-db",
+          provider: "openai",
+          model_info: {
+            id: "model-db-1",
+            db_model: true,
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
         },
-      },
-    ], 2, 1, 1, 50);
+      ],
+      2,
+      1,
+      1,
+      50,
+    );
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
 
@@ -387,23 +411,29 @@ describe("AllModelsTab", () => {
       }),
     );
 
-    const modelData = createPaginatedModelData([
-      {
-        model_name: "gpt-4-config",
-        litellm_model_name: "gpt-4-config",
-        provider: "openai",
-        model_info: {
-          id: "model-config-1",
-          db_model: false,
-          direct_access: true,
-          access_via_team_ids: [],
-          access_groups: [],
-          created_by: "user-123",
-          created_at: "2024-01-01",
-          updated_at: "2024-01-01",
+    const modelData = createPaginatedModelData(
+      [
+        {
+          model_name: "gpt-4-config",
+          litellm_model_name: "gpt-4-config",
+          provider: "openai",
+          model_info: {
+            id: "model-config-1",
+            db_model: false,
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
         },
-      },
-    ], 1, 1, 1, 50);
+      ],
+      1,
+      1,
+      1,
+      50,
+    );
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
 
@@ -537,23 +567,29 @@ describe("AllModelsTab", () => {
       }),
     );
 
-    const modelData = createPaginatedModelData([
-      {
-        model_name: "gpt-4-delete-test",
-        litellm_model_name: "gpt-4-delete-test",
-        provider: "openai",
-        model_info: {
-          id: "model-to-delete",
-          db_model: true,
-          direct_access: true,
-          access_via_team_ids: [],
-          access_groups: [],
-          created_by: "user-123",
-          created_at: "2024-01-01",
-          updated_at: "2024-01-01",
+    const modelData = createPaginatedModelData(
+      [
+        {
+          model_name: "gpt-4-delete-test",
+          litellm_model_name: "gpt-4-delete-test",
+          provider: "openai",
+          model_info: {
+            id: "model-to-delete",
+            db_model: true,
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
         },
-      },
-    ], 1, 1, 1, 50);
+      ],
+      1,
+      1,
+      1,
+      50,
+    );
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null, refetch: vi.fn() });
 
@@ -581,23 +617,29 @@ describe("AllModelsTab", () => {
       }),
     );
 
-    const modelData = createPaginatedModelData([
-      {
-        model_name: "gpt-4-clickable",
-        litellm_model_name: "gpt-4-clickable",
-        provider: "openai",
-        model_info: {
-          id: "clickable-model-id",
-          db_model: true,
-          direct_access: true,
-          access_via_team_ids: [],
-          access_groups: [],
-          created_by: "user-123",
-          created_at: "2024-01-01",
-          updated_at: "2024-01-01",
+    const modelData = createPaginatedModelData(
+      [
+        {
+          model_name: "gpt-4-clickable",
+          litellm_model_name: "gpt-4-clickable",
+          provider: "openai",
+          model_info: {
+            id: "clickable-model-id",
+            db_model: true,
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
         },
-      },
-    ], 1, 1, 1, 50);
+      ],
+      1,
+      1,
+      1,
+      50,
+    );
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null, refetch: vi.fn() });
 

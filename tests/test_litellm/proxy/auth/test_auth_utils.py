@@ -14,6 +14,7 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     check_complete_credentials,
     get_end_user_id_from_request_body,
+    get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
     get_model_from_request,
@@ -90,6 +91,22 @@ class TestGetKeyModelRpmLimit:
         )
         result = get_key_model_rpm_limit(user_api_key_dict)
         assert result == {}
+
+
+class TestGetKeyMcpRpmLimit:
+    def test_empty_dict_limits_are_returned(self):
+        key_override = UserAPIKeyAuth(
+            api_key="sk-123",
+            metadata={"mcp_rpm_limit": {}},
+            team_metadata={"mcp_rpm_limit": {"github": 50}},
+        )
+        assert get_key_mcp_rpm_limit(key_override) == {}
+
+        team_empty = UserAPIKeyAuth(
+            api_key="sk-123",
+            team_metadata={"mcp_rpm_limit": {}},
+        )
+        assert get_key_mcp_rpm_limit(team_empty) == {}
 
 
 class TestGetKeyModelTpmLimit:
@@ -379,6 +396,62 @@ def test_get_model_from_request_extracts_video_id_model():
             route="/v1/videos/{video_id}",
         )
         == "video-model"
+    )
+
+
+def test_get_model_from_request_resolves_video_id_model_with_router():
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    provider_video_id = (
+        "projects/test-project/locations/us-central1/publishers/google/models/"
+        "veo-3.1-generate-001/operations/operation-id"
+    )
+    video_id = encode_video_id_with_provider(
+        video_id=provider_video_id,
+        provider="vertex_ai",
+        model_id="veo-3.1-generate-001",
+    )
+    llm_router = MagicMock()
+    llm_router.resolve_model_name_from_model_id.return_value = (
+        "gcp/google/veo-3.1-generate-001"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=llm_router,
+        )
+        == "gcp/google/veo-3.1-generate-001"
+    )
+    llm_router.resolve_model_name_from_model_id.assert_called_once_with(
+        "veo-3.1-generate-001"
+    )
+
+
+def test_get_model_from_request_resolves_character_id_model_with_router():
+    from litellm.types.videos.utils import encode_character_id_with_provider
+
+    character_id = encode_character_id_with_provider(
+        character_id="character-provider-id",
+        provider="vertex_ai",
+        model_id="veo-3.1-generate-001",
+    )
+    llm_router = MagicMock()
+    llm_router.resolve_model_name_from_model_id.return_value = (
+        "gcp/google/veo-3.1-generate-001"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"character_id": character_id},
+            route="/v1/videos/characters/{character_id}",
+            llm_router=llm_router,
+        )
+        == "gcp/google/veo-3.1-generate-001"
+    )
+    llm_router.resolve_model_name_from_model_id.assert_called_once_with(
+        "veo-3.1-generate-001"
     )
 
 
@@ -1478,6 +1551,40 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         )
 
 
+class TestIsRequestBodySafeBlocksBedrockProjectOverride:
+    """``aws_bedrock_project_id`` pins a deployment to a Bedrock project so
+    that project's data-retention policy applies to its requests. A
+    caller-supplied value would run the request under any project reachable
+    with the deployment's shared AWS credentials, bypassing the configured
+    retention/accounting association."""
+
+    def test_project_id_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="aws_bedrock_project_id"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "aws_bedrock_project_id": "proj_attacker000000",
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_project_id(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "aws_bedrock_project_id": "proj_byok000000",
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
 # ── is_request_body_safe nested-config recursion (VERIA-6) ────────────────────
 
 
@@ -1644,6 +1751,7 @@ class TestObservabilityCallbackBans:
             "braintrust_api_key",
             "braintrust_project",
             "phoenix_project_name",
+            "phoenix_project_name_override",
             "wandb_api_key",
             "weave_project_id",
             "gcs_bucket_name",
@@ -1675,6 +1783,7 @@ class TestObservabilityCallbackBans:
             "posthog_api_url",
             "braintrust_project",
             "phoenix_project_name",
+            "phoenix_project_name_override",
         ],
     )
     def test_observability_field_in_metadata_dict_is_rejected(
