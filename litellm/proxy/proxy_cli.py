@@ -74,6 +74,22 @@ def _build_db_connection_url_params(
     return params
 
 
+def _clear_prisma_module_cache() -> None:
+    for module_name in list(sys.modules):
+        if module_name == "prisma" or module_name.startswith("prisma."):
+            sys.modules.pop(module_name, None)
+
+
+def _is_prisma_client_generated() -> bool:
+    try:
+        from prisma import Prisma  # type: ignore # noqa: F401
+
+        return True
+    except Exception:
+        _clear_prisma_module_cache()
+        return False
+
+
 def append_query_params(url: Optional[str], params: dict) -> str:
     from litellm._logging import verbose_proxy_logger
 
@@ -1131,6 +1147,12 @@ def run_server(
                         flush=True,
                     )
                     sys.exit(1)
+            prisma_not_runnable_message = (
+                "Unable to connect to DB. DATABASE_URL found in environment, "
+                "but the prisma package was not found. Install database "
+                "dependencies with `pip install 'litellm[extra_proxy]'` or "
+                "`uv tool install 'litellm[proxy,extra_proxy]'`."
+            )
             try:
                 from litellm.secret_managers.main import get_secret
 
@@ -1154,9 +1176,25 @@ def run_server(
                     modified_url = append_query_params(database_url, connection_url_params)
                     os.environ["DIRECT_URL"] = modified_url
                 subprocess.run(["prisma"], capture_output=True)
+                if not _is_prisma_client_generated():
+                    prisma_schema_path = Path(__file__).parent / "schema.prisma"
+                    subprocess.run(
+                        ["prisma", "generate", "--schema", str(prisma_schema_path)],
+                        capture_output=True,
+                        check=True,
+                    )
+                    _clear_prisma_module_cache()
                 is_prisma_runnable = True
             except FileNotFoundError:
                 is_prisma_runnable = False
+            except subprocess.CalledProcessError:
+                is_prisma_runnable = False
+                prisma_not_runnable_message = (
+                    "Unable to connect to DB. DATABASE_URL found in environment, "
+                    "but `prisma generate` failed. Please run "
+                    "`prisma generate --schema litellm/proxy/schema.prisma` "
+                    "and check the Prisma CLI output before starting the proxy."
+                )
 
             if is_prisma_runnable:
                 from litellm.proxy.db.check_migration import check_prisma_schema_diff
@@ -1204,9 +1242,7 @@ def run_server(
                                 "Set --enforce_prisma_migration_check or ENFORCE_PRISMA_MIGRATION_CHECK=true to exit on failure.\033[0m"
                             )
             else:
-                print(
-                    f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa: F541
-                )
+                print(prisma_not_runnable_message)
         if port == 4000 and ProxyInitializationHelpers._is_port_in_use(port):
             port = random.randint(1024, 49152)
 

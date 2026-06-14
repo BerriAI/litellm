@@ -2791,11 +2791,22 @@ class PrismaClient:
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
+        except ModuleNotFoundError as e:
+            if e.name == "prisma":
+                verbose_proxy_logger.error(f"Failed to import Prisma client: {e}")
+                verbose_proxy_logger.error("DATABASE_URL requires LiteLLM's Prisma database dependencies.")
+                raise Exception(
+                    "Prisma package is not installed. For database-backed proxy "
+                    "deployments, install LiteLLM with `pip install "
+                    "'litellm[extra_proxy]'` or `uv tool install "
+                    "'litellm[proxy,extra_proxy]'`."
+                ) from e
+            raise
         except Exception as e:
             verbose_proxy_logger.error(f"Failed to import Prisma client: {e}")
             verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
             verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
-            raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
+            raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.") from e
         iam_flag = self.iam_token_db_auth if self.iam_token_db_auth is not None else False
         # When read-replica routing is on, tag log lines with [writer]/[reader]
         # so the two wrappers' interleaved IAM refresh logs can be told apart.
