@@ -1,6 +1,6 @@
 ---
-title: "v1.88.0rc3 - Claude Opus 4.8, MCP Access-Group Authorization & Typed OpenTelemetry"
-slug: "v1-88-0-rc-3"
+title: "v1.88.0 - Claude Opus 4.8, MCP Access-Group Authorization & Typed OpenTelemetry"
+slug: "v1-88-0"
 date: 2026-06-04T18:45:10
 authors:
   - name: Krrish Dholakia
@@ -31,14 +31,14 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-docker.litellm.ai/berriai/litellm:1.88.0-rc.3
+docker.litellm.ai/berriai/litellm:1.88.0
 ```
 
 </TabItem>
 <TabItem value="pip" label="Pip">
 
 ```bash
-pip install litellm==1.88.0rc3
+pip install litellm==1.88.0
 ```
 
 </TabItem>
@@ -46,7 +46,7 @@ pip install litellm==1.88.0rc3
 
 ## Key Highlights
 
-`v1.88.0rc3` is the current release candidate for 1.88.0.
+`v1.88.0` is the stable release, graduated from the `v1.88.0` release candidates.
 
 - **Claude Opus 4.8** is supported across Anthropic, Bedrock (including `global` / `us` / `eu` / `au` regional routes), Azure AI, and Vertex, at 1M-token context with adaptive thinking and `output_config` goal mode.
 - **MCP access-group authorization** was reworked end to end: key and team access groups now resolve to MCP servers, grants are additive with opt-in member assignment, and clients can route through stateful or stateless sessions by session id.
@@ -256,11 +256,11 @@ Almost everything above shipped in **rc.1**. The later candidates are small, tar
 
 No new contributors this release; all 11 authors are returning contributors.
 
-**Full Changelog**: https://github.com/BerriAI/litellm/compare/v1.87.0-rc.1...v1.88.0-rc.3
+**Full Changelog**: https://github.com/BerriAI/litellm/compare/v1.87.0...v1.88.0
 
 ---
 
-## 06/04/2026 (`v1.88.0rc3`)
+## 06/04/2026 (`v1.88.0`)
 
 * New Models / Updated Models: 9
 * LLM API Endpoints: 15
