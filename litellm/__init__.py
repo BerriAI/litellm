@@ -212,6 +212,12 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
+# When False (default), the Router will NOT append internal config names
+# (model_group, fallback model groups, deployment timeouts, fallback failure
+# details) to exception messages. These get surfaced to clients via
+# ProxyException.message and leak the proxy's internal model_name / fallback
+# wiring. Set to True to restore upstream debug behavior.
+expose_router_debug_in_errors: bool = False
 filter_invalid_headers: Optional[bool] = False
 add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
