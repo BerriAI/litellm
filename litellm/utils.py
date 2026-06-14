@@ -6004,7 +6004,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 )
                 _output_cost_per_token = 0
 
-            return ModelInfoBase(
+            result = ModelInfoBase(
                 key=key,
                 max_tokens=_model_info.get("max_tokens", None),
                 max_input_tokens=_model_info.get("max_input_tokens", None),
@@ -6045,18 +6045,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 input_cost_per_character=_model_info.get(
                     "input_cost_per_character", None
-                ),
-                input_cost_per_token_above_128k_tokens=_model_info.get(
-                    "input_cost_per_token_above_128k_tokens", None
-                ),
-                input_cost_per_token_above_200k_tokens=_model_info.get(
-                    "input_cost_per_token_above_200k_tokens", None
-                ),
-                input_cost_per_token_above_272k_tokens=_model_info.get(
-                    "input_cost_per_token_above_272k_tokens", None
-                ),
-                input_cost_per_token_above_512k_tokens=_model_info.get(
-                    "input_cost_per_token_above_512k_tokens", None
                 ),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
@@ -6100,21 +6088,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 output_cost_per_reasoning_token=_model_info.get(
                     "output_cost_per_reasoning_token", None
-                ),
-                output_cost_per_token_above_128k_tokens=_model_info.get(
-                    "output_cost_per_token_above_128k_tokens", None
-                ),
-                output_cost_per_character_above_128k_tokens=_model_info.get(
-                    "output_cost_per_character_above_128k_tokens", None
-                ),
-                output_cost_per_token_above_200k_tokens=_model_info.get(
-                    "output_cost_per_token_above_200k_tokens", None
-                ),
-                output_cost_per_token_above_272k_tokens=_model_info.get(
-                    "output_cost_per_token_above_272k_tokens", None
-                ),
-                output_cost_per_token_above_512k_tokens=_model_info.get(
-                    "output_cost_per_token_above_512k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_second_1080p=_model_info.get(
@@ -6203,6 +6176,17 @@ def _get_model_info_helper(  # noqa: PLR0915
                 uses_embed_content=_model_info.get("uses_embed_content", None),
                 supports_image_size=_model_info.get("supports_image_size", None),
             )
+        # Forward any `_above_` tier key the caller configured
+        # but wasn't in the fixed list above.  This makes every
+        # threshold the parser supports actually reachable instead of
+        # being silently dropped when N is not one of the hard-coded
+        # values, and also catches keys added to model_prices_and_context_window.json
+        # without a corresponding code change.
+        for _k, _v in _model_info.items():
+            if "_above_" in _k and _k not in result:
+                result[_k] = _v
+
+        return result
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
         raise Exception(
