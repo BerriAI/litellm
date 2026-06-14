@@ -585,6 +585,16 @@ class ChunkProcessor:
         # # Update usage information if needed
         prompt_tokens = 0
         completion_tokens = 0
+        # Anthropic's `message_start` SSE event carries usage.output_tokens=1 as a
+        # cursor/placeholder; the real value only arrives in `message_delta`.
+        # If a stream is cancelled before `message_delta` lands, the last-wins
+        # accumulator below leaves completion_tokens stuck at 1 — which then
+        # bypasses the `completion_tokens or token_counter(...)` fallback in
+        # calculate_usage() because 1 is truthy. Track whether any update came
+        # from a chunk that's definitively NOT a cursor (output_tokens > 1) so
+        # we can signal "no real usage seen" to the caller and let the text-based
+        # fallback kick in.
+        saw_non_cursor_completion = False
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
@@ -617,6 +627,8 @@ class ChunkProcessor:
                     and usage_chunk_dict["completion_tokens"] > 0
                 ):
                     completion_tokens = usage_chunk_dict["completion_tokens"]
+                    if usage_chunk_dict["completion_tokens"] > 1:
+                        saw_non_cursor_completion = True
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
                     usage_chunk_dict["cache_creation_input_tokens"] > 0
                     or cache_creation_input_tokens is None
@@ -666,6 +678,15 @@ class ChunkProcessor:
                     )
 
                 prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
+
+        # See `saw_non_cursor_completion` comment above. If the only completion
+        # update we ever saw was the Anthropic message_start cursor (=1), reset
+        # to 0 here so calculate_usage()'s `or token_counter(text=...)` fallback
+        # estimates from the actually-received completion text instead of trusting
+        # the placeholder. Legitimate 1-token completions are unaffected — the
+        # text-based fallback on a 1-token completion_output also yields ~1.
+        if completion_tokens == 1 and not saw_non_cursor_completion:
+            completion_tokens = 0
 
         return UsagePerChunk(
             prompt_tokens=prompt_tokens,
