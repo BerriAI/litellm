@@ -23,6 +23,27 @@ export const MIGRATED_PAGES: Record<string, string> = {
   "tag-management": "tag-management",
   "vector-stores": "vector-stores",
   memory: "memory",
+  policies: "policies",
+  guardrails: "guardrails",
+  prompts: "prompts",
+  "tool-policies": "tool-policies",
+  skills: "skills",
+  // Legacy alias: the old switch matched ?page=claude-code-plugins for the same panel.
+  "claude-code-plugins": "skills",
+  caching: "caching",
+  "cost-tracking": "cost-tracking",
+  "transform-request": "transform-request",
+  "ui-theme": "ui-theme",
+  logs: "logs",
+  "admin-panel": "admin-panel",
+  "logging-and-alerts": "logging-and-alerts",
+  "model-hub-table": "model-hub-table",
+  // The modern usage dashboard; the old ?page=usage report stays on the legacy switch.
+  new_usage: "usage",
+  agents: "agents",
+  "router-settings": "router-settings",
+  users: "users",
+  organizations: "organizations",
 };
 
 function uiBase(): string {

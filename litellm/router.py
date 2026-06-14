@@ -562,6 +562,7 @@ class Router:
         else:
             self.max_fallbacks = litellm.ROUTER_MAX_FALLBACKS
 
+        self._explicit_timeout = timeout  # None when user did not pass timeout
         self.timeout = timeout or litellm.request_timeout
         self.stream_timeout = stream_timeout
 
@@ -3225,9 +3226,25 @@ class Router:
 
         kwargs["model_info"] = model_info
 
-        kwargs["timeout"] = self._get_timeout(
-            kwargs=kwargs, data=deployment["litellm_params"]
-        )
+        if function_name == "_ageneric_api_call_with_fallbacks":
+            from litellm.passthrough.timeout_utils import (
+                resolve_llm_passthrough_timeout,
+            )
+
+            _router_timeout = (
+                float(self._explicit_timeout)
+                if isinstance(self._explicit_timeout, (int, float))
+                else None
+            )
+            kwargs["timeout"] = resolve_llm_passthrough_timeout(
+                kwargs=kwargs,
+                litellm_params=deployment["litellm_params"],
+                router_timeout=_router_timeout,
+            )
+        else:
+            kwargs["timeout"] = self._get_timeout(
+                kwargs=kwargs, data=deployment["litellm_params"]
+            )
 
         self._update_kwargs_with_default_litellm_params(
             kwargs=kwargs, metadata_variable_name=metadata_variable_name
@@ -4095,47 +4112,13 @@ class Router:
         ```
         """
         try:
+            kwargs["model"] = model
             kwargs["input"] = input
             kwargs["voice"] = voice
-
-            deployment = await self.async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "prompt"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            kwargs["original_function"] = self._aspeech
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            data = deployment["litellm_params"].copy()
-            data["model"]
-            for k, v in self.default_litellm_params.items():
-                if (
-                    k not in kwargs
-                ):  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
+            response = await self.async_function_with_fallbacks(**kwargs)
 
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
-            )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
-
-            response = await litellm.aspeech(
-                **{
-                    **data,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
             return response
         except Exception as e:
             asyncio.create_task(
@@ -4146,6 +4129,76 @@ class Router:
                     original_exception=e,
                 )
             )
+            raise e
+
+    async def _aspeech(self, model: str, input: str, voice: str, **kwargs):
+        model_name = model
+        try:
+            verbose_router_logger.debug(
+                f"Inside _aspeech()- model: {model}; kwargs: {kwargs}"
+            )
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+            deployment = await self.async_get_available_deployment(
+                model=model,
+                messages=[{"role": "user", "content": "prompt"}],
+                specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
+            )
+
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            data = deployment["litellm_params"].copy()
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
+            )
+
+            self.total_calls[model_name] += 1
+            response = litellm.aspeech(
+                **{
+                    **data,
+                    "input": input,
+                    "voice": voice,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
+
+            ### CONCURRENCY-SAFE RPM CHECKS ###
+            rpm_semaphore = self._get_client(
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
+            )
+
+            if rpm_semaphore is not None and isinstance(
+                rpm_semaphore, asyncio.Semaphore
+            ):
+                async with rpm_semaphore:
+                    """
+                    - Check rpm limits before making the call
+                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    """
+                    await self.async_routing_strategy_pre_call_checks(
+                        deployment=deployment, parent_otel_span=parent_otel_span
+                    )
+                    response = await response
+            else:
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
+                response = await response
+
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"litellm.aspeech(model={model_name})\033[32m 200 OK\033[0m"
+            )
+            return response
+        except Exception as e:
+            verbose_router_logger.info(
+                f"litellm.aspeech(model={model_name})\033[31m Exception {str(e)}\033[0m"
+            )
+            if model_name is not None:
+                self.fail_calls[model_name] += 1
             raise e
 
     async def arerank(self, model: str, **kwargs):

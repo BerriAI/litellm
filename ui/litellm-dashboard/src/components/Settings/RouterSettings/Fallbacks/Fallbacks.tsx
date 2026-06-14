@@ -67,7 +67,6 @@ interface FallbacksProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
-  modelData: any;
 }
 
 async function testFallbackModelResponse(selectedModel: string, accessToken: string, t: TFunction) {
@@ -119,7 +118,7 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
   }
 }
 
-const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, modelData }) => {
+const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) => {
   const { t } = useTranslation();
   const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>({});
   const [isDeleting, setIsDeleting] = useState(false);
@@ -248,7 +247,6 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
     <>
       {canModify && (
         <AddFallbacks
-          models={modelData?.data ? modelData.data.map((data: any) => data.model_name) : []}
           accessToken={accessToken || ""}
           value={routerSettings.fallbacks || []}
           onChange={handleFallbacksChange}
