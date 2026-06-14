@@ -2,11 +2,13 @@
 """Per-file count gate for mypy and basedpyright.
 
 Each tool's output is reduced to a count of errors per file and checked against
-a committed budget, the max errors allowed per file. Counts ignore line and
-column numbers, so they survive code moving within a file; a file fails only
-when it gains more errors than its ceiling. Run with --update to re-capture the
-budget from the current tree (ratchet). The tool output is read from stdin, so
-the caller decides how to invoke mypy or basedpyright.
+a committed budget of the form {"slack": N, "files": {path: count}}. Counts
+ignore line and column numbers, so they survive code moving within a file; a
+file fails only when it gains more than `slack` errors over its recorded count.
+slack lives in the JSON so it can be tuned without touching this script. Run
+with --update to re-capture the counts from the current tree (ratchet),
+preserving the existing slack. Tool output is read from stdin, so the caller
+decides how to invoke mypy or basedpyright.
 """
 
 import argparse
@@ -24,10 +26,9 @@ PATTERNS: Mapping[str, re.Pattern[str]] = {
     "basedpyright": re.compile(r"^\s*(?P<file>.+?):\d+:\d+ - error:"),
 }
 
-# Headroom per file on top of its recorded count, so an inference ripple in an
-# unrelated file (basedpyright especially) does not fail the build over a couple
-# of errors. Small on purpose: a file still fails once it drifts past this.
-PER_FILE_SLACK = 5
+# Seed slack written into a freshly created budget. Existing budgets keep
+# whatever slack is already declared in their JSON.
+DEFAULT_SLACK = 5
 
 
 class Breach(NamedTuple):
@@ -73,15 +74,21 @@ def budget_path(tool: str) -> Path:
 
 def cmd_update(tool: str, counts: Mapping[str, int]) -> None:
     path = budget_path(tool)
-    path.write_text(json.dumps(dict(sorted(counts.items())), indent=2) + "\n")
+    slack = (
+        json.loads(path.read_text()).get("slack", DEFAULT_SLACK)
+        if path.exists()
+        else DEFAULT_SLACK
+    )
+    data = {"slack": slack, "files": dict(sorted(counts.items()))}
+    path.write_text(json.dumps(data, indent=2) + "\n")
     print(
-        f"Re-captured {tool} per-file budget: {len(counts)} files, {sum(counts.values())} errors"
+        f"Re-captured {tool} per-file budget: {len(counts)} files, {sum(counts.values())} errors (slack {slack})"
     )
 
 
 def cmd_check(tool: str, counts: Mapping[str, int]) -> None:
     budget = json.loads(budget_path(tool).read_text())
-    breaches = evaluate(counts, budget, PER_FILE_SLACK)
+    breaches = evaluate(counts, budget["files"], budget["slack"])
     if not breaches:
         print(
             f"OK: every file is within its {tool} ceiling ({sum(counts.values())} errors total)"
