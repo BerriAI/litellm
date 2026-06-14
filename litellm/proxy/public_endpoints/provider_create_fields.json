@@ -1244,6 +1244,16 @@
     "litellm_provider": "gemini",
     "credential_fields": [
       {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://generativelanguage.googleapis.com/v1beta",
+        "tooltip": "Override only when using a Gemini-compatible gateway (e.g. /v1beta path on a self-hosted proxy). LiteLLM appends '/models/{model}:generateContent' so include '/v1beta' but not the trailing slash.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://generativelanguage.googleapis.com/v1beta"
+      },
+      {
         "key": "api_key",
         "label": "API Key",
         "placeholder": "aig-",
