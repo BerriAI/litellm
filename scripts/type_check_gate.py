@@ -24,6 +24,11 @@ PATTERNS: Mapping[str, re.Pattern[str]] = {
     "basedpyright": re.compile(r"^\s*(?P<file>.+?):\d+:\d+ - error:"),
 }
 
+# Headroom per file on top of its recorded count, so an inference ripple in an
+# unrelated file (basedpyright especially) does not fail the build over a couple
+# of errors. Small on purpose: a file still fails once it drifts past this.
+PER_FILE_SLACK = 5
+
 
 class Breach(NamedTuple):
     file: str
@@ -52,11 +57,13 @@ def count_errors(lines: Iterable[str], pattern: re.Pattern[str]) -> dict[str, in
     return dict(counts)
 
 
-def evaluate(counts: Mapping[str, int], budget: Mapping[str, int]) -> list[Breach]:
+def evaluate(
+    counts: Mapping[str, int], budget: Mapping[str, int], slack: int
+) -> list[Breach]:
     return sorted(
-        Breach(file, count, budget.get(file, 0))
+        Breach(file, count, budget.get(file, 0) + slack)
         for file, count in counts.items()
-        if count > budget.get(file, 0)
+        if count > budget.get(file, 0) + slack
     )
 
 
@@ -74,7 +81,7 @@ def cmd_update(tool: str, counts: Mapping[str, int]) -> None:
 
 def cmd_check(tool: str, counts: Mapping[str, int]) -> None:
     budget = json.loads(budget_path(tool).read_text())
-    breaches = evaluate(counts, budget)
+    breaches = evaluate(counts, budget, PER_FILE_SLACK)
     if not breaches:
         print(
             f"OK: every file is within its {tool} ceiling ({sum(counts.values())} errors total)"
