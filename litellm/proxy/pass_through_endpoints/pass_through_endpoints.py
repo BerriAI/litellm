@@ -94,7 +94,9 @@ def _remove_pass_through_adapter(adapter_id: Optional[str]) -> None:
 
 
 def _is_pass_through_adapter_active(adapter_id: str) -> bool:
-    return any(adapter_entry.get("id") == adapter_id for adapter_entry in litellm.adapters)
+    return any(
+        adapter_entry.get("id") == adapter_id for adapter_entry in litellm.adapters
+    )
 
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
