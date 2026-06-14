@@ -11,7 +11,7 @@ import json
 from typing import Callable, Mapping
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
-from litellm.integrations.otel.mappers.utils import collect, drop_none
+from litellm.integrations.otel.mappers.utils import collect, drop_none, json_or_none
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -196,11 +196,11 @@ class GenAIMapper:
 
 
 def _input_messages(messages: tuple[Mapping[str, object], ...]) -> str | None:
-    return json.dumps([_input_message(m) for m in messages]) if messages else None
+    return json_or_none([_input_message(m) for m in messages]) if messages else None
 
 
 def _output_messages(choices: tuple[Mapping[str, object], ...]) -> str | None:
-    return json.dumps([_output_message(c) for c in choices]) if choices else None
+    return json_or_none([_output_message(c) for c in choices]) if choices else None
 
 
 def _input_message(message: Mapping[str, object]) -> Mapping[str, object]:

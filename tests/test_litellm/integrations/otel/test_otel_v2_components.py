@@ -3,6 +3,7 @@ baggage helpers, metrics, the typed coercion helpers, mapper branches, span-name
 builders, and the registry validator's failure paths. Needs the OTel SDK."""
 
 import json
+from datetime import datetime
 
 import pytest
 
@@ -404,6 +405,46 @@ def test_genai_mapper_tool_result_message_becomes_response_part():
     assert message["parts"] == [
         {"type": "tool_call_response", "id": "call_42", "result": "21C and sunny"}
     ]
+
+
+def test_genai_mapper_tool_call_arguments_pass_through_when_not_json():
+    # A non-string blob is kept as-is; an unparseable string survives verbatim
+    # rather than letting the JSON parse error bubble up.
+    data = _llm_call_with_content(
+        choices_out=(
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {"id": "a", "function": {"name": "f", "arguments": "not json"}},
+                        {"id": "b", "function": {"name": "g", "arguments": {"x": 1}}},
+                    ],
+                },
+            },
+        )
+    )
+    (message,) = json.loads(GenAIMapper().map(data)[GenAI.OUTPUT_MESSAGES])
+    assert [p["arguments"] for p in message["parts"]] == ["not json", {"x": 1}]
+
+
+def test_genai_mapper_output_choice_without_message_defaults_role():
+    data = _llm_call_with_content(choices_out=({"finish_reason": "stop"},))
+    (message,) = json.loads(GenAIMapper().map(data)[GenAI.OUTPUT_MESSAGES])
+    assert message == {"role": "assistant", "parts": [], "finish_reason": "stop"}
+
+
+def test_genai_mapper_non_serializable_content_does_not_crash_span():
+    # json_or_none guards the dump: a stray non-JSON value is stringified instead
+    # of raising through ``collect`` and dropping the whole span.
+    data = _llm_call_with_content(
+        messages_in=(
+            {"role": "tool", "tool_call_id": "c", "content": datetime(2026, 1, 1)},
+        )
+    )
+    (message,) = json.loads(GenAIMapper().map(data)[GenAI.INPUT_MESSAGES])
+    assert message["parts"][0]["type"] == "tool_call_response"
+    assert "2026" in message["parts"][0]["result"]
 
 
 def test_llm_cost_from_breakdown_maps_costbreakdown_keys():
