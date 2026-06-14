@@ -1164,6 +1164,99 @@ class TestCallToolRestAPI:
         assert logging_obj.async_failure_handler.await_args.args[0] is tool_error
         assert logging_obj.call_type == CallTypes.call_mcp_tool.value
 
+    async def test_failure_logging_error_does_not_mask_original_error(
+        self, monkeypatch
+    ):
+        """
+        Logging is non-blocking: if async_failure_handler itself raises, the
+        original tool-call error and its HTTP status must still surface rather
+        than being replaced by a generic 500 from the logging layer.
+        """
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        stub_server = StubServer()
+
+        logging_obj = MagicMock()
+        logging_obj.async_failure_handler = AsyncMock(
+            side_effect=RuntimeError("otel exporter down")
+        )
+
+        async def fake_common_processing(self, **kwargs):
+            return self.data, logging_obj
+
+        async def fake_execute_mcp_tool(**kwargs):
+            raise HTTPException(status_code=403, detail="forbidden")
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_config",
+            {},
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic",
+            fake_common_processing,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "execute_mcp_tool",
+            fake_execute_mcp_tool,
+            raising=False,
+        )
+
+        request_payload = {
+            "server_id": "server-1",
+            "name": "demo-tool",
+            "arguments": {"foo": "bar"},
+        }
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body=request_payload,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(
+                request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 403
+        logging_obj.async_failure_handler.assert_awaited_once()
+
 
 class TestGetToolsForSingleServer:
     """Test _get_tools_for_single_server with object_permission filtering"""

@@ -878,9 +878,16 @@ if MCP_AVAILABLE:
             except Exception as e:
                 if logging_obj is not None:
                     logging_obj.call_type = CallTypes.call_mcp_tool.value
-                    await logging_obj.async_failure_handler(
-                        e, traceback.format_exc(), start_time, datetime.now()
-                    )
+                    try:
+                        await logging_obj.async_failure_handler(
+                            e, traceback.format_exc(), start_time, datetime.now()
+                        )
+                    except Exception as logging_error:
+                        verbose_logger.exception(
+                            "MCP tool call failed and failure logging also raised; "
+                            "preserving original error: %s",
+                            logging_error,
+                        )
                 raise
             return result
         except MCPMissingUserEnvVarsError as e:

@@ -2732,18 +2732,24 @@ if MCP_AVAILABLE:
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         if litellm_logging_obj is not None:
-            litellm_logging_obj.post_call(original_response=response)
-            end_time = datetime.now()
-            await litellm_logging_obj.async_post_mcp_tool_call_hook(
-                kwargs=litellm_logging_obj.model_call_details,
-                response_obj=response,
-                start_time=start_time,
-                end_time=end_time,
-            )
-            litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
-            await litellm_logging_obj.async_success_handler(
-                result=response, start_time=start_time, end_time=end_time
-            )
+            try:
+                litellm_logging_obj.post_call(original_response=response)
+                end_time = datetime.now()
+                await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                    kwargs=litellm_logging_obj.model_call_details,
+                    response_obj=response,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+                litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
+                await litellm_logging_obj.async_success_handler(
+                    result=response, start_time=start_time, end_time=end_time
+                )
+            except Exception as logging_error:
+                verbose_logger.exception(
+                    "MCP tool call succeeded but success logging raised: %s",
+                    logging_error,
+                )
         return response
 
     @client
