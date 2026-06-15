@@ -380,3 +380,57 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
         logging_obj.stream = _hook_stream
 
     assert logging_obj.stream is False
+
+
+def test_default_enabled_providers_is_wildcard():
+    """Default (no enabled_providers configured) must intercept for ALL providers.
+
+    Regression test: previously ``enabled_providers=None`` silently narrowed to
+    ``[bedrock]``, so native Anthropic server-tools like ``web_search_20250305``
+    were forwarded untouched to non-Bedrock backends (vllm, openai, together_ai,
+    …) that cannot parse them. The docstring promised "None = all providers" —
+    this test locks that contract in.
+    """
+    logger = WebSearchInterceptionLogger()
+    assert logger.enabled_providers is None
+
+    # Empty list is documented as equivalent to "all providers".
+    logger_empty = WebSearchInterceptionLogger(enabled_providers=[])
+    assert logger_empty.enabled_providers is None
+
+
+@pytest.mark.asyncio
+async def test_deployment_hook_default_intercepts_non_bedrock_provider():
+    """With default config, the hook must convert web_search_20250305 for any provider.
+
+    Before the fix, this test would fail for custom_llm_provider="hosted_vllm"
+    because the default ``enabled_providers=[bedrock]`` skipped the hook, and
+    the native server-tool (no ``input_schema``) was forwarded to the backend
+    — which then rejected it with a Pydantic validation error on
+    ``body.tools[0].input_schema``.
+    """
+    logger = WebSearchInterceptionLogger()  # no enabled_providers → wildcard
+
+    kwargs = {
+        "model": "hosted_vllm/some-model",
+        "messages": [{"role": "user", "content": "search the web"}],
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+        ],
+        "custom_llm_provider": "hosted_vllm",
+        "api_key": "fake-key",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+
+    assert (
+        result is not None
+    ), "default config must intercept web_search for non-Bedrock providers"
+    # The server-side tool (no input_schema) must be replaced with the
+    # function-style litellm_web_search tool before it reaches the backend.
+    assert all(t.get("type") != "web_search_20250305" for t in result["tools"])
+    assert any(
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
+        for t in result["tools"]
+    )
