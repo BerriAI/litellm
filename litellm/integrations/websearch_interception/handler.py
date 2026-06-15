@@ -1339,8 +1339,13 @@ class WebSearchInterceptionLogger(CustomLogger):
         websearch_params: WebSearchInterceptionConfig = {}
         if "websearch_interception_params" in litellm_settings:
             websearch_params = litellm_settings["websearch_interception_params"]
-        elif "websearch_interception" in callback_specific_params:
-            websearch_params = callback_specific_params["websearch_interception"]
+        elif "websearch_interception" in callback_specific_params and isinstance(
+            callback_specific_params["websearch_interception"], dict
+        ):
+            websearch_params = cast(
+                WebSearchInterceptionConfig,
+                callback_specific_params["websearch_interception"],
+            )
 
         # Use classmethod to initialize from config
         return WebSearchInterceptionLogger.from_config_yaml(websearch_params)

@@ -71,6 +71,14 @@ proxy = [
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
     "pydantic-settings>=2.14.1,<3.0",
 ]
+# Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
+# imports (fastapi, cryptography, ...) are all guarded, so it runs on the base
+# SDK plus just these three; none of the server runtime in `proxy` is pulled in.
+cli = [
+    "rich>=13.9.4,<14.0",
+    "pyyaml>=6.0.3,<7.0",
+    "requests>=2.32.0,<3.0",
+]
 extra_proxy = [
     "prisma>=0.11.0,<1.0",
     "azure-identity>=1.25.2,<2.0",
@@ -125,13 +133,14 @@ proxy-runtime = [
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
     "azure-storage-file-datalake>=12.20.0,<13.0",
-    "pypdf>=6.10.2,<7.0; python_version < '3.14'",
+    "pypdf>=6.12.0,<7.0; python_version < '3.14'",
     "llm-sandbox>=0.3.39,<1.0",
     "detect-secrets>=1.5.0,<2.0",
 ]
 
 [project.scripts]
 litellm = "litellm:run_server"
+lite = "litellm.proxy.client.cli:cli"
 litellm-proxy = "litellm.proxy.client.cli:cli"
 
 [dependency-groups]
@@ -231,6 +240,10 @@ requires = ["uv_build==0.11.8"]
 build-backend = "uv_build"
 
 [tool.uv]
+constraint-dependencies = [
+    "tornado>=6.5.6",
+    "aiohttp>=3.13.5,<3.14",
+]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
 exclude-newer = "3 days"

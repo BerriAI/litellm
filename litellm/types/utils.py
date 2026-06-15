@@ -197,6 +197,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]  # OpenAI priority service tier pricing
     cache_read_input_token_cost_above_200k_tokens: Optional[float]
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
+    cache_read_input_token_cost_above_512k_tokens: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -206,6 +207,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_272k_tokens: Optional[
         float
     ]  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
+    input_cost_per_token_above_512k_tokens: Optional[
+        float
+    ]  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -239,6 +243,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_272k_tokens: Optional[
         float
     ]  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
+    output_cost_per_token_above_512k_tokens: Optional[
+        float
+    ]  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -492,6 +499,7 @@ CallTypesLiteral = Literal[
     "create_batch",
     "acreate_batch",
     "pass_through_endpoint",
+    "allm_passthrough_route",
     "anthropic_messages",
     "aretrieve_batch",
     "retrieve_batch",
@@ -526,6 +534,7 @@ CallTypesLiteral = Literal[
     "acreate_skill",
     "acreate_realtime_client_secret",
     "arealtime_calls",
+    "acreate_realtime_transcription_session",
 ]
 
 # Mapping of API routes to their corresponding call types
@@ -2486,6 +2495,7 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     litellm_call_id: Optional[str]
     model_alias_map: Optional[dict]
     metadata: Optional[dict]
+    litellm_metadata: Optional[dict]
     model_info: Optional[dict]
     proxy_server_request: Optional[dict]
     acompletion: Optional[bool]
@@ -3050,6 +3060,12 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     wandb_api_key: Optional[str]
     weave_project_id: Optional[str]
 
+    # Datadog dynamic params
+    dd_api_key: Optional[str]
+    dd_site: Optional[str]
+    dd_agent_host: Optional[str]
+    dd_agent_port: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
@@ -3217,6 +3233,7 @@ all_litellm_params = (
         "search_tool_name",
         "order",
         "enable_json_schema_validation",
+        "use_xai_oauth",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())

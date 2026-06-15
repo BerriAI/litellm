@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
     MCPAuthType,
@@ -1855,6 +1856,10 @@ class BlockKeyRequest(LiteLLMPydanticObjectBase):
     key: str  # required
 
 
+class BlockModelRequest(LiteLLMPydanticObjectBase):
+    model_id: str  # required
+
+
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
     callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
@@ -2044,6 +2049,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=0.0,
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
     )
+    timeout: Optional[float] = Field(
+        default=None,
+        description="Upstream request timeout in seconds for this pass-through endpoint. If unset, uses general_settings.pass_through_request_timeout (default 600).",
+    )
     auth: bool = Field(
         default=True,
         description="Whether authentication is required for the pass-through endpoint. Defaults to True so a pass-through silently created without an explicit value still requires a valid LiteLLM API key — set to False only if the endpoint is meant to be a public forwarder (e.g. an unauthenticated webhook target).",
@@ -2176,6 +2185,17 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "`statement_cache_size`). Keys here override any default LiteLLM sets."
         ),
     )
+    database_disable_prepared_statements: Optional[bool] = Field(
+        None,
+        description=(
+            "Disable server-side prepared statements by setting Prisma's "
+            "`pgbouncer=true` URL param. Use this for pgbouncer transaction-pooling "
+            "deployments, or to prevent the 'cached plan must not change result "
+            "type' error that pooled connections hit during rolling schema "
+            "migrations. An explicit `pgbouncer` in `database_extra_connection_params` "
+            "takes precedence."
+        ),
+    )
     database_type: Optional[Literal["dynamo_db"]] = Field(
         None, description="to use dynamodb instead of postgres db"
     )
@@ -2206,6 +2226,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
     )
+    cancel_on_disconnect: Optional[bool] = Field(
+        None,
+        description="cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure",
+    )
     infer_model_from_keys: Optional[bool] = Field(
         None,
         description="for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)",
@@ -2219,8 +2243,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     health_check_concurrency: Optional[int] = Field(
         None,
         description=(
-            "limit concurrent health checks per cycle; when unset, "
-            "health checks run without a concurrency cap"
+            "limit concurrent health checks per cycle; when unset, health checks run without a concurrency cap"
         ),
     )
     health_check_skip_disabled_background_models: bool = Field(
@@ -2263,6 +2286,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=False,
         description="Public model hub for users to see what models they have access to, supported openai params, etc.",
     )
+    pass_through_request_timeout: Optional[float] = Field(
+        default=None,
+        description="Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.",
+    )
     pass_through_endpoints: Optional[List[PassThroughGenericEndpoint]] = Field(
         default=None,
         description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
@@ -2287,6 +2314,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
+    )
+    use_spend_logs_partitioning: Optional[bool] = Field(
+        None,
+        description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
     )
     mcp_internal_ip_ranges: Optional[List[str]] = Field(
         None,
@@ -3078,6 +3109,14 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="Galileo",
     )
 
+    newrelic: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="newrelic",
+        ui_callback_name="New Relic",
+        litellm_callback_params=[
+            "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED",
+        ],
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """
@@ -3834,6 +3873,7 @@ PassThroughEndpointLoggingResultValues = Union[
     EmbeddingResponse,
     VideoObject,
     StandardPassThroughResponseObject,
+    ResponsesAPIResponse,
 ]
 
 

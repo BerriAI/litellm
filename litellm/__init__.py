@@ -43,6 +43,7 @@ from typing import (
     Type,
 )
 from litellm.types.integrations.datadog import DatadogInitParams
+from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -154,10 +155,12 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gitlab",
     "cloudzero",
     "focus",
+    "mavvrik",
     "vantage",
     "posthog",
     "levo",
     "compression_interception",
+    "newrelic",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -359,6 +362,9 @@ enable_gemini_default_thinking_level_low: bool = (
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
+require_managed_files: bool = (
+    False  # proxy only - require target_model_names on POST /v1/files
+)
 enable_caching_on_provider_specific_optional_params: bool = (
     False  # feature-flag for caching on optional params - e.g. 'top_k'
 )
@@ -412,6 +418,7 @@ s3_callback_params: Optional[Dict] = None
 s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
+newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
@@ -1373,6 +1380,7 @@ from .search.main import *
 from .realtime_api.main import (
     _arealtime,
     acreate_realtime_client_secret,
+    acreate_realtime_transcription_session,
     arealtime_calls,
 )
 from .responses.main import _aresponses_websocket
@@ -1722,6 +1730,9 @@ if TYPE_CHECKING:
     )
     from .llms.voyage.embedding.transformation_contextual import (
         VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig,
+    )
+    from .llms.voyage.embedding.transformation_multimodal import (
+        VoyageMultimodalEmbeddingConfig as VoyageMultimodalEmbeddingConfig,
     )
     from .llms.infinity.embedding.transformation import (
         InfinityEmbeddingConfig as InfinityEmbeddingConfig,

@@ -158,6 +158,7 @@ from ..integrations.litellm_agent import LiteLLMAgentModelResolver
 from ..integrations.literal_ai import LiteralAILogger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
+from ..integrations.newrelic import NewRelicLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
 from ..integrations.posthog import PostHogLogger
@@ -380,13 +381,14 @@ class Logging(LiteLLMLoggingBaseClass):
             List[Union[str, Callable, CustomLogger]]
         ] = dynamic_async_failure_callbacks
 
-        # Process dynamic callbacks
-        self.process_dynamic_callbacks()
-
         ## DYNAMIC LANGFUSE / GCS / logging callback KEYS ##
         self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
             self.initialize_standard_callback_dynamic_params(kwargs)
         )
+
+        # Process dynamic callbacks (after standard_callback_dynamic_params is initialized,
+        # so team-scoped credentials are available for callback initialization)
+        self.process_dynamic_callbacks()
         self.standard_built_in_tools_params: StandardBuiltInToolsParams = (
             self.initialize_standard_built_in_tools_params(kwargs)
         )
@@ -481,8 +483,21 @@ class Logging(LiteLLMLoggingBaseClass):
                 isinstance(callback, str)
                 and callback in litellm._known_custom_logger_compatible_callbacks
             ):
+                # For callbacks that support team-scoped credentials (e.g. datadog),
+                # pass only the relevant dynamic params as custom_logger_init_args.
+                _custom_logger_init_args: Optional[dict] = None
+                if callback == "datadog":
+                    _custom_logger_init_args = {
+                        k: v
+                        for k, v in self.standard_callback_dynamic_params.items()
+                        if k.startswith("dd_")
+                    }
+
                 callback_class = _init_custom_logger_compatible_class(
-                    callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                    callback,  # type: ignore[arg-type]
+                    internal_usage_cache=None,
+                    llm_router=None,  # type: ignore
+                    custom_logger_init_args=_custom_logger_init_args,
                 )
                 if callback_class is not None:
                     processed_list.append(callback_class)
@@ -3507,9 +3522,7 @@ class Logging(LiteLLMLoggingBaseClass):
         else:
             return None
 
-    def _handle_anthropic_messages_response_logging(
-        self, result: Any
-    ) -> Union[ModelResponse, ResponsesAPIResponse]:
+    def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
         """
         Handles logging for Anthropic messages responses.
 
@@ -3528,15 +3541,14 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
         elif isinstance(result, ModelResponse):
             return result
-        elif isinstance(
+
+        if isinstance(
             result,
             (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
         ):
-            # anthropic_messages() can route to OpenAI Responses API; in that path
-            # the assembled streaming result is one of these terminal events rather than
-            # a ModelResponse. Return the inner response so downstream handlers
-            # (_transform_usage_objects, normalize_logging_result) can process it.
-            return result.response
+            result = result.response
+        if isinstance(result, ResponsesAPIResponse):
+            return self._translate_responses_api_response_to_model_response(result)
 
         httpx_response = self.model_call_details.get("httpx_response", None)
         if httpx_response and isinstance(httpx_response, httpx.Response):
@@ -3569,6 +3581,55 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=None,
             )
         return result
+
+    def _translate_responses_api_response_to_model_response(
+        self, result: ResponsesAPIResponse
+    ) -> ModelResponse:
+        """
+        Convert a Responses API response into a ModelResponse for spend_logs.
+
+        The proxy UI parses spend_log rows expecting chat-completion shape
+        (response.choices[0].message); a raw ResponsesAPIResponse dump (output[...])
+        would render as empty in the Logs tab. Translation also yields full
+        choices/message detail downstream consumers can rely on.
+        """
+        from litellm.completion_extras.litellm_responses_transformation.transformation import (
+            LiteLLMResponsesTransformationHandler,
+        )
+
+        try:
+            return LiteLLMResponsesTransformationHandler().transform_response(
+                model=self.model,
+                raw_response=result,
+                model_response=litellm.ModelResponse(),
+                logging_obj=self,
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding=litellm.encoding,
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                "Responses API -> ModelResponse translation failed for "
+                "anthropic_messages logging (%s); falling back to minimal "
+                "usage-only ModelResponse to keep the spend_logs row.",
+                str(e),
+            )
+            model_response = litellm.ModelResponse()
+            model_response.model = self.model
+            usage = getattr(result, "usage", None)
+            if usage is not None and ResponseAPILoggingUtils._is_response_api_usage(
+                usage
+            ):
+                setattr(
+                    model_response,
+                    "usage",
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        usage
+                    ),
+                )
+            return model_response
 
     def _handle_non_streaming_google_genai_generate_content_response_logging(
         self, result: Any
@@ -3894,6 +3955,24 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_prometheus_logger)
             return _prometheus_logger  # type: ignore
         elif logging_integration == "datadog":
+            # Check if team-scoped credentials are provided
+            _dd_api_key = custom_logger_init_args.get("dd_api_key")
+            _dd_site = custom_logger_init_args.get("dd_site")
+            _dd_agent_host = custom_logger_init_args.get("dd_agent_host")
+            _dd_agent_port = custom_logger_init_args.get("dd_agent_port")
+
+            if _dd_api_key or _dd_site or _dd_agent_host:
+                # Team-scoped credentials: use DynamicLoggingCache for per-credential isolation
+                from litellm.integrations.datadog.datadog_team_handler import (
+                    DataDogHandler,
+                )
+
+                return DataDogHandler.get_datadog_logger_for_request(
+                    standard_callback_dynamic_params=custom_logger_init_args,  # type: ignore
+                    in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+                )
+
+            # Global (env-var based): reuse cached instance
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLogger):
                     return callback  # type: ignore
@@ -4124,6 +4203,17 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             focus_logger = FocusLogger()
             _in_memory_loggers.append(focus_logger)
             return focus_logger  # type: ignore
+        elif logging_integration == "mavvrik":
+            from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import (
+                MavvrikFocusLogger,
+            )
+
+            for callback in _in_memory_loggers:
+                if type(callback) is MavvrikFocusLogger:
+                    return callback  # type: ignore
+            mavvrik_focus_logger = MavvrikFocusLogger()
+            _in_memory_loggers.append(mavvrik_focus_logger)
+            return mavvrik_focus_logger  # type: ignore
         elif logging_integration == "vantage":
             from litellm.integrations.vantage.vantage_logger import VantageLogger
 
@@ -4419,6 +4509,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             gitlab_logger = GitLabPromptManager(gitlab_config=gitlab_config)
             _in_memory_loggers.append(gitlab_logger)
             return gitlab_logger  # type: ignore
+        elif logging_integration == "newrelic":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, NewRelicLogger):
+                    return callback  # type: ignore
+            newrelic_logger = NewRelicLogger()
+            _in_memory_loggers.append(newrelic_logger)
+            return newrelic_logger  # type: ignore
         return None
     except Exception as e:
         verbose_logger.exception(
@@ -4719,6 +4816,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "smtp_email":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SMTPEmailLogger):
+                    return callback
+        elif logging_integration == "newrelic":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, NewRelicLogger):
                     return callback
         return None
 

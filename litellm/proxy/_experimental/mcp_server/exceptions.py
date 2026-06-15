@@ -10,8 +10,9 @@ class MCPUpstreamAuthError(Exception):
     (typically HTTP 401) and the gateway should surface it transparently to
     the client instead of swallowing it.
 
-    Only relevant for pass-through MCP servers (see
-    ``MCPServer.is_oauth_passthrough``). The gateway converts this exception
+    Relevant for MCP servers that delegate OAuth to the upstream server,
+    including pass-through servers and OAuth2 servers with
+    ``delegate_auth_to_upstream`` enabled. The gateway converts this exception
     into an HTTP 401 response on single-server routes, preserving any
     ``WWW-Authenticate`` challenge emitted by the upstream so standards-
     compliant MCP clients can trigger the upstream OAuth flow.
