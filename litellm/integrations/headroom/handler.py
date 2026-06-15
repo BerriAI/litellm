@@ -42,7 +42,36 @@ proxy YAML config; the registration logic lives in
 
 from __future__ import annotations
 
+import logging
+import sys
 from typing import Any
+
+# ---------------------------------------------------------------------------
+# Step 0: surface the headroom.* loggers on the proxy's stdout/stderr.
+#
+# Why we do this here, not via LITELLM_LOG: LITELLM_LOG=DEBUG only configures
+# the ``LiteLLM Proxy`` namespace and its sub-loggers. Third-party loggers
+# (``headroom.*``) inherit Python's default WARNING level and have no handlers
+# attached, so the ``logger.info("Headroom: X→Y tokens (saved Z, %d%%)")``
+# success line and the ``logger.warning("Headroom compression failed: ...")``
+# error line never reach pod logs. Operators have no way to verify that
+# compression is firing or to debug failures without exec'ing into the pod.
+#
+# Solution: attach a stderr StreamHandler to the ``headroom`` logger at
+# import time and pin its effective level to INFO. We don't touch the root
+# logger (would spam every other library's INFO) and we don't propagate
+# (avoid duplicate lines if some downstream config later attaches a root
+# handler).
+# ---------------------------------------------------------------------------
+_hr_logger = logging.getLogger("headroom")
+if not any(getattr(h, "_mt_headroom_handler", False) for h in _hr_logger.handlers):
+    _h = logging.StreamHandler(sys.stderr)
+    _h._mt_headroom_handler = True  # type: ignore[attr-defined]
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    _h.setLevel(logging.INFO)
+    _hr_logger.addHandler(_h)
+    _hr_logger.setLevel(logging.INFO)
+    _hr_logger.propagate = False
 
 # ---------------------------------------------------------------------------
 # Step 1: monkey-patch DEFAULT_EXCLUDE_TOOLS BEFORE any headroom.compress
@@ -89,6 +118,75 @@ class MTHeadroomAggressive(HeadroomCallback, CustomLogger):
     `compress_user_messages=True`, `target_ratio=0.5` so the latest
     tool_result becomes a compression target instead of a protected one.
     """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._prewarm_pipeline()
+
+    @staticmethod
+    def _prewarm_pipeline() -> None:
+        """Force ModernBERT weights to load NOW, not on the first request.
+
+        Headroom's text compressor lazy-loads ``answerdotai/ModernBERT-base``
+        (~134 weight tensors, ~700MB) the first time it has to compress text.
+        Observed cold-start latency on devops-watchtower: ~31 seconds — far
+        too long for a request hot path. The same payload measured ~30ms on
+        the second call (model in memory, no further loads).
+
+        Drive a synthetic compression at startup so the proxy's first real
+        request gets the warm path. The dummy payload is shaped like a
+        Bash tool_result (same routing branch as Claude-Code's heaviest
+        traffic) so the routing predicate hits the same compressor path.
+        """
+        try:
+            from headroom.compress import compress  # type: ignore[import-not-found]
+
+            dummy_messages = [
+                {"role": "user", "content": "warmup"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "warmup_1",
+                            "name": "Bash",
+                            "input": {"command": "echo warmup"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "warmup_1",
+                            # Long enough (>50 words) that the compressor
+                            # actually engages instead of short-circuiting.
+                            "content": (
+                                "warmup line " * 200
+                            ),
+                        }
+                    ],
+                },
+            ]
+            compress(
+                messages=dummy_messages,
+                model="claude-sonnet-4-5-20250929",
+                model_limit=200000,
+                hooks=None,
+                protect_recent=0,
+                compress_user_messages=True,
+                target_ratio=0.5,
+            )
+            logging.getLogger("headroom").info(
+                "MTHeadroomAggressive: pipeline pre-warm complete"
+            )
+        except Exception as e:  # pragma: no cover — pre-warm is best-effort
+            logging.getLogger("headroom").warning(
+                "MTHeadroomAggressive: pipeline pre-warm failed: %s. "
+                "First real request will pay the cold-start latency.",
+                e,
+            )
 
     # LiteLLM's pre-call dispatch (litellm/proxy/utils.py:1515) calls the hook
     # with a different signature than upstream HeadroomCallback expects:
