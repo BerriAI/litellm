@@ -1424,10 +1424,9 @@ class MCPServerManager:
         except Exception:
             verbose_logger.exception(
                 "Failed to get allowed MCP servers; team-level object_permission "
-                "grants would be silently dropped. Re-raising to avoid "
-                "accidental permission loss."
+                "grants may be dropped. Falling back to global servers only."
             )
-            raise
+            return allow_all_server_ids
 
     async def resolve_toolset_tool_permissions(
         self,
