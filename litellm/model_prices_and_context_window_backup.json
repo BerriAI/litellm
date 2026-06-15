@@ -4409,23 +4409,6 @@
             "/v1/audio/transcriptions"
         ]
     },
-    "azure/gpt-realtime-whisper": {
-        "input_cost_per_second": 0.0002833333333333333,
-        "litellm_provider": "azure",
-        "mode": "audio_transcription",
-        "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/gpt-realtime-whisper",
-        "supported_endpoints": [
-            "/v1/realtime",
-            "/v1/realtime/transcription_sessions"
-        ],
-        "supported_modalities": [
-            "audio"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
-        "supports_audio_input": true
-    },
     "azure/gpt-5.1-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
