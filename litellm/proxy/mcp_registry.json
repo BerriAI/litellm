@@ -185,8 +185,9 @@
       "icon_url": "https://cdn.simpleicons.org/notion",
       "category": "Productivity",
       "registry_url": "https://registry.modelcontextprotocol.io/servers/com.notion%2Fmcp",
-      "transport": "sse",
-      "url": "https://mcp.notion.com/sse",
+      "transport": "http",
+      "url": "https://mcp.notion.com/mcp",
+      "auth_type": "oauth2",
       "env_vars": []
     },
     {

@@ -106,6 +106,16 @@ class TestMCPRegistryFile:
         assert "command" not in slack
         assert "args" not in slack
 
+    def test_notion_defaults_to_streamable_http_oauth(self, registry_path):
+        """Notion's MCP server should default to streamable HTTP at /mcp with OAuth, not SSE at /sse."""
+        with open(registry_path, "r") as f:
+            data = json.load(f)
+        notion = next(s for s in data["servers"] if s["name"] == "notion")
+        assert notion["transport"] == "http"
+        assert notion["url"] == "https://mcp.notion.com/mcp"
+        assert notion["auth_type"] == "oauth2"
+        assert "/sse" not in notion["url"]
+
     def test_atlassian_uses_authv2_endpoint(self, registry_path):
         """Atlassian's MCP server should default to the streamable HTTP authv2 endpoint."""
         with open(registry_path, "r") as f:
