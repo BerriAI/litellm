@@ -223,9 +223,10 @@ async def test_post_raises_on_milvus_error_code():
 
 
 @pytest.mark.asyncio
-async def test_db_name_from_env_and_partition_propagated(monkeypatch):
+async def test_db_name_and_partition_from_env_propagated(monkeypatch):
     monkeypatch.setenv("MILVUS_DB_NAME", "mydb")
-    ingestion = _make_ingestion(auto_create_collection=False, partition_name="p1")
+    monkeypatch.setenv("MILVUS_PARTITION_NAME", "p1")
+    ingestion = _make_ingestion(auto_create_collection=False)
 
     post_mock = AsyncMock()
     post_mock.return_value = _json_response({"code": 0, "data": {"insertCount": 1}})
@@ -243,6 +244,32 @@ async def test_db_name_from_env_and_partition_propagated(monkeypatch):
     insert_body = post_mock.call_args_list[0].kwargs["json"]
     assert insert_body["dbName"] == "mydb"
     assert insert_body["partitionName"] == "p1"
+
+
+@pytest.mark.asyncio
+async def test_partition_name_from_request_is_ignored(monkeypatch):
+    monkeypatch.delenv("MILVUS_PARTITION_NAME", raising=False)
+    ingestion = _make_ingestion(
+        auto_create_collection=False, partition_name="victim_partition"
+    )
+
+    assert ingestion.partition_name is None
+
+    post_mock = AsyncMock()
+    post_mock.return_value = _json_response({"code": 0, "data": {"insertCount": 1}})
+    ingestion.async_httpx_client = MagicMock()
+    ingestion.async_httpx_client.post = post_mock
+
+    await ingestion.store(
+        file_content=None,
+        filename=None,
+        content_type=None,
+        chunks=["c"],
+        embeddings=[[1.0]],
+    )
+
+    insert_body = post_mock.call_args_list[0].kwargs["json"]
+    assert "partitionName" not in insert_body
 
 
 @pytest.mark.asyncio

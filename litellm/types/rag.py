@@ -218,7 +218,6 @@ class MilvusVectorStoreOptions(TypedDict, total=False):
     # Connection
     api_base: Optional[str]  # Milvus REST base URL (or MILVUS_API_BASE env)
     api_key: Optional[str]  # Milvus token (or MILVUS_API_KEY env); optional if no auth
-    partition_name: Optional[str]  # Target partition
 
     # Schema / collection config (used for auto-creation)
     vector_field: Optional[str]  # Embedding field name (default: "vector")

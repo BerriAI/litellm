@@ -58,7 +58,9 @@ class MilvusRAGIngestion(BaseRAGIngestion):
     - db_name: Milvus database namespace, server-side only via MILVUS_DB_NAME env.
       Not accepted from the request: it selects the write target's database and is
       outside the per-collection authorization boundary.
-    - partition_name: target partition (optional)
+    - partition_name: target partition, server-side only via MILVUS_PARTITION_NAME
+      env. Not accepted from the request: it selects the write target's partition
+      and is outside the per-collection authorization boundary.
     - auto_create_collection: create the collection if missing (default: True)
     """
 
@@ -104,7 +106,7 @@ class MilvusRAGIngestion(BaseRAGIngestion):
             "metric_type", MILVUS_DEFAULT_METRIC_TYPE
         )
         self.db_name = get_secret_str("MILVUS_DB_NAME")
-        self.partition_name = self.vector_store_config.get("partition_name")
+        self.partition_name = get_secret_str("MILVUS_PARTITION_NAME")
         self.auto_create_collection = self.vector_store_config.get(
             "auto_create_collection", True
         )
