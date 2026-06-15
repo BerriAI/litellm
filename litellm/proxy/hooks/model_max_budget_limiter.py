@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Optional, TypedDict
+from typing import List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -13,13 +13,6 @@ from litellm.types.utils import (
     GenericBudgetConfigType,
     StandardLoggingPayload,
 )
-
-
-class ModelMaxBudgetUsageEntry(TypedDict):
-    current_spend: float
-    budget_limit: Optional[float]
-    time_period: Optional[str]
-
 
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX = "end_user_model_spend"
@@ -215,33 +208,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if "/" in model:
             return model.split("/")[-1]
         return model
-
-    async def get_current_period_spend(
-        self,
-        user_api_key_hash: str,
-        model_max_budget: Dict[str, Dict],
-    ) -> Dict[str, ModelMaxBudgetUsageEntry]:
-        """
-        Returns the current budget-period spend for each model in model_max_budget.
-
-        Keys with no budget_duration are omitted; there is no rolling window to report.
-        """
-        result: Dict[str, ModelMaxBudgetUsageEntry] = {}
-        for model, budget_info in model_max_budget.items():
-            budget_config = BudgetConfig(**budget_info)
-            if budget_config.budget_duration is None:
-                continue
-            current_spend = await self._get_virtual_key_spend_for_model(
-                user_api_key_hash=user_api_key_hash,
-                model=model,
-                key_budget_config=budget_config,
-            )
-            result[model] = ModelMaxBudgetUsageEntry(
-                current_spend=round(current_spend or 0.0, 4),
-                budget_limit=budget_config.max_budget,
-                time_period=budget_config.budget_duration,
-            )
-        return result
 
     async def async_filter_deployments(
         self,
