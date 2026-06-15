@@ -347,6 +347,9 @@ class RepelloAIGuardrail(CustomGuardrail):
     @classmethod
     def _extract_prompt_text(cls, data: Dict) -> Optional[str]:
         texts = cls._extract_prompt_message_text(data)
+        instructions = data.get("instructions")
+        if isinstance(instructions, str) and instructions:
+            texts.append(instructions)
 
         raw_messages = data.get("messages")
         if isinstance(raw_messages, list):
