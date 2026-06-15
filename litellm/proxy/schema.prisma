@@ -251,6 +251,7 @@ model LiteLLM_UserTable {
     rpm_limit     BigInt?
     budget_duration String? 
     budget_reset_at DateTime?
+    budget_limits Json? // multiple concurrent budget windows for the user
     allowed_cache_controls String[] @default([])
     policies         String[] @default([])
     model_spend      Json @default("{}")

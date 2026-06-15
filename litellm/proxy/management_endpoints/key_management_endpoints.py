@@ -3434,6 +3434,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             ).isoformat()
             initialized_windows.append(w)
         budget_limits_json = json.dumps(initialized_windows)
+    user_budget_limits_json = budget_limits_json if request_type == "user" else None
+    key_budget_limits_json = budget_limits_json if request_type == "key" else None
 
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
@@ -3486,6 +3488,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "rpm_limit": rpm_limit,
             "budget_duration": budget_duration,
             "budget_reset_at": reset_at,
+            "budget_limits": user_budget_limits_json,
             "allowed_cache_controls": allowed_cache_controls,
             "sso_user_id": sso_user_id,
             "object_permission_id": object_permission_id,
@@ -3517,7 +3520,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
-            "budget_limits": budget_limits_json,
+            "budget_limits": key_budget_limits_json,
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],

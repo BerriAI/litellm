@@ -1098,8 +1098,64 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
+def _existing_reset_at_by_duration(
+    existing_user_row: Optional[Any],
+) -> Dict[str, str]:
+    if existing_user_row is None:
+        return {}
+    existing_limits = getattr(existing_user_row, "budget_limits", None)
+    if isinstance(existing_limits, str):
+        try:
+            existing_limits = json.loads(existing_limits)
+        except (ValueError, TypeError):
+            return {}
+    if not isinstance(existing_limits, list):
+        return {}
+    out: Dict[str, str] = {}
+    for ew in existing_limits:
+        if isinstance(ew, BaseModel):
+            ew = ew.model_dump()
+        if not isinstance(ew, dict):
+            continue
+        ed = ew.get("budget_duration")
+        er = ew.get("reset_at")
+        if not ed or not er:
+            continue
+        if isinstance(er, datetime):
+            er = er.isoformat()
+        out[ed] = er
+    return out
+
+
+def _initialize_budget_limits_for_update(
+    new_windows: List[Any],
+    existing_user_row: Optional[Any],
+) -> str:
+    """
+    Stamp `reset_at` on each incoming window. Preserve the existing reset_at
+    when its `budget_duration` is unchanged so a routine update (e.g. tweaking
+    `max_budget`) does not silently restart the user's budget clock and let
+    them spend a fresh window immediately. New durations get a fresh reset.
+    """
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    preserved = _existing_reset_at_by_duration(existing_user_row)
+    initialized = []
+    for window in new_windows:
+        w = {**window} if isinstance(window, dict) else window.model_dump()
+        duration = w["budget_duration"]
+        w["reset_at"] = (
+            preserved.get(duration)
+            or get_budget_reset_time(budget_duration=duration).isoformat()
+        )
+        initialized.append(w)
+    return json.dumps(initialized)
+
+
 def _update_internal_user_params(
-    data_json: dict, data: Union[UpdateUserRequest, UpdateUserRequestNoUserIDorEmail]
+    data_json: dict,
+    data: Union[UpdateUserRequest, UpdateUserRequestNoUserIDorEmail],
+    existing_user_row: Optional[Any] = None,
 ) -> dict:
     non_default_values = {}
     fields_set = data.fields_set() if hasattr(data, "fields_set") else set()
@@ -1128,6 +1184,12 @@ def _update_internal_user_params(
 
         non_default_values["budget_reset_at"] = get_budget_reset_time(
             budget_duration=non_default_values["budget_duration"]
+        )
+
+    if "budget_limits" in non_default_values:
+        non_default_values["budget_limits"] = _initialize_budget_limits_for_update(
+            new_windows=non_default_values["budget_limits"],
+            existing_user_row=existing_user_row,
         )
 
     if "max_budget" not in non_default_values:
@@ -1246,12 +1308,6 @@ async def _update_single_user_helper(
     if not user_request.user_id and not user_request.user_email:
         raise ValueError("Either user_id or user_email must be provided")
 
-    data_json: dict = user_request.model_dump(exclude_unset=True)
-    non_default_values = _update_internal_user_params(
-        data_json=data_json, data=user_request
-    )
-    _hash_password_in_dict(non_default_values)
-
     existing_user_row: Optional[BaseModel] = None
     if user_request.user_id:
         existing_user_row = await prisma_client.db.litellm_usertable.find_first(
@@ -1269,6 +1325,16 @@ async def _update_single_user_helper(
             **existing_user_row.model_dump(exclude_none=True)
         )
 
+    data_json: dict = user_request.model_dump(exclude_unset=True)
+    # Pass existing_user_row so budget_limits reset_at can be preserved for
+    # windows whose budget_duration is unchanged.
+    non_default_values = _update_internal_user_params(
+        data_json=data_json,
+        data=user_request,
+        existing_user_row=existing_user_row,
+    )
+    _hash_password_in_dict(non_default_values)
+
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
     # can_user_call_user_update() already restricts non-admins to self-updates,
@@ -1285,7 +1351,10 @@ async def _update_single_user_helper(
         _is_self_update
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
     ):
-        _protected_fields = ("max_budget", "soft_budget", "spend")
+        # budget_limits is treated the same way as max_budget — a non-admin
+        # must not be able to raise (or replace) their own per-window budget
+        # limits via the self-update path.
+        _protected_fields = ("max_budget", "soft_budget", "spend", "budget_limits")
         for _field in _protected_fields:
             if _field in non_default_values:
                 raise HTTPException(

@@ -239,6 +239,12 @@ class SpendCounterReseed:
                 "team_id": entity_id,
                 "startTime": {"gte": window_start},
             }
+        elif entity_type == "User":
+            group_field = "user"
+            where = {
+                "user": entity_id,
+                "startTime": {"gte": window_start},
+            }
         else:
             return None
 
