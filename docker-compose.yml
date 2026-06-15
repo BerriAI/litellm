@@ -20,7 +20,7 @@ services:
       # to a separate reader endpoint, e.g. an Aurora reader. Leave unset for
       # single-DB deployments. With IAM_TOKEN_DB_AUTH enabled, the reader URL
       # is auto-refreshed alongside the writer.
-      # DATABASE_URL_READ_REPLICA: "postgresql://llmproxy:dbpassword9090@db-reader:5432/litellm"
+      DATABASE_URL_READ_REPLICA: "postgresql://llmproxy:dbpassword9090@db_read:5432/litellm"
       STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
       LITELLM_REDIS_HOST: "redis" # Redis service hostname in Docker network
       LITELLM_REDIS_PASSWORD: "" # No password for local Redis
@@ -38,6 +38,7 @@ services:
       - .env # Load local .env file
     depends_on:
       - db  # Indicates that this service depends on the 'db' service, ensuring 'db' starts first
+      - db_read
       - redis  # Ensure Redis starts before litellm for caching support
     healthcheck:  # Defines the health check configuration for the container
       test:
@@ -60,6 +61,24 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data # Persists Postgres data across container restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
+  db_read:
+    image: postgres:16
+    restart: always
+    container_name: litellm_db_read
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_read_data:/var/lib/postgresql/data # Persists Postgres data across container restarts
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
       interval: 1s
@@ -98,5 +117,7 @@ volumes:
     driver: local
   postgres_data:
     name: litellm_postgres_data # Named volume for Postgres data persistence
+  postgres_read_data:
+    name: litellm_postgres_read_data # Named volume for read replica data persistence
   redis_data:
     driver: local

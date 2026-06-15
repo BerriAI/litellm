@@ -335,10 +335,8 @@ class PrismaWrapper:
         loop for 30-120+ seconds when the engine is stuck on TCP close,
         breaking `/health/liveliness` and causing Kubernetes pod restarts.
 
-        The writer wrapper relies on Prisma re-reading `DATABASE_URL` from env;
-        the reader wrapper opts into `recreate_uses_datasource=True` so the
-        new URL is passed explicitly via `datasource={"url": ...}` (Prisma
-        does not auto-read alternate env vars like DATABASE_URL_READ_REPLICA).
+        The new URL is passed explicitly via `datasource={"url": ...}` so
+        writer and reader recreates cannot pick up a stale environment value.
 
         Serializes all recreations through `self._reconnection_lock` so the
         IAM-refresh path and the engine-death/transport-error reconnect paths
@@ -382,11 +380,9 @@ class PrismaWrapper:
             )
             return False
 
-        kwargs: dict[str, Any] = {}
+        kwargs: dict[str, Any] = {"datasource": {"url": new_db_url}}
         if http_client is not None:
             kwargs["http"] = http_client
-        if self._recreate_uses_datasource:
-            kwargs["datasource"] = {"url": new_db_url}
         new_prisma = Prisma(**kwargs)
 
         # Connect the new client BEFORE touching the old one. The old client
