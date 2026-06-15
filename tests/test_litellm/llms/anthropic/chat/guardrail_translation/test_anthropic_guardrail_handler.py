@@ -294,6 +294,52 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert tools[1]["description"] == "Get the weather at a specific location"
         assert "input_schema" in tools[1]
 
+    def test_extract_input_skips_anthropic_tool_result_when_skip_tool_message(self):
+        """When skip_tool_message=True, Anthropic tool_result blocks must be skipped.
+
+        Anthropic tool outputs are tool_result blocks nested inside a user message
+        (not a role="tool" message), so the role-based early-return does not cover
+        them. Guardrail scanning must skip those blocks while still scanning the
+        user's own text in the same message.
+        """
+        handler = AnthropicMessagesHandler()
+        message = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "user typed text"},
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "abc",
+                    "content": "secret tool output",
+                },
+            ],
+        }
+
+        # skip_tool_message=True -> tool_result text is NOT scanned, user text is
+        texts: List[str] = []
+        handler._extract_input_text_and_images(
+            message=message,
+            msg_idx=0,
+            texts_to_check=texts,
+            images_to_check=[],
+            task_mappings=[],
+            skip_tool_message=True,
+        )
+        assert "user typed text" in texts
+        assert "secret tool output" not in texts
+
+        # skip_tool_message=False -> tool_result text IS scanned (default behavior)
+        texts_default: List[str] = []
+        handler._extract_input_text_and_images(
+            message=message,
+            msg_idx=0,
+            texts_to_check=texts_default,
+            images_to_check=[],
+            task_mappings=[],
+            skip_tool_message=False,
+        )
+        assert "secret tool output" in texts_default
+
 
 if __name__ == "__main__":
     # Run the tests
