@@ -1570,6 +1570,16 @@ class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     user_role: Literal["user", "admin"] = "user"
 
 
+def _normalize_user_email(value: Any) -> Any:
+    # Trim + lowercase email at input boundary so create/update/lookup all
+    # agree. See #28880: leading whitespace stored without trim locked users
+    # out at login because lookup didn't trim.
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower()
+    return normalized or None
+
+
 class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
@@ -1589,6 +1599,11 @@ class NewUserRequest(GenerateRequestBase):
     send_invite_email: Optional[bool] = None
     sso_user_id: Optional[str] = None
     organizations: Optional[List[str]] = None
+
+    @field_validator("user_email", mode="before")
+    @classmethod
+    def _normalize_email(cls, v: Any) -> Any:
+        return _normalize_user_email(v)
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -1633,12 +1648,16 @@ class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
     user_id: Optional[str] = None
     user_email: Optional[str] = None
 
-    @model_validator(mode="before")
+    @field_validator("user_email", mode="before")
     @classmethod
-    def check_user_info(cls, values):
-        if values.get("user_id") is None and values.get("user_email") is None:
+    def _normalize_email(cls, v: Any) -> Any:
+        return _normalize_user_email(v)
+
+    @model_validator(mode="after")
+    def check_user_info(self) -> "UpdateUserRequest":
+        if self.user_id is None and self.user_email is None:
             raise ValueError("Either user id or user email must be provided")
-        return values
+        return self
 
 
 class DeleteUserRequest(LiteLLMPydanticObjectBase):
@@ -1765,14 +1784,16 @@ class MemberBase(LiteLLMPydanticObjectBase):
         description="The email address of the user to add. Either user_id or user_email must be provided",
     )
 
-    @model_validator(mode="before")
+    @field_validator("user_email", mode="before")
     @classmethod
-    def check_user_info(cls, values):
-        if not isinstance(values, dict):
-            raise ValueError("input needs to be a dictionary")
-        if values.get("user_id") is None and values.get("user_email") is None:
+    def _normalize_email(cls, v: Any) -> Any:
+        return _normalize_user_email(v)
+
+    @model_validator(mode="after")
+    def check_user_info(self) -> "MemberBase":
+        if self.user_id is None and self.user_email is None:
             raise ValueError("Either user id or user email must be provided")
-        return values
+        return self
 
 
 class Member(MemberBase):

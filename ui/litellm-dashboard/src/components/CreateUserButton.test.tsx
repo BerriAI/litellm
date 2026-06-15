@@ -150,6 +150,31 @@ describe("CreateUserButton", () => {
       });
     });
 
+    it("should trim whitespace from user_email before submitting (#28880)", async () => {
+      const user = userEvent.setup();
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "new-user-trim" } });
+      mockInvitationCreateCall.mockResolvedValue({
+        id: "inv-trim",
+        user_id: "new-user-trim",
+        has_user_setup_sso: false,
+      } as any);
+
+      renderWithProviders(
+        <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} isEmbedded />,
+      );
+
+      await user.type(screen.getByLabelText(/user email/i), "  trim@example.com  ");
+      await user.click(screen.getByRole("combobox", { name: /user role/i }));
+      await user.click(screen.getByText("User"));
+      await user.click(screen.getByRole("button", { name: /create user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
+          user_email: "trim@example.com",
+        }));
+      });
+    });
+
     it("should call onUserCreated callback when user is created in embedded mode", async () => {
       const user = userEvent.setup();
       const onUserCreated = vi.fn();

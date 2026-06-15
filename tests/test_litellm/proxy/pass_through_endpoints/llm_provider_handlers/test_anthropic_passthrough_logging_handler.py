@@ -684,3 +684,362 @@ class TestAnthropicBatchPassthroughCostTracking:
             mock_proxy_logging_obj.get_proxy_hook.assert_called_once_with(
                 "managed_files"
             )
+
+
+class TestPureTextFastPathParity:
+    """
+    The pure-text fast path in _build_complete_streaming_response must produce
+    a response (and downstream logging/cost payload) byte-identical to the
+    legacy stream_chunk_builder path. Anything non-text must fall back.
+    """
+
+    @staticmethod
+    def _sse(event, data):
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    @staticmethod
+    def _to_all_chunks(raw_frames):
+        # Mirror production: raw bytes -> _convert_raw_bytes_to_str_lines.
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+
+        return PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_frames)
+
+    @staticmethod
+    def _norm(resp):
+        if resp is None:
+            return None
+        d = resp.model_dump()
+        # id / created are non-deterministic even between two legacy runs.
+        d.pop("id", None)
+        d.pop("created", None)
+        return d
+
+    def _text_stream(
+        self,
+        texts,
+        *,
+        input_tokens=12,
+        cache_creation=0,
+        cache_read=0,
+        stop_reason="end_turn",
+        with_ping=True,
+        blocks=1,
+    ):
+        frames = [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_abc",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-3-5-sonnet-20241022",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {
+                            "input_tokens": input_tokens,
+                            "output_tokens": 0,
+                            "cache_creation_input_tokens": cache_creation,
+                            "cache_read_input_tokens": cache_read,
+                        },
+                    },
+                },
+            )
+        ]
+        per_block = max(1, len(texts) // blocks)
+        ti = 0
+        for b in range(blocks):
+            frames.append(
+                self._sse(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": b,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                )
+            )
+            if with_ping:
+                frames.append(self._sse("ping", {"type": "ping"}))
+            chunk_texts = texts[ti : ti + per_block] if b < blocks - 1 else texts[ti:]
+            ti += per_block
+            for t in chunk_texts:
+                frames.append(
+                    self._sse(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": b,
+                            "delta": {"type": "text_delta", "text": t},
+                        },
+                    )
+                )
+            frames.append(
+                self._sse(
+                    "content_block_stop", {"type": "content_block_stop", "index": b}
+                )
+            )
+        frames.append(
+            self._sse(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                    "usage": {"output_tokens": len(texts)},
+                },
+            )
+        )
+        frames.append(self._sse("message_stop", {"type": "message_stop"}))
+        return frames
+
+    def _assert_parity(self, raw_frames):
+        all_chunks = self._to_all_chunks(raw_frames)
+        lo1 = MagicMock()
+        lo1.model_call_details = {}
+        lo2 = MagicMock()
+        lo2.model_call_details = {}
+
+        legacy = AnthropicPassthroughLoggingHandler._build_complete_streaming_response_legacy(
+            all_chunks=list(all_chunks),
+            litellm_logging_obj=lo1,
+            model="claude-3-5-sonnet-20241022",
+        )
+        fast = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=list(all_chunks),
+            litellm_logging_obj=lo2,
+            model="claude-3-5-sonnet-20241022",
+        )
+        assert self._norm(fast) == self._norm(legacy)
+
+        # Downstream logged/billed payload must also match.
+        start = datetime.now()
+        end = datetime.now()
+        k_legacy = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=legacy,
+            model="claude-3-5-sonnet-20241022",
+            kwargs={},
+            start_time=start,
+            end_time=end,
+            logging_obj=lo1,
+        )
+        k_fast = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=fast,
+            model="claude-3-5-sonnet-20241022",
+            kwargs={},
+            start_time=start,
+            end_time=end,
+            logging_obj=lo2,
+        )
+        # Usage drives cost; it must be byte-identical between paths.
+        assert getattr(fast, "usage", None) == getattr(legacy, "usage", None)
+
+        # And the full logged payload (sans non-deterministic response id).
+        def _scrub(p):
+            d = dict(p)
+            r = d.get("complete_streaming_response_in_db") or d.get(
+                "complete_streaming_response"
+            )
+            return d, getattr(r, "usage", None)
+
+        assert _scrub(k_fast)[1] == _scrub(k_legacy)[1]
+
+    def test_parity_simple_text(self):
+        self._assert_parity(self._text_stream(["Hello", " ", "world", "!"]))
+
+    def test_parity_single_delta(self):
+        self._assert_parity(self._text_stream(["Just one piece of text."]))
+
+    def test_parity_cache_tokens(self):
+        self._assert_parity(
+            self._text_stream(
+                ["a", "b", "c"], input_tokens=20, cache_creation=5, cache_read=7
+            )
+        )
+
+    def test_parity_max_tokens_stop(self):
+        self._assert_parity(self._text_stream(["tok"] * 8, stop_reason="max_tokens"))
+
+    def test_parity_no_ping(self):
+        self._assert_parity(self._text_stream(["x", "y"], with_ping=False))
+
+    def test_parity_empty_text_deltas(self):
+        self._assert_parity(self._text_stream(["", "hi", "", "there"]))
+
+    def test_parity_multi_text_block(self):
+        self._assert_parity(self._text_stream(["p1", "p2", "p3", "p4"], blocks=2))
+
+    def test_parity_multibyte_batched_frames(self):
+        # Several SSE events delivered in one network chunk.
+        frames = self._text_stream(["alpha", "beta", "gamma"])
+        merged = b"".join(frames)
+        self._assert_parity([merged])
+
+    def test_collapse_returns_none_for_tool_use(self):
+        frames = [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "m",
+                        "model": "x",
+                        "role": "assistant",
+                        "type": "message",
+                        "content": [],
+                        "usage": {"input_tokens": 1, "output_tokens": 0},
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "get_weather",
+                        "input": {},
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": "{}"},
+                },
+            ),
+            self._sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            self._sse("message_stop", {"type": "message_stop"}),
+        ]
+        all_chunks = self._to_all_chunks(frames)
+        assert (
+            AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(
+                list(all_chunks)
+            )
+            is None
+        )
+
+    def test_collapse_returns_none_for_thinking(self):
+        frames = [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "m",
+                        "model": "x",
+                        "role": "assistant",
+                        "type": "message",
+                        "content": [],
+                        "usage": {"input_tokens": 1, "output_tokens": 0},
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "thinking", "thinking": ""},
+                },
+            ),
+            self._sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": "hmm"},
+                },
+            ),
+            self._sse("message_stop", {"type": "message_stop"}),
+        ]
+        all_chunks = self._to_all_chunks(frames)
+        assert (
+            AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(
+                list(all_chunks)
+            )
+            is None
+        )
+
+    def test_collapse_actually_shrinks_chunk_count(self):
+        frames = self._text_stream(["a"] * 50)
+        all_chunks = list(self._to_all_chunks(frames))
+        collapsed = AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(
+            all_chunks
+        )
+        assert collapsed is not None
+        # 50 text deltas + 50 event markers + 1 ping collapse to far fewer.
+        assert len(collapsed) < len(all_chunks) / 2
+
+    def test_collapse_returns_none_for_interleaved_block_indexes(self):
+        """
+        Anthropic sends content blocks strictly sequentially (start/deltas/stop
+        for one, then the next). If a stream ever interleaves deltas across
+        block indexes, the fast path must bail to legacy rather than merge text
+        from different blocks under a single index.
+        """
+        frames = [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_abc",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-3-5-sonnet-20241022",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 1, "output_tokens": 0},
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            # Interleave: delta for block 0, then delta for block 1, with no
+            # content_block_stop between them.
+            self._sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "hello "},
+                },
+            ),
+            self._sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "text_delta", "text": "world"},
+                },
+            ),
+            self._sse("message_stop", {"type": "message_stop"}),
+        ]
+        all_chunks = list(self._to_all_chunks(frames))
+        assert (
+            AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(all_chunks)
+            is None
+        )
