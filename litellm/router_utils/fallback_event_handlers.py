@@ -246,6 +246,10 @@ def _check_non_standard_fallback_format(fallbacks: Optional[List[Any]]) -> bool:
     elif all(isinstance(item, dict) for item in fallbacks):
         for key in LiteLLMParamsTypedDict.__annotations__.keys():
             if key in fallbacks[0].keys():
+                # Handle edge case where model group is named exactly same as a litellm param
+                # e.g. fallbacks: [{"model": ["qwen-backup"]}]
+                if len(fallbacks[0].keys()) == 1 and isinstance(fallbacks[0][key], list):
+                    return False
                 return True
 
     return False
