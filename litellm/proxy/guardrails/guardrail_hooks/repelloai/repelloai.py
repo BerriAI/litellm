@@ -1,4 +1,3 @@
-import os
 from datetime import datetime
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Type, Union
 
@@ -73,8 +72,8 @@ class RepelloAIGuardrail(CustomGuardrail):
         )
         self.repelloai_api_key = (
             api_key
-            or os.environ.get("ARGUS_API_KEY")
-            or os.environ.get("REPELLOAI_API_KEY")
+            or get_secret_str("ARGUS_API_KEY")
+            or get_secret_str("REPELLOAI_API_KEY")
             or ""
         )
         if not self.repelloai_api_key:
@@ -152,6 +151,7 @@ class RepelloAIGuardrail(CustomGuardrail):
             exception_str = str(e)
             return self._handle_unreachable(e)
         finally:
+            end_time = datetime.now()
             guardrail_json_response: Union[Exception, str, dict, List[dict]] = (
                 dict(repelloai_response) if repelloai_response else exception_str
             )
@@ -160,8 +160,8 @@ class RepelloAIGuardrail(CustomGuardrail):
                 guardrail_status=status,
                 request_data=request_data,
                 start_time=start_time.timestamp(),
-                end_time=datetime.now().timestamp(),
-                duration=(datetime.now() - start_time).total_seconds(),
+                end_time=end_time.timestamp(),
+                duration=(end_time - start_time).total_seconds(),
                 masked_entity_count={},
                 event_type=event_type,
             )
@@ -235,6 +235,12 @@ class RepelloAIGuardrail(CustomGuardrail):
                     "policies_violated": repelloai_response.get("policies_violated"),
                 },
             )
+        self._log_flagged_verdict(repelloai_response)
+
+    @staticmethod
+    def _log_flagged_verdict(
+        repelloai_response: RepelloAIAnalyzeResponse,
+    ) -> None:
         if repelloai_response.get("verdict") == FLAGGED_VERDICT:
             verbose_proxy_logger.warning(
                 "RepelloAI Argus flagged content (allowed): %s",
@@ -242,18 +248,14 @@ class RepelloAIGuardrail(CustomGuardrail):
             )
 
     @staticmethod
-    def _get_last_user_text(messages: List[Dict[str, str]]) -> Optional[str]:
-        """Return the latest user text the guardrail should inspect.
-
-        RepelloAI Argus scans a single prompt text, not the full conversation
-        history, so we intentionally prefer the most recent user turn.
-        """
-        for message in reversed(messages):
-            if message.get("role") == "user" and message.get("content"):
-                return message["content"]
-        if messages:
-            return messages[-1].get("content")
-        return None
+    def _extract_prompt_text(data: Dict) -> Optional[str]:
+        messages = build_inspection_messages(data)
+        texts = [
+            message.get("content")
+            for message in messages
+            if isinstance(message.get("content"), str) and message.get("content")
+        ]
+        return "\n".join(text for text in texts if text is not None) if texts else None
 
     async def async_pre_call_hook(
         self,
@@ -272,8 +274,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        messages = build_inspection_messages(data)
-        text = self._get_last_user_text(messages)
+        text = self._extract_prompt_text(data)
         if not text:
             verbose_proxy_logger.warning(
                 "RepelloAI Argus: no inspectable prompt text in data - skipping."
@@ -363,6 +364,8 @@ class RepelloAIGuardrail(CustomGuardrail):
                 request_data=request_data,
                 event_type=event_type,
             )
+            if repelloai_response is not None:
+                self._log_flagged_verdict(repelloai_response)
             if self._verdict_blocks(repelloai_response):
                 from litellm.proxy.proxy_server import StreamingCallbackError
 
@@ -372,20 +375,64 @@ class RepelloAIGuardrail(CustomGuardrail):
             yield chunk
 
     @staticmethod
-    def _extract_response_text(response) -> Optional[str]:
-        """Join non-empty assistant message contents across all choices.
+    def _extract_response_text(response: object) -> Optional[str]:
+        """Extract inspectable assistant text from chat or Responses API shapes."""
+        if hasattr(response, "output_text"):
+            output_text = getattr(response, "output_text")
+            if isinstance(output_text, str) and output_text:
+                return output_text
 
-        Handles multi-choice responses and choices with null content
-        (e.g. tool-call-only) without raising.
-        """
-        response_dict = response.model_dump() if hasattr(response, "model_dump") else {}
+        if isinstance(response, dict):
+            response_dict = response
+        elif hasattr(response, "model_dump"):
+            response_dict = response.model_dump()
+        else:
+            response_dict = {}
+        text = RepelloAIGuardrail._extract_chat_completion_text(response_dict)
+        if text:
+            return text
+        return RepelloAIGuardrail._extract_responses_api_text(response_dict)
+
+    @staticmethod
+    def _extract_chat_completion_text(response_dict: Dict) -> Optional[str]:
         parts: List[str] = []
-        for choice in response_dict.get("choices", []) or []:
-            message = choice.get("message") or {}
+        choices = response_dict.get("choices")
+        if not isinstance(choices, list):
+            return None
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if not isinstance(message, dict):
+                continue
             content = message.get("content")
             if isinstance(content, str) and content:
                 parts.append(content)
         return "\n".join(parts) if parts else None
+
+    @staticmethod
+    def _extract_responses_api_text(response_dict: Dict) -> Optional[str]:
+        texts: List[str] = []
+        output = response_dict.get("output")
+        if not isinstance(output, list):
+            return None
+        for output_item in output:
+            if not isinstance(output_item, dict):
+                continue
+            if output_item.get("type") != "message":
+                continue
+            content = output_item.get("content")
+            if not isinstance(content, list):
+                continue
+            for content_item in content:
+                if not isinstance(content_item, dict):
+                    continue
+                if content_item.get("type") not in ("output_text", "text"):
+                    continue
+                text = content_item.get("text")
+                if isinstance(text, str) and text:
+                    texts.append(text)
+        return "".join(texts) if texts else None
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
