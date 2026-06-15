@@ -915,6 +915,11 @@ class ApplyGuardrailRequest(BaseModel):
 
 class ApplyGuardrailResponse(BaseModel):
     response_text: str
+    # The structured guardrail result (name, status, provider, and the raw
+    # guardrail response/classification). Populated on both the success and the
+    # blocked paths. Optional so the field is omitted when no guardrail info is
+    # available.
+    guardrail_response: Optional[List[Dict[str, Any]]] = None
 
 
 class PatchGuardrailRequest(BaseModel):
