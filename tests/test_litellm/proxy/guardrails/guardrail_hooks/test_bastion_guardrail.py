@@ -5,6 +5,7 @@ import and no network/model access — so these tests are CI-safe and determinis
 A fake guard treats any text containing a chat-template token as an attack.
 """
 
+from types import SimpleNamespace
 from typing import Optional
 from unittest.mock import MagicMock
 
@@ -38,6 +39,23 @@ def _make(threshold: Optional[float] = None) -> BastionGuardrail:
     g = BastionGuardrail(guardrail_name="bastion", threshold=threshold)
     g._guard = _fake_guard()  # inject the mock; _get_guard() is never reached
     return g
+
+
+def _make_mcp(
+    event_hook: tuple[str, ...] = ("pre_mcp_call", "during_mcp_call")
+) -> BastionGuardrail:
+    g = BastionGuardrail(
+        guardrail_name="bastion", event_hook=list(event_hook), default_on=True
+    )
+    g._guard = _fake_guard()
+    return g
+
+
+def _mcp_response(*texts: str) -> SimpleNamespace:
+    """Fake MCPPostCallResponseObject: .mcp_tool_call_response = list of text items."""
+    return SimpleNamespace(
+        mcp_tool_call_response=[{"type": "text", "text": t} for t in texts]
+    )
 
 
 @pytest.mark.asyncio
@@ -179,3 +197,68 @@ def test_initialize_guardrail_requires_name():
 
     with pytest.raises(ValueError):
         initialize_guardrail(LitellmParams(guardrail="bastion"), {"litellm_params": {}})
+
+
+# ----------------------------- MCP coverage -----------------------------
+
+
+def test_supported_event_hooks_include_mcp():
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    g = _make()
+    assert GuardrailEventHooks.pre_mcp_call in g.supported_event_hooks
+    assert GuardrailEventHooks.during_mcp_call in g.supported_event_hooks
+
+
+@pytest.mark.asyncio
+async def test_outbound_mcp_arguments_screened():
+    """pre_mcp_call: injection in MCP tool arguments is caught via apply_guardrail."""
+    g = _make()
+    request_data = {"tool_name": "lookup", "arguments": {"q": ATTACK}}
+    with pytest.raises(HTTPException):
+        await g.apply_guardrail({"texts": []}, request_data, "request")
+
+
+@pytest.mark.asyncio
+async def test_mcp_result_clean_passes_through():
+    g = _make_mcp()
+    resp = _mcp_response(BENIGN)
+    out = await g.async_post_mcp_tool_call_hook(
+        kwargs={}, response_obj=resp, start_time=None, end_time=None
+    )
+    assert out is None  # unchanged
+    assert resp.mcp_tool_call_response[0]["text"] == BENIGN
+
+
+@pytest.mark.asyncio
+async def test_mcp_result_injection_is_replaced():
+    """Indirect injection in a tool RESULT is replaced with a refusal."""
+    g = _make_mcp()
+    resp = _mcp_response("benign context", ATTACK)
+    out = await g.async_post_mcp_tool_call_hook(
+        kwargs={}, response_obj=resp, start_time=None, end_time=None
+    )
+    assert out is resp  # modified object returned
+    for item in resp.mcp_tool_call_response:
+        assert item["text"] == g.violation_message
+
+
+@pytest.mark.asyncio
+async def test_mcp_result_skipped_when_not_configured_for_mcp():
+    g = _make_mcp(event_hook=("pre_call",))  # no MCP mode -> gate skips
+    resp = _mcp_response(ATTACK)
+    out = await g.async_post_mcp_tool_call_hook(
+        kwargs={}, response_obj=resp, start_time=None, end_time=None
+    )
+    assert out is None
+    assert resp.mcp_tool_call_response[0]["text"] == ATTACK  # untouched
+
+
+@pytest.mark.asyncio
+async def test_mcp_result_no_text_items_is_noop():
+    g = _make_mcp()
+    resp = SimpleNamespace(mcp_tool_call_response=[{"type": "image", "data": "x"}])
+    out = await g.async_post_mcp_tool_call_hook(
+        kwargs={}, response_obj=resp, start_time=None, end_time=None
+    )
+    assert out is None

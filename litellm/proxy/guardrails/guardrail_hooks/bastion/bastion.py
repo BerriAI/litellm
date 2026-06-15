@@ -30,9 +30,12 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from bastion_prompt_protection import Guard, GuardResult
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.mcp import MCPPostCallResponseObject
 
 
 DEFAULT_VIOLATION_MESSAGE = (
@@ -86,7 +89,54 @@ def _collect_screenable_texts(
     )
     for func in legacy_functions or []:
         texts.extend(_function_texts(func, ("name", "description", "parameters")))
+    # MCP tool-call request fields (present when screening an MCP call pre-invocation).
+    if isinstance(request_data, dict):
+        for key in ("tool_name", "mcp_tool_name"):
+            name = request_data.get(key)
+            if isinstance(name, str) and name:
+                texts.append(name)
+        mcp_args = request_data.get("mcp_arguments")
+        if mcp_args is None:
+            mcp_args = request_data.get("arguments")
+        if isinstance(mcp_args, str):
+            if mcp_args:
+                texts.append(mcp_args)
+        elif mcp_args is not None:
+            texts.append(json.dumps(mcp_args, default=str))
     return texts
+
+
+def _mcp_text_items(content: object) -> list[object]:
+    """Return the text-bearing items from an MCP tool-call response list."""
+    items: list[object] = []
+    if not isinstance(content, list):
+        return items
+    for item in content:
+        is_text = (
+            item.get("type") == "text"
+            if isinstance(item, dict)
+            else getattr(item, "type", None) == "text"
+        )
+        if is_text:
+            items.append(item)
+    return items
+
+
+def _mcp_item_text(item: object) -> str:
+    """Read the text off an MCP text-content item (dict or object)."""
+    text = item.get("text") if isinstance(item, dict) else getattr(item, "text", None)
+    return text if isinstance(text, str) else ""
+
+
+def _set_mcp_item_text(item: object, text: str) -> None:
+    """Replace the text on an MCP text-content item (dict or object)."""
+    if isinstance(item, dict):
+        item["text"] = text
+    else:
+        try:
+            setattr(item, "text", text)
+        except (AttributeError, TypeError):
+            pass
 
 
 class BastionGuardrail(CustomGuardrail):
@@ -118,6 +168,8 @@ class BastionGuardrail(CustomGuardrail):
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.post_call,
                 GuardrailEventHooks.during_call,
+                GuardrailEventHooks.pre_mcp_call,
+                GuardrailEventHooks.during_mcp_call,
             ],
             event_hook=_event_hook or [GuardrailEventHooks.pre_call],
             default_on=default_on,
@@ -177,3 +229,56 @@ class BastionGuardrail(CustomGuardrail):
                     },
                 )
         return inputs
+
+    async def async_post_mcp_tool_call_hook(
+        self,
+        kwargs: dict,
+        response_obj: "MCPPostCallResponseObject",
+        start_time: "datetime",
+        end_time: "datetime",
+    ) -> Optional["MCPPostCallResponseObject"]:
+        """Screen an MCP tool *result* for indirect prompt injection.
+
+        Tool results carry untrusted content (web pages, issues, documents) that
+        can smuggle instructions back into the model — the MCP analog of indirect
+        injection in RAG. On a flagged result the offending text is replaced with a
+        refusal so the poisoned content never reaches the LLM.
+
+        This runs on the proxy's logging path (where exceptions are swallowed), so
+        blocking is done by returning a modified response, not by raising.
+        """
+        data = kwargs if isinstance(kwargs, dict) else {}
+        # Only screen results when this guardrail is configured for MCP.
+        if not (
+            self.should_run_guardrail(
+                data=data, event_type=GuardrailEventHooks.pre_mcp_call
+            )
+            or self.should_run_guardrail(
+                data=data, event_type=GuardrailEventHooks.during_mcp_call
+            )
+        ):
+            return None
+
+        items = _mcp_text_items(getattr(response_obj, "mcp_tool_call_response", None))
+        if not items:
+            return None
+
+        guard = self._get_guard()
+        flagged = False
+        for item in items:
+            text = _mcp_item_text(item)
+            if not text:
+                continue
+            result = await asyncio.to_thread(guard.protect, text)
+            if self._is_attack(result):
+                flagged = True
+                break
+
+        if not flagged:
+            return None
+
+        # Block by replacing the result text with a refusal — the poisoned content
+        # never reaches the model.
+        for item in items:
+            _set_mcp_item_text(item, self.violation_message)
+        return response_obj
