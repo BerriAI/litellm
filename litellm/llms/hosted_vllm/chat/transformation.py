@@ -205,29 +205,20 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         """
         Support translating:
         - video files from file_id or file_data to video_url
-        - thinking_blocks on assistant messages to content blocks
+        - thinking_blocks on assistant messages are removed, and content lists
+          are converted to strings for vLLM compatibility
         """
         for message in messages:
             if message["role"] == "assistant":
-                thinking_blocks = message.pop("thinking_blocks", None)  # type: ignore
-                if thinking_blocks:
-                    new_content: list = [
-                        (
-                            {
-                                "type": block["type"],
-                                "thinking": block.get("thinking", ""),
-                            }
-                            if block.get("type") == "thinking"
-                            else {"type": block["type"], "data": block.get("data", "")}
-                        )
-                        for block in thinking_blocks
-                    ]
-                    existing_content = message.get("content")
-                    if isinstance(existing_content, str):
-                        new_content.append({"type": "text", "text": existing_content})
-                    elif isinstance(existing_content, list):
-                        new_content.extend(existing_content)
-                    message["content"] = new_content  # type: ignore
+                message.pop("thinking_blocks", None)  # type: ignore
+                existing_content = message.get("content")
+                if isinstance(existing_content, list):
+                    text_parts = []
+                    for c in existing_content:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            text_parts.append(c.get("text", ""))
+                    content_str = "".join(text_parts)
+                    message["content"] = content_str if content_str else None
             elif message["role"] == "user":
                 message_content = message.get("content")
                 if message_content and isinstance(message_content, list):
