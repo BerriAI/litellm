@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import smtplib
+import ssl
 import sys
 import threading
 import time
@@ -136,6 +137,9 @@ from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
@@ -2688,6 +2692,42 @@ class ProxyLogging:
             logging_obj._deferred_stream_complete_args = None
             asyncio.create_task(_deferred_cb(*_args))
 
+    def _release_max_parallel_requests_on_disconnect(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """
+        Release the api-key max_parallel_requests slot when a streaming
+        response is cancelled mid-flight (client disconnect). Neither the
+        success nor failure logging callback fires on the resulting
+        CancelledError / GeneratorExit, so the pre-call +1 would otherwise
+        leak.
+
+        Must be called from the outermost streaming generator (the one
+        Starlette drives and closes on disconnect). A nested iterator-hook
+        generator only receives GeneratorExit when it is garbage collected,
+        which is non-deterministic, so the refund cannot live there.
+
+        Scheduled fire-and-forget (no await) because awaiting is not
+        permitted while unwinding a GeneratorExit.
+        """
+        limiter = self.get_proxy_hook("parallel_request_limiter")
+        if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
+            return
+        try:
+            asyncio.create_task(
+                limiter.async_release_max_parallel_requests_on_disconnect(
+                    user_api_key_dict
+                )
+            )
+        except RuntimeError:
+            # No running event loop (e.g. interpreter/loop shutdown); the
+            # counter's window TTL will reclaim the slot.
+            verbose_proxy_logger.warning(
+                "parallel_request_limiter_v3: could not schedule "
+                "max_parallel_requests release on disconnect; no running "
+                "event loop. Slot will be reclaimed when its window TTL expires"
+            )
+
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
         Initialize the response taking too long task if user is using slack alerting
@@ -3653,7 +3693,10 @@ class PrismaClient:
                             db=self.db, hashed_token=hashed_token
                         )
                         if active_token_id:
-                            response = await self.get_data(
+                            # The recursive call returns a finished
+                            # LiteLLM_VerificationTokenView; the dict
+                            # normalization below would crash subscripting it.
+                            deprecated_response = await self.get_data(
                                 token=active_token_id,
                                 table_name="combined_view",
                                 query_type="find_unique",
@@ -3661,10 +3704,11 @@ class PrismaClient:
                                 proxy_logging_obj=proxy_logging_obj,
                                 check_deprecated=False,
                             )
-                            if response is not None:
+                            if deprecated_response is not None:
                                 verbose_proxy_logger.debug(
                                     "Deprecated key used during grace period"
                                 )
+                            return deprecated_response
 
                     if response is not None:
                         if response["team_models"] is None:
@@ -5134,6 +5178,23 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
     return
 
 
+def _should_use_smtp_ssl(smtp_port: int) -> bool:
+    """
+    Port 465 expects an immediate TLS handshake (implicit SSL), so a plain
+    smtplib.SMTP connection hangs waiting for an SMTP banner. Use SMTP_SSL
+    there, or when SMTP_USE_SSL is explicitly enabled.
+    """
+    return os.getenv("SMTP_USE_SSL", "False") == "True" or smtp_port == 465
+
+
+def _create_smtp_connection(smtp_host: str, smtp_port: int) -> smtplib.SMTP:
+    if _should_use_smtp_ssl(smtp_port=smtp_port):
+        return smtplib.SMTP_SSL(
+            host=smtp_host, port=smtp_port, context=ssl.create_default_context()
+        )
+    return smtplib.SMTP(host=smtp_host, port=smtp_port)
+
+
 async def send_email(
     receiver_email: Optional[str] = None,
     subject: Optional[str] = None,
@@ -5179,13 +5240,13 @@ async def send_email(
     email_message.attach(MIMEText(html, "html"))
 
     try:
-        # Establish a secure connection with the SMTP server
-        with smtplib.SMTP(
-            host=smtp_host,
-            port=smtp_port,
+        using_ssl = _should_use_smtp_ssl(smtp_port=smtp_port)
+        with _create_smtp_connection(
+            smtp_host=smtp_host,
+            smtp_port=smtp_port,
         ) as server:
-            if os.getenv("SMTP_TLS", "True") != "False":
-                server.starttls()
+            if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
+                server.starttls(context=ssl.create_default_context())
 
             # Login to your email account only if smtp_username and smtp_password are provided
             if smtp_username and smtp_password:

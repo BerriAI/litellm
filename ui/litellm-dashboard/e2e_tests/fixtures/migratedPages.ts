@@ -1,16 +1,46 @@
 /**
- * Source of truth for the App Router migration smoke (tests/migration/migratedPages.spec.ts).
+ * Source of truth for the App Router migration E2E suites.
  *
- * Add a route segment here once its migration has MERGED to the branch under test.
- * Both suites pick it up automatically:
- *   - default mount:           npm run e2e:migration
- *   - server-root-path mount:  SERVER_ROOT_PATH=/<root> npm run e2e:migration:root
+ * Add an entry (legacy sidebar page id -> route segment) once a page's migration
+ * has MERGED to the branch under test. Consumers pick it up automatically:
+ *   - migration smoke (tests/migration/migratedPages.spec.ts), via MIGRATED_E2E_SEGMENTS:
+ *       default mount:           npm run e2e:migration
+ *       server-root-path mount:  SERVER_ROOT_PATH=/<root> npm run e2e:migration:root
+ *   - navigation specs that assert per-page URLs (tests/navigation/sidebar.spec.ts)
  *
  * Keep this in lockstep with MIGRATED_PAGES in src/utils/migratedPages.ts.
- * Pending (uncomment as each PR lands): playground, and the leaf-pages batch
- * (budgets, caching, cost-tracking, guardrails, guardrails-monitor, logs,
- * mcp-servers, memory, policies, projects, prompts, search-tools, skills,
- * tag-management, tool-policies, transform-request, ui-theme, vector-stores,
- * workflows, access-groups).
  */
-export const MIGRATED_E2E_SEGMENTS: string[] = ["api-reference"];
+export const MIGRATED_E2E_PAGES: Record<string, string> = {
+  api_ref: "api-reference",
+  "llm-playground": "playground",
+  projects: "projects",
+  "access-groups": "access-groups",
+  budgets: "budgets",
+  workflows: "workflows",
+  "guardrails-monitor": "guardrails-monitor",
+  "mcp-servers": "mcp-servers",
+  "search-tools": "search-tools",
+  "tag-management": "tag-management",
+  "vector-stores": "vector-stores",
+  memory: "memory",
+  policies: "policies",
+  guardrails: "guardrails",
+  prompts: "prompts",
+  "tool-policies": "tool-policies",
+  skills: "skills",
+  caching: "caching",
+  "cost-tracking": "cost-tracking",
+  "transform-request": "transform-request",
+  "ui-theme": "ui-theme",
+  logs: "logs",
+  "admin-panel": "admin-panel",
+  "logging-and-alerts": "logging-and-alerts",
+  "model-hub-table": "model-hub-table",
+  new_usage: "usage",
+  agents: "agents",
+  "router-settings": "router-settings",
+  users: "users",
+  organizations: "organizations",
+};
+
+export const MIGRATED_E2E_SEGMENTS: string[] = [...new Set(Object.values(MIGRATED_E2E_PAGES))];

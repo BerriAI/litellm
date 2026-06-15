@@ -412,6 +412,20 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["compact-2026-01-12"]
 
+    @pytest.mark.parametrize("provider", ["bedrock_converse", "bedrock"])
+    def test_fine_grained_tool_streaming_forwarded_for_bedrock(self, provider):
+        """Bedrock honors fine-grained-tool-streaming-2025-05-14 via
+        additionalModelRequestFields.anthropic_beta. Stripping it (previously
+        mapped to null) silently re-enables Anthropic's server-side buffering of
+        tool-call argument deltas, so streamed tool args arrive in a single
+        end-of-stream burst instead of incrementally."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["fine-grained-tool-streaming-2025-05-14"],
+            provider=provider,
+        )
+
+        assert filtered == ["fine-grained-tool-streaming-2025-05-14"]
+
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
         for provider in [

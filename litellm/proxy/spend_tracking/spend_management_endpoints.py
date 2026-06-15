@@ -2142,6 +2142,20 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         data = await prisma_client.db.query_raw(sql_query, *sql_params)
 
+        # query_raw returns the JSONB `metadata` column as a string (the Prisma
+        # serialiser bypasses the model-layer JSON hydration we get on the ORM
+        # path). The UI reads `metadata.status` / `metadata.error_information`
+        # as object fields, so failure rows looked like successes (#29674).
+        # Re-hydrate to dict here.
+        for row in data:
+            if isinstance(row, dict):
+                md = row.get("metadata")
+                if isinstance(md, str):
+                    try:
+                        row["metadata"] = json.loads(md)
+                    except (ValueError, TypeError):
+                        row["metadata"] = {}
+
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
 

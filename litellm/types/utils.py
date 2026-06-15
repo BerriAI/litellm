@@ -499,6 +499,7 @@ CallTypesLiteral = Literal[
     "create_batch",
     "acreate_batch",
     "pass_through_endpoint",
+    "allm_passthrough_route",
     "anthropic_messages",
     "aretrieve_batch",
     "retrieve_batch",
@@ -533,6 +534,7 @@ CallTypesLiteral = Literal[
     "acreate_skill",
     "acreate_realtime_client_secret",
     "arealtime_calls",
+    "acreate_realtime_transcription_session",
 ]
 
 # Mapping of API routes to their corresponding call types
@@ -2493,6 +2495,7 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     litellm_call_id: Optional[str]
     model_alias_map: Optional[dict]
     metadata: Optional[dict]
+    litellm_metadata: Optional[dict]
     model_info: Optional[dict]
     proxy_server_request: Optional[dict]
     acompletion: Optional[bool]
@@ -3056,6 +3059,12 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Weave (W&B) dynamic params
     wandb_api_key: Optional[str]
     weave_project_id: Optional[str]
+
+    # Datadog dynamic params
+    dd_api_key: Optional[str]
+    dd_site: Optional[str]
+    dd_agent_host: Optional[str]
+    dd_agent_port: Optional[str]
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
