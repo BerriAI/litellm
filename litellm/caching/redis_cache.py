@@ -365,12 +365,13 @@ class RedisCache(BaseCache):
         self.redis_async_client = redis_async_client  # type: ignore
         return redis_async_client
 
-    def check_and_fix_namespace(self, key: str) -> str:
+    def check_and_fix_namespace(self, key: Optional[str]) -> Optional[str]:
         """
-        Make sure each key starts with the given namespace
+        Make sure each key starts with the given namespace.
+        Returns None if key is None (caller is responsible for guarding).
         """
         if key is None:
-            return key  # type: ignore[return-value]
+            return None
         if self.namespace is not None and not key.startswith(self.namespace):
             key = self.namespace + ":" + key
 
@@ -790,6 +791,8 @@ class RedisCache(BaseCache):
             raise e
 
         key = self.check_and_fix_namespace(key=key)
+        if key is None:
+            return
         print_verbose(f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
         try:
             await self._set_cache_sadd_helper(
