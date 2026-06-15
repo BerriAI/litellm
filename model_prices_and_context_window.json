@@ -13916,6 +13916,30 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro": {
+        "input_cost_per_token": 1.74e-06,
+        "output_cost_per_token": 3.48e-06,
+        "cache_read_input_token_cost": 1.45e-07,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "source": "https://fireworks.ai/pricing"
+    },
+    "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash": {
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
+        "cache_read_input_token_cost": 2.8e-08,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "source": "https://fireworks.ai/pricing"
+    },
+    "fireworks_ai/accounts/fireworks/models/kimi-k2p6": {
+        "input_cost_per_token": 9.5e-07,
+        "output_cost_per_token": 4e-06,
+        "cache_read_input_token_cost": 1.6e-07,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "source": "https://fireworks.ai/pricing"
+    },
     "fireworks_ai/accounts/fireworks/models/deepseek-v3p2": {
         "input_cost_per_token": 5.6e-07,
         "litellm_provider": "fireworks_ai",
