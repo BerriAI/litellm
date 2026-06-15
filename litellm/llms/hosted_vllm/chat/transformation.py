@@ -217,8 +217,8 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     for c in existing_content:
                         if isinstance(c, dict) and c.get("type") == "text":
                             text_parts.append(c.get("text", ""))
-                    content_str = "".join(text_parts)
-                    message["content"] = content_str if content_str else None
+                    content_str = "\n".join(text_parts)
+                    message["content"] = content_str
             elif message["role"] == "user":
                 message_content = message.get("content")
                 if message_content and isinstance(message_content, list):
