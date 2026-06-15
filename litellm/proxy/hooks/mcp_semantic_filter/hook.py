@@ -194,7 +194,7 @@ class SemanticToolFilterHook(CustomLogger):
                 f"are native, no MCP filtering applied"
             )
 
-    async def async_pre_call_hook(
+    async def async_pre_call_hook(  # noqa: PLR0915
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
