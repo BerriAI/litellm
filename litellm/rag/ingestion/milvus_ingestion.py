@@ -55,7 +55,9 @@ class MilvusRAGIngestion(BaseRAGIngestion):
     - vector_field: embedding field name (default: "vector")
     - text_field: chunk text field name (default: "text")
     - metric_type: distance metric for auto-created collection (default: "COSINE")
-    - db_name: Milvus database name (optional)
+    - db_name: Milvus database namespace, server-side only via MILVUS_DB_NAME env.
+      Not accepted from the request: it selects the write target's database and is
+      outside the per-collection authorization boundary.
     - partition_name: target partition (optional)
     - auto_create_collection: create the collection if missing (default: True)
     """
@@ -101,7 +103,7 @@ class MilvusRAGIngestion(BaseRAGIngestion):
         self.metric_type = self.vector_store_config.get(
             "metric_type", MILVUS_DEFAULT_METRIC_TYPE
         )
-        self.db_name = self.vector_store_config.get("db_name")
+        self.db_name = get_secret_str("MILVUS_DB_NAME")
         self.partition_name = self.vector_store_config.get("partition_name")
         self.auto_create_collection = self.vector_store_config.get(
             "auto_create_collection", True
