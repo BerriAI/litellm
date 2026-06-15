@@ -179,12 +179,9 @@ class SemanticToolFilterHook(CustomLogger):
             tool_names_csv = self._get_tool_names_csv(filtered_mcp_tools)
 
             _metadata_variable_name = self._get_metadata_variable_name(data)
-            data[_metadata_variable_name][
-                "litellm_semantic_filter_stats"
-            ] = filter_stats
-            data[_metadata_variable_name][
-                "litellm_semantic_filter_tools"
-            ] = tool_names_csv
+            metadata = data.setdefault(_metadata_variable_name, {})
+            metadata["litellm_semantic_filter_stats"] = filter_stats
+            metadata["litellm_semantic_filter_tools"] = tool_names_csv
 
             verbose_proxy_logger.info(
                 f"Semantic tool filter: {filter_stats} MCP tools "
@@ -244,20 +241,30 @@ class SemanticToolFilterHook(CustomLogger):
             )
 
             try:
-                # Preserve native OpenAI-format tools before expansion.
+                # Preserve all non-MCP-reference tools before expansion.
                 # _expand_mcp_tools only returns expanded MCP tools;
                 # non-MCP tools in the original list are discarded by
                 # _parse_mcp_tools.  Without this, native tools in
                 # mixed requests (MCP refs + native) are silently lost.
+                # We detect MCP references by type=="mcp" (the only
+                # shape _should_expand_mcp_tools triggers on), keeping
+                # both Chat Completions and Responses API native formats.
                 native_tools_before_expand = [
                     t
                     for t in tools
-                    if isinstance(t, dict) and "function" in t and "type" in t
+                    if not (isinstance(t, dict) and t.get("type") == "mcp")
                 ]
 
                 expanded_tools = await self._expand_mcp_tools(tools, user_api_key_dict)
 
                 if not expanded_tools:
+                    if native_tools_before_expand:
+                        data["tools"] = native_tools_before_expand
+                        verbose_proxy_logger.warning(
+                            "No MCP tools expanded, preserving "
+                            f"{len(native_tools_before_expand)} native tools"
+                        )
+                        return data
                     verbose_proxy_logger.warning(
                         "No tools expanded from MCP references"
                     )
@@ -304,8 +311,13 @@ class SemanticToolFilterHook(CustomLogger):
             # ── Partition tools into MCP-registered and native ──
             native_tools: List[Any] = []
             mcp_tools: List[Any] = []
-            for t in tools:
-                (mcp_tools if self._is_mcp_tool(t) else native_tools).append(t)
+            mcp_indices: set = set()
+            for i, t in enumerate(tools):
+                if self._is_mcp_tool(t):
+                    mcp_tools.append(t)
+                    mcp_indices.add(i)
+                else:
+                    native_tools.append(t)
 
             verbose_proxy_logger.debug(
                 f"Applying semantic filter: {len(mcp_tools)} MCP tools, "
@@ -322,13 +334,25 @@ class SemanticToolFilterHook(CustomLogger):
             else:
                 filtered_mcp_tools = []
 
+            # Build set of surviving MCP tool names for order-preserving
+            # merge.  Uses names (not id()) so the merge stays correct
+            # even if filter_tools internally copies tool objects.
+            filtered_mcp_names: set = set()
+            for t in filtered_mcp_tools:
+                name, _ = self.filter._extract_tool_info(t)
+                if name:
+                    filtered_mcp_names.add(name)
+
             # Merge preserving original request order — some LLMs are
             # sensitive to the position tools appear in.
-            filtered_mcp_ids = {id(t) for t in filtered_mcp_tools}
-            mcp_ids = {id(t) for t in mcp_tools}
-            filtered_tools = [
-                t for t in tools if id(t) not in mcp_ids or id(t) in filtered_mcp_ids
-            ]
+            filtered_tools: List[Any] = []
+            for i, t in enumerate(tools):
+                if i in mcp_indices:
+                    name, _ = self.filter._extract_tool_info(t)
+                    if name in filtered_mcp_names:
+                        filtered_tools.append(t)
+                else:
+                    filtered_tools.append(t)
 
             # Always update tools
             data["tools"] = filtered_tools
@@ -346,7 +370,8 @@ class SemanticToolFilterHook(CustomLogger):
                 )
             except Exception as e:
                 verbose_proxy_logger.warning(
-                    f"Failed to emit semantic filter metadata: {e}"
+                    f"Failed to emit semantic filter metadata: {e}",
+                    exc_info=True,
                 )
 
             return data
@@ -369,7 +394,7 @@ class SemanticToolFilterHook(CustomLogger):
         from litellm.constants import MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH
 
         _metadata_variable_name = self._get_metadata_variable_name(data)
-        metadata = data[_metadata_variable_name]
+        metadata = data.get(_metadata_variable_name, {})
 
         filter_stats = metadata.get("litellm_semantic_filter_stats")
         if not filter_stats:
