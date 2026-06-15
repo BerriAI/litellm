@@ -109,7 +109,7 @@ class BaseConfig(ABC):
 
     def is_thinking_enabled(self, non_default_params: dict) -> bool:
         return (
-            non_default_params.get("thinking", {}).get("type") == "enabled"
+            (non_default_params.get("thinking") or {}).get("type") == "enabled"
             or non_default_params.get("reasoning_effort") is not None
         )
 
