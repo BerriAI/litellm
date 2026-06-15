@@ -1301,6 +1301,29 @@ def test_log_context_cost_calculation():
     print(f"  - Total: ${result:.6f}")
 
 
+def test_token_tier_thresholds_sort_by_numeric_value():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
+
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_90k_tokens": 5e-6,
+        "input_cost_per_token_above_128k_tokens": 9e-6,
+        "output_cost_per_token_above_90k_tokens": 7e-6,
+        "output_cost_per_token_above_128k_tokens": 11e-6,
+    }
+    usage = Usage(
+        prompt_tokens=150_000,
+        completion_tokens=10,
+        total_tokens=150_010,
+    )
+
+    prompt_cost, completion_cost, *_ = _get_token_base_cost(model_info, usage)
+
+    assert prompt_cost == 9e-6
+    assert completion_cost == 11e-6
+
+
 def test_gemini_25_explicit_caching_cost_direct_usage():
     """
     Test that Gemini 2.5 models correctly calculate costs with explicit caching.
