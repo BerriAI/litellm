@@ -1320,3 +1320,124 @@ async def test_cache_control_hook_bedrock_payload_caps_cachepoints_at_four():
                 f"Bedrock payload exceeded Anthropic's 4 cache_control block limit: "
                 f"found {cache_points} cachePoint blocks"
             )
+
+
+def test_cache_control_hook_reserves_slot_for_tool_config_point():
+    """A tool_config injection point consumes one of the 4 slots downstream.
+
+    With role:system targeting 4 system messages plus a tool_config point, the
+    hook must inject at most 3 message-level blocks so the tool_config cachePoint
+    appended by the Bedrock transform keeps the total at 4, not 5.
+    """
+    hook = AnthropicCacheControlHook()
+
+    messages: List[AllMessageValues] = [
+        {"role": "system", "content": f"System {i}"} for i in range(4)
+    ]
+    messages.append({"role": "user", "content": "hello"})
+
+    _, processed, non_default_params = hook.get_chat_completion_prompt(
+        model="bedrock/us.anthropic.claude-opus-4-6-v1:0",
+        messages=messages,
+        non_default_params={
+            "cache_control_injection_points": [
+                {
+                    "location": "message",
+                    "role": "system",
+                    "control": {"type": "ephemeral", "ttl": "1h"},
+                },
+                {"location": "tool_config"},
+            ]
+        },
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _count_cache_control(processed) == 3
+    # The tool_config point is passed through for the provider transform.
+    assert non_default_params["cache_control_injection_points"] == [
+        {"location": "tool_config"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point():
+    """End-to-end: message + tool_config injection must not exceed 4 cachePoints."""
+    with patch.dict(
+        os.environ,
+        {
+            "AWS_ACCESS_KEY_ID": "fake_access_key_id",
+            "AWS_SECRET_ACCESS_KEY": "fake_secret_access_key",
+            "AWS_REGION_NAME": "us-east-1",
+        },
+    ):
+        litellm.callbacks = [AnthropicCacheControlHook()]
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "output": {"message": {"role": "assistant", "content": "ok"}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 100, "outputTokens": 4, "totalTokens": 104},
+        }
+        mock_response.status_code = 200
+
+        client = AsyncHTTPHandler()
+        with patch.object(client, "post", return_value=mock_response) as mock_post:
+            messages = [
+                {"role": "system", "content": f"System block {i}"} for i in range(4)
+            ]
+            messages.append({"role": "user", "content": "What is the weather?"})
+
+            await litellm.acompletion(
+                model="bedrock/us.anthropic.claude-opus-4-6-v1:0",
+                messages=messages,
+                max_tokens=32,
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get weather for a location",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"location": {"type": "string"}},
+                                "required": ["location"],
+                            },
+                        },
+                    }
+                ],
+                cache_control_injection_points=[
+                    {
+                        "location": "message",
+                        "role": "system",
+                        "control": {"type": "ephemeral", "ttl": "1h"},
+                    },
+                    {"location": "tool_config"},
+                ],
+                client=client,
+            )
+
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+
+            cache_points = sum(
+                1
+                for block in request_body.get("system", [])
+                if isinstance(block, dict) and "cachePoint" in block
+            )
+            for msg in request_body.get("messages", []):
+                content = msg.get("content", [])
+                if isinstance(content, list):
+                    cache_points += sum(
+                        1
+                        for block in content
+                        if isinstance(block, dict) and "cachePoint" in block
+                    )
+            for tool in request_body.get("toolConfig", {}).get("tools", []):
+                if isinstance(tool, dict) and "cachePoint" in tool:
+                    cache_points += 1
+
+            assert cache_points <= 4, (
+                f"Bedrock payload exceeded Anthropic's 4 cache_control block limit "
+                f"when mixing message and tool_config injection: found {cache_points}"
+            )

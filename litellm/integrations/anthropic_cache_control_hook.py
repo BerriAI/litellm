@@ -74,8 +74,20 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             else:
                 remaining_points.append(point)
 
+        # Non-message points (currently Bedrock tool_config) are handled in the
+        # provider transform, where each tool_config point appends at most one
+        # cachePoint to the tools. That block also counts toward Anthropic's
+        # limit, so reserve a slot for it here to leave room.
+        reserved_blocks = (
+            1
+            if any(p.get("location") == "tool_config" for p in remaining_points)
+            else 0
+        )
+
         processed_messages = self._apply_message_injections(
-            points=message_points, messages=processed_messages
+            points=message_points,
+            messages=processed_messages,
+            max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
         )
 
         # Pass through non-message injection points for provider-specific handling
@@ -88,6 +100,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     def _apply_message_injections(
         points: List[CacheControlMessageInjectionPoint],
         messages: List[AllMessageValues],
+        max_blocks: int,
     ) -> List[AllMessageValues]:
         """Apply message-level cache control injection points in order.
 
@@ -95,15 +108,20 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         breakpoints per request. Client-supplied breakpoints count toward that
         limit, so we never inject onto a message that already carries
         cache_control (preserving the client's TTL) and we stop injecting once
-        the limit is reached. Injection points are honored in config order, so
-        earlier points win when slots are scarce.
+        ``max_blocks`` is reached. Injection points are honored in config order,
+        so earlier points win when slots are scarce.
         """
         used_blocks = sum(
             AnthropicCacheControlHook._count_cache_control_blocks(msg)
             for msg in messages
         )
 
+        limit_reached = False
         for point in points:
+            if used_blocks >= max_blocks:
+                limit_reached = True
+                break
+
             control: ChatCompletionCachedContent = point.get(
                 "control", None
             ) or ChatCompletionCachedContent(type="ephemeral")
@@ -111,12 +129,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             for target_index in AnthropicCacheControlHook._resolve_target_indices(
                 point=point, messages=messages
             ):
-                if used_blocks >= MAX_CACHE_CONTROL_BLOCKS:
-                    verbose_logger.warning(
-                        f"AnthropicCacheControlHook: Reached the Anthropic limit of "
-                        f"{MAX_CACHE_CONTROL_BLOCKS} cache_control blocks. Skipping further injection."
-                    )
-                    return messages
+                if used_blocks >= max_blocks:
+                    limit_reached = True
+                    break
 
                 if AnthropicCacheControlHook._message_has_cache_control(
                     messages[target_index]
@@ -130,6 +145,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                     )
                 )
                 used_blocks += 1
+
+            if limit_reached:
+                break
+
+        if limit_reached:
+            verbose_logger.warning(
+                f"AnthropicCacheControlHook: Reached the Anthropic limit of "
+                f"{MAX_CACHE_CONTROL_BLOCKS} cache_control blocks. Skipping further injection."
+            )
 
         return messages
 
