@@ -350,25 +350,16 @@ def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog)
 
 def test_vertex_backend_url_must_not_include_client_query_params():
     """Regression: appending ?model= to Vertex Live WSS URLs causes 1007 errors."""
-    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-
     cfg = VertexAIRealtimeConfig(
         access_token="tok", project="my-proj", location="us-central1"
     )
     backend_url = cfg.get_complete_url(
         api_base=None, model="gemini-live-2.5-flash-native-audio"
     )
-    client_query_params = {
-        "model": "gemini-live-2.5-flash-native-audio",
-        "intent": "chat",
-    }
 
+    # Vertex encodes the model in the setup message; client ?model= must not leak here.
     assert "?" not in backend_url
-    polluted_url = BaseLLMHTTPHandler._append_query_params(
-        backend_url, client_query_params
-    )
-    assert "model=" in polluted_url
-    assert polluted_url != backend_url
+    assert "model=" not in backend_url
 
 
 def test_vertex_function_call_output_omits_id():
