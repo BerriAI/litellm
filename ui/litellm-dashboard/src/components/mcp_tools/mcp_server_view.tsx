@@ -9,6 +9,7 @@ import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import { getSecureItem } from "@/utils/secureStorage";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
 import { getMaskedAndFullUrl } from "./utils";
+import { getProxyBaseUrl } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { Button as AntdButton } from "antd";
@@ -55,12 +56,12 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   initialTabIndex = 0,
 }) => {
   // Open the editing Settings tab on first render when returning from the edit OAuth
-  // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
+  // redirect, so the "token fetched" feedback shows where the user left off (Settings=3).
   const returningFromEditOAuth = isReturningFromEditOAuth(isProxyAdmin, mcpServer.server_id);
   const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 3 : initialTabIndex);
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
@@ -69,6 +70,10 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 
   const urlValue = mcpServer.url ?? "";
   const { maskedUrl, hasToken } = urlValue ? getMaskedAndFullUrl(urlValue) : { maskedUrl: "—", hasToken: false };
+
+  const coworkServerIdentifier = mcpServer.alias || mcpServer.server_name || mcpServer.server_id;
+  const coworkUrl = `${getProxyBaseUrl()}/${coworkServerIdentifier}/mcp`;
+  const isUpstreamDelegated = mcpServer.delegate_auth_to_upstream === true;
 
   const renderUrlWithToggle = (url: string | null | undefined, showFull: boolean) => {
     if (!url) return "—";
@@ -151,6 +156,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           {[
             <Tab key="overview">Overview</Tab>,
             <Tab key="tools">MCP Tools</Tab>,
+            <Tab key="integrations">Integrations</Tab>,
             ...(isProxyAdmin ? [<Tab key="settings">Settings</Tab>] : []),
           ]}
         </TabList>
@@ -217,6 +223,45 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               serverAlias={mcpServer.alias}
               extraHeaders={mcpServer.extra_headers}
             />
+          </TabPanel>
+
+          {/* Integrations Panel */}
+          <TabPanel>
+            <Card className="p-6">
+              <Title>Claude Cowork</Title>
+              <Text className="text-gray-500 mt-1">
+                Add this MCP server to Claude Cowork by pasting the URL below into the connector setup.
+              </Text>
+
+              <div className="mt-5">
+                <Text className="text-xs font-medium text-gray-500 uppercase tracking-wide">Server URL</Text>
+                <div className="mt-2 flex items-center gap-2 rounded border border-gray-200 bg-gray-50 px-3 py-2">
+                  <Text className="flex-1 break-all font-mono text-sm text-gray-900">{coworkUrl}</Text>
+                  <AntdButton
+                    type="text"
+                    size="small"
+                    icon={copiedStates["mcp-cowork-url"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                    onClick={() => copyToClipboard(coworkUrl, "mcp-cowork-url")}
+                    className={`transition-all duration-200 ${
+                      copiedStates["mcp-cowork-url"]
+                        ? "text-green-600 bg-green-50 border-green-200"
+                        : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                    }`}
+                  />
+                </div>
+              </div>
+
+              {isUpstreamDelegated && (
+                <div className="mt-5 rounded border border-blue-200 bg-blue-50 p-4">
+                  <Text className="text-sm font-semibold text-blue-900">OAuth: Dynamic Client Registration</Text>
+                  <Text className="mt-1 text-sm text-blue-800">
+                    This server delegates authentication upstream, so Claude Cowork completes the OAuth flow directly
+                    with the provider through Dynamic Client Registration. Leave the auth fields empty; no LiteLLM key
+                    header is needed.
+                  </Text>
+                </div>
+              )}
+            </Card>
           </TabPanel>
 
           {/* Settings Panel */}
