@@ -369,6 +369,8 @@ class RedisCache(BaseCache):
         """
         Make sure each key starts with the given namespace
         """
+        if key is None:
+            return key
         if self.namespace is not None and not key.startswith(self.namespace):
             key = self.namespace + ":" + key
 
