@@ -284,7 +284,9 @@ class DeepKeepGuardrail(CustomGuardrail):
         additional_params: Dict[str, Any] = {"firewall_id": self.firewall_id}
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_body)
         if dynamic_params:
-            additional_params.update({k: v for k, v in dynamic_params.items() if k != "firewall_id"})
+            additional_params.update(
+                {k: v for k, v in dynamic_params.items() if k != "firewall_id"}
+            )
 
         # Extract user API key metadata
         user_metadata = self._extract_user_api_key_metadata(request_data)
