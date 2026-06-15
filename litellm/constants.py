@@ -57,6 +57,19 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS = (
     float(_max_stream_duration_env) if _max_stream_duration_env is not None else None
 )
 
+# Max seconds to wait for the next chunk from a streaming provider before
+# raising a Timeout. Guards against a provider that keeps the socket warm
+# (keepalive bytes) but stops sending content, which httpx's read timeout
+# cannot detect. None (default) = disabled. Async streaming only.
+_stream_inactivity_timeout_env = os.getenv(
+    "LITELLM_STREAM_INACTIVITY_TIMEOUT_SECONDS", None
+)
+LITELLM_STREAM_INACTIVITY_TIMEOUT_SECONDS = (
+    float(_stream_inactivity_timeout_env)
+    if _stream_inactivity_timeout_env is not None
+    else None
+)
+
 # Maximum number of base64 characters to keep in logging payloads.
 # Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
