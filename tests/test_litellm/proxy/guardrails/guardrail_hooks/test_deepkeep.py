@@ -530,6 +530,61 @@ class TestDeepKeepGuardrail:
         assert result["structured_messages"] == sample_structured
 
     @pytest.mark.asyncio
+    async def test_apply_guardrail_applies_tool_redactions_from_response(self):
+        """should use redacted tools/tool_calls from response when GUARDRAIL_INTERVENED returns them."""
+        guardrail = DeepKeepGuardrail(
+            api_key="test-key",
+            api_base="https://test.deepkeep.ai",
+            firewall_id="fw-123",
+            guardrail_name="test",
+            event_hook="pre_call",
+        )
+
+        redacted_tools = [{"type": "function", "function": {"name": "get_data", "description": "[REDACTED]"}}]
+        redacted_tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "get_data", "arguments": "{}"}}]
+
+        mock_response = Response(
+            status_code=200,
+            json={
+                "action": "GUARDRAIL_INTERVENED",
+                "blocked_reason": None,
+                "texts": None,
+                "images": None,
+                "tools": redacted_tools,
+                "tool_calls": redacted_tool_calls,
+            },
+            request=Request(
+                "POST",
+                "https://test.deepkeep.ai/v3/openai/beta/litellm_basic_guardrail_api",
+            ),
+        )
+
+        original_tools = [{"type": "function", "function": {"name": "get_data", "description": "sensitive info"}}]
+        original_tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "get_data", "arguments": '{"secret": "value"}'}}]
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["run the tool"],
+                    "tools": original_tools,
+                    "tool_calls": original_tool_calls,
+                },
+                request_data={"metadata": {}},
+                input_type="request",
+            )
+
+        # Redacted versions from the API response must be used, not the originals
+        assert result["tools"] == redacted_tools
+        assert result["tool_calls"] == redacted_tool_calls
+        assert result["tools"] != original_tools
+        assert result["tool_calls"] != original_tool_calls
+
+    @pytest.mark.asyncio
     async def test_firewall_id_in_payload(self):
         """should include firewall_id in additional_provider_specific_params."""
         guardrail = DeepKeepGuardrail(

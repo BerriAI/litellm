@@ -238,6 +238,36 @@ class DeepKeepGuardrail(CustomGuardrail):
         verbose_proxy_logger.error("DeepKeep guardrail API error: %s", str(error))
         raise DeepKeepGuardrailAPIError(f"DeepKeep guardrail API failed: {str(error)}")
 
+    @staticmethod
+    def _build_return_inputs(
+        *,
+        response_json: Dict[str, Any],
+        texts: list,
+        images: Optional[Any],
+        tools: Optional[Any],
+        tool_calls: Optional[Any],
+        structured_messages: Optional[Any],
+    ) -> GenericGuardrailAPIInputs:
+        """Merge original inputs with any guardrail-modified values from the API response."""
+        return_inputs = GenericGuardrailAPIInputs(texts=texts)
+        if response_json.get("texts"):
+            return_inputs["texts"] = response_json["texts"]
+        if response_json.get("images"):
+            return_inputs["images"] = response_json["images"]
+        elif images:
+            return_inputs["images"] = images
+        if response_json.get("tools"):
+            return_inputs["tools"] = response_json["tools"]
+        elif tools:
+            return_inputs["tools"] = tools
+        if response_json.get("tool_calls"):
+            return_inputs["tool_calls"] = response_json["tool_calls"]
+        elif tool_calls:
+            return_inputs["tool_calls"] = tool_calls
+        if structured_messages:
+            return_inputs["structured_messages"] = structured_messages
+        return return_inputs
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -336,21 +366,14 @@ class DeepKeepGuardrail(CustomGuardrail):
                     should_wrap_with_default_message=False,
                 )
 
-            # Build return inputs – apply any modifications from GUARDRAIL_INTERVENED
-            return_inputs = GenericGuardrailAPIInputs(texts=texts)
-            if response_json.get("texts"):
-                return_inputs["texts"] = response_json["texts"]
-            if response_json.get("images"):
-                return_inputs["images"] = response_json["images"]
-            elif images:
-                return_inputs["images"] = images
-            if tools:
-                return_inputs["tools"] = tools
-            if tool_calls:
-                return_inputs["tool_calls"] = tool_calls
-            if structured_messages:
-                return_inputs["structured_messages"] = structured_messages
-            return return_inputs
+            return self._build_return_inputs(
+                response_json=response_json,
+                texts=texts,
+                images=images,
+                tools=tools,
+                tool_calls=tool_calls,
+                structured_messages=structured_messages,
+            )
 
         except GuardrailRaisedException:
             raise
