@@ -1967,27 +1967,35 @@ def convert_to_anthropic_tool_invoke(
         # Check if this is a server-side tool (web_search, tool_search, etc.)
         # Server tool IDs start with "srvtoolu_"
         if tool_id.startswith("srvtoolu_"):
-            # Create server_tool_use block instead of tool_use
-            _anthropic_server_tool_use: Dict[str, Any] = {
-                "type": "server_tool_use",
-                "id": tool_id,
-                "name": tool_name,
-                "input": tool_input,
-            }
-            anthropic_tool_invoke.append(_anthropic_server_tool_use)
-
-            # Add corresponding tool result if available.
-            # Check both web_search_results (web_search_tool_result / web_fetch_tool_result)
-            # and tool_results (bash_code_execution_tool_result, etc.)
+            # A server_tool_use block MUST be immediately followed by its matching
+            # *_tool_result block, or Anthropic rejects the request. The result is
+            # carried in provider_specific_fields (web_search_results / tool_results)
+            # — see PRs #17746 / #17798. A generic OpenAI client that does NOT
+            # round-trip provider_specific_fields (e.g. Open WebUI) drops it on
+            # replay, leaving no result to pair. In that case emit neither a bare
+            # server_tool_use here nor a user tool_result for the same id (see the
+            # tool/function handling in anthropic_messages_pt) — the server-side
+            # search already shaped the assistant's text answer, and replaying an
+            # unpaired server tool turn is exactly what triggers the 400
+            # ("unexpected tool_use_id ... in tool_result blocks").
             _all_tool_results: List[Any] = []
             if web_search_results:
                 _all_tool_results.extend(web_search_results)
             if tool_results:
                 _all_tool_results.extend(tool_results)
-            for result in _all_tool_results:
-                if result.get("tool_use_id") == tool_id:
-                    anthropic_tool_invoke.append(result)
-                    break
+            _matching_tool_result = next(
+                (r for r in _all_tool_results if r.get("tool_use_id") == tool_id),
+                None,
+            )
+            if _matching_tool_result is not None:
+                _anthropic_server_tool_use: Dict[str, Any] = {
+                    "type": "server_tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                }
+                anthropic_tool_invoke.append(_anthropic_server_tool_use)
+                anthropic_tool_invoke.append(_matching_tool_result)
         else:
             # Regular tool_use
             sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
@@ -2673,12 +2681,24 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 user_message_types_block["role"] == "tool"
                 or user_message_types_block["role"] == "function"
             ):
-                # OpenAI's tool message content will always be a string
-                user_content.append(
-                    convert_to_anthropic_tool_result(
-                        user_message_types_block, force_base64=force_base64
+                # A generic OpenAI client (e.g. Open WebUI) emits a `tool` message
+                # for a server-side tool call (id starts with "srvtoolu_") to
+                # satisfy OpenAI's "every tool_call needs a tool result" rule.
+                # Anthropic rejects a user tool_result whose id maps to a
+                # server_tool_use (it is not a client tool_use), and the unpaired
+                # server_tool_use is already dropped in
+                # convert_to_anthropic_tool_invoke when its result didn't survive
+                # the round-trip — so skip the orphaned server-tool result here too.
+                _tc_id = user_message_types_block.get("tool_call_id")
+                if isinstance(_tc_id, str) and _tc_id.startswith("srvtoolu_"):
+                    pass
+                else:
+                    # OpenAI's tool message content will always be a string
+                    user_content.append(
+                        convert_to_anthropic_tool_result(
+                            user_message_types_block, force_base64=force_base64
+                        )
                     )
-                )
 
             msg_i += 1
 
