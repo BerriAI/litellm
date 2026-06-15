@@ -3271,10 +3271,10 @@ async def _build_model_max_budget_usage(
     now = datetime.now(tz=timezone.utc)
     result: Dict[str, Any] = {}
     for model, budget_info in model_max_budget.items():
-        budget_config = BudgetConfig(**budget_info)
-        if budget_config.budget_duration is None:
-            continue
         try:
+            budget_config = BudgetConfig(**budget_info)
+            if budget_config.budget_duration is None:
+                continue
             period_start = now - timedelta(
                 seconds=duration_in_seconds(budget_config.budget_duration)
             )

@@ -12443,6 +12443,30 @@ async def test_build_model_max_budget_usage_unparseable_duration_skipped():
 
 
 @pytest.mark.asyncio
+async def test_build_model_max_budget_usage_invalid_budget_config_skipped():
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_model_max_budget_usage,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[{"total_spend": 0.20}])
+
+    result = await _build_model_max_budget_usage(
+        api_key_hash="some-hash",
+        model_max_budget={
+            "gpt-4o": {"max_budget": "not-a-number", "budget_duration": "1d"},
+            "gpt-3.5-turbo": {"budget_limit": 0.5, "time_period": "7d"},
+        },
+        prisma_client=mock_prisma_client,
+    )
+    assert "gpt-4o" not in result
+    assert "gpt-3.5-turbo" in result
+    assert mock_prisma_client.db.query_raw.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_build_model_max_budget_usage_different_durations_per_model_windows():
     """Models with different budget_duration values must each be queried with their own rolling window."""
     from datetime import datetime, timedelta, timezone
