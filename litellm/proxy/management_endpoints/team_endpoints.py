@@ -1043,6 +1043,14 @@ async def new_team(  # noqa: PLR0915
                 if default_value is not None:
                     setattr(data, field, default_value)
 
+        # `models` defaults to an empty list rather than None on the request, so it
+        # needs its own check: apply the configured default when the request did not
+        # specify any models (matches SSO-provisioned team behavior).
+        if not getattr(data, "models", None):
+            default_models = _get_default_team_param("models")
+            if default_models is not None:
+                data.models = default_models
+
         # Legacy fallback: apply max_budget from default_team_settings (YAML config)
         # if still not set after checking default_team_params.
         if data.max_budget is None:
