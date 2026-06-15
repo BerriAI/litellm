@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Type, Union
 
 from fastapi import HTTPException
+from httpx import Response as HttpxResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -21,6 +22,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
 from litellm.types.utils import (
     CallTypesLiteral,
     GuardrailStatus,
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
 )
@@ -31,11 +33,15 @@ BLOCKED_VERDICT = "blocked"
 FLAGGED_VERDICT = "flagged"
 PASSED_VERDICT = "passed"
 UnreachableFallback = Literal["fail_closed", "fail_open"]
+AnalyzeStage = Literal["prompt", "response"]
 
 # Argus returns these for a permanently broken guardrail (bad key, unknown
 # asset_id, malformed payload), not a transient outage. They must always
 # block, never honour fail_open.
 CONFIG_ERROR_STATUS_CODES = frozenset({400, 401, 403, 404, 422})
+_SCHEMA_SCALAR_KEYS = frozenset(("name", "description", "title", "const", "default"))
+_SCHEMA_LIST_KEYS = frozenset(("enum", "examples"))
+_SCHEMA_EXTRACTED_KEYS = _SCHEMA_SCALAR_KEYS | _SCHEMA_LIST_KEYS
 
 
 class RepelloAIGuardrailMissingSecrets(Exception):
@@ -68,27 +74,27 @@ class RepelloAIGuardrail(CustomGuardrail):
 
         return args
 
-    @classmethod
-    def _iter_schema_text(cls, node: object) -> List[str]:
+    @staticmethod
+    def _iter_schema_text(node: object) -> List[str]:
         texts: List[str] = []
         stack: List[object] = [node]
-        scalar_keys = ("name", "description", "title", "const", "default")
-        list_keys = ("enum", "examples")
 
         while stack:
             current = stack.pop()
             if isinstance(current, dict):
-                for key in scalar_keys:
+                for key in _SCHEMA_SCALAR_KEYS:
                     value = current.get(key)
                     if isinstance(value, str) and value:
                         texts.append(value)
-                for key in list_keys:
+                for key in _SCHEMA_LIST_KEYS:
                     items = current.get(key)
                     if isinstance(items, list):
                         for item in items:
                             if isinstance(item, str) and item:
                                 texts.append(item)
-                stack.extend(reversed(list(current.values())))
+                stack.extend(
+                    reversed([v for k, v in current.items() if k not in _SCHEMA_EXTRACTED_KEYS])
+                )
             elif isinstance(current, list):
                 stack.extend(reversed(current))
 
@@ -170,7 +176,7 @@ class RepelloAIGuardrail(CustomGuardrail):
     async def _call_analyze(
         self,
         text: str,
-        stage: str,
+        stage: AnalyzeStage,
         request_data: Dict,
         event_type: GuardrailEventHooks,
     ) -> Optional[RepelloAIAnalyzeResponse]:
@@ -239,7 +245,7 @@ class RepelloAIGuardrail(CustomGuardrail):
             )
 
     @staticmethod
-    def _raise_for_config_error(response) -> None:
+    def _raise_for_config_error(response: HttpxResponse) -> None:
         """Surface auth/config failures instead of silently failing open.
 
         These status codes mean the guardrail itself is misconfigured (bad API
@@ -387,7 +393,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
