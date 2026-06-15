@@ -14,17 +14,17 @@ from litellm.types.containers.main import ContainerListResponse, ContainerObject
 
 @pytest.fixture(autouse=True)
 def clear_container_owner_cache():
-    for cache in (
+    caches = (
         ownership._CONTAINER_OWNER_CACHE,
+        ownership._CONTAINER_STORED_ID_CACHE,
+        ownership._CONTAINER_TEAM_CACHE,
         ownership._ALLOWED_CONTAINER_IDS_CACHE,
-    ):
+    )
+    for cache in caches:
         cache.cache_dict.clear()
         cache.ttl_dict.clear()
     yield
-    for cache in (
-        ownership._CONTAINER_OWNER_CACHE,
-        ownership._ALLOWED_CONTAINER_IDS_CACHE,
-    ):
+    for cache in caches:
         cache.cache_dict.clear()
         cache.ttl_dict.clear()
 
@@ -932,10 +932,7 @@ async def test_should_record_containers_from_responses_output_for_service_accoun
         AsyncMock(return_value=prisma_client),
     )
     auth = UserAPIKeyAuth(team_id="team-1")
-    encoded_container_id = (
-        "cntr_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmF6dXJlO21vZGVsX2lkOmR"
-        "lZi0xMjM7Y29udGFpbmVyX2lkOmNudHJfbmF0aXZl"
-    )
+    encoded_container_id = "cntr_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmF6dXJlO21vZGVsX2lkOmRlZi0xMjM7Y29udGFpbmVyX2lkOmNudHJfbmF0aXZl"
     responses_payload = {
         "output": [
             {
@@ -972,10 +969,7 @@ async def test_should_record_containers_from_responses_output_for_service_accoun
 async def test_service_account_can_access_container_after_responses_tracking(
     monkeypatch,
 ):
-    encoded_container_id = (
-        "cntr_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmF6dXJlO21vZGVsX2lkOmR"
-        "lZi0xMjM7Y29udGFpbmVyX2lkOmNudHJfbmF0aXZl"
-    )
+    encoded_container_id = "cntr_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmF6dXJlO21vZGVsX2lkOmRlZi0xMjM7Y29udGFpbmVyX2lkOmNudHJfbmF0aXZl"
     table = AsyncMock()
     table.find_unique.return_value = None
     prisma_client = SimpleNamespace(
@@ -1024,10 +1018,7 @@ async def test_should_record_container_ownership_after_streaming_responses_finis
     """
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-    encoded_container_id = (
-        "cntr_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmF6dXJlO21vZGVsX2lkOmR"
-        "lZi0xMjM7Y29udGFpbmVyX2lkOmNudHJfbmF0aXZl"
-    )
+    encoded_container_id = "cntr_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmF6dXJlO21vZGVsX2lkOmRlZi0xMjM7Y29udGFpbmVyX2lkOmNudHJfbmF0aXZl"
     response_body = SimpleNamespace(
         output=[
             SimpleNamespace(
@@ -1107,3 +1098,127 @@ async def test_streaming_ownership_wrap_no_op_when_stream_did_not_complete(
 
     assert chunks == ["data: chunk-1\n\n"]
     record.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Team-visibility opt-in (cross-principal access).
+#
+# Regression coverage for the Disney case: a container created by a user key
+# (owner = user_id) was unreachable by the team's service account (scope only
+# ``team:<id>``). The fix lets a creator's team opt into team visibility, which
+# stamps the container's ``team_id`` so any same-team principal can read it,
+# while keeping private-to-creator the default and preserving cross-team
+# isolation.
+# ---------------------------------------------------------------------------
+
+
+def _row(created_by, team_id, container_id="cntr_x"):
+    return SimpleNamespace(
+        created_by=created_by,
+        team_id=team_id,
+        unified_object_id=container_id,
+        file_object="{}",
+        file_purpose="container",
+    )
+
+
+def _prisma(monkeypatch, *, find_unique=None, find_first=None):
+    table = AsyncMock()
+    table.find_unique.return_value = find_unique
+    table.find_first.return_value = find_first
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership, "_get_prisma_client", AsyncMock(return_value=prisma_client)
+    )
+    return table
+
+
+@pytest.mark.asyncio
+async def test_user_created_container_is_private_by_default(monkeypatch):
+    """A user whose team has NOT opted in creates a private container:
+    team_id is left unset so no teammate (or service account) inherits access."""
+    table = _prisma(monkeypatch, find_unique=None)
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-1", team_metadata={})
+
+    await ownership.record_container_owner(
+        response=_container("cntr_priv"),
+        user_api_key_dict=creator,
+        custom_llm_provider="openai",
+    )
+
+    data = table.create.call_args.kwargs["data"]
+    assert data["created_by"] == "alice"
+    assert data["team_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_team_opt_in_stamps_team_id_but_keeps_creator(monkeypatch):
+    """With the team opted in, the container is stamped with the team while
+    still recording the individual creator in created_by."""
+    table = _prisma(monkeypatch, find_unique=None)
+    creator = UserAPIKeyAuth(
+        user_id="alice",
+        team_id="team-1",
+        team_metadata={"container_visibility": "team"},
+    )
+
+    await ownership.record_container_owner(
+        response=_container("cntr_shared"),
+        user_api_key_dict=creator,
+        custom_llm_provider="openai",
+    )
+
+    data = table.create.call_args.kwargs["data"]
+    assert data["created_by"] == "alice"
+    assert data["team_id"] == "team-1"
+
+
+@pytest.mark.asyncio
+async def test_same_team_service_account_can_access_team_visible_container(monkeypatch):
+    """The Disney case, fixed: a user-created, team-visible container is
+    reachable by the team's service account (user_id=None, scope team:team-1)."""
+    _prisma(monkeypatch, find_first=_row("alice", "team-1", "cntr_shared"))
+    service_account = UserAPIKeyAuth(team_id="team-1")
+
+    original_id, provider = await ownership.assert_user_can_access_container(
+        container_id="cntr_shared",
+        user_api_key_dict=service_account,
+        custom_llm_provider="openai",
+    )
+
+    assert original_id == "cntr_shared"
+    assert provider == "openai"
+
+
+@pytest.mark.asyncio
+async def test_service_account_denied_on_private_user_container(monkeypatch):
+    """Regression guard: when the team has NOT opted in (team_id None), a
+    same-team service account is still forbidden from a user's container."""
+    _prisma(monkeypatch, find_first=_row("alice", None, "cntr_priv"))
+    service_account = UserAPIKeyAuth(team_id="team-1")
+
+    with pytest.raises(HTTPException) as exc:
+        await ownership.assert_user_can_access_container(
+            container_id="cntr_priv",
+            user_api_key_dict=service_account,
+            custom_llm_provider="openai",
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_other_team_cannot_access_team_visible_container(monkeypatch):
+    """Cross-team isolation is preserved: a service account from a different
+    team cannot read a team-visible container."""
+    _prisma(monkeypatch, find_first=_row("alice", "team-1", "cntr_shared"))
+    other_team = UserAPIKeyAuth(team_id="team-2")
+
+    with pytest.raises(HTTPException) as exc:
+        await ownership.assert_user_can_access_container(
+            container_id="cntr_shared",
+            user_api_key_dict=other_team,
+            custom_llm_provider="openai",
+        )
+    assert exc.value.status_code == 403

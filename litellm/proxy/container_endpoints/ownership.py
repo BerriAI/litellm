@@ -10,7 +10,7 @@ from litellm.proxy.common_utils.resource_ownership import (
     get_primary_resource_owner_scope,
     get_resource_owner_scopes,
     is_proxy_admin,
-    user_can_access_resource_owner,
+    user_can_access_resource_owner_or_team,
 )
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -30,6 +30,13 @@ _CONTAINER_OWNER_CACHE = InMemoryCache(max_size_in_memory=10000, default_ttl=60)
 # re-hitting Prisma on every retrieve/delete.
 _NEGATIVE_STORED_ID_SENTINEL = "__litellm_container_no_stored_id__"
 _CONTAINER_STORED_ID_CACHE = InMemoryCache(max_size_in_memory=10000, default_ttl=60)
+
+# Caches the team a container is shared with (its ``team_id``), populated from
+# the same row fetch as the owner cache. A negative sentinel marks a private
+# container (no team), so the access check can distinguish "private" from a
+# cache miss.
+_NEGATIVE_TEAM_SENTINEL = "__litellm_container_no_team__"
+_CONTAINER_TEAM_CACHE = InMemoryCache(max_size_in_memory=10000, default_ttl=60)
 
 # Per-caller-scope cache for ``GET /v1/containers`` list filtering. Without
 # this, every list call issues a fresh ``find_many`` against
@@ -163,11 +170,25 @@ async def record_container_owners_from_responses_response(
             # batch — other containers in the same response should still
             # get recorded so their follow-up file API calls don't 403.
             verbose_proxy_logger.exception(
-                "Failed to record container ownership from responses output "
-                "for container_id=%s: %s",
+                "Failed to record container ownership from responses output for container_id=%s: %s",
                 container_id,
                 e,
             )
+
+
+def _resolve_container_team_id(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+    """Return the team to share a newly-created container with, or ``None`` to
+    keep it private to its creator. A container is team-visible only when the
+    creator belongs to a team whose metadata opts in
+    (``container_visibility == "team"``); this preserves the private-by-default
+    behaviour and makes team sharing an explicit team-level switch."""
+    team_id = getattr(user_api_key_dict, "team_id", None)
+    if not team_id:
+        return None
+    team_metadata = getattr(user_api_key_dict, "team_metadata", None) or {}
+    if team_metadata.get("container_visibility") == "team":
+        return team_id
+    return None
 
 
 async def record_container_owner(
@@ -214,15 +235,22 @@ async def record_container_owner(
         )
         return response
 
+    container_team_id = _resolve_container_team_id(user_api_key_dict)
     table = ManagedObjectRepository(prisma_client).table
     existing = await table.find_unique(where={"model_object_id": model_object_id})
     if existing is not None:
         if getattr(existing, "file_purpose", None) != CONTAINER_OBJECT_PURPOSE:
             raise HTTPException(status_code=500, detail="Unable to track container")
-        if not user_can_access_resource_owner(
-            getattr(existing, "created_by", None), user_api_key_dict
+        if not user_can_access_resource_owner_or_team(
+            getattr(existing, "created_by", None),
+            getattr(existing, "team_id", None),
+            user_api_key_dict,
         ):
             raise HTTPException(status_code=403, detail="Forbidden")
+        # Visibility is fixed at create time; a re-record (e.g. a colliding
+        # container id) refreshes the encoded id/object but must not silently
+        # flip an existing container's visibility, so ``team_id`` is left as-is.
+        effective_team_id = getattr(existing, "team_id", None)
         await table.update(
             where={"model_object_id": model_object_id},
             data={
@@ -232,6 +260,7 @@ async def record_container_owner(
             },
         )
     else:
+        effective_team_id = container_team_id
         await table.create(
             data={
                 "unified_object_id": container_id,
@@ -239,12 +268,16 @@ async def record_container_owner(
                 "file_object": file_object_json,
                 "file_purpose": CONTAINER_OBJECT_PURPOSE,
                 "created_by": owner,
+                "team_id": container_team_id,
                 "updated_by": owner,
             }
         )
 
     _CONTAINER_OWNER_CACHE.set_cache(model_object_id, owner)
     _CONTAINER_STORED_ID_CACHE.set_cache(model_object_id, container_id)
+    _CONTAINER_TEAM_CACHE.set_cache(
+        model_object_id, effective_team_id or _NEGATIVE_TEAM_SENTINEL
+    )
     # Drop the caller's own list-cache entry so the just-created container
     # shows up on their next ``GET /v1/containers``. Other callers with
     # disjoint scope tuples have their own entries; intersecting-scope
@@ -293,6 +326,11 @@ async def _get_container_owner(
             else _NEGATIVE_STORED_ID_SENTINEL
         ),
     )
+    team_id = getattr(row, "team_id", None) if row is not None else None
+    _CONTAINER_TEAM_CACHE.set_cache(
+        model_object_id,
+        team_id if isinstance(team_id, str) and team_id else _NEGATIVE_TEAM_SENTINEL,
+    )
     return owner
 
 
@@ -338,6 +376,40 @@ async def _get_stored_container_id(
     return stored_id if isinstance(stored_id, str) and stored_id else None
 
 
+async def _get_container_team_id(
+    original_container_id: str, custom_llm_provider: str
+) -> Optional[str]:
+    """Return the team a container is shared with, or ``None`` if it is
+    private to its creator. ``_get_container_owner`` populates this cache from
+    the same row, so calling it right after an owner lookup is a cache hit."""
+    model_object_id = _container_model_object_id(
+        original_container_id, custom_llm_provider
+    )
+
+    cached = _CONTAINER_TEAM_CACHE.get_cache(model_object_id)
+    if cached == _NEGATIVE_TEAM_SENTINEL:
+        return None
+    if isinstance(cached, str) and cached:
+        return cached
+
+    prisma_client = await _get_prisma_client()
+    if prisma_client is None:
+        return None
+
+    row = await ManagedObjectRepository(prisma_client).table.find_first(
+        where={
+            "model_object_id": model_object_id,
+            "file_purpose": CONTAINER_OBJECT_PURPOSE,
+        }
+    )
+    team_id = getattr(row, "team_id", None) if row is not None else None
+    _CONTAINER_TEAM_CACHE.set_cache(
+        model_object_id,
+        team_id if isinstance(team_id, str) and team_id else _NEGATIVE_TEAM_SENTINEL,
+    )
+    return team_id if isinstance(team_id, str) and team_id else None
+
+
 async def assert_user_can_access_container(
     container_id: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -354,7 +426,12 @@ async def assert_user_can_access_container(
     # that pre-date this enforcement need an admin to either re-create
     # via the now-tracked flow or assign ``created_by`` on the row.
     owner = await _get_container_owner(original_container_id, resolved_provider)
-    if not user_can_access_resource_owner(owner, user_api_key_dict):
+    resource_team_id = await _get_container_team_id(
+        original_container_id, resolved_provider
+    )
+    if not user_can_access_resource_owner_or_team(
+        owner, resource_team_id, user_api_key_dict
+    ):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     return original_container_id, resolved_provider
@@ -412,11 +489,20 @@ async def _get_allowed_container_ids(
     if prisma_client is None:
         return set()
 
+    # A caller sees containers they own (created_by in their scopes) plus any
+    # team-visible container shared with their team. ``owner_scopes`` already
+    # varies by team, so the cache key stays correct.
+    where_filter: Dict[str, Any] = {"file_purpose": CONTAINER_OBJECT_PURPOSE}
+    caller_team_id = getattr(user_api_key_dict, "team_id", None)
+    if caller_team_id:
+        where_filter["OR"] = [
+            {"created_by": {"in": owner_scopes}},
+            {"team_id": caller_team_id},
+        ]
+    else:
+        where_filter["created_by"] = {"in": owner_scopes}
     rows = await ManagedObjectRepository(prisma_client).table.find_many(
-        where={
-            "file_purpose": CONTAINER_OBJECT_PURPOSE,
-            "created_by": {"in": owner_scopes},
-        }
+        where=where_filter
     )
     allowed_ids = {
         row.model_object_id
