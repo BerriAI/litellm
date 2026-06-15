@@ -299,3 +299,71 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     supported_params = config.get_supported_openai_params(model="gpt-5.1")
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
+
+
+@pytest.mark.parametrize("model", ["gpt-5", "gpt-5.4-mini"])
+def test_azure_gpt5_tool_choice_required_gated_by_api_version(model):
+    """
+    tool_choice='required' is not supported by Azure on api_version<=2024-05-01.
+
+    Azure GPT-5 deployments must honor the same api_version gating as the
+    non-GPT-5 Azure path instead of silently forwarding 'required'.
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "f",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.get_optional_params(
+            model=model,
+            custom_llm_provider="azure",
+            tool_choice="required",
+            tools=tools,
+            api_version="2024-05-01-preview",
+            drop_params=False,
+        )
+
+    # newer api_version supports it
+    params = litellm.get_optional_params(
+        model=model,
+        custom_llm_provider="azure",
+        tool_choice="required",
+        tools=tools,
+        api_version="2025-01-01-preview",
+        drop_params=False,
+    )
+    assert params["tool_choice"] == "required"
+
+
+@pytest.mark.parametrize("model", ["gpt-5", "gpt-5.4-mini"])
+def test_azure_gpt5_response_format_falls_back_to_tools_on_old_api_version(model):
+    """
+    On api_versions that predate native json_schema support, Azure GPT-5 should
+    convert response_format into a tool call, matching the non-GPT-5 Azure path.
+    """
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "r",
+            "schema": {
+                "type": "object",
+                "properties": {"a": {"type": "string"}},
+                "required": ["a"],
+            },
+            "strict": True,
+        },
+    }
+    params = litellm.get_optional_params(
+        model=model,
+        custom_llm_provider="azure",
+        response_format=response_format,
+        api_version="2024-02-01",
+        drop_params=False,
+    )
+    assert "response_format" not in params
+    assert "tools" in params

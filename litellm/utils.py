@@ -4841,6 +4841,12 @@ def get_optional_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "azure":
         _azure_detection_model = base_model or model
+        api_version = (
+            api_version
+            or litellm.api_version
+            or get_secret("AZURE_API_VERSION")
+            or litellm.AZURE_DEFAULT_API_VERSION
+        )
         if litellm.AzureOpenAIO1Config().is_o_series_model(
             model=_azure_detection_model
         ):
@@ -4848,6 +4854,7 @@ def get_optional_params(  # noqa: PLR0915
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=_azure_detection_model,
+                api_version=api_version,  # type: ignore
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
@@ -4861,6 +4868,7 @@ def get_optional_params(  # noqa: PLR0915
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=_azure_detection_model,
+                api_version=api_version,  # type: ignore
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
@@ -4872,12 +4880,6 @@ def get_optional_params(  # noqa: PLR0915
                 "Azure optional params - api_version: api_version={}, litellm.api_version={}, os.environ['AZURE_API_VERSION']={}".format(
                     api_version, litellm.api_version, get_secret("AZURE_API_VERSION")
                 )
-            )
-            api_version = (
-                api_version
-                or litellm.api_version
-                or get_secret("AZURE_API_VERSION")
-                or litellm.AZURE_DEFAULT_API_VERSION
             )
             optional_params = litellm.AzureOpenAIConfig().map_openai_params(
                 non_default_params=non_default_params,
