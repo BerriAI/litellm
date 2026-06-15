@@ -2513,14 +2513,14 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
     )
 
     # thinking must be set (adaptive for 4.6+)
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "adaptive"
     # output_config must carry the mapped effort
-    assert "output_config" in result, (
-        f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "output_config" in result
+    ), f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["output_config"]["effort"] == "low"
 
 
@@ -2532,7 +2532,9 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
         {"effort": "low", "summary": "concise"},
     ],
 )
-def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_effort_value):
+def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(
+    reasoning_effort_value,
+):
     """
     Non-adaptive (pre-4.6) branch: dict-shape reasoning_effort must still map
     to ``thinking.type='enabled'`` + ``budget_tokens``. ``output_config`` must
@@ -2547,9 +2549,9 @@ def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_ef
         drop_params=False,
     )
 
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "enabled"
     assert "budget_tokens" in result["thinking"]
     assert result["thinking"]["budget_tokens"] > 0
@@ -2582,12 +2584,12 @@ def test_reasoning_effort_unparseable_dict_is_dropped(bad_value):
         model="claude-sonnet-4-6-20260219",
         drop_params=False,
     )
-    assert "thinking" not in result, (
-        f"thinking should not be set for bad value {bad_value!r}"
-    )
-    assert "output_config" not in result, (
-        f"output_config should not be set for bad value {bad_value!r}"
-    )
+    assert (
+        "thinking" not in result
+    ), f"thinking should not be set for bad value {bad_value!r}"
+    assert (
+        "output_config" not in result
+    ), f"output_config should not be set for bad value {bad_value!r}"
 
 
 @pytest.mark.parametrize(
@@ -4864,3 +4866,80 @@ def test_sanitize_tool_names_in_request_no_tools_is_noop():
     forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({"tools": []})
     assert forward == {}
     assert reverse == {}
+
+
+def test_map_tools_skips_non_standard_tools():
+    """_map_tools should skip tools without 'input_schema' or 'function' keys
+    instead of crashing. This supports Responses API tool types like
+    web_search_preview, server_tool_use, etc."""
+    config = AnthropicConfig()
+    tools = [
+        # Standard OpenAI function tool - should be mapped
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        # Anthropic-format tool - should pass through
+        {
+            "type": "custom",
+            "name": "my_tool",
+            "input_schema": {"type": "object", "properties": {}},
+        },
+        # Non-standard tool without 'function' key - should be skipped
+        {
+            "type": "web_search_preview",
+            "name": "web_search",
+        },
+        # Another non-standard tool type
+        {
+            "type": "server_tool_use",
+            "name": "server_tool",
+            "server_url": "https://example.com/tools",
+        },
+    ]
+    anthropic_tools, mcp_servers = config._map_tools(tools)
+
+    # Should have 2 tools: the OpenAI function tool and the Anthropic-format tool
+    assert (
+        len(anthropic_tools) == 2
+    ), f"Expected 2 tools, got {len(anthropic_tools)}: {anthropic_tools}"
+    assert mcp_servers == []
+
+    # Verify the first tool is the OpenAI function one (mapped to Anthropic format)
+    assert "input_schema" in anthropic_tools[0]
+    assert anthropic_tools[0]["name"] == "get_weather"
+
+    # Verify the second tool is the Anthropic-format one (passed through)
+    assert anthropic_tools[1]["name"] == "my_tool"
+
+
+def test_map_tools_allows_empty_tool_list():
+    """_map_tools should handle an empty tool list gracefully."""
+    config = AnthropicConfig()
+    anthropic_tools, mcp_servers = config._map_tools([])
+    assert anthropic_tools == []
+    assert mcp_servers == []
+
+
+def test_map_tools_skips_malformed_openai_tool():
+    """_map_tools should skip tools with type='function' but missing 'function' key,
+    and log an ERROR-level message since this is likely a malformed definition."""
+    config = AnthropicConfig()
+    # Malformed OpenAI tool: type="function" but no "function" key
+    tools = [
+        {
+            "type": "function",
+            "name": "get_weather",  # should be inside "function": {...}
+        },
+        # Legitimate non-function tool should still be skipped with warning
+        {
+            "type": "web_search_preview",
+        },
+    ]
+    anthropic_tools, mcp_servers = config._map_tools(tools)
+    assert len(anthropic_tools) == 0
+    assert mcp_servers == []
