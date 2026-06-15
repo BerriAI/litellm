@@ -2829,7 +2829,11 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[
-            {"session_id": session_id, "_count": {"session_id": 2}},
+            {
+                "session_id": session_id,
+                "_count": {"session_id": 2},
+                "_sum": {"spend": 0.0, "request_duration_ms": 0},
+            },
         ]
     )
 
@@ -2846,19 +2850,210 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     rows = result["data"]
     assert len(rows) == 3
 
-    # Rows with the shared session_id should have session_total_count=2
     assert rows[0]["session_total_count"] == 2
     assert rows[1]["session_total_count"] == 2
 
-    # Row without a session_id defaults to 1
     assert rows[2]["session_total_count"] == 1
 
-    # group_by should have been called with the session_id
     mock_prisma.db.litellm_spendlogs.group_by.assert_called_once_with(
         by=["session_id"],
         where={"session_id": {"in": [session_id]}},
         count={"session_id": True},
+        sum={"spend": True, "request_duration_ms": True},
     )
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_session_aggregate_spend():
+    """
+    Regression test: _build_ui_spend_logs_response must attach session_total_spend
+    and session_total_duration (summed from all requests in the session) to each
+    row that carries a session_id.  Rows without a session_id fall back to their
+    own spend/request_duration_ms.  The group_by call must include sum=.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-abc-123"
+    dict_rows = [
+        {
+            "request_id": "req-1",
+            "session_id": session_id,
+            "spend": 0.01,
+            "request_duration_ms": 1000,
+        },
+        {
+            "request_id": "req-2",
+            "session_id": session_id,
+            "spend": 0.02,
+            "request_duration_ms": 2000,
+        },
+        {
+            "request_id": "req-3",
+            "session_id": None,
+            "spend": 0.05,
+            "request_duration_ms": 500,
+        },
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "_count": {"session_id": 2},
+                "_sum": {"spend": 0.03, "request_duration_ms": 3000},
+            },
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=3,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    assert len(rows) == 3
+
+    assert rows[0]["session_total_spend"] == 0.03
+    assert rows[0]["session_total_duration"] == 3000
+    assert rows[1]["session_total_spend"] == 0.03
+    assert rows[1]["session_total_duration"] == 3000
+
+    assert rows[2]["session_total_spend"] == 0.05
+    assert rows[2]["session_total_duration"] == 500
+
+    mock_prisma.db.litellm_spendlogs.group_by.assert_called_once_with(
+        by=["session_id"],
+        where={"session_id": {"in": [session_id]}},
+        count={"session_id": True},
+        sum={"spend": True, "request_duration_ms": True},
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_merges_session_scope_where():
+    """
+    Security regression #25708: the session aggregate group_by must merge the
+    caller's authorization scope so the totals never sum logs the caller is not
+    allowed to see (session_id is client-supplied and can collide across tenants).
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "shared-sess"
+    dict_rows = [
+        {
+            "request_id": "req-1",
+            "session_id": session_id,
+            "spend": 0.01,
+            "request_duration_ms": 100,
+        },
+    ]
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "_count": {"session_id": 1},
+                "_sum": {"spend": 0.01, "request_duration_ms": 100},
+            },
+        ]
+    )
+
+    await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+        session_scope_where={"user": "user_1"},
+    )
+
+    where = mock_prisma.db.litellm_spendlogs.group_by.call_args.kwargs["where"]
+    assert where["user"] == "user_1"
+    assert where["session_id"] == {"in": [session_id]}
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_scopes_session_aggregate_to_non_admin_caller(
+    client, monkeypatch
+):
+    """
+    Security regression #25708: a non-admin's session aggregate must be scoped to
+    their authorized logs (user/team), not just session_id, so they cannot read
+    other tenants' spend/duration via a shared, client-supplied session_id.
+    """
+    captured: dict = {}
+
+    async def mock_query_raw(sql_query, *params):
+        return [
+            {
+                "request_id": "req1",
+                "session_id": "shared-sess",
+                "spend": 0.01,
+                "request_duration_ms": 100,
+            }
+        ]
+
+    async def mock_group_by(*args, **kwargs):
+        captured["where"] = kwargs.get("where")
+        return [
+            {
+                "session_id": "shared-sess",
+                "_count": {"session_id": 1},
+                "_sum": {"spend": 0.01, "request_duration_ms": 100},
+            }
+        ]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(return_value=1)
+            self.db.litellm_spendlogs.group_by = AsyncMock(side_effect=mock_group_by)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: False,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._can_user_view_spend_log",
+        lambda user_api_key_dict: True,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
+        AsyncMock(return_value=[]),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        assert captured["where"].get("user") == "user_1"
+        assert captured["where"]["session_id"] == {"in": ["shared-sess"]}
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 # ---------------------------------------------------------------------------
