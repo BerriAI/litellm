@@ -3045,17 +3045,33 @@ if MCP_AVAILABLE:
                             s.strip() for s in servers_and_path.split(",") if s.strip()
                         ]
                 else:
-                    # Single server case - use regex approach for server/path separation
-                    # This handles cases like "custom_solutions/user_123/chat/completions"
-                    # where we want to extract "custom_solutions/user_123" as the server name
-                    single_server_match = re.match(
-                        r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", servers_and_path
-                    )
-                    if single_server_match:
-                        server_name = single_server_match.group(1)
-                        mcp_servers_from_path = [server_name]
+                    # Single server case. A two-segment server name like
+                    # ``custom_solutions/user_123`` collides with the canonical
+                    # ``/<alias>/mcp`` SDK suffix when the alias is
+                    # single-segment (``/mcp/atlassian1/mcp`` would otherwise
+                    # be parsed as the two-segment server ``atlassian1/mcp``).
+                    # Resolve the ambiguity: prefer the two-segment form when
+                    # the registry has such a server; otherwise fall back to
+                    # the single-segment form *only* when the trailing segment
+                    # is a known MCP transport suffix (``mcp``/``sse``). For
+                    # arbitrary trailing junk, return the unresolvable
+                    # two-segment so callers fail closed.
+                    segs = servers_and_path.split("/", 2)
+                    if len(segs) >= 2:
+                        two_segment = f"{segs[0]}/{segs[1]}"
+                        if (
+                            global_mcp_server_manager.get_mcp_server_by_name(
+                                two_segment
+                            )
+                            is not None
+                        ):
+                            mcp_servers_from_path = [two_segment]
+                        elif segs[1] in ("mcp", "sse"):
+                            mcp_servers_from_path = [segs[0]]
+                        else:
+                            mcp_servers_from_path = [two_segment]
                     else:
-                        mcp_servers_from_path = [servers_and_path]
+                        mcp_servers_from_path = [segs[0]]
         return mcp_servers_from_path
 
     async def extract_mcp_auth_context(scope, path):

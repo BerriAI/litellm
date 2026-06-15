@@ -404,13 +404,34 @@ class MCPRequestHandler:
                 servers_part = servers_and_path
             return [s.strip() for s in servers_part.split(",") if s.strip()]
 
-        # Single-server case — server name may contain at most one slash.
-        single_server_match = re.match(
-            r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", servers_and_path
+        # Single-server case. A two-segment server name like
+        # ``custom_solutions/user_123`` collides with the canonical
+        # ``/<alias>/mcp`` SDK suffix when the alias is single-segment
+        # (``/mcp/atlassian1/mcp`` would otherwise be parsed as the two-
+        # segment server ``atlassian1/mcp``). Resolve the ambiguity: prefer
+        # the two-segment form when the registry has such a server;
+        # otherwise fall back to the single-segment form *only* when the
+        # trailing segment is a known MCP transport suffix (``mcp``/``sse``).
+        # For arbitrary trailing junk, return the unresolvable two-segment
+        # so callers fail closed (preserves auth/routing parity which the
+        # ``test_delegate_does_not_bypass_on_extra_path_segment`` regression
+        # depends on). Inline import avoids a circular dependency.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
         )
-        if single_server_match:
-            return [single_server_match.group(1)]
-        return [servers_and_path]
+
+        segs = servers_and_path.split("/", 2)
+        if len(segs) >= 2:
+            two_segment = f"{segs[0]}/{segs[1]}"
+            if (
+                global_mcp_server_manager.get_mcp_server_by_name(two_segment)
+                is not None
+            ):
+                return [two_segment]
+            if segs[1] in ("mcp", "sse"):
+                return [segs[0]]
+            return [two_segment]
+        return [segs[0]]
 
     @staticmethod
     def _target_servers_use_oauth2(
