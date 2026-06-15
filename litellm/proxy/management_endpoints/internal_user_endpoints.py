@@ -428,6 +428,11 @@ async def new_user(
                 status_code=500,
                 detail=CommonProxyErrors.db_not_connected_error.value,
             )
+        # Normalize email — strip leading/trailing whitespace so a user created
+        # with " user@example.com" can still log in as "user@example.com".
+        if data.user_email is not None:
+            data.user_email = data.user_email.strip()
+
         # Check for duplicate user_id or email
         await _check_duplicate_user_id(data.user_id, prisma_client)
         await _check_duplicate_user_email(data.user_email, prisma_client)
