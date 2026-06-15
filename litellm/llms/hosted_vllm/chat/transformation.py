@@ -101,26 +101,18 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
     ) -> dict:
         _tools = non_default_params.pop("tools", None)
         if _tools is not None:
-            # remove 'additionalProperties' from tools
             _tools = _remove_additional_properties(_tools)
-            # remove 'strict' from tools
             _tools = _remove_strict_from_schema(_tools)
             if isinstance(_tools, list):
                 _tools = self._convert_custom_tools_to_function_tools(_tools)
         if _tools is not None:
             non_default_params["tools"] = _tools
 
-        # Handle thinking parameter - convert Anthropic-style to OpenAI-style reasoning_effort
-        # vLLM is OpenAI-compatible, so it understands reasoning_effort, not thinking
-        # Reference: https://github.com/BerriAI/litellm/issues/19761
         thinking = non_default_params.pop("thinking", None)
         if thinking is not None and isinstance(thinking, dict):
             if thinking.get("type") == "enabled":
-                # Only convert if reasoning_effort not already set
                 if "reasoning_effort" not in non_default_params:
                     budget_tokens = thinking.get("budget_tokens", 0)
-                    # Map budget_tokens to reasoning_effort level
-                    # Same logic as Anthropic adapter (translate_anthropic_thinking_to_reasoning_effort)
                     if budget_tokens >= 10000:
                         non_default_params["reasoning_effort"] = "high"
                     elif budget_tokens >= 5000:
@@ -137,20 +129,13 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")  # type: ignore
+        api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
         dynamic_api_key = (
             api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
-        )  # vllm does not require an api key
+        )
         return api_base, dynamic_api_key
 
     def _is_video_file(self, content_item: ChatCompletionFileObject) -> bool:
-        """
-        Check if the file is a video
-
-        - format: video/<extension>
-        - file_data: base64 encoded video data
-        - file_id: infer mp4 from extension
-        """
         file = content_item.get("file", {})
         format = file.get("format")
         file_data = file.get("file_data")
@@ -210,7 +195,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         """
         for message in messages:
             if message["role"] == "assistant":
-                message.pop("thinking_blocks", None)  # type: ignore
+                message.pop("thinking_blocks", None)
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
                     text_parts = []
@@ -234,6 +219,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                         message_content[idx] = self._convert_file_to_video_url(
                             content_item
                         )
+
         if is_async:
             return super()._transform_messages(
                 messages, model, is_async=cast(Literal[True], True)
