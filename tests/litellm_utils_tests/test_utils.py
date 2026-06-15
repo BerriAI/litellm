@@ -2516,3 +2516,9 @@ def test_get_base_model_from_metadata():
     # Test 6: None input
     result = _get_base_model_from_metadata(None)
     assert result is None, f"Expected None for None input, got {result}"
+
+
+def test_model_list_models_by_provider_in_sync():
+    assert set(litellm.model_list) == {
+        m for v in litellm.models_by_provider.values() for m in v
+    }

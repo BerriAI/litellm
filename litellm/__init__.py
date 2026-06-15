@@ -986,92 +986,6 @@ ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
 
-model_list = list(
-    open_ai_chat_completion_models
-    | open_ai_text_completion_models
-    | cohere_models
-    | cohere_chat_models
-    | anthropic_models
-    | set(replicate_models)
-    | openrouter_models
-    | datarobot_models
-    | set(huggingface_models)
-    | vertex_chat_models
-    | vertex_text_models
-    | ai21_models
-    | ai21_chat_models
-    | set(together_ai_models)
-    | set(baseten_models)
-    | aleph_alpha_models
-    | nlp_cloud_models
-    | set(ollama_models)
-    | bedrock_models
-    | deepinfra_models
-    | perplexity_models
-    | set(maritalk_models)
-    | runwayml_models
-    | vertex_language_models
-    | watsonx_models
-    | gemini_models
-    | text_completion_codestral_models
-    | text_completion_inception_models
-    | xai_models
-    | zai_models
-    | fal_ai_models
-    | deepseek_models
-    | azure_ai_models
-    | voyage_models
-    | infinity_models
-    | databricks_models
-    | cloudflare_models
-    | codestral_models
-    | friendliai_models
-    | palm_models
-    | groq_models
-    | azure_models
-    | azure_anthropic_models
-    | anyscale_models
-    | cerebras_models
-    | galadriel_models
-    | nvidia_nim_models
-    | nvidia_riva_models
-    | soniox_models
-    | sambanova_models
-    | azure_text_models
-    | novita_models
-    | assemblyai_models
-    | jina_ai_models
-    | snowflake_models
-    | gradient_ai_models
-    | llama_models
-    | featherless_ai_models
-    | nscale_models
-    | deepgram_models
-    | elevenlabs_models
-    | dashscope_models
-    | moonshot_models
-    | publicai_models
-    | v0_models
-    | morph_models
-    | lambda_ai_models
-    | inception_models
-    | black_forest_labs_models
-    | recraft_models
-    | cometapi_models
-    | oci_models
-    | heroku_models
-    | vercel_ai_gateway_models
-    | volcengine_models
-    | wandb_models
-    | ovhcloud_models
-    | lemonade_models
-    | docker_model_runner_models
-    | reducto_models
-    | bedrock_mantle_models
-    | set(clarifai_models)
-)
-
-model_list_set = set(model_list)
 
 # provider_list is lazy-loaded via __getattr__ to avoid importing LlmProviders at import time
 
@@ -1098,7 +1012,7 @@ models_by_provider: dict = {
     | vertex_minimax_models
     | vertex_moonshot_models
     | vertex_zai_models,
-    "ai21": ai21_models,
+    "ai21": ai21_models | ai21_chat_models,
     "bedrock": bedrock_models | bedrock_converse_models,
     "petals": petals_models,
     "ollama": ollama_models,
@@ -1178,7 +1092,11 @@ models_by_provider: dict = {
     "llamagate": llamagate_models,
     "reducto": reducto_models,
     "bedrock_mantle": bedrock_mantle_models,
+    "docker_model_runner": docker_model_runner_models,
 }
+
+model_list = list({m for v in models_by_provider.values() for m in v})
+model_list_set = set(model_list)
 
 # mapping for those models which have larger equivalents
 longer_context_model_fallback_dict: dict = {
