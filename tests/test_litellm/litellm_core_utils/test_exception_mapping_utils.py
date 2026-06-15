@@ -385,42 +385,74 @@ class TestGetBodyErrorCode:
         assert _get_body_error_code('{"error":{"message":"x"}}') is None
 
 
-# Test cases for Gemini upstream-error body-code mapping
-# Body code 429 wrapped in HTTP 500/503 envelopes (e.g. new-api gateways)
-# must map to RateLimitError so Router retries kick in.
+# Test cases for Gemini upstream-error body-code mapping.
+#
+# Body code 429 wrapped in a 5xx HTTP envelope (e.g. new-api gateways)
+# must map to RateLimitError so Router retries kick in. A 4xx HTTP
+# envelope with body code:429 must NOT — it falls through to whatever
+# the HTTP status code maps to (BadRequestError, AuthenticationError,
+# etc.), matching upstream's existing semantics.
 gemini_body_code_429_test_cases = [
-    # (error_body, should_be_rate_limit, description)
+    # (status_code, error_body, expected_exception_type, description)
     (
+        500,
         '{"error":{"message":" This model is currently experiencing high demand.'
         " Spikes in demand are usually temporary. Please try again later."
         ' (request id: x)","type":"upstream_error","param":"","code":429}}',
-        True,
-        "new-api gateway wraps Gemini overload as code:429",
+        litellm.RateLimitError,
+        "HTTP 500 envelope with body code:429 -> RateLimitError",
     ),
     (
+        503,
+        '{"error":{"message":"upstream unavailable","type":"upstream_error",'
+        '"param":"","code":429}}',
+        litellm.RateLimitError,
+        "HTTP 503 envelope with body code:429 -> RateLimitError",
+    ),
+    (
+        502,
+        '{"error":{"message":"bad gateway","code":429}}',
+        litellm.RateLimitError,
+        "HTTP 502 envelope with body code:429 -> RateLimitError",
+    ),
+    (
+        500,
         '{"error":{"message":"server boom","code":500}}',
-        False,
-        "genuine 500 body stays InternalServerError",
+        litellm.InternalServerError,
+        "HTTP 500 with body code:500 stays InternalServerError",
     ),
     (
+        500,
         "plain text 500 error",
-        False,
-        "non-JSON body falls through to status_code mapping",
+        litellm.InternalServerError,
+        "HTTP 500 with non-JSON body falls through to status_code mapping",
+    ),
+    (
+        400,
+        '{"error":{"message":"malformed","code":429}}',
+        litellm.BadRequestError,
+        "HTTP 400 with body code:429 must NOT be promoted to RateLimitError",
+    ),
+    (
+        401,
+        '{"error":{"message":"bad key","code":429}}',
+        litellm.AuthenticationError,
+        "HTTP 401 with body code:429 must NOT be promoted to RateLimitError",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "error_body, should_be_rate_limit, description",
+    "status_code, error_body, expected_exception, description",
     gemini_body_code_429_test_cases,
 )
 def test_gemini_upstream_error_body_code_429_maps_to_rate_limit(
-    error_body, should_be_rate_limit, description
+    status_code, error_body, expected_exception, description
 ):
     """
-    Some upstream gateways wrap a 429 rate-limit signal inside an HTTP 500
-    envelope (body still says code:429). LiteLLM must surface this as
-    RateLimitError, not InternalServerError, so Router fallbacks trigger.
+    Body code 429 inside a 5xx envelope -> RateLimitError so Router
+    retries kick in. Body code 429 inside a 4xx envelope must fall
+    through to the HTTP-status-code branch (P1 from greptile review).
     """
     model = "gemini/gemini-2.5-flash"
     custom_llm_provider = "gemini"
@@ -433,24 +465,15 @@ def test_gemini_upstream_error_body_code_429_maps_to_rate_limit(
             self.message = message
             super().__init__(message)
 
-    original_exception = _FakeGeminiError(status_code=500, message=error_body)
+    original_exception = _FakeGeminiError(status_code=status_code, message=error_body)
 
-    if should_be_rate_limit:
-        with pytest.raises(litellm.RateLimitError) as excinfo:
-            exception_type(
-                model=model,
-                original_exception=original_exception,
-                custom_llm_provider=custom_llm_provider,
-            )
-        assert isinstance(excinfo.value, litellm.RateLimitError), description
-    else:
-        with pytest.raises(litellm.InternalServerError) as excinfo:
-            exception_type(
-                model=model,
-                original_exception=original_exception,
-                custom_llm_provider=custom_llm_provider,
-            )
-        assert isinstance(excinfo.value, litellm.InternalServerError), description
+    with pytest.raises(expected_exception) as excinfo:
+        exception_type(
+            model=model,
+            original_exception=original_exception,
+            custom_llm_provider=custom_llm_provider,
+        )
+    assert isinstance(excinfo.value, expected_exception), description
 
 
 class TestExtractAndRaiseLitellmException:

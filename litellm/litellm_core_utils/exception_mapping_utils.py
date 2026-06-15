@@ -1425,9 +1425,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             ),
                         ),
                     )
-                elif _get_body_error_code(error_str) == 429:
-                    # upstream gateway wraps a 429 inside a 500/503 body
-                    # e.g. {"error":{"code":429,"type":"upstream_error",...}}
+                elif (
+                    isinstance(getattr(original_exception, "status_code", None), int)
+                    and 500 <= original_exception.status_code < 600
+                    and _get_body_error_code(error_str) == 429
+                ):
+                    # upstream gateway wraps a 429 inside a 5xx envelope
+                    # e.g. HTTP 500/503 with {"error":{"code":429,...}}.
+                    # Scoped to 5xx so HTTP 400/401 with body code:429
+                    # still maps to BadRequestError / AuthenticationError.
                     exception_mapping_worked = True
                     raise RateLimitError(
                         message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
