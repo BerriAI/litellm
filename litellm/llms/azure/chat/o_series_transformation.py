@@ -58,6 +58,9 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         )
 
         if azure_gated_params:
+            # AzureOpenAIO1Config does not inherit from AzureOpenAIConfig, so the
+            # Azure gating is reached via an instance rather than the unbound-self
+            # dispatch used in the GPT-5 path.
             optional_params = AzureOpenAIConfig().map_openai_params(
                 non_default_params=azure_gated_params,
                 optional_params=optional_params,
