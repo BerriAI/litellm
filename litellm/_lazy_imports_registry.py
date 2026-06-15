@@ -288,6 +288,7 @@ LLM_CONFIG_NAMES = (
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
+    "TokenmixConfig",
     "PerplexityChatConfig",
     "AzureOpenAIO1Config",
     "IBMWatsonXAIConfig",
@@ -1105,6 +1106,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "LmStudioEmbeddingConfig",
     ),
     "NscaleConfig": (".llms.nscale.chat.transformation", "NscaleConfig"),
+    "TokenmixConfig": (".llms.tokenmix.chat.transformation", "TokenmixConfig"),
     "PerplexityChatConfig": (
         ".llms.perplexity.chat.transformation",
         "PerplexityChatConfig",

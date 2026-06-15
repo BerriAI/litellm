@@ -616,6 +616,7 @@ LITELLM_CHAT_PROVIDERS = [
     "meta_llama",
     "featherless_ai",
     "nscale",
+    "tokenmix",
     "nebius",
     "dashscope",
     "moonshot",
@@ -774,6 +775,7 @@ openai_compatible_endpoints: List = [
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
+    "api.tokenmix.ai/v1",
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
@@ -838,6 +840,7 @@ openai_compatible_providers: List = [
     "parasail",  # Parasail - JSON-configured provider
     "featherless_ai",
     "nscale",
+    "tokenmix",
     "nebius",
     "dashscope",
     "moonshot",
