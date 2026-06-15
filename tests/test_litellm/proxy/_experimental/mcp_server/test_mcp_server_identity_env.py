@@ -24,7 +24,7 @@ MGMT_MODULE = "litellm.proxy.management_endpoints.mcp_management_endpoints"
 def _env_and_reload(**env):
     saved = {key: os.environ.get(key) for key in env}
 
-    def _restore_env(values):
+    def _apply_env(values):
         for key, value in values.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -37,10 +37,10 @@ def _env_and_reload(**env):
         return utils, mgmt
 
     try:
-        _restore_env(env)
+        _apply_env(env)
         yield _reload()
     finally:
-        _restore_env(saved)
+        _apply_env(saved)
         _reload()
 
 
