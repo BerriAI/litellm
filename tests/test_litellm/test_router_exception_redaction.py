@@ -214,3 +214,96 @@ async def test_flag_on_leaks_when_no_fallback_group_found():
     msg = excinfo.value.message
     assert "No fallback model group found" in msg, msg
     assert _INTERNAL_MODEL_GROUP_NAME in msg, msg
+
+
+# --- Site 1: Deployment timeout debug on litellm.Timeout --------------------
+
+
+def _router_with_plain_deployment() -> Router:
+    """Plain deployment, no preconfigured mock_response — caller supplies via kwargs.
+
+    Exception instances cannot live in `model_list[*].litellm_params` because
+    `Router.__init__` deep-copies model_list and several LiteLLM exceptions
+    (Timeout, ContentPolicyViolationError) require positional args that
+    `__reduce__` cannot reconstruct. Passing the trigger at call-site bypasses
+    the deepcopy entirely.
+    """
+    return Router(
+        model_list=[
+            {
+                "model_name": _INTERNAL_MODEL_GROUP_NAME,
+                "litellm_params": {"model": "gpt-4o", "api_key": "key"},
+                "model_info": {"id": "secret-deployment-id"},
+            },
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_default_does_not_leak_deployment_timeout_debug():
+    router = _router_with_plain_deployment()
+    with pytest.raises(litellm.Timeout) as excinfo:
+        await router.acompletion(
+            model=_INTERNAL_MODEL_GROUP_NAME,
+            messages=[{"role": "user", "content": "hi"}],
+            mock_timeout=True,
+            timeout=0.001,
+        )
+    msg = excinfo.value.message
+    assert "Deployment Info: request_timeout:" not in msg, msg
+
+
+@pytest.mark.asyncio
+async def test_flag_on_leaks_deployment_timeout_debug():
+    litellm.expose_router_debug_in_errors = True
+    router = _router_with_plain_deployment()
+    with pytest.raises(litellm.Timeout) as excinfo:
+        await router.acompletion(
+            model=_INTERNAL_MODEL_GROUP_NAME,
+            messages=[{"role": "user", "content": "hi"}],
+            mock_timeout=True,
+            timeout=0.001,
+        )
+    msg = excinfo.value.message
+    assert "Deployment Info: request_timeout:" in msg, msg
+
+
+# --- Site 3: ContentPolicyViolationError fallback hint (no fallback set) ----
+
+
+def _content_policy_error() -> litellm.ContentPolicyViolationError:
+    return litellm.ContentPolicyViolationError(
+        message="mocked policy violation",
+        model="gpt-4o",
+        llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+async def test_default_does_not_leak_content_policy_fallback_hint():
+    router = _router_with_plain_deployment()
+    with pytest.raises(litellm.ContentPolicyViolationError) as excinfo:
+        await router.acompletion(
+            model=_INTERNAL_MODEL_GROUP_NAME,
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=_content_policy_error(),
+        )
+    msg = excinfo.value.message
+    assert "content_policy_fallback=" not in msg, msg
+    assert _INTERNAL_MODEL_GROUP_NAME not in msg, msg
+
+
+@pytest.mark.asyncio
+async def test_flag_on_leaks_content_policy_fallback_hint():
+    litellm.expose_router_debug_in_errors = True
+    router = _router_with_plain_deployment()
+    with pytest.raises(litellm.ContentPolicyViolationError) as excinfo:
+        await router.acompletion(
+            model=_INTERNAL_MODEL_GROUP_NAME,
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=_content_policy_error(),
+        )
+    msg = excinfo.value.message
+    assert "content_policy_fallback=" in msg, msg
+    assert _INTERNAL_MODEL_GROUP_NAME in msg, msg
