@@ -997,6 +997,56 @@ def test_opus_uses_native_structured_output(model_name):
     assert optional_params.get("json_mode") is True
 
 
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "claude-opus-4-8",
+        "claude-opus-4.8",
+        "anthropic/claude-opus-4-8",
+    ],
+)
+def test_opus_4_8_uses_native_structured_output_with_thinking(model_name):
+    """
+    Regression: opus-4.8 is routed through adaptive thinking by default, so the
+    forced-tool fallback (guarded by `if not is_thinking_enabled`) never sets
+    tool_choice and response_format silently fails to constrain output. The model
+    must hit the native output_format path instead.
+    """
+    config = AnthropicConfig()
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "test_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                },
+                "required": ["name", "age"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "response_format": response_format,
+            "thinking": {"type": "enabled"},
+        },
+        optional_params={},
+        model=model_name,
+        drop_params=False,
+    )
+
+    assert "output_format" in optional_params
+    assert optional_params["output_format"]["type"] == "json_schema"
+    assert "tools" not in optional_params
+    assert "tool_choice" not in optional_params
+    assert optional_params.get("json_mode") is True
+
+
 def test_non_structured_output_model_uses_tool_workaround():
     """
     Test that models NOT in the native structured output list still use the
