@@ -70,6 +70,24 @@ jobs:
               ;;
           esac
 
+      - name: React 👀 to acknowledge the reconsider
+        # Add an eyes reaction to the triggering comment the moment we accept
+        # it, so the contributor gets instant feedback that the bot saw their
+        # `@agent-shin reconsider` before the slower triage steps run. Gated on
+        # AGENT_SHIN_ENABLED so dry-run leaves no visible trace. Best-effort:
+        # a reactions API hiccup must never fail the actual reconsider.
+        if: steps.auth.outputs.authorized == 'true' && vars.AGENT_SHIN_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=eyes \
+            || echo "::warning::failed to add 👀 reaction (non-fatal)"
+
       - name: Checkout triage script
         if: steps.auth.outputs.authorized == 'true'
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -135,3 +153,20 @@ jobs:
             echo "::notice::AGENT_SHIN_ENABLED is not 'true' -> reconsider stays in dry-run (no comment, no reopen)."
           fi
           python3 .github/scripts/triage_with_llm.py "${ARGS[@]}"
+
+      - name: React 👍 when the reconsider finishes
+        # Once the reconsider run has completed successfully, add a thumbs-up so
+        # the contributor sees the bot is done (the 👀 stays, signalling
+        # seen -> handled). `success()` keeps this from firing if the run
+        # errored, and the AGENT_SHIN_ENABLED gate keeps dry-run inert.
+        if: success() && steps.auth.outputs.authorized == 'true' && vars.AGENT_SHIN_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=+1 \
+            || echo "::warning::failed to add 👍 reaction (non-fatal)"

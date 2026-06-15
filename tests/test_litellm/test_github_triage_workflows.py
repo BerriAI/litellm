@@ -143,3 +143,70 @@ def test_should_require_agent_shin_enabled_for_close(workflow_file: str) -> None
         "guard that forces dry-run). Without this, an unset repo "
         "variable would not be treated as a kill switch."
     )
+
+
+def _reconsider_steps() -> list[dict]:
+    workflow = _load_workflow("triage_reconsider.yml")
+    return workflow["jobs"]["reconsider"]["steps"]
+
+
+def _index_of_run_step(steps: list[dict], needle: str) -> int:
+    for i, step in enumerate(steps):
+        run = step.get("run")
+        if isinstance(run, str) and needle in run:
+            return i
+    raise AssertionError(f"no run step contains {needle!r}")
+
+
+def _reaction_steps(steps: list[dict], content: str) -> list[tuple[int, dict]]:
+    return [
+        (i, s)
+        for i, s in enumerate(steps)
+        if isinstance(s.get("run"), str)
+        and f"content={content}" in s["run"]
+        and "/reactions" in s["run"]
+    ]
+
+
+class TestReconsiderReactions:
+    """The reconsider workflow acknowledges the triggering comment with a 👀
+    reaction the moment it accepts the trigger, and a 👍 once the run finishes,
+    so the contributor gets feedback immediately instead of waiting on a cron.
+
+    Both reactions are gated on `AGENT_SHIN_ENABLED == 'true'` so a dry-run
+    leaves no visible trace, and both target the comment that fired the event
+    (`github.event.comment.id`). The ordering (👀 before the triage run, 👍
+    after) is the whole point — these tests fail if a refactor reorders the
+    steps, drops a reaction, or stops gating them.
+    """
+
+    def test_eyes_reaction_is_posted_before_the_triage_run(self) -> None:
+        steps = _reconsider_steps()
+        run_idx = _index_of_run_step(steps, "triage_with_llm.py")
+        eyes = _reaction_steps(steps, "eyes")
+        assert len(eyes) == 1, "expected exactly one 👀 (eyes) reaction step"
+        idx, step = eyes[0]
+        assert idx < run_idx, "👀 must be posted BEFORE the slow triage run, not after"
+        assert "github.event.comment.id" in (step.get("env") or {}).get(
+            "COMMENT_ID", ""
+        ), "👀 must react to the comment that triggered the workflow"
+        assert "${COMMENT_ID}" in step["run"], (
+            "👀 must react to the triggering comment, not a hardcoded id"
+        )
+        assert "vars.AGENT_SHIN_ENABLED == 'true'" in step["if"], (
+            "👀 must be gated on AGENT_SHIN_ENABLED so dry-run stays inert"
+        )
+
+    def test_thumbs_up_reaction_is_posted_after_a_successful_run(self) -> None:
+        steps = _reconsider_steps()
+        run_idx = _index_of_run_step(steps, "triage_with_llm.py")
+        thumbs = _reaction_steps(steps, "+1")
+        assert len(thumbs) == 1, "expected exactly one 👍 (+1) reaction step"
+        idx, step = thumbs[0]
+        assert idx > run_idx, "👍 must come AFTER the triage run"
+        assert "success()" in step["if"], (
+            "👍 must only fire when the reconsider run succeeded"
+        )
+        assert "vars.AGENT_SHIN_ENABLED == 'true'" in step["if"], (
+            "👍 must be gated on AGENT_SHIN_ENABLED so dry-run stays inert"
+        )

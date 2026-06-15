@@ -76,6 +76,20 @@ ROLLOUT_BLOG_URL = "https://docs.litellm.ai/docs/agent_shin_triage_rollout"
 # override with --close-on YYYY-MM-DD when running the script manually.
 DEFAULT_GRACE_DAYS = 7
 
+# The daily auto-close sweeps (close_low_quality_prs.yml at 09:00 UTC and
+# review_gate.yml at 09:30 UTC) are what actually close a still-failing item,
+# so the deadline we promise contributors has to name that wall-clock moment.
+ACTIVATION_TIME_UTC = "09:00 UTC"
+
+
+def _format_cutoff(cutoff: dt.date) -> str:
+    """Human-readable, timezone-explicit cutoff, e.g. ``Monday, June 1, 2026
+    (09:00 UTC)`` — the moment a still-failing PR/issue gets closed."""
+    return (
+        f"{cutoff.strftime('%A, %B')} {cutoff.day}, {cutoff.year} "
+        f"({ACTIVATION_TIME_UTC})"
+    )
+
 
 def _rubric_section_pr() -> str:
     return (
@@ -84,9 +98,10 @@ def _rubric_section_pr() -> str:
         "- A linked GitHub issue using a closing keyword: "
         "`Fixes #1234`, `Closes #1234`, or `Resolves #1234`, OR\n"
         "- All three of: a clear **problem description**, **expected vs. "
-        "actual behavior**, and **visual QA proof** "
-        "(before/after screenshots, a short screen recording, or terminal/"
-        "log output).\n"
+        "actual behavior**, and **end-to-end QA proof** (at least one of a "
+        "short screen recording / video, before/after screenshots, or the "
+        "exact commands you ran with their real output; mocked or stubbed "
+        "runs don't count).\n"
         "\n"
         "PRs also need a **Greptile confidence score of 4/5 or higher** before "
         "the bot will tag them `ready for review`. You can `@greptileai` to "
@@ -98,9 +113,11 @@ def _rubric_section_issue() -> str:
     return (
         "**Going forward, every external issue needs:**\n"
         "\n"
-        "- For **bug reports**: a runnable reproduction (code/curl/config), "
-        "expected vs. actual behavior, and a screenshot, traceback, or log "
-        "showing the bug.\n"
+        "- For **bug reports**: end-to-end evidence of the bug (at least one "
+        "of a screen recording / video, a screenshot, or the exact commands "
+        "you ran with their real output / traceback) plus expected vs. actual "
+        "behavior. Written steps with no run output don't count, and mocked "
+        "or stubbed runs don't count.\n"
         "- For **feature requests**: a clear description of the proposed "
         "feature plus a use case + concrete example (config, API call, UI "
         "flow, or scenario showing what's blocked today)."
@@ -134,7 +151,7 @@ def _missing_section(verdict: dict, greptile_score: int | None) -> str:
         )
     if not missing:
         return (
-            "_The bot couldn't articulate a specific missing piece — see the "
+            "_The bot couldn't articulate a specific missing piece; see the "
             "rubric link above and double-check the description includes all "
             "of it before the rollout._"
         )
@@ -150,18 +167,20 @@ def _recovery_section(kind: str) -> str:
             "PR or comment `@agent-shin reconsider` on the closed PR. If "
             "Greptile re-scores you at 4/5 or higher I'll reopen and tag "
             "the PR `ready for review`. (`@greptileai` works on closed PRs "
-            "too — a fresh review is one of the signals that lifts you back "
+            "too; a fresh review is one of the signals that lifts you back "
             "into the queue.) This is **not** us losing interest in your "
-            "change — far from it. We just need open PRs to be a list of "
+            "change; far from it. We just need open PRs to be a list of "
             "things a maintainer can act on, so we can get to yours faster."
         )
     return (
         "**If the bot closes this issue after the rollout:** edit the issue "
-        "description to add the missing pieces and reopen it (GitHub lets "
-        "external authors reopen their own issues). The bot will re-evaluate "
-        "and, if the rubric is met, leave it open. This is **not** us saying "
-        "the bug isn't real or the request isn't useful — it's so the "
-        "remaining open issues are a list of things a maintainer can act on."
+        "description to add the missing pieces, then comment `@agent-shin "
+        "reconsider` on the closed issue. I'll re-evaluate and, if the rubric "
+        "is met, reopen it. (GitHub doesn't let external authors reopen an "
+        "issue a maintainer or bot closed, so the comment is the reliable "
+        "path.) This is **not** us saying the bug isn't real or the request "
+        "isn't useful; it's so the remaining open issues are a list of things "
+        "a maintainer can act on."
     )
 
 
@@ -171,19 +190,20 @@ def format_heads_up_comment(
     """Compose the friendly 7-day heads-up comment posted on a failing PR/issue."""
     noun = "PR" if kind == "pr" else "issue"
     rubric = _rubric_section_pr() if kind == "pr" else _rubric_section_issue()
+    cutoff_str = _format_cutoff(cutoff)
     explanation = (verdict.get("explanation") or "").strip()
     explanation_block = (
         f"> _(The judge's note for this one: {explanation})_\n\n" if explanation else ""
     )
 
     return (
-        "🚄 **Heads-up: new OSS triage bot landing on "
-        f"{cutoff.strftime('%A, %B')} {cutoff.day}, {cutoff.year}.**\n"
+        "🚅 **Heads-up: we're turning on the OSS triage bot in "
+        f"{DEFAULT_GRACE_DAYS} days, on {cutoff_str}.**\n"
         "\n"
         "We're rolling out **Agent Shin**, an LLM-as-judge triage bot for "
-        f"external {noun}s. After the rollout, the bot will read each open "
-        f"{noun}'s description, score it against a small rubric, and "
-        f"auto-close any {noun} that's missing the basics — with a single "
+        f"external {noun}s. Once it's live, the bot reads each open "
+        f"{noun}'s description, scores it against a small rubric, and "
+        f"auto-closes any {noun} that's missing the basics, with a single "
         f"comment explaining what's missing and how to recover. Full "
         f"context: [Agent Shin rollout blog post]({ROLLOUT_BLOG_URL}).\n"
         "\n"
@@ -196,13 +216,14 @@ def format_heads_up_comment(
         f"{explanation_block}"
         "**Timeline (you have a week):**\n"
         "\n"
-        f"- You have **until {cutoff.strftime('%A, %B')} {cutoff.day}** "
-        f"({DEFAULT_GRACE_DAYS} days from this comment) to update the "
-        f"{noun} description with the missing pieces. Nothing happens to "
-        f"this {noun} during that window.\n"
-        f"- After the rollout, the bot runs daily. From then on, any new "
-        f"{noun} that fails the rubric gets a **24-hour grace period** "
-        "(one warning comment, then auto-close).\n"
+        f"- We turn the bot on in {DEFAULT_GRACE_DAYS} days, on "
+        f"**{cutoff_str}**. You have until then to update this {noun}'s "
+        "description with the missing pieces above.\n"
+        f"- If this {noun} still fails the rubric at **{cutoff_str}**, "
+        "we'll close it.\n"
+        f"- From then on the bot runs daily, and every {noun} that fails "
+        "the rubric gets a **24-hour lifetime**: one warning comment, then "
+        "auto-close a day later.\n"
         "\n"
         f"{_recovery_section(kind)}\n"
         "\n"

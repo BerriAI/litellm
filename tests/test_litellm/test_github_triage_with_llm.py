@@ -167,11 +167,15 @@ class TestCloseCommentText:
         assert "I'll re-evaluate automatically" not in body
 
     def test_issue_close_comment_should_use_reconsider_trigger(self, triage_module):
+        # OSS authors have read access, which only lets them reopen issues
+        # they closed themselves; they CANNOT reopen an issue a maintainer or
+        # bot closed. So the recovery path is `@agent-shin reconsider` (the
+        # bot reopens), exactly like the PR path. If this regresses to "reopen
+        # it yourself", contributors hit a dead end on bot-closed issues.
         body = triage_module.format_issue_close_comment(
             {"verdict": "fail", "missing": ["repro"], "explanation": "thin"}
         )
         assert "@agent-shin reconsider" in body
-        assert "Reopen the issue" not in body
 
     def test_pr_close_comment_should_link_blog_explainer(self, triage_module):
         # The blog post is the canonical public explanation of what the bot
@@ -204,10 +208,11 @@ class TestCloseCommentText:
         assert "mock" in body.lower()
 
     def test_all_agent_shin_comments_should_use_bullet_train_emoji(self, triage_module):
-        # The bullet train (🚄) is Agent Shin's symbol; the previous wave (👋)
-        # was generic and didn't match the bot's identity. Every action-
-        # required comment the bot can post must use the bullet train so the
-        # contributor recognizes who's writing without reading the signoff.
+        # The bullet train (🚅) is Agent Shin's symbol, matching the LiteLLM
+        # logo; the previous wave (👋) was generic and didn't match the bot's
+        # identity. Every action-required comment the bot can post must use the
+        # bullet train so the contributor recognizes who's writing without
+        # reading the signoff.
         verdict = {"verdict": "fail", "missing": [], "explanation": ""}
         comments = {
             "pr_close": triage_module.format_pr_close_comment(verdict),
@@ -219,7 +224,7 @@ class TestCloseCommentText:
             ),
         }
         for name, body in comments.items():
-            assert "🚄" in body, f"{name} comment is missing the bullet train emoji"
+            assert "🚅" in body, f"{name} comment is missing the bullet train emoji"
             assert "👋" not in body, f"{name} comment still uses the old wave emoji"
 
     def test_pr_close_comment_should_show_what_pr_got_right(self, triage_module):
@@ -267,21 +272,22 @@ class TestCloseCommentText:
         assert "What you got right" not in body
 
     def test_issue_close_comment_should_show_what_issue_got_right(self, triage_module):
+        # `has_expected_vs_actual` is present, the end-to-end bug evidence is
+        # not: the "what you got right" block must surface the former and omit
+        # the latter (no "✅ (nothing)"-style noise for absent items).
         body = triage_module.format_issue_close_comment(
             {
                 "verdict": "fail",
                 "kind": "bug",
-                "has_repro": True,
-                "has_proof": False,
+                "has_repro": False,
                 "has_expected_vs_actual": True,
-                "missing": ["screenshot / log"],
-                "explanation": "missing proof",
+                "missing": ["end-to-end evidence of the bug"],
+                "explanation": "no repro shown",
             }
         )
         assert "What you got right" in body
-        assert "Runnable reproduction" in body
         assert "Expected vs. actual behavior" in body
-        assert "- ✅ Screenshot, traceback, or log" not in body
+        assert "- ✅ End-to-end evidence of the bug" not in body
 
     def test_close_comments_should_use_softer_park_for_later_framing(
         self, triage_module
@@ -498,6 +504,26 @@ class TestBuildPrompts:
         prompt = triage_module.build_issue_prompt(title="Bug", body="repro here")
         assert "Bug" in prompt
         assert "repro here" in prompt
+
+    def test_issue_bug_rubric_requires_end_to_end_evidence_and_drops_pass_bias(
+        self, triage_module
+    ):
+        # The bug bar was tightened: a report needs the "before" half shown
+        # end-to-end (video / screenshot / real command output), prose-only
+        # repro steps no longer pass, and the old "bias toward PASS" leniency
+        # is gone. If any of these regress, the judge silently goes soft on
+        # undemonstrated bug reports again.
+        prompt = triage_module.build_issue_prompt(title="t", body="x")
+        normalized = " ".join(prompt.split())
+        assert "Bias toward PASS when the issue has structure" not in normalized
+        assert "END-TO-END EVIDENCE OF THE BUG" in normalized
+        assert "Do not bias toward PASS" in normalized
+        # The three accepted forms of the "before" demonstration must be named.
+        assert "screen recording / video" in normalized
+        assert "screenshot of the bug" in normalized
+        assert "mocked or stubbed" in normalized
+        # Prose-only steps are explicitly insufficient now.
+        assert "steps to reproduce" in normalized
 
     def test_should_not_crash_when_pr_body_contains_curly_braces(self, triage_module):
         """User-supplied content with `{` / `}` must NOT be re-parsed by
@@ -1752,6 +1778,8 @@ class TestGraceWarningCommentText:
         )
         assert triage_module.GRACE_COMMENT_MARKER in body
         assert "1 day" in body
+        # OSS authors can't reopen a bot-closed issue, so recovery is
+        # `@agent-shin reconsider` (the bot reopens), like the PR path.
         assert "@agent-shin reconsider" in body
 
     def test_pr_close_comment_should_promise_greptileai_works_post_close(

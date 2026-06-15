@@ -14,8 +14,10 @@ To pass triage, your PR must satisfy AT LEAST ONE of:
   (B) Provide ALL of the following IN THIS PR DESCRIPTION:
       - A clear problem description (what bug or missing feature this addresses)
       - Expected vs. actual behavior
-      - Visual QA proof (before/after screenshots, screen recording, or
-        terminal output demonstrating that the fix/feature works end-to-end)
+      - End-to-end QA proof: AT LEAST ONE of a screen recording / video,
+        before/after screenshots, or the exact commands you ran with their
+        real output, demonstrating the fix/feature works end-to-end (mocked
+        or stubbed runs don't count)
 
 Every external PR (including drafts, regardless of age) also receives a
 Greptile code review. Any PR with a Greptile Confidence Score below 4/5 is
@@ -57,10 +59,15 @@ External contributors: required unless you linked a GitHub issue above. -->
 
 ## QA proof
 
-<!-- Required for external contributors: include before/after screenshots,
-a screen recording, or terminal/log output that demonstrates the fix or feature
-works end-to-end. For UI changes, before/after screenshots are mandatory.
-For backend changes, terminal output of a passing test or curl command is fine. -->
+<!-- Required for ALL contributors (internal and external): include AT LEAST ONE
+of a screen recording / video, before/after screenshots, or the exact commands
+you ran with their real output, demonstrating the fix or feature works
+end-to-end. Mocked or
+stubbed runs don't count, and running `pytest` on the repo's unit tests doesn't
+count either (those mock the provider, DB, and network, so they aren't
+end-to-end). For UI changes, a screen recording or before/after screenshots work
+best; for backend changes, real terminal output of a curl or command run against
+the real system is fine. -->
 
 ## Pre-Submission checklist
 
@@ -101,7 +108,7 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 🐛 Bug Fix
 🧹 Refactoring
 📖 Documentation
-🚄 Infrastructure
+🚅 Infrastructure
 ✅ Test
 
 ## Changes

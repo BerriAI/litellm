@@ -172,20 +172,25 @@ class TestHeadsUpCommentBody:
             cutoff=dt.date(2026, 6, 1),
         )
         assert "Monday, June 1, 2026" in body  # cutoff readable
+        assert "09:00 UTC" in body  # deadline is timezone-explicit
+        assert "we'll close it" in body  # hard deadline, not a passive notice
+        assert "24-hour lifetime" in body  # post-rollout steady state
         assert "Greptile" in body and "3/5" in body  # specific shortfall
         assert "QA proof" in body  # missing piece surfaced
         assert "PR *description*" in body  # description-only note
         assert heads_up_module.HEADS_UP_MARKER in body  # idempotency marker
 
-    def test_issue_comment_uses_reopen_recovery_path(self, heads_up_module):
+    def test_issue_comment_uses_reconsider_recovery_path(self, heads_up_module):
+        # OSS authors can't reopen an issue the bot closed (read access only
+        # lets them reopen issues they closed themselves), so the heads-up
+        # recovery path is `@agent-shin reconsider`, not self-reopen.
         body = heads_up_module.format_heads_up_comment(
             kind="issue",
             verdict={"verdict": "fail", "missing": ["repro"], "explanation": ""},
             greptile_score=None,
             cutoff=dt.date(2026, 6, 1),
         )
-        assert "reopen" in body.lower()  # issues recover by reopening
-        assert "@agent-shin reconsider" not in body  # PR-only recovery path
+        assert "@agent-shin reconsider" in body
         assert heads_up_module.HEADS_UP_MARKER in body
 
     def test_empty_missing_uses_fallback_copy(self, heads_up_module):
