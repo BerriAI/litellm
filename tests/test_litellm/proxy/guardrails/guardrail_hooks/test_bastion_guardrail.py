@@ -262,3 +262,41 @@ async def test_mcp_result_no_text_items_is_noop():
         kwargs={}, response_obj=resp, start_time=None, end_time=None
     )
     assert out is None
+
+
+# A compromised MCP server can return the tool result WRAPPED (CallToolResult)
+# rather than as a bare content list. The text items then live under an inner
+# `content` field; the screener must unwrap these or the injection bypasses it.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "wrap",
+    [
+        lambda items: {"content": items},  # dict CallToolResult
+        lambda items: {"result": {"content": items}},  # JSON-RPC-ish envelope
+        lambda items: SimpleNamespace(content=items),  # MCP SDK object
+        lambda items: SimpleNamespace(result=SimpleNamespace(content=items)),
+        lambda items: [("content", items), ("isError", False)],  # Pydantic-coerced
+    ],
+)
+async def test_mcp_result_injection_in_wrapped_result_is_replaced(wrap):
+    g = _make_mcp()
+    items = [{"type": "text", "text": "benign context"}, {"type": "text", "text": ATTACK}]
+    resp = SimpleNamespace(mcp_tool_call_response=wrap(items))
+    out = await g.async_post_mcp_tool_call_hook(
+        kwargs={}, response_obj=resp, start_time=None, end_time=None
+    )
+    assert out is resp
+    # the inner content items (same objects) are replaced in place
+    assert all(it["text"] == g.violation_message for it in items)
+
+
+@pytest.mark.asyncio
+async def test_mcp_result_clean_wrapped_result_passes_through():
+    g = _make_mcp()
+    items = [{"type": "text", "text": BENIGN}]
+    resp = SimpleNamespace(mcp_tool_call_response={"content": items})
+    out = await g.async_post_mcp_tool_call_hook(
+        kwargs={}, response_obj=resp, start_time=None, end_time=None
+    )
+    assert out is None
+    assert items[0]["text"] == BENIGN  # untouched

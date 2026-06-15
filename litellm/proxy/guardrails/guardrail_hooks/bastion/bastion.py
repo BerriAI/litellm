@@ -106,6 +106,49 @@ def _collect_screenable_texts(
     return texts
 
 
+def _mcp_content_list(response: object) -> list[object]:
+    """Unwrap an MCP tool-call response to its list of content items.
+
+    LiteLLM may hand us the content list directly, or a wrapped ``CallToolResult``
+    whose text items live under an inner ``content`` field. The wrapper shows up as
+    a dict (``{"content": [...]}`` / ``{"result": {"content": [...]}}``), an MCP SDK
+    object (``.content`` / ``.result.content``), or a Pydantic-coerced
+    ``[(field, value), ...]`` list. Dig the content list out of any of these so a
+    poisoned text item is never silently skipped (the screening-bypass the bot
+    flagged). Returns ``[]`` when no content list is found.
+    """
+    # Pydantic-coerced [(field, value), ...] -> treat as a dict wrapper.
+    if (
+        isinstance(response, list)
+        and response
+        and all(
+            isinstance(it, tuple) and len(it) == 2 and isinstance(it[0], str)
+            for it in response
+        )
+    ):
+        response = dict(response)
+    # Already a plain content list.
+    if isinstance(response, list):
+        return response
+    # dict wrapper: {"content": [...]} or {"result": {"content": [...]}}.
+    if isinstance(response, dict):
+        content = response.get("content")
+        if isinstance(content, list):
+            return content
+        result = response.get("result")
+        if isinstance(result, dict) and isinstance(result.get("content"), list):
+            return result["content"]
+        return []
+    # object wrapper (MCP SDK model / CallToolResult): .content or .result.content.
+    content = getattr(response, "content", None)
+    if isinstance(content, list):
+        return content
+    inner_content = getattr(getattr(response, "result", None), "content", None)
+    if isinstance(inner_content, list):
+        return inner_content
+    return []
+
+
 def _mcp_text_items(content: object) -> list[object]:
     """Return the text-bearing items from an MCP tool-call response list."""
     items: list[object] = []
@@ -259,7 +302,8 @@ class BastionGuardrail(CustomGuardrail):
         ):
             return None
 
-        items = _mcp_text_items(getattr(response_obj, "mcp_tool_call_response", None))
+        content = _mcp_content_list(getattr(response_obj, "mcp_tool_call_response", None))
+        items = _mcp_text_items(content)
         if not items:
             return None
 
