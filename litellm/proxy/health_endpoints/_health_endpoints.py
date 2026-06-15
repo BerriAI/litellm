@@ -14,7 +14,10 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    _should_enable_http2,
+)
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
@@ -1524,6 +1527,7 @@ async def _get_health_readiness_details(
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "enable_http2": _should_enable_http2(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
             }
@@ -1535,6 +1539,7 @@ async def _get_health_readiness_details(
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "enable_http2": _should_enable_http2(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
             }
