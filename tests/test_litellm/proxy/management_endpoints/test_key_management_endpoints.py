@@ -7398,6 +7398,215 @@ async def test_build_key_filter_member_team_service_accounts():
     assert {"user_id": None} in and_parts
 
 
+def test_build_key_filter_member_service_account_visibility_disabled():
+    """
+    When the proxy is configured with expose_team_service_accounts_to_members=False,
+    a regular team member must NOT receive the service-account OR-branch — they
+    should only see their own keys.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "regular-member-123"
+    member_team_ids = ["team-A", "team-B"]
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=member_team_ids,
+        include_created_by_keys=False,
+        expose_team_service_accounts_to_members=False,
+    )
+
+    # Only the user-own-keys condition should remain; no AND/OR wrapper needed.
+    assert "AND" not in where
+    assert where.get("user_id") == user_id
+
+
+def test_build_key_filter_admin_unaffected_when_member_visibility_disabled():
+    """
+    Regression: turning off member service-account visibility must NOT shrink
+    what a team admin sees — the admin_team_ids branch still grants full team
+    key visibility.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "admin-user"
+    admin_team_ids = ["team-A"]
+    member_team_ids = ["team-A", "team-B"]
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=admin_team_ids,
+        member_team_ids=member_team_ids,
+        include_created_by_keys=False,
+        expose_team_service_accounts_to_members=False,
+    )
+
+    assert "AND" in where
+    or_conditions = where["AND"][1]["OR"]
+
+    # Expect exactly two branches: own keys + admin-team full visibility.
+    # The member service-account branch (would be for team-B) is suppressed.
+    assert len(or_conditions) == 2
+
+    has_admin_branch = any(
+        isinstance(c.get("team_id"), dict) and c["team_id"].get("in") == admin_team_ids
+        for c in or_conditions
+    )
+    assert has_admin_branch, "Admin team_id IN branch must still be present"
+
+    has_member_service_branch = any(
+        "AND" in c
+        and any(
+            isinstance(p, dict) and p.get("user_id") is None and "team_id" in p
+            for p in c["AND"]
+        )
+        for c in or_conditions
+    )
+    assert not has_member_service_branch, "Member service-account branch must be gone"
+
+
+@pytest.mark.parametrize(
+    "general_settings_value,expected",
+    [
+        ({}, True),  # missing key → default
+        ({"expose_team_service_accounts_to_members": True}, True),
+        ({"expose_team_service_accounts_to_members": False}, False),
+        # Non-bool values must fall back to the safe default, not silently flip:
+        ({"expose_team_service_accounts_to_members": None}, True),
+        ({"expose_team_service_accounts_to_members": "False"}, True),
+        ({"expose_team_service_accounts_to_members": "false"}, True),
+        ({"expose_team_service_accounts_to_members": "true"}, True),
+        ({"expose_team_service_accounts_to_members": 0}, True),
+        ({"expose_team_service_accounts_to_members": 1}, True),
+    ],
+)
+def test_resolve_general_settings_bool_safe_default(general_settings_value, expected):
+    """
+    Only literal Python True/False from config should toggle the flag.
+    Any other value (None, strings, ints) must safely default — otherwise a
+    quoted "False" in YAML would silently keep service accounts visible.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _resolve_general_settings_bool,
+    )
+
+    result = _resolve_general_settings_bool(
+        general_settings_value,
+        key="expose_team_service_accounts_to_members",
+        default=True,
+    )
+    assert result is expected
+
+
+def test_build_key_filter_member_include_created_by_keys_excludes_service_accounts_when_flag_off():
+    """
+    Regression for the include_created_by_keys bypass: a regular member calling
+    `/key/list?include_created_by_keys=true` must not receive team service-account
+    keys (user_id is NULL) they created when
+    expose_team_service_accounts_to_members=False. The created_by OR-branch
+    must carry a `user_id is not None` filter under the flag.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "regular-member-456"
+    member_team_ids = ["team-A", "team-B"]
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=member_team_ids,
+        include_created_by_keys=True,
+        expose_team_service_accounts_to_members=False,
+    )
+
+    assert "AND" in where, "Expected the multi-branch wrapper when include_created_by_keys is on"
+    or_conditions = where["AND"][1]["OR"]
+
+    created_by_branches = [
+        c for c in or_conditions
+        if "AND" in c and any(
+            isinstance(p, dict) and p.get("created_by") == user_id for p in c["AND"]
+        )
+    ]
+    assert created_by_branches, "Expected a created_by OR-branch"
+    created_by_and = created_by_branches[0]["AND"]
+    has_service_account_exclusion = any(
+        isinstance(p, dict) and p.get("user_id") == {"not": None}
+        for p in created_by_and
+    )
+    assert has_service_account_exclusion, (
+        "created_by branch must carry `user_id is not None` when "
+        "expose_team_service_accounts_to_members=False, otherwise members can "
+        "read team service-account keys they created via "
+        "`/key/list?include_created_by_keys=true`"
+    )
+
+
+def test_build_key_filter_member_include_created_by_keys_unchanged_when_flag_on():
+    """
+    Regression guard: when the flag is on (default), the created_by branch
+    keeps its pre-existing shape with no user_id-is-not-None constraint.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "regular-member-789"
+    member_team_ids = ["team-A"]
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=member_team_ids,
+        include_created_by_keys=True,
+        expose_team_service_accounts_to_members=True,
+    )
+
+    or_conditions = where["AND"][1]["OR"] if "AND" in where else [where]
+    created_by_branches = [
+        c for c in or_conditions
+        if "AND" in c and any(
+            isinstance(p, dict) and p.get("created_by") == user_id for p in c["AND"]
+        )
+    ]
+    assert created_by_branches
+    created_by_and = created_by_branches[0]["AND"]
+    has_service_account_exclusion = any(
+        isinstance(p, dict) and p.get("user_id") == {"not": None}
+        for p in created_by_and
+    )
+    assert not has_service_account_exclusion, (
+        "Flag-on path must keep the original created_by shape"
+    )
+
+
 @pytest.mark.asyncio
 async def test_build_key_filter_admin_sees_all_team_keys():
     """

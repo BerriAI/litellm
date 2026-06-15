@@ -2609,6 +2609,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
     )
+    expose_team_service_accounts_to_members: Optional[bool] = Field(
+        True,
+        description="When False, non-admin team members do NOT see service-account keys (user_id=NULL) of their teams via /key/list. Team admins (and proxy admins) are unaffected and still see full team keys. Default True preserves upstream behavior.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
