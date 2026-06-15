@@ -697,6 +697,246 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
 
 
 @pytest.mark.asyncio
+async def test_test_model_connection_passes_model_info_to_health_check_helper():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/29266
+
+    `test_model_connection` previously hardcoded `model_info={}` when
+    calling `_update_litellm_params_for_health_check`, silently dropping
+    flags like `health_check_supports_max_tokens: False`. As a result,
+    `max_tokens: 5` was always injected by the UI "Test Connection"
+    button — even when the operator had configured the deployment to
+    skip it. Verify that the caller-supplied `model_info` is forwarded
+    through to the helper so the UI matches the background `/health`
+    behavior.
+    """
+    mock_request = MagicMock()
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.token = "test-token"
+
+    mock_prisma_client = MagicMock()
+    mock_router = MagicMock()
+    mock_router.get_model_list.return_value = []
+
+    mock_can_user_make_model_call = AsyncMock()
+    mock_health_check_result = {"status": "healthy"}
+    mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
+    mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
+
+    captured = {}
+
+    def mock_update_params(model_info, litellm_params):
+        captured["model_info"] = model_info
+        params = litellm_params.copy()
+        params["messages"] = [{"role": "user", "content": "test"}]
+        return params
+
+    def mock_reject_os_environ(params):
+        return None
+
+    request_model_info = {"health_check_supports_max_tokens": False}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            mock_can_user_make_model_call,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            mock_run_with_timeout,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            mock_update_params,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._reject_os_environ_references",
+            mock_reject_os_environ,
+        ),
+    ):
+        await health_test_model_connection(
+            request=mock_request,
+            mode="chat",
+            litellm_params={"model": "azure/gpt-4o"},
+            model_info=request_model_info,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    # The caller-supplied model_info must reach the helper unchanged so
+    # that `health_check_supports_max_tokens: False` is honored. Before
+    # the fix this was always `{}`.
+    assert captured["model_info"] == request_model_info
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_does_not_trust_caller_health_check_model():
+    """
+    Security regression: `_update_litellm_params_for_health_check`
+    rewrites `litellm_params["model"]` from `model_info.health_check_model`.
+    `test_model_connection` must not let the request body inject that
+    field after `can_user_make_model_call()` has already authorized the
+    deployment, otherwise a caller could redirect the probe to a
+    different provider model while reusing the resolved deployment's
+    credentials.
+
+    Verify two things:
+      1. When the deployment is resolved server-side via the router,
+         the helper receives the deployment's `model_info` (not the
+         request body's).
+      2. When no deployment is resolved (ad-hoc curl flow), the helper
+         only receives the allow-listed non-routing flags — keys like
+         `health_check_model` and `mode` from the request body are
+         dropped.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    mock_request = MagicMock()
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.token = "test-token"
+
+    mock_prisma_client = MagicMock()
+    mock_can_user_make_model_call = AsyncMock()
+    mock_health_check_result = {"status": "healthy"}
+    mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
+    mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
+
+    captured = {}
+
+    def mock_update_params(model_info, litellm_params):
+        captured["model_info"] = model_info
+        params = litellm_params.copy()
+        params["messages"] = [{"role": "user", "content": "test"}]
+        return params
+
+    def mock_reject_os_environ(params):
+        return None
+
+    # 1. With server-side deployment resolved by id.
+    server_side_model_info = {
+        "id": "deployment-1",
+        "health_check_supports_max_tokens": True,
+    }
+    server_side_deployment = Deployment(
+        model_name="gpt-4o",
+        litellm_params=LiteLLM_Params(
+            model="azure/gpt-4o",
+            api_key="server-key",
+            api_base="https://server.invalid/v1",
+        ),
+        model_info=server_side_model_info,
+    )
+
+    mock_router_with_deployment = MagicMock()
+    mock_router_with_deployment.get_deployment.return_value = server_side_deployment
+
+    malicious_model_info = {
+        "id": "deployment-1",
+        # Attacker-controlled: would otherwise be honored by the helper
+        # to rewrite litellm_params["model"] to a different provider model.
+        "health_check_model": "openai/gpt-5-attacker",
+        "mode": "audio_speech",
+        "health_check_voice": "evil",
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router_with_deployment),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            mock_can_user_make_model_call,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            mock_run_with_timeout,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            mock_update_params,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._reject_os_environ_references",
+            mock_reject_os_environ,
+        ),
+    ):
+        await health_test_model_connection(
+            request=mock_request,
+            mode="chat",
+            litellm_params={"model": "azure/gpt-4o"},
+            model_info=malicious_model_info,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    helper_model_info = captured["model_info"]
+    # Server-side flag survives.
+    assert helper_model_info.get("health_check_supports_max_tokens") is True
+    # Caller-supplied routing fields must not have been forwarded.
+    assert "health_check_model" not in helper_model_info
+    assert helper_model_info.get("mode") != "audio_speech"
+    assert "health_check_voice" not in helper_model_info
+
+    # 2. With no router-resolved deployment, only safe non-routing flags pass through.
+    captured.clear()
+    mock_router_no_match = MagicMock()
+    mock_router_no_match.get_deployment.return_value = None
+    mock_router_no_match.get_model_list.return_value = []
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router_no_match),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            mock_can_user_make_model_call,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            mock_run_with_timeout,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            mock_update_params,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._reject_os_environ_references",
+            mock_reject_os_environ,
+        ),
+    ):
+        await health_test_model_connection(
+            request=mock_request,
+            mode="chat",
+            litellm_params={"model": "azure/gpt-4o"},
+            model_info={
+                "health_check_supports_max_tokens": False,
+                "health_check_model": "openai/gpt-5-attacker",
+                "mode": "audio_speech",
+                "health_check_voice": "evil",
+            },
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    helper_model_info = captured["model_info"]
+    assert helper_model_info == {"health_check_supports_max_tokens": False}
+
+
+@pytest.mark.asyncio
 async def test_health_services_endpoint_datadog_llm_observability():
     """
     Verify that 'datadog_llm_observability' is accepted as a valid service
