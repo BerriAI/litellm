@@ -1069,6 +1069,10 @@ class AsyncHTTPHandler:
         # aiohttp unless the user explicitly disabled it; a shared_session is only
         # usable by the aiohttp transport so it rides along here.
         if not AsyncHTTPHandler._aiohttp_transport_disabled_by_config():
+            # Keep the original observability: this is the path that actually
+            # builds the aiohttp transport (the refactor moved selection here from
+            # _should_use_aiohttp_transport, which is now global-config only).
+            verbose_logger.debug("Using AiohttpTransport...")
             return AsyncHTTPHandler._create_aiohttp_transport(
                 ssl_context=ssl_context,
                 ssl_verify=ssl_verify,

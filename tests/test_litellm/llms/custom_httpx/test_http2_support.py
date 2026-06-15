@@ -135,6 +135,20 @@ class TestTransportSelection:
         # and http2 is NOT enabled on that plain httpx client
         assert _pool_http2(handler.client) is False
 
+    def test_aiohttp_transport_path_emits_debug_log(self):
+        # The aiohttp-building path must keep the "Using AiohttpTransport..." debug
+        # log it had before the HTTP/2 refactor moved transport selection into
+        # _create_async_transport.
+        from unittest.mock import patch
+
+        litellm.enable_http2 = False
+        litellm.disable_aiohttp_transport = False
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.verbose_logger"
+        ) as mock_logger:
+            AsyncHTTPHandler._create_async_transport()
+            mock_logger.debug.assert_any_call("Using AiohttpTransport...")
+
 
 # ---------------------------------------------------------------------------
 # Client construction — http2 actually reaches the pool
