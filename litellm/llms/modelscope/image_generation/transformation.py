@@ -6,7 +6,7 @@ Handles transformation between OpenAI-compatible format and ModelScope API forma
 API Reference: https://modelscope.cn/docs/model-service/API-Inference/intro
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union  # noqa: TID251
 
 import httpx
 
@@ -42,7 +42,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
 
     def get_supported_openai_params(
         self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    ) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Return list of OpenAI params supported by ModelScope.
 
@@ -75,7 +75,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         optional_params.update(non_default_params)
         return optional_params
 
-    def get_complete_url(
+    def get_complete_url(  # noqa: PLR0913
         self,
         api_base: Optional[str],
         api_key: Optional[str],
@@ -95,11 +95,11 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         # Return the images endpoint
         return f"{base_url}/images/generations"
 
-    def validate_environment(
+    def validate_environment(  # noqa: PLR0913
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: Optional[str] = None,
@@ -151,7 +151,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
 
         return request_data
 
-    def transform_image_generation_response(
+    def transform_image_generation_response(  # noqa: PLR0913
         self,
         model: str,
         raw_response: httpx.Response,

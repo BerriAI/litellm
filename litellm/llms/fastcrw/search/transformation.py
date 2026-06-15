@@ -8,7 +8,7 @@ or cloud). The search response uses the Firecrawl-compatible envelope
 fastCRW API Reference: https://fastcrw.com/docs/rest-api
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import Optional, TypedDict, Union
 
 import httpx
 
@@ -34,10 +34,10 @@ class FastCRWSearchRequest(_FastCRWSearchRequestRequired, total=False):
     """
 
     limit: int  # Optional - maximum number of results to return
-    sources: List[
+    sources: list[
         str
     ]  # Optional - sources to search ('web', 'images'), default ['web']
-    scrapeOptions: Dict  # Optional - options for scraping search results
+    scrapeOptions: dict  # Optional - options for scraping search results
 
 
 class FastCRWSearchConfig(BaseSearchConfig):
@@ -49,11 +49,11 @@ class FastCRWSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         """
@@ -70,7 +70,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
         self,
         api_base: Optional[str],
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: Optional[Union[dict, list[dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -86,10 +86,10 @@ class FastCRWSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: Union[str, list[str]],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to fastCRW API format.
 

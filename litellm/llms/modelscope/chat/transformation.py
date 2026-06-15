@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` to ModelScope's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from typing import Any, Coroutine, Literal, Optional, Tuple, Union, cast, overload  # noqa: TID251
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -23,20 +23,20 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> list[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[list[AllMessageValues], Coroutine[Any, Any, list[AllMessageValues]]]:
         """
         Flatten text-only content lists to strings for ModelScope.
 
@@ -69,7 +69,7 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         dynamic_api_key = api_key or get_secret_str("MODELSCOPE_API_KEY")
         return api_base, dynamic_api_key
 
-    def get_complete_url(
+    def get_complete_url(  # noqa: PLR0913
         self,
         api_base: Optional[str],
         api_key: Optional[str],

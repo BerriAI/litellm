@@ -1,6 +1,6 @@
 import json
 from abc import abstractmethod
-from typing import TYPE_CHECKING, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Optional, Union, cast
 
 import litellm
 
@@ -35,7 +35,7 @@ def convert_model_response_to_streaming(
         ValueError: If the conversion fails
     """
     try:
-        streaming_choices: List[StreamingChoices] = []
+        streaming_choices: list[StreamingChoices] = []
         for choice in model_response.choices:
             streaming_choices.append(
                 StreamingChoices(
