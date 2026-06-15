@@ -14,6 +14,7 @@ from litellm._redis import (
 )
 from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
 from litellm._redis_credential_provider import (
+    AzureADCredentialProvider,
     GCPIAMCredentialProvider,
     _token_cache,
 )
@@ -383,6 +384,75 @@ def test_get_redis_async_client_gcp_cluster_uses_credential_provider():
     assert (
         "password" not in cluster_call_kwargs
     ), "async GCP cluster must not use a static password (expires after 1h)"
+
+
+def test_sync_url_client_azure_ad_auth_uses_credential_provider(monkeypatch):
+    """URL-based Azure Redis clients must keep token auth instead of filtering
+    it out before Redis.from_url."""
+    mock_credential = MagicMock()
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.DefaultAzureCredential = MagicMock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = MagicMock(return_value=mock_credential)
+    mock_azure_identity.ManagedIdentityCredential = MagicMock(
+        return_value=mock_credential
+    )
+    monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
+
+    with (
+        patch.dict(
+            "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+        ),
+        patch("litellm._redis.redis.Redis.from_url") as mock_from_url,
+    ):
+        get_redis_client(
+            url="rediss://cache.redis.cache.windows.net:6380",
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+    call_kwargs = mock_from_url.call_args.kwargs
+    assert call_kwargs["url"] == "rediss://cache.redis.cache.windows.net:6380"
+    assert isinstance(call_kwargs["credential_provider"], AzureADCredentialProvider)
+    assert "redis_connect_func" not in call_kwargs
+    assert call_kwargs["credential_provider"].get_credentials() == (
+        "managed-identity-object-id",
+        mock_credential.get_token.return_value.token,
+    )
+
+
+def test_connection_pool_url_azure_ad_auth_uses_credential_provider(monkeypatch):
+    """Connection pools built from Redis URLs need Azure AD credential_provider
+    too, otherwise pooled connections authenticate with no token."""
+    mock_credential = MagicMock()
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.DefaultAzureCredential = MagicMock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = MagicMock(return_value=mock_credential)
+    mock_azure_identity.ManagedIdentityCredential = MagicMock(
+        return_value=mock_credential
+    )
+    monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
+
+    with (
+        patch.dict(
+            "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+        ),
+        patch(
+            "litellm._redis.async_redis.BlockingConnectionPool.from_url"
+        ) as mock_from_url,
+    ):
+        get_redis_connection_pool(
+            url="rediss://cache.redis.cache.windows.net:6380",
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+    call_kwargs = mock_from_url.call_args.kwargs
+    assert call_kwargs["url"] == "rediss://cache.redis.cache.windows.net:6380"
+    assert isinstance(call_kwargs["credential_provider"], AzureADCredentialProvider)
+    assert call_kwargs["credential_provider"].get_credentials() == (
+        "managed-identity-object-id",
+        mock_credential.get_token.return_value.token,
+    )
 
 
 @patch("litellm._redis.init_redis_cluster")

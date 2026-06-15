@@ -706,6 +706,12 @@ class ProxyInitializationHelpers:
     help="Connects to RDS DB with IAM token",
 )
 @click.option(
+    "--azure_postgresql_auth",
+    default=False,
+    is_flag=True,
+    help="Connects to Azure PostgreSQL with Microsoft Entra token auth",
+)
+@click.option(
     "--num_requests",
     default=10,
     type=int,
@@ -865,6 +871,7 @@ def run_server(
     granian_threads,
     test_async,
     iam_token_db_auth,
+    azure_postgresql_auth,
     num_requests,
     use_queue,
     health,
@@ -994,7 +1001,30 @@ def run_server(
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
-        if iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
+        if (
+            azure_postgresql_auth
+            or get_secret_bool("AZURE_POSTGRESQL_AUTH")
+            or get_secret_bool("AZURE_POSTGRESQL_PASSWORDLESS_AUTH")
+        ):
+            from litellm.proxy.auth.azure_postgres_token import (
+                generate_azure_postgres_auth_token,
+            )
+
+            db_host = os.getenv("DATABASE_HOST")
+            db_port = os.getenv("DATABASE_PORT", "5432")
+            db_user = os.getenv("DATABASE_USER")
+            db_name = os.getenv("DATABASE_NAME")
+            db_schema = os.getenv("DATABASE_SCHEMA")
+
+            token = generate_azure_postgres_auth_token().token
+
+            _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
+            if db_schema:
+                _db_url += f"?schema={db_schema}"
+
+            os.environ["DATABASE_URL"] = _db_url
+            os.environ["AZURE_POSTGRESQL_AUTH"] = "True"
+        elif iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
             from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
             db_host = os.getenv("DATABASE_HOST")

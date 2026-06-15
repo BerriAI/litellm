@@ -758,6 +758,94 @@ def test_reader_iam_refresh_uses_parsed_endpoint(monkeypatch):
     assert os.environ["DATABASE_URL"] == "writer-url-untouched"
 
 
+def test_azure_postgres_token_helper_uses_entra_scope(monkeypatch):
+    """Azure PostgreSQL passwordless auth must request the Azure Database for
+    PostgreSQL scope and URL-encode the access token before placing it in a
+    Postgres URL password slot."""
+    from litellm.proxy.auth.azure_postgres_token import (
+        AZURE_POSTGRES_SCOPE,
+        generate_azure_postgres_auth_token,
+    )
+
+    captured: Dict[str, Any] = {}
+
+    class FakeCredential:
+        def get_token(self, scope: str):
+            captured["scope"] = scope
+            return type(
+                "Token",
+                (),
+                {"token": "raw/token?with&chars=1", "expires_on": 1893456000},
+            )()
+
+    token = generate_azure_postgres_auth_token(credential=FakeCredential())
+
+    assert captured["scope"] == AZURE_POSTGRES_SCOPE
+    assert token.token == "raw%2Ftoken%3Fwith%26chars%3D1"
+    assert token.expires_on == 1893456000
+
+
+def test_writer_get_azure_postgres_token_uses_database_env_vars(monkeypatch):
+    """Writer Azure passwordless auth reads the same DATABASE_HOST/PORT/USER/NAME
+    env vars as the existing RDS IAM path, but mints an Entra token instead of
+    an AWS presigned token."""
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    monkeypatch.setenv("DATABASE_HOST", "server.postgres.database.azure.com")
+    monkeypatch.setenv("DATABASE_PORT", "5432")
+    monkeypatch.setenv("DATABASE_USER", "managed-identity-name")
+    monkeypatch.setenv("DATABASE_NAME", "litellm")
+    monkeypatch.setenv("DATABASE_SCHEMA", "public")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    fake_module = MagicMock()
+    fake_module.generate_azure_postgres_auth_token.return_value = type(
+        "AzureToken", (), {"token": "AZURE%2FTOKEN", "expires_on": 1893456000}
+    )()
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.auth.azure_postgres_token", fake_module
+    )
+
+    writer = PrismaWrapper(
+        original_prisma=MagicMock(),
+        iam_token_db_auth=True,
+        db_token_auth_type="azure_postgresql",
+    )
+
+    new_url = writer.get_rds_iam_token()
+
+    assert new_url == (
+        "postgresql://managed-identity-name:AZURE%2FTOKEN@"
+        "server.postgres.database.azure.com:5432/litellm?schema=public"
+    )
+    assert os.environ["DATABASE_URL"] == new_url
+    fake_module.generate_azure_postgres_auth_token.assert_called_once()
+
+
+def test_azure_postgres_jwt_expiration_is_used_for_refresh_timing():
+    """Azure PostgreSQL tokens are JWTs; the wrapper should read exp so the
+    existing proactive refresh loop can schedule before token expiry."""
+    import base64
+    import json
+    from datetime import datetime
+
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    def b64url(data: Dict[str, Any]) -> str:
+        raw = json.dumps(data).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    exp = 1893456000
+    token = f"{b64url({'alg': 'none'})}.{b64url({'exp': exp})}.signature"
+    wrapper = PrismaWrapper(
+        original_prisma=MagicMock(),
+        iam_token_db_auth=True,
+        db_token_auth_type="azure_postgresql",
+    )
+
+    assert wrapper._parse_token_expiration(token) == datetime.utcfromtimestamp(exp)
+
+
 @pytest.mark.asyncio
 async def test_reader_recreate_uses_datasource_override(monkeypatch):
     """Reader recreate must pass `datasource={"url": ...}` to Prisma() — Prisma

@@ -3,6 +3,8 @@ This file contains the PrismaWrapper class, which is used to wrap the Prisma cli
 """
 
 import asyncio
+import base64
+import json
 import os
 import random
 import signal
@@ -97,9 +99,11 @@ class PrismaWrapper:
         iam_endpoint: IAMEndpoint | None = None,
         recreate_uses_datasource: bool = False,
         log_prefix: str = "",
+        db_token_auth_type: str = "rds_iam",
     ):
         self._original_prisma = original_prisma
         self.iam_token_db_auth = iam_token_db_auth
+        self._db_token_auth_type = db_token_auth_type
 
         # Per-connection knobs so the same wrapper can be used for the writer
         # (defaults: DATABASE_URL env, IAM endpoint from DATABASE_HOST/etc.,
@@ -119,6 +123,7 @@ class PrismaWrapper:
         self._token_refresh_task: asyncio.Task | None = None
         self._reconnection_lock = asyncio.Lock()
         self._last_refresh_time: datetime | None = None
+        self._last_token_expires_on: int | None = None
 
         # Coordination for planned engine restarts (issue #29176). Every
         # `recreate_prisma_client` SIGTERMs the running query-engine on
@@ -135,6 +140,11 @@ class PrismaWrapper:
         self._expected_engine_deaths: set[int] = set()
         self._engine_generation: int = 0
         self.on_engine_replaced: Callable[[], None] | None = None
+
+    def _token_auth_log_name(self) -> str:
+        if self._db_token_auth_type == "azure_postgresql":
+            return "Azure PostgreSQL Entra token"
+        return "RDS IAM token"
 
     def _get_engine_pid(self) -> int:
         """Get the PID of the current Prisma engine subprocess, or 0 if unavailable.
@@ -222,26 +232,54 @@ class PrismaWrapper:
         if token is None:
             return None
 
+        # Token format: ...?X-Amz-Date=YYYYMMDDTHHMMSSZ&X-Amz-Expires=900&...
+        if "?" in token:
+            try:
+                query_string = token.split("?", 1)[1]
+                params = urllib.parse.parse_qs(query_string)
+
+                expires_str = params.get("X-Amz-Expires", [None])[0]
+                date_str = params.get("X-Amz-Date", [None])[0]
+
+                if expires_str and date_str:
+                    token_created = datetime.strptime(date_str, "%Y%m%dT%H%M%SZ")
+                    expires_in = int(expires_str)
+
+                    return token_created + timedelta(seconds=expires_in)
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Failed to parse token expiration: {e}")
+
+        return self._parse_jwt_token_expiration(token)
+
+    def _parse_jwt_token_expiration(self, token: str) -> datetime | None:
+        """Parse the exp claim from JWT-shaped database auth tokens.
+
+        Azure PostgreSQL Entra access tokens are JWTs. The token was already
+        accepted from Azure Identity, so this only decodes the payload locally
+        to schedule refresh; it does not validate trust.
+        """
         try:
-            # Token format: ...?X-Amz-Date=YYYYMMDDTHHMMSSZ&X-Amz-Expires=900&...
-            if "?" not in token:
+            parts = token.split(".")
+            if len(parts) < 2:
                 return None
-
-            query_string = token.split("?", 1)[1]
-            params = urllib.parse.parse_qs(query_string)
-
-            expires_str = params.get("X-Amz-Expires", [None])[0]
-            date_str = params.get("X-Amz-Date", [None])[0]
-
-            if not expires_str or not date_str:
+            payload = parts[1]
+            padding = "=" * (-len(payload) % 4)
+            decoded = base64.urlsafe_b64decode(f"{payload}{padding}")
+            claims = json.loads(decoded)
+            exp = claims.get("exp")
+            if exp is None:
                 return None
-
-            token_created = datetime.strptime(date_str, "%Y%m%dT%H%M%SZ")
-            expires_in = int(expires_str)
-
-            return token_created + timedelta(seconds=expires_in)
+            return datetime.utcfromtimestamp(int(exp))
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to parse token expiration: {e}")
+            verbose_proxy_logger.debug(f"Failed to parse JWT token expiration: {e}")
+            return None
+
+    def _get_last_token_expiration(self) -> datetime | None:
+        if self._last_token_expires_on is None:
+            return None
+        try:
+            return datetime.utcfromtimestamp(int(self._last_token_expires_on))
+        except Exception:
             return None
 
     def _calculate_seconds_until_refresh(self) -> float:
@@ -259,6 +297,8 @@ class PrismaWrapper:
         db_url = os.getenv(self._db_url_env_var)
         token = self._extract_token_from_db_url(db_url)
         expiration_time = self._parse_token_expiration(token)
+        if expiration_time is None:
+            expiration_time = self._get_last_token_expiration()
 
         if expiration_time is None:
             # If we can't parse the token, use fallback interval
@@ -285,6 +325,8 @@ class PrismaWrapper:
 
         token = self._extract_token_from_db_url(token_url)
         expiration_time = self._parse_token_expiration(token)
+        if expiration_time is None:
+            expiration_time = self._get_last_token_expiration()
 
         if expiration_time is None:
             # If we can't parse the token, assume it's expired to trigger refresh
@@ -304,12 +346,8 @@ class PrismaWrapper:
         if not self.iam_token_db_auth:
             return None
 
-        from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
-
         if self._iam_endpoint is not None:
             endpoint = self._iam_endpoint
-            token = generate_iam_auth_token(db_host=endpoint.host, db_port=endpoint.port, db_user=endpoint.user)
-            _db_url = endpoint.build_url(token)
         else:
             db_host = os.getenv("DATABASE_HOST")
             # Default to the Postgres standard port; passing None to
@@ -319,12 +357,32 @@ class PrismaWrapper:
             db_user = os.getenv("DATABASE_USER")
             db_name = os.getenv("DATABASE_NAME")
             db_schema = os.getenv("DATABASE_SCHEMA")
+            endpoint = IAMEndpoint(
+                host=db_host or "",
+                port=db_port,
+                user=db_user or "",
+                name=db_name or "",
+                schema=db_schema,
+            )
+
+        db_host = endpoint.host
+        db_port = endpoint.port
+        db_user = endpoint.user
+
+        if self._db_token_auth_type == "azure_postgresql":
+            from litellm.proxy.auth.azure_postgres_token import (
+                generate_azure_postgres_auth_token,
+            )
+
+            token_response = generate_azure_postgres_auth_token()
+            token = token_response.token
+            self._last_token_expires_on = token_response.expires_on
+        else:
+            from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
             token = generate_iam_auth_token(db_host=db_host, db_port=db_port, db_user=db_user)
 
-            _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
-            if db_schema:
-                _db_url += f"?schema={db_schema}"
+        _db_url = endpoint.build_url(token)
 
         os.environ[self._db_url_env_var] = _db_url
         return _db_url
@@ -443,8 +501,9 @@ class PrismaWrapper:
 
         self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
         verbose_proxy_logger.info(
-            "%sStarted RDS IAM token proactive refresh background task",
+            "%sStarted %s proactive refresh background task",
             self._log_prefix,
+            self._token_auth_log_name(),
         )
 
     async def stop_token_refresh_task(self) -> None:
@@ -462,7 +521,11 @@ class PrismaWrapper:
         except asyncio.CancelledError:
             pass
         self._token_refresh_task = None
-        verbose_proxy_logger.info("%sStopped RDS IAM token refresh background task", self._log_prefix)
+        verbose_proxy_logger.info(
+            "%sStopped %s refresh background task",
+            self._log_prefix,
+            self._token_auth_log_name(),
+        )
 
     async def _token_refresh_loop(self) -> None:
         """
@@ -473,7 +536,7 @@ class PrismaWrapper:
         This is more efficient than polling, requiring only 1 wake-up per token cycle.
         """
         verbose_proxy_logger.info(
-            f"{self._log_prefix}RDS IAM token refresh loop started. "
+            f"{self._log_prefix}{self._token_auth_log_name()} refresh loop started. "
             f"Tokens will be refreshed {self.TOKEN_REFRESH_BUFFER_SECONDS}s before expiration."
         )
 
@@ -484,21 +547,29 @@ class PrismaWrapper:
 
                 if sleep_seconds > 0:
                     verbose_proxy_logger.info(
-                        f"{self._log_prefix}RDS IAM token refresh scheduled in "
+                        f"{self._log_prefix}{self._token_auth_log_name()} refresh scheduled in "
                         f"{sleep_seconds:.0f} seconds ({sleep_seconds / 60:.1f} minutes)"
                     )
                     await asyncio.sleep(sleep_seconds)
 
                 # Refresh the token
-                verbose_proxy_logger.info("%sProactively refreshing RDS IAM token...", self._log_prefix)
+                verbose_proxy_logger.info(
+                    "%sProactively refreshing %s...",
+                    self._log_prefix,
+                    self._token_auth_log_name(),
+                )
                 await self._safe_refresh_token()
 
             except asyncio.CancelledError:
-                verbose_proxy_logger.info("%sRDS IAM token refresh loop cancelled", self._log_prefix)
+                verbose_proxy_logger.info(
+                    "%s%s refresh loop cancelled",
+                    self._log_prefix,
+                    self._token_auth_log_name(),
+                )
                 break
             except Exception as e:
                 verbose_proxy_logger.error(
-                    f"{self._log_prefix}Error in RDS IAM token refresh loop: {e}. "
+                    f"{self._log_prefix}Error in {self._token_auth_log_name()} refresh loop: {e}. "
                     f"Retrying in {self.FALLBACK_REFRESH_INTERVAL_SECONDS}s..."
                 )
                 # On error, wait before retrying to avoid tight error loops
@@ -534,13 +605,15 @@ class PrismaWrapper:
                 await self._recreate_prisma_client_locked(new_db_url)
                 self._last_refresh_time = datetime.utcnow()
                 verbose_proxy_logger.info(
-                    "%sRDS IAM token refreshed successfully. New token valid for ~15 minutes.",
+                    "%s%s refreshed successfully.",
                     self._log_prefix,
+                    self._token_auth_log_name(),
                 )
             else:
                 verbose_proxy_logger.error(
-                    "%sFailed to generate new RDS IAM token during proactive refresh",
+                    "%sFailed to generate new %s during proactive refresh",
                     self._log_prefix,
+                    self._token_auth_log_name(),
                 )
 
     def _token_refresh_not_needed(self, token_url: str | None) -> bool:
@@ -594,10 +667,11 @@ class PrismaWrapper:
 
                 if running_loop is not None:
                     verbose_proxy_logger.warning(
-                        "%sRDS IAM token expired in __getattr__ — proactive refresh "
+                        "%s%s expired in __getattr__ — proactive refresh "
                         "may have failed. Scheduling async refresh; the current "
                         "request may fail and be retried with the fresh token.",
                         self._log_prefix,
+                        self._token_auth_log_name(),
                     )
                     # Non-blocking: schedule the locked refresh on the
                     # running loop. The reconnection lock inside
@@ -605,9 +679,10 @@ class PrismaWrapper:
                     running_loop.create_task(self._safe_refresh_token())
                 else:
                     verbose_proxy_logger.warning(
-                        "%sRDS IAM token expired in __getattr__ — proactive refresh "
+                        "%s%s expired in __getattr__ — proactive refresh "
                         "may have failed. Triggering synchronous fallback refresh...",
                         self._log_prefix,
+                        self._token_auth_log_name(),
                     )
                     new_db_url = self.get_rds_iam_token()
                     if new_db_url:
