@@ -242,7 +242,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                 # outputs (file reads, API responses) bypass guardrail scanning.
                 # The block index is tracked so sanitized text is written back to
                 # the correct location (see _apply_guardrail_responses_to_input).
-                if content_item.get("type") == "tool_result":
+                # Honor skip_tool_message here as well: Anthropic tool outputs are
+                # tool_result blocks nested inside a user message (not a role="tool"
+                # message), so the role check above does not cover them.
+                if content_item.get("type") == "tool_result" and not skip_tool_message:
                     tool_result_content = content_item.get("content")
                     if isinstance(tool_result_content, str):
                         texts_to_check.append(tool_result_content)
