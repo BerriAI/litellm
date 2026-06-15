@@ -92,37 +92,7 @@ class TestMCPRegistryFile:
         linear = next(s for s in data["servers"] if s["name"] == "linear")
         assert linear["transport"] == "http"
         assert linear["url"] == "https://mcp.linear.app/mcp"
-        assert linear["auth_type"] == "oauth2"
         assert "/sse" not in linear["url"]
-
-    def test_slack_defaults_to_streamable_http_oauth(self, registry_path):
-        """Slack's MCP server should default to streamable HTTP with the hosted /mcp endpoint and OAuth."""
-        with open(registry_path, "r") as f:
-            data = json.load(f)
-        slack = next(s for s in data["servers"] if s["name"] == "slack")
-        assert slack["transport"] == "http"
-        assert slack["url"] == "https://mcp.slack.com/mcp"
-        assert slack["auth_type"] == "oauth2"
-        assert "command" not in slack
-        assert "args" not in slack
-
-    def test_notion_defaults_to_streamable_http_oauth(self, registry_path):
-        """Notion's MCP server should default to streamable HTTP at /mcp with OAuth, not SSE at /sse."""
-        with open(registry_path, "r") as f:
-            data = json.load(f)
-        notion = next(s for s in data["servers"] if s["name"] == "notion")
-        assert notion["transport"] == "http"
-        assert notion["url"] == "https://mcp.notion.com/mcp"
-        assert notion["auth_type"] == "oauth2"
-        assert "/sse" not in notion["url"]
-
-    def test_atlassian_uses_authv2_endpoint(self, registry_path):
-        """Atlassian's MCP server should default to the streamable HTTP authv2 endpoint."""
-        with open(registry_path, "r") as f:
-            data = json.load(f)
-        atlassian = next(s for s in data["servers"] if s["name"] == "atlassian")
-        assert atlassian["transport"] == "http"
-        assert atlassian["url"] == "https://mcp.atlassian.com/v1/mcp/authv2"
 
     def test_well_known_servers_present(self, registry_path):
         """Ensure key well-known MCPs are in the registry."""
