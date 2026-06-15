@@ -79,7 +79,9 @@ jobs:
           # enabled or a collaborator triggers it manually, so an external user
           # can't force paid LLM calls by churning a fork PR while the bot is
           # still in dry-run.
-          OPENAI_API_KEY: ${{ (vars.AGENT_SHIN_ENABLED == 'true' || github.event_name == 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}
+          # Kill-switch semantics: only suppress the LLM key when the variable
+          # is literally "false". Unset / any other value -> bot is live.
+          OPENAI_API_KEY: ${{ (vars.AGENT_SHIN_ENABLED != 'false' || github.event_name == 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
           AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
@@ -92,20 +94,20 @@ jobs:
           set -euo pipefail
           COMMON=(--review-gate --grace-days "${GRACE_DAYS}" --min-greptile-score "${MIN_GREPTILE_SCORE}")
 
-          # Fail-safe gating, identical philosophy to the Greptile closer:
-          #   - AGENT_SHIN_ENABLED must be the EXACT string "true" to act at all.
-          #   - A manual dispatch can still preview with close=false.
-          #   - Automatic triggers (PR events, schedule) act once enabled — that
-          #     is the whole point of the gate (re-tag / un-tag automatically).
+          # Kill-switch gating:
+          #   - AGENT_SHIN_ENABLED="false" (the exact string) forces dry-run.
+          #   - Any other value, including unset, leaves the bot live.
+          #   - A manual dispatch can still preview with close=false even
+          #     when the bot is live.
           DO_CLOSE="false"
-          if [ "${AGENT_SHIN_ENABLED:-false}" != "true" ]; then
-            echo "::notice::AGENT_SHIN_ENABLED is not 'true' -> dry-run (no labels/comments/closes)."
+          if [ "${AGENT_SHIN_ENABLED:-true}" = "false" ]; then
+            echo "::notice::Agent Shin kill switch is ON (AGENT_SHIN_ENABLED='false'). Forcing dry-run."
           elif [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && [ "${CLOSE_FLAG:-false}" = "true" ]; then
             DO_CLOSE="true"
             echo "::notice::Manual run -> acting for real."
           elif [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
             DO_CLOSE="true"
-            echo "::notice::Enabled automatic trigger (${GITHUB_EVENT_NAME:-}) -> acting for real."
+            echo "::notice::Automatic trigger (${GITHUB_EVENT_NAME:-}) -> acting for real (kill switch off)."
           else
             echo "::notice::Manual dispatch with close=false -> dry-run."
           fi

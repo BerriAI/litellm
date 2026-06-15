@@ -64,10 +64,10 @@ jobs:
       - name: Run low-quality PR closer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Scheduled runs are ALWAYS dry-run, even when AGENT_SHIN_ENABLED is
-          # "true", so the team can QA the closer's verdicts in step summaries
-          # before any contributor sees a PR closed. Real closures only happen
-          # on manual workflow_dispatch with close=true (and the variable set).
+          # Scheduled runs are ALWAYS dry-run, even after the rollout, so the
+          # team can QA the closer's verdicts in step summaries before any
+          # contributor sees a PR closed. Real closures only happen on manual
+          # workflow_dispatch with close=true (and the kill switch off).
           CLOSE_FLAG: ${{ github.event.inputs.close || 'false' }}
           AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
           MIN_AGE_DAYS: ${{ github.event.inputs.min_age_days || '0' }}
@@ -81,12 +81,15 @@ jobs:
             --min-score "${MIN_SCORE}"
             --limit "${LIMIT}"
           )
-          if [ "${AGENT_SHIN_ENABLED:-false}" != "true" ]; then
-            echo "::notice::AGENT_SHIN_ENABLED is not 'true' -> forcing dry-run regardless of close input."
+          # Kill switch: AGENT_SHIN_ENABLED="false" forces dry-run. Default
+          # (unset / any other value) is "live", matching the post-enactment
+          # rollout state.
+          if [ "${AGENT_SHIN_ENABLED:-true}" = "false" ]; then
+            echo "::notice::Agent Shin kill switch is ON (AGENT_SHIN_ENABLED='false'). Forcing dry-run."
           elif [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && [ "${CLOSE_FLAG}" = "true" ]; then
             ARGS+=(--close)
             echo "::notice::Running in close-on-fail mode."
           else
-            echo "::notice::AGENT_SHIN_ENABLED is true but this trigger is dry-run (scheduled event or close=false)."
+            echo "::notice::Kill switch off but this trigger is dry-run (scheduled event or close=false)."
           fi
           python3 .github/scripts/close_low_quality_prs.py "${ARGS[@]}"

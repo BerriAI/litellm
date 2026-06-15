@@ -15,11 +15,11 @@ name: Agent Shin — reconsider
 # (which loses the original PR's history). The bot, on the other hand,
 # has write access via GH_TOKEN and can reopen on their behalf.
 #
-# DRY-RUN BY DEFAULT — gated on `vars.AGENT_SHIN_ENABLED == 'true'` just
-# like the other Agent Shin workflows. The workflow also gates on the
-# commenter being either the PR/issue author or an internal collaborator
-# (OWNER/MEMBER/COLLABORATOR) so random commenters cannot DOS the LLM
-# judge or force a reopen.
+# LIVE BY DEFAULT — disabled only when `vars.AGENT_SHIN_ENABLED == 'false'`
+# (the kill switch shared with the other Agent Shin workflows). The workflow
+# also gates on the commenter being either the PR/issue author or an internal
+# collaborator (OWNER/MEMBER/COLLABORATOR) so random commenters cannot DOS the
+# LLM judge or force a reopen.
 
 on:
   issue_comment:
@@ -115,23 +115,20 @@ jobs:
             ARGS=(--repo "${{ github.repository }}" --issue "${NUMBER}" --reconsider)
           fi
           # Reconsider's destructive actions (post comment + reopen) are
-          # gated on `--close`, mirroring the regular triage workflows.
-          # When AGENT_SHIN_ENABLED is not the EXACT string "true", we
-          # still run the script so its verdict + would-X action lands in
-          # the step summary for QA — but without `--close`, the script
-          # returns `would-reopen` / `would-reconsider-still-failing`
-          # instead of touching GitHub state.
+          # gated on `--close`. The kill switch is the shared
+          # AGENT_SHIN_ENABLED variable: setting it to the literal string
+          # "false" forces reconsider back to dry-run (the script still
+          # runs so the would-X verdict lands in the step summary for QA,
+          # but without `--close` no GitHub state changes).
           #
-          # Use the positive `= "true"` gate (not `!= "true" -> exit`) so
-          # the workflow guardrails in
-          # tests/test_litellm/test_github_triage_workflows.py see the
-          # canonical fail-safe enable pattern. Unknown values like
-          # "True", "yes", "1", or typos fall through to the dry-run
-          # branch, which is the safe default.
-          if [ "${AGENT_SHIN_ENABLED:-false}" = "true" ]; then
+          # Negative `!= "false"` against the `:-true` default keeps the
+          # kill-switch semantics symmetric with the other triage
+          # workflows — unknown values (typos, "True", "1") leave the bot
+          # live, matching the post-enactment live-by-default policy.
+          if [ "${AGENT_SHIN_ENABLED:-true}" != "false" ]; then
             ARGS+=(--close)
-            echo "::notice::Agent Shin reconsider ENABLED — running real triage (close=true)."
+            echo "::notice::Agent Shin reconsider is LIVE — running real triage (close=true)."
           else
-            echo "::notice::AGENT_SHIN_ENABLED is not 'true' -> reconsider stays in dry-run (no comment, no reopen)."
+            echo "::notice::Agent Shin kill switch is ON (AGENT_SHIN_ENABLED='false'). Reconsider stays in dry-run."
           fi
           python3 .github/scripts/triage_with_llm.py "${ARGS[@]}"

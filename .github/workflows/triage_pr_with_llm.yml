@@ -2,15 +2,15 @@ name: Agent Shin — PR triage
 
 # LLM-as-judge triage for external pull requests.
 #
-# DRY-RUN BY DEFAULT. Closures and public comments are gated on the repo
-# variable `AGENT_SHIN_ENABLED` being set to the string `"true"`. Until then,
-# every run only writes its verdict to the workflow step summary so the team
-# can QA the judge's decisions before flipping it on.
+# LIVE BY DEFAULT. Closures and public comments fire whenever the workflow is
+# triggered and the dispatch input asks for `close=true`. The repo variable
+# `AGENT_SHIN_ENABLED` acts as a kill switch — set it to the exact string
+# `"false"` (Settings > Secrets and variables > Actions > Variables) to force
+# every run back to dry-run. Any other value, including unset, leaves the bot
+# enabled.
 #
-# To enable for real:
-#   1. Add a repo secret `OPENAI_API_KEY` (or compatible).
-#   2. Set repo variable `AGENT_SHIN_ENABLED` to `true`
-#      (Settings > Secrets and variables > Actions > Variables).
+# Required setup:
+#   - Repo secret `OPENAI_API_KEY` (or compatible) for the LLM judge.
 #
 # We use `pull_request_target` so the workflow has access to repo secrets
 # and runs against PRs from forks. We never check out fork code — only read
@@ -25,7 +25,7 @@ on:
         description: "PR number to triage manually."
         required: true
       close:
-        description: "If true and AGENT_SHIN_ENABLED=true, actually close on fail."
+        description: "If true (and AGENT_SHIN_ENABLED != 'false'), actually close on fail."
         required: false
         default: "false"
         type: choice
@@ -66,7 +66,11 @@ jobs:
           # The Python script calls the LLM whenever this var is set
           # (regardless of `--close`); stripping `--close` doesn't suppress
           # the API call, only the destructive side effects.
-          OPENAI_API_KEY: ${{ (vars.AGENT_SHIN_ENABLED == 'true' || github.event_name == 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}
+          # Kill-switch semantics: only suppress the LLM key when the variable
+          # is literally "false". Unset / any other value -> bot is live, key
+          # is exposed. Manual dispatch always gets the key so a collaborator
+          # can force-run even with the kill switch on.
+          OPENAI_API_KEY: ${{ (vars.AGENT_SHIN_ENABLED != 'false' || github.event_name == 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
           AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
@@ -82,13 +86,16 @@ jobs:
           # string, and a `!= "false"` check would treat "True", "yes",
           # "1", "TRUE", typos, and accidental whitespace as enabling
           # closure. Mirror the Greptile closer's `= "true"` pattern.
-          if [ "${AGENT_SHIN_ENABLED:-false}" = "true" ] && [ "${DISPATCH_CLOSE:-false}" = "true" ]; then
+          # Kill switch: AGENT_SHIN_ENABLED="false" forces dry-run even when
+          # the dispatch input asks for close. The default (unset / any other
+          # value) is "live", matching the post-enactment rollout state.
+          if [ "${AGENT_SHIN_ENABLED:-true}" != "false" ] && [ "${DISPATCH_CLOSE:-false}" = "true" ]; then
             ARGS+=(--close)
-            echo "::notice::Agent Shin is ENABLED and running in close-on-fail mode."
-          elif [ "${AGENT_SHIN_ENABLED:-false}" = "true" ]; then
-            echo "::notice::Agent Shin is ENABLED but this trigger is dry-run (workflow_dispatch close != 'true' or scheduled event)."
+            echo "::notice::Agent Shin is LIVE — running in close-on-fail mode."
+          elif [ "${AGENT_SHIN_ENABLED:-true}" != "false" ]; then
+            echo "::notice::Agent Shin is LIVE but this trigger is dry-run (workflow_dispatch close != 'true' or scheduled event)."
           else
-            echo "::notice::Agent Shin is in DRY-RUN mode (AGENT_SHIN_ENABLED is not 'true'). No comments will be posted; no PRs will be closed."
+            echo "::notice::Agent Shin kill switch is ON (AGENT_SHIN_ENABLED='false'). Forcing dry-run."
           fi
           # On the scheduled/automatic pull_request_target trigger we default to
           # dry-run regardless, so the team can review verdicts in the step
