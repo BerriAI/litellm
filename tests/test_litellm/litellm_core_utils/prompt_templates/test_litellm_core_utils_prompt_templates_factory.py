@@ -1803,6 +1803,91 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert text_block["text"] == "I found the time tool. How can I help you?"
 
 
+def test_convert_to_anthropic_tool_invoke_server_tool_dropped_without_result():
+    """
+    A server_tool_use (srvtoolu_) whose matching *_tool_result is not available
+    (a generic OpenAI client dropped provider_specific_fields on replay) must be
+    omitted: a bare server_tool_use with no following tool_result is rejected by
+    Anthropic. See https://github.com/BerriAI/litellm/issues/17737
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_invoke,
+    )
+
+    tool_calls = [
+        {
+            "id": "srvtoolu_01ABC123",
+            "type": "function",
+            "function": {"name": "web_search", "arguments": '{"query": "x"}'},
+        }
+    ]
+
+    # No web_search_results / tool_results -> drop the orphan rather than emit a
+    # bare server_tool_use.
+    assert convert_to_anthropic_tool_invoke(tool_calls) == []
+
+
+def test_anthropic_messages_pt_drops_orphan_server_tool_from_generic_client():
+    """
+    A generic OpenAI client (e.g. Open WebUI) replays a prior web-search turn as
+    an assistant tool_call + a `tool` message both keyed to the same srvtoolu_ id,
+    without round-tripping provider_specific_fields. The transformed Anthropic
+    messages must contain neither a bare server_tool_use nor a user tool_result
+    for that id (either is rejected with "unexpected tool_use_id ... in
+    tool_result blocks"). See https://github.com/BerriAI/litellm/issues/17737
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "latest news on elephants?"},
+        {
+            "role": "assistant",
+            "content": "Here's what I found about elephants...",
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01ABC123",
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": '{"query": "latest elephant news"}',
+                    },
+                }
+            ],
+            # no provider_specific_fields — a generic OpenAI client drops it
+        },
+        {"role": "tool", "tool_call_id": "srvtoolu_01ABC123", "content": "...results..."},
+        {"role": "user", "content": "tell me more"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    for msg in result:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            assert block.get("type") != "server_tool_use", result
+            if block.get("type") == "tool_result":
+                assert not str(block.get("tool_use_id", "")).startswith(
+                    "srvtoolu_"
+                ), result
+
+    assistant_text = " ".join(
+        b.get("text", "")
+        for m in result
+        if m.get("role") == "assistant"
+        for b in (m.get("content") or [])
+        if isinstance(b, dict) and b.get("type") == "text"
+    )
+    assert "elephants" in assistant_text
+
+
 def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     """
     Regression test for issue #19098: unpack_defs() causes OOM with nested tool schemas.
