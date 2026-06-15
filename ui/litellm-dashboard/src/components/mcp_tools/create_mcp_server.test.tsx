@@ -754,6 +754,30 @@ describe("CreateMCPServer", () => {
         expect(nameInput).toHaveValue("github_mcp");
       });
     });
+
+    it("prefills streamable HTTP, URL, and OAuth from a discovery preset like Slack", async () => {
+      const prefillData = {
+        name: "slack",
+        title: "Slack",
+        description: "Channel management, messaging, and Slack workspace integration",
+        category: "Communication",
+        transport: "http",
+        url: "https://mcp.slack.com/mcp",
+        auth_type: "oauth2",
+      };
+
+      render(<CreateMCPServer {...defaultProps} prefillData={prefillData} />);
+
+      await waitFor(() => {
+        const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+        expect(urlInput).toHaveValue("https://mcp.slack.com/mcp");
+      });
+
+      // Setting auth_type to oauth2 should render the OAuth form fields
+      await waitFor(() => {
+        expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+      });
+    });
   });
 
   describe("with back to discovery button", () => {

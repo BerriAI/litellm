@@ -69,13 +69,10 @@
       "icon_url": "https://cdn.simpleicons.org/slack",
       "category": "Communication",
       "registry_url": null,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-slack"],
-      "env_vars": [
-        {"name": "SLACK_BOT_TOKEN", "description": "Slack Bot User OAuth Token", "secret": true},
-        {"name": "SLACK_TEAM_ID", "description": "Slack Team/Workspace ID", "secret": false}
-      ]
+      "transport": "http",
+      "url": "https://mcp.slack.com/mcp",
+      "auth_type": "oauth2",
+      "env_vars": []
     },
     {
       "name": "discord",

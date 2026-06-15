@@ -273,6 +273,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       transport: transport,
     };
 
+    if (prefillData.auth_type) {
+      prefillValues.auth_type = prefillData.auth_type;
+    }
+
     if (transport === "stdio") {
       const stdioObj: Record<string, any> = {};
       if (prefillData.command) stdioObj.command = prefillData.command;

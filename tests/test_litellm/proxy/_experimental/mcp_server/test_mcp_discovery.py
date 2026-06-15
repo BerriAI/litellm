@@ -94,6 +94,17 @@ class TestMCPRegistryFile:
         assert linear["url"] == "https://mcp.linear.app/mcp"
         assert "/sse" not in linear["url"]
 
+    def test_slack_defaults_to_streamable_http_oauth(self, registry_path):
+        """Slack's MCP server should default to streamable HTTP with the hosted /mcp endpoint and OAuth."""
+        with open(registry_path, "r") as f:
+            data = json.load(f)
+        slack = next(s for s in data["servers"] if s["name"] == "slack")
+        assert slack["transport"] == "http"
+        assert slack["url"] == "https://mcp.slack.com/mcp"
+        assert slack["auth_type"] == "oauth2"
+        assert "command" not in slack
+        assert "args" not in slack
+
     def test_well_known_servers_present(self, registry_path):
         """Ensure key well-known MCPs are in the registry."""
         with open(registry_path, "r") as f:
