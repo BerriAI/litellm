@@ -1511,6 +1511,36 @@ def test_raise_on_model_repetition(
             wrapper.raise_on_model_repetition()
 
 
+def test_raise_on_model_repetition_tolerates_empty_choices(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/28884
+
+    Vertex Gemini grounding/search/thought-only stream chunks can arrive with
+    `choices=[]`. raise_on_model_repetition should treat them as non-signal
+    instead of raising IndexError on chunks[-1].choices[0].
+    """
+    wrapper = initialized_custom_stream_wrapper
+
+    content_chunk = _make_chunk("hello world")
+    metadata_only_chunk = ModelResponseStream(
+        id="test",
+        created=1741037890,
+        model="test-model",
+        choices=[],
+    )
+
+    # Empty-choices chunk after a content chunk must not raise.
+    wrapper.chunks.append(content_chunk)
+    wrapper.chunks.append(metadata_only_chunk)
+    wrapper.raise_on_model_repetition()
+
+    # Empty-choices chunk as the prior chunk must also not raise.
+    wrapper.chunks.append(content_chunk)
+    wrapper.raise_on_model_repetition()
+
+
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk
