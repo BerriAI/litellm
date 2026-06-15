@@ -263,3 +263,42 @@ def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(
     model_info = GetModelCostMap.load_local_model_cost_map()[model]
 
     assert model_info["bedrock_output_config_effort_ceiling"] == expected_ceiling
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-opus-4-8",
+        "anthropic.claude-opus-4-8-v1:0",
+        "us.anthropic.claude-opus-4-8",
+        "us.anthropic.claude-opus-4-8-v1:0",
+        "eu.anthropic.claude-opus-4-8",
+        "global.anthropic.claude-opus-4-8",
+        "bedrock/converse/us.anthropic.claude-opus-4-8",
+        "bedrock/invoke/us.anthropic.claude-opus-4-8",
+        "claude-opus-4.8",
+        "claude_opus_4_8",
+        "CLAUDE-OPUS-4-8",
+    ],
+)
+def test_is_claude_4_5_on_bedrock_recognises_opus_4_8(model):
+    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+
+    assert is_claude_4_5_on_bedrock(model) is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-3-sonnet",
+        "anthropic.claude-opus-4",
+        "us.anthropic.claude-opus-4-4",
+        "us.anthropic.claude-opus-4-9",
+        "anthropic.claude-haiku-4-8",
+        "anthropic.claude-sonnet-4-8",
+    ],
+)
+def test_is_claude_4_5_on_bedrock_does_not_overmatch(model):
+    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+
+    assert is_claude_4_5_on_bedrock(model) is False
