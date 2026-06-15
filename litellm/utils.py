@@ -6848,6 +6848,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("DASHSCOPE_API_KEY")
+        elif custom_llm_provider == "modelscope":
+            if "MODELSCOPE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("MODELSCOPE_API_KEY")
         elif custom_llm_provider == "moonshot":
             if "MOONSHOT_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8519,6 +8524,7 @@ class ProviderConfigManager:
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
+            LlmProviders.MODELSCOPE: (lambda: litellm.ModelScopeChatConfig(), False),
             LlmProviders.MOONSHOT: (lambda: litellm.MoonshotChatConfig(), False),
             LlmProviders.DOCKER_MODEL_RUNNER: (
                 lambda: litellm.DockerModelRunnerChatConfig(),
@@ -9457,6 +9463,12 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_image_generation_config(model)
+        elif LlmProviders.MODELSCOPE == provider:
+            from litellm.llms.modelscope.image_generation import (
+                get_modelscope_image_generation_config,
+            )
+
+            return get_modelscope_image_generation_config(model)
         return None
 
     @staticmethod

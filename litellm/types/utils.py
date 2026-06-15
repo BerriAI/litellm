@@ -3338,6 +3338,7 @@ class LlmProviders(str, Enum):
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
+    MODELSCOPE = "modelscope"
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
     V0 = "v0"

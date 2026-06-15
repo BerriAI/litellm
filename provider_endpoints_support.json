@@ -1502,6 +1502,24 @@
         "interactions": true
       }
     },
+    "modelscope": {
+      "display_name": "ModelScope (`modelscope`)",
+      "url": "https://docs.litellm.ai/docs/providers/modelscope",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "moonshot": {
       "display_name": "Moonshot (`moonshot`)",
       "url": "https://docs.litellm.ai/docs/providers/moonshot",
