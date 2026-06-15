@@ -130,6 +130,7 @@ from litellm.proxy.db.exception_handler import (
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import (
     PrismaWrapper,
+    build_database_token_auth_url,
     parse_iam_endpoint_from_url,
 )
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
@@ -2790,12 +2791,9 @@ class PrismaClient:
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
             os.getenv("IAM_TOKEN_DB_AUTH")
         )
-        self.azure_postgresql_auth: bool = (
+        azure_postgresql_auth = (
             str_to_bool(os.getenv("AZURE_POSTGRESQL_AUTH")) is True
             or str_to_bool(os.getenv("AZURE_POSTGRESQL_PASSWORDLESS_AUTH")) is True
-        )
-        db_token_auth_type = (
-            "azure_postgresql" if self.azure_postgresql_auth else "rds_iam"
         )
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
@@ -2814,7 +2812,7 @@ class PrismaClient:
         iam_flag = (
             self.iam_token_db_auth if self.iam_token_db_auth is not None else False
         )
-        token_auth_enabled = bool(iam_flag or self.azure_postgresql_auth)
+        token_auth_enabled = bool(iam_flag or azure_postgresql_auth)
         # When read-replica routing is on, tag log lines with [writer]/[reader]
         # so the two wrappers' interleaved IAM refresh logs can be told apart.
         # Single-DB deployments get an empty prefix (logs unchanged).
@@ -2825,14 +2823,14 @@ class PrismaClient:
                 original_prisma=Prisma(http=http_client),
                 iam_token_db_auth=token_auth_enabled,
                 log_prefix=writer_log_prefix,
-                db_token_auth_type=db_token_auth_type,
+                azure_postgresql_auth=azure_postgresql_auth,
             )
         else:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(),
                 iam_token_db_auth=token_auth_enabled,
                 log_prefix=writer_log_prefix,
-                db_token_auth_type=db_token_auth_type,
+                azure_postgresql_auth=azure_postgresql_auth,
             )
 
         # Optional read-replica routing. When DATABASE_URL_READ_REPLICA is set,
@@ -2861,23 +2859,10 @@ class PrismaClient:
                 # `PrismaWrapper.__getattr__`, which deadlocks the event loop
                 # and times out after 30s.
                 if token_auth_enabled and reader_iam_endpoint is not None:
-                    if db_token_auth_type == "azure_postgresql":
-                        from litellm.proxy.auth.azure_postgres_token import (
-                            generate_azure_postgres_auth_token,
-                        )
-
-                        reader_token = generate_azure_postgres_auth_token().token
-                    else:
-                        from litellm.proxy.auth.rds_iam_token import (
-                            generate_iam_auth_token,
-                        )
-
-                        reader_token = generate_iam_auth_token(
-                            db_host=reader_iam_endpoint.host,
-                            db_port=reader_iam_endpoint.port,
-                            db_user=reader_iam_endpoint.user,
-                        )
-                    read_replica_url = reader_iam_endpoint.build_url(reader_token)
+                    read_replica_url, _ = build_database_token_auth_url(
+                        reader_iam_endpoint,
+                        azure_postgresql_auth=azure_postgresql_auth,
+                    )
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
                 reader_kwargs: Dict[str, Any] = {"datasource": {"url": read_replica_url}}
                 if http_client is not None:
@@ -2891,7 +2876,7 @@ class PrismaClient:
                     iam_endpoint=reader_iam_endpoint,
                     recreate_uses_datasource=True,
                     log_prefix="[reader]",
-                    db_token_auth_type=db_token_auth_type,
+                    azure_postgresql_auth=azure_postgresql_auth,
                 )
                 self.db = RoutingPrismaWrapper(writer=writer_wrapper, reader=reader_wrapper)
                 verbose_proxy_logger.info(

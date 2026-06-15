@@ -1001,52 +1001,33 @@ def run_server(
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
-        if (
+        azure_postgresql_auth_enabled = (
             azure_postgresql_auth
             or get_secret_bool("AZURE_POSTGRESQL_AUTH")
             or get_secret_bool("AZURE_POSTGRESQL_PASSWORDLESS_AUTH")
+        )
+        if (
+            azure_postgresql_auth_enabled
+            or iam_token_db_auth
+            or get_secret_bool("IAM_TOKEN_DB_AUTH")
         ):
-            from litellm.proxy.auth.azure_postgres_token import (
-                generate_azure_postgres_auth_token,
+            from litellm.proxy.db.prisma_client import (
+                build_database_token_auth_url,
+                get_database_auth_endpoint_from_env,
             )
 
-            db_host = os.getenv("DATABASE_HOST")
-            db_port = os.getenv("DATABASE_PORT", "5432")
-            db_user = os.getenv("DATABASE_USER")
-            db_name = os.getenv("DATABASE_NAME")
-            db_schema = os.getenv("DATABASE_SCHEMA")
-
-            token = generate_azure_postgres_auth_token().token
-
-            _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
-            if db_schema:
-                _db_url += f"?schema={db_schema}"
-
+            _db_url, _ = build_database_token_auth_url(
+                get_database_auth_endpoint_from_env(),
+                azure_postgresql_auth=azure_postgresql_auth_enabled,
+            )
             os.environ["DATABASE_URL"] = _db_url
-            os.environ["AZURE_POSTGRESQL_AUTH"] = "True"
-        elif iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
-            from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
-
-            db_host = os.getenv("DATABASE_HOST")
-            # Default to the Postgres standard port. Without a default,
-            # `db_port=None` flows into `boto.generate_db_auth_token(Port=None)`
-            # and botocore stringifies it to `"None"` while building the
-            # presigned URL, which then blows up with `ValueError: Port could
-            # not be cast to integer value as 'None'` during signing.
-            db_port = os.getenv("DATABASE_PORT", "5432")
-            db_user = os.getenv("DATABASE_USER")
-            db_name = os.getenv("DATABASE_NAME")
-            db_schema = os.getenv("DATABASE_SCHEMA")
-
-            token = generate_iam_auth_token(db_host=db_host, db_port=db_port, db_user=db_user)
-
-            # print(f"token: {token}")
-            _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
-            if db_schema:
-                _db_url += f"?schema={db_schema}"
-
-            os.environ["DATABASE_URL"] = _db_url
-            os.environ["IAM_TOKEN_DB_AUTH"] = "True"
+            os.environ[
+                (
+                    "AZURE_POSTGRESQL_AUTH"
+                    if azure_postgresql_auth_enabled
+                    else "IAM_TOKEN_DB_AUTH"
+                )
+            ] = "True"
 
         ### DECRYPT ENV VAR ###
 

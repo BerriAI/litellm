@@ -295,9 +295,7 @@ def create_azure_ad_redis_connect_func(
 
 def _get_azure_ad_redis_username(redis_kwargs: dict) -> Optional[str]:
     username = redis_kwargs.get("username") or os.environ.get("REDIS_USERNAME")
-    if username is None:
-        return None
-    return str(username)
+    return str(username) if username is not None else None
 
 
 def _get_credential_provider_from_connect_func(

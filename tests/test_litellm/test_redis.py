@@ -28,6 +28,16 @@ def clear_gcp_iam_token_cache():
     _token_cache.clear()
 
 
+def _mock_azure_identity(mock_credential):
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.DefaultAzureCredential = MagicMock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = MagicMock(return_value=mock_credential)
+    mock_azure_identity.ManagedIdentityCredential = MagicMock(
+        return_value=mock_credential
+    )
+    return mock_azure_identity
+
+
 def test_get_redis_url_from_environment_single_url(monkeypatch):
     """Test when REDIS_URL is directly provided"""
     # Set the environment variable
@@ -390,12 +400,7 @@ def test_sync_url_client_azure_ad_auth_uses_credential_provider(monkeypatch):
     """URL-based Azure Redis clients must keep token auth instead of filtering
     it out before Redis.from_url."""
     mock_credential = MagicMock()
-    mock_azure_identity = MagicMock()
-    mock_azure_identity.DefaultAzureCredential = MagicMock(return_value=mock_credential)
-    mock_azure_identity.ClientSecretCredential = MagicMock(return_value=mock_credential)
-    mock_azure_identity.ManagedIdentityCredential = MagicMock(
-        return_value=mock_credential
-    )
+    mock_azure_identity = _mock_azure_identity(mock_credential)
     monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
 
     with (
@@ -424,12 +429,7 @@ def test_connection_pool_url_azure_ad_auth_uses_credential_provider(monkeypatch)
     """Connection pools built from Redis URLs need Azure AD credential_provider
     too, otherwise pooled connections authenticate with no token."""
     mock_credential = MagicMock()
-    mock_azure_identity = MagicMock()
-    mock_azure_identity.DefaultAzureCredential = MagicMock(return_value=mock_credential)
-    mock_azure_identity.ClientSecretCredential = MagicMock(return_value=mock_credential)
-    mock_azure_identity.ManagedIdentityCredential = MagicMock(
-        return_value=mock_credential
-    )
+    mock_azure_identity = _mock_azure_identity(mock_credential)
     monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
 
     with (

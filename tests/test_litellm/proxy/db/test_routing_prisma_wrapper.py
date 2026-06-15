@@ -809,7 +809,7 @@ def test_writer_get_azure_postgres_token_uses_database_env_vars(monkeypatch):
     writer = PrismaWrapper(
         original_prisma=MagicMock(),
         iam_token_db_auth=True,
-        db_token_auth_type="azure_postgresql",
+        azure_postgresql_auth=True,
     )
 
     new_url = writer.get_rds_iam_token()
@@ -825,22 +825,16 @@ def test_writer_get_azure_postgres_token_uses_database_env_vars(monkeypatch):
 def test_azure_postgres_jwt_expiration_is_used_for_refresh_timing():
     """Azure PostgreSQL tokens are JWTs; the wrapper should read exp so the
     existing proactive refresh loop can schedule before token expiry."""
-    import base64
-    import json
     from datetime import datetime
 
     from litellm.proxy.db.prisma_client import PrismaWrapper
 
-    def b64url(data: Dict[str, Any]) -> str:
-        raw = json.dumps(data).encode("utf-8")
-        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-
     exp = 1893456000
-    token = f"{b64url({'alg': 'none'})}.{b64url({'exp': exp})}.signature"
+    token = "eyJhbGciOiJub25lIn0.eyJleHAiOjE4OTM0NTYwMDB9.signature"
     wrapper = PrismaWrapper(
         original_prisma=MagicMock(),
         iam_token_db_auth=True,
-        db_token_auth_type="azure_postgresql",
+        azure_postgresql_auth=True,
     )
 
     assert wrapper._parse_token_expiration(token) == datetime.utcfromtimestamp(exp)

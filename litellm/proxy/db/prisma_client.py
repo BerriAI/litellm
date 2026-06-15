@@ -70,6 +70,37 @@ def parse_iam_endpoint_from_url(url: str) -> IAMEndpoint:
     )
 
 
+def get_database_auth_endpoint_from_env() -> IAMEndpoint:
+    return IAMEndpoint(
+        host=os.getenv("DATABASE_HOST") or "",
+        port=os.getenv("DATABASE_PORT", "5432"),
+        user=os.getenv("DATABASE_USER") or "",
+        name=os.getenv("DATABASE_NAME") or "",
+        schema=os.getenv("DATABASE_SCHEMA"),
+    )
+
+
+def build_database_token_auth_url(
+    endpoint: IAMEndpoint,
+    *,
+    azure_postgresql_auth: bool = False,
+) -> tuple[str, int | None]:
+    if azure_postgresql_auth:
+        from litellm.proxy.auth.azure_postgres_token import (
+            generate_azure_postgres_auth_token,
+        )
+
+        token_response = generate_azure_postgres_auth_token()
+        return endpoint.build_url(token_response.token), token_response.expires_on
+
+    from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+
+    token = generate_iam_auth_token(
+        db_host=endpoint.host, db_port=endpoint.port, db_user=endpoint.user
+    )
+    return endpoint.build_url(token), None
+
+
 class PrismaWrapper:
     """
     Wrapper around Prisma client that handles RDS IAM token authentication.
@@ -99,11 +130,11 @@ class PrismaWrapper:
         iam_endpoint: IAMEndpoint | None = None,
         recreate_uses_datasource: bool = False,
         log_prefix: str = "",
-        db_token_auth_type: str = "rds_iam",
+        azure_postgresql_auth: bool = False,
     ):
         self._original_prisma = original_prisma
         self.iam_token_db_auth = iam_token_db_auth
-        self._db_token_auth_type = db_token_auth_type
+        self._azure_postgresql_auth = azure_postgresql_auth
 
         # Per-connection knobs so the same wrapper can be used for the writer
         # (defaults: DATABASE_URL env, IAM endpoint from DATABASE_HOST/etc.,
@@ -142,7 +173,7 @@ class PrismaWrapper:
         self.on_engine_replaced: Callable[[], None] | None = None
 
     def _token_auth_log_name(self) -> str:
-        if self._db_token_auth_type == "azure_postgresql":
+        if self._azure_postgresql_auth:
             return "Azure PostgreSQL Entra token"
         return "RDS IAM token"
 
@@ -349,40 +380,13 @@ class PrismaWrapper:
         if self._iam_endpoint is not None:
             endpoint = self._iam_endpoint
         else:
-            db_host = os.getenv("DATABASE_HOST")
-            # Default to the Postgres standard port; passing None to
-            # `generate_iam_auth_token` makes botocore embed the literal
-            # string "None" in the presigned URL, which then fails to parse.
-            db_port = os.getenv("DATABASE_PORT", "5432")
-            db_user = os.getenv("DATABASE_USER")
-            db_name = os.getenv("DATABASE_NAME")
-            db_schema = os.getenv("DATABASE_SCHEMA")
-            endpoint = IAMEndpoint(
-                host=db_host or "",
-                port=db_port,
-                user=db_user or "",
-                name=db_name or "",
-                schema=db_schema,
-            )
+            endpoint = get_database_auth_endpoint_from_env()
 
-        db_host = endpoint.host
-        db_port = endpoint.port
-        db_user = endpoint.user
-
-        if self._db_token_auth_type == "azure_postgresql":
-            from litellm.proxy.auth.azure_postgres_token import (
-                generate_azure_postgres_auth_token,
-            )
-
-            token_response = generate_azure_postgres_auth_token()
-            token = token_response.token
-            self._last_token_expires_on = token_response.expires_on
-        else:
-            from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
-
-            token = generate_iam_auth_token(db_host=db_host, db_port=db_port, db_user=db_user)
-
-        _db_url = endpoint.build_url(token)
+        _db_url, expires_on = build_database_token_auth_url(
+            endpoint, azure_postgresql_auth=self._azure_postgresql_auth
+        )
+        if expires_on is not None:
+            self._last_token_expires_on = expires_on
 
         os.environ[self._db_url_env_var] = _db_url
         return _db_url
