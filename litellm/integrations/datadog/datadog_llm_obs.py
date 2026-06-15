@@ -57,10 +57,16 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     "[DATADOG MOCK] DataDogLLMObs logger initialized in mock mode"
                 )
 
-            # Configure DataDog endpoint (Agent or Direct API)
-            # Use LITELLM_DD_AGENT_HOST to avoid conflicts with ddtrace's DD_AGENT_HOST
-            # Check for agent mode FIRST - agent mode doesn't require DD_API_KEY or DD_SITE
+            # Configure DataDog endpoint. Precedence:
+            #   1. LITELLM_DD_AGENT_HOST (TCP agent)
+            #   2. DD_TRACE_AGENT_URL starting with "unix://" (Unix socket agent)
+            #   3. DD_API_KEY + DD_SITE (direct API)
+            # Use LITELLM_DD_AGENT_HOST to avoid conflicts with ddtrace's DD_AGENT_HOST.
+            # The DD_TRACE_AGENT_URL fallback matches ddtrace's own env var so a single
+            # operator-injected setting (e.g. unix:///var/run/datadog/apm.socket) wires
+            # both ddtrace and LiteLLM's LLM Observability shipping at once.
             dd_agent_host = os.getenv("LITELLM_DD_AGENT_HOST")
+            dd_trace_agent_url = os.getenv("DD_TRACE_AGENT_URL", "")
 
             self.async_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback
@@ -69,6 +75,19 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
             if dd_agent_host:
                 self._configure_dd_agent(dd_agent_host=dd_agent_host)
+            elif dd_trace_agent_url.startswith("unix://"):
+                # Only the canonical `unix:///absolute/path` form is supported.
+                # `unix://host/path` (relative path with a phantom hostname) is
+                # accepted by httpx at construction time but fails with an
+                # obscure OSError on the first flush — refuse early instead.
+                socket_path = dd_trace_agent_url[len("unix://") :]
+                if not socket_path.startswith("/"):
+                    raise ValueError(
+                        f"DD_TRACE_AGENT_URL has an unsupported unix:// form: "
+                        f"'{dd_trace_agent_url}'. Expected an absolute path, e.g. "
+                        f"unix:///var/run/datadog/apm.socket"
+                    )
+                self._configure_dd_agent_uds(socket_path=socket_path)
             else:
                 # Only require DD_API_KEY and DD_SITE for direct API mode
                 if os.getenv("DD_API_KEY", None) is None:
@@ -112,6 +131,35 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             f"http://{dd_agent_host}:{agent_port}/api/intake/llm-obs/v1/trace/spans"
         )
         verbose_logger.debug(f"DataDogLLMObs: Using DD Agent at {self.intake_url}")
+
+    def _configure_dd_agent_uds(self, socket_path: str):
+        """
+        Configure the Datadog logger to send LLM Observability traces to the
+        Datadog Agent over a Unix domain socket (UDS).
+
+        Required by deployments where the agent is reachable only via UDS, e.g.
+        the Datadog Operator's APM auto-instrumentation which mounts
+        /var/run/datadog/apm.socket and sets DD_TRACE_AGENT_URL to
+        unix:///var/run/datadog/apm.socket. The TCP agent ports (8126) are not
+        bound on the host in this configuration, so the existing TCP agent mode
+        cannot reach the agent.
+
+        As with TCP agent mode, the agent handles auth — no API Key required.
+        """
+        # Replace the shared HTTPX client (TCP-only) with one that routes through
+        # the UDS transport. Goes through the same get_async_httpx_client factory
+        # so we get default timeouts, headers, and a managed lifecycle; the
+        # factory bypasses its cache when a custom transport is supplied.
+        # Same URL path as TCP mode; host portion is unused because the request
+        # is delivered straight over the socket.
+        self.uds_transport = httpx.AsyncHTTPTransport(uds=socket_path)
+        self.async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback,
+            transport=self.uds_transport,
+        )
+        self.DD_SITE = "localhost"  # Not used for URL construction in agent mode
+        self.intake_url = "http://localhost/api/intake/llm-obs/v1/trace/spans"
+        verbose_logger.debug(f"DataDogLLMObs: Using DD Agent over UDS at {socket_path}")
 
     def _configure_dd_direct_api(self):
         """

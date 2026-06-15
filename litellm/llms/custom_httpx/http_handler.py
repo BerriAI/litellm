@@ -524,6 +524,7 @@ class AsyncHTTPHandler:
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
+        transport: Optional[httpx.AsyncBaseTransport] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -532,6 +533,7 @@ class AsyncHTTPHandler:
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
             shared_session=shared_session,
+            transport=transport,
         )
         self.client_alias = client_alias
 
@@ -541,26 +543,44 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
+        transport: Optional[httpx.AsyncBaseTransport] = None,
     ) -> httpx.AsyncClient:
-        # Get unified SSL configuration
+        if timeout is None:
+            timeout = _DEFAULT_TIMEOUT
+
+        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
+        default_headers = get_default_headers()
+
+        # A caller-supplied transport (e.g. AsyncHTTPTransport(uds=...) for talking
+        # to a local Datadog agent over a Unix domain socket) bypasses all SSL
+        # plumbing — SSL is irrelevant to a unix-socket connection, and reading
+        # SSL_CERT_FILE / SSL_SECURITY_LEVEL / SSL_ECDH_CURVE / SSL_CERTIFICATE
+        # here would fail client creation if any of those env vars are
+        # misconfigured in the UDS environment.
+        if transport is not None:
+            return httpx.AsyncClient(
+                transport=transport,
+                event_hooks=event_hooks,
+                timeout=timeout,
+                headers=default_headers,
+                follow_redirects=True,
+            )
+
+        # Default path: TCP/TLS — compute the full SSL config and let httpx
+        # pick its transport (or use the aiohttp transport when enabled).
         ssl_config = get_ssl_configuration(ssl_verify)
 
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
-        if timeout is None:
-            timeout = _DEFAULT_TIMEOUT
-        # Create a client with a connection pool
-
         transport = AsyncHTTPHandler._create_async_transport(
-            ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
+            ssl_context=(
+                ssl_config if isinstance(ssl_config, ssl.SSLContext) else None
+            ),
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             shared_session=shared_session,
         )
-
-        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
-        default_headers = get_default_headers()
 
         return httpx.AsyncClient(
             transport=transport,
@@ -1333,13 +1353,36 @@ def get_async_httpx_client(
     llm_provider: Union[LlmProviders, httpxSpecialProvider],
     params: Optional[dict] = None,
     shared_session: Optional["ClientSession"] = None,
+    transport: Optional[httpx.AsyncBaseTransport] = None,
 ) -> AsyncHTTPHandler:
     """
     Retrieves the async HTTP client from the cache
     If not present, creates a new client
 
     Caches the new client and returns it.
+
+    When `transport` is provided (e.g. an `httpx.AsyncHTTPTransport(uds=...)`
+    for talking to a local Datadog agent over a Unix domain socket), the
+    cache is bypassed — each transport is typically a one-off and we don't
+    have a stable cache key for it.
     """
+    if transport is not None:
+        # Cache bypass: each caller-supplied transport is treated as unique.
+        # The caller is responsible for retaining the returned handler so it
+        # isn't garbage-collected mid-flight.
+        if params is not None:
+            handler_params = {
+                k: v for k, v in params.items() if k != "disable_aiohttp_transport"
+            }
+            handler_params["shared_session"] = shared_session
+            handler_params["transport"] = transport
+            return AsyncHTTPHandler(**handler_params)
+        return AsyncHTTPHandler(
+            timeout=_DEFAULT_TIMEOUT,
+            shared_session=shared_session,
+            transport=transport,
+        )
+
     _params_key_name = ""
     if params is not None:
         for key, value in params.items():
