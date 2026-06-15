@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import AsyncGenerator, Dict, List, Literal, Optional, Type, Union
+from typing import AsyncGenerator, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import HTTPException
 from httpx import Response as HttpxResponse
@@ -93,7 +93,13 @@ class RepelloAIGuardrail(CustomGuardrail):
                             if isinstance(item, str) and item:
                                 texts.append(item)
                 stack.extend(
-                    reversed([v for k, v in current.items() if k not in _SCHEMA_EXTRACTED_KEYS])
+                    reversed(
+                        [
+                            v
+                            for k, v in current.items()
+                            if k not in _SCHEMA_EXTRACTED_KEYS
+                        ]
+                    )
                 )
             elif isinstance(current, list):
                 stack.extend(reversed(current))
@@ -197,11 +203,14 @@ class RepelloAIGuardrail(CustomGuardrail):
         repelloai_response: Optional[RepelloAIAnalyzeResponse] = None
         try:
             verbose_proxy_logger.debug("RepelloAI Argus request: %s", request)
-            response = await self.async_handler.post(
+            raw_response = await self.async_handler.post(
                 url=endpoint,
                 headers={"X-API-Key": self.repelloai_api_key},
                 json=request,
             )
+            if raw_response is None:
+                raise ValueError("RepelloAI Argus returned no response")
+            response: HttpxResponse = raw_response
             self._raise_for_config_error(response)
             response.raise_for_status()
             payload = response.json()
@@ -328,11 +337,12 @@ class RepelloAIGuardrail(CustomGuardrail):
     @staticmethod
     def _extract_prompt_message_text(data: Dict) -> List[str]:
         messages = build_inspection_messages(data)
-        return [
-            message.get("content")
-            for message in messages
-            if isinstance(message.get("content"), str) and message.get("content")
-        ]
+        texts: List[str] = []
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str) and content:
+                texts.append(content)
+        return texts
 
     @classmethod
     def _extract_prompt_text(cls, data: Dict) -> Optional[str]:
@@ -486,7 +496,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         if isinstance(response, dict):
             response_dict = response
         elif hasattr(response, "model_dump"):
-            response_dict = response.model_dump()
+            response_dict = cast(Dict, response.model_dump())  # type: ignore[union-attr]
         else:
             response_dict = {}
         text = RepelloAIGuardrail._extract_chat_completion_text(response_dict)
