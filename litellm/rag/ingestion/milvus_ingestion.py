@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import (
     MILVUS_DEFAULT_METRIC_TYPE,
@@ -68,6 +67,9 @@ class MilvusRAGIngestion(BaseRAGIngestion):
     ):
         BaseRAGIngestion.__init__(self, ingest_options=ingest_options, router=router)
 
+        if not self.embedding_config:
+            self.embedding_config = {"model": "text-embedding-3-small"}
+
         self.collection_name = self.vector_store_config.get(
             "collection_name"
         ) or self.vector_store_config.get("vector_store_id")
@@ -109,6 +111,21 @@ class MilvusRAGIngestion(BaseRAGIngestion):
             llm_provider=httpxSpecialProvider.RAG
         )
 
+    @classmethod
+    def normalize_authorized_vector_store_id(
+        cls, vector_store_opts: Dict[str, Any]
+    ) -> None:
+        """
+        Milvus resolves its write target from `collection_name` first (falling
+        back to `vector_store_id`). Always mirror `collection_name` onto
+        `vector_store_id` so authorization covers the collection that will be
+        written to - even when the caller supplies a different `vector_store_id`
+        they happen to have access to.
+        """
+        collection_name = vector_store_opts.get("collection_name")
+        if collection_name:
+            vector_store_opts["vector_store_id"] = collection_name
+
     def _headers(self) -> Dict[str, str]:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.api_key:
@@ -135,38 +152,6 @@ class MilvusRAGIngestion(BaseRAGIngestion):
                 f"code={data.get('code')} message={data.get('message')}"
             )
         return data
-
-    async def embed(
-        self,
-        chunks: List[str],
-    ) -> Optional[List[List[float]]]:
-        """
-        Generate embeddings using LiteLLM's embedding API (any provider).
-
-        Defaults to text-embedding-3-small when no embedding config is provided.
-        """
-        if not chunks:
-            return None
-
-        if not self.embedding_config:
-            verbose_logger.warning(
-                "No embedding config provided, using default text-embedding-3-small"
-            )
-            self.embedding_config = {"model": "text-embedding-3-small"}
-
-        embedding_model = self.embedding_config.get("model", "text-embedding-3-small")
-        input_chunks: List[str] = list(chunks)
-
-        if self.router:
-            response = await self.router.aembedding(
-                model=embedding_model, input=input_chunks
-            )
-        else:
-            response = await litellm.aembedding(
-                model=embedding_model, input=input_chunks
-            )
-
-        return [item["embedding"] for item in response.data]
 
     async def _collection_exists(self) -> bool:
         try:

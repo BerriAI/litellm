@@ -28,6 +28,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
+from litellm.rag.main import get_ingestion_class
 
 router = APIRouter()
 
@@ -102,21 +103,24 @@ def _normalize_collection_name_as_vector_store_id(
     """
     Normalize provider-native write targets to `vector_store_id` for authorization.
 
-    Some providers (e.g. Milvus) use `collection_name` as the write target and
-    only fall back to `vector_store_id`. The proxy authorizes targets by the
-    `vector_store_id` key, so a request that sets only `collection_name` would
-    bypass `assert_user_can_access_vector_store_id` and write into another team's
-    managed collection. Copy `collection_name` into `vector_store_id` when the
-    latter is absent so it is authorized as the vector store id.
+    The proxy authorizes ingestion by the `vector_store_id` key, but some
+    providers resolve their real write target from a different field (e.g. Milvus
+    uses `collection_name`). Each ingestion class owns that knowledge via
+    `normalize_authorized_vector_store_id`, so dispatch to it instead of hardcoding
+    provider-specific logic here. This closes the bypass where a caller pairs a
+    write target they cannot access with a `vector_store_id` they can.
     """
     vector_store_opts = ingest_options.get("vector_store")
     if not isinstance(vector_store_opts, dict):
         return
-    if vector_store_opts.get("custom_llm_provider") != "milvus":
+    provider = vector_store_opts.get("custom_llm_provider")
+    if not provider:
         return
-    collection_name = vector_store_opts.get("collection_name")
-    if collection_name and not vector_store_opts.get("vector_store_id"):
-        vector_store_opts["vector_store_id"] = collection_name
+    try:
+        ingestion_class = get_ingestion_class(provider)
+    except ValueError:
+        return
+    ingestion_class.normalize_authorized_vector_store_id(vector_store_opts)
 
 
 async def _authorize_nested_vector_store_ids(

@@ -100,6 +100,21 @@ class BaseRAGIngestion(ABC):
         """Get the vector store provider."""
         return self.vector_store_config.get("custom_llm_provider", "openai")
 
+    @classmethod
+    def normalize_authorized_vector_store_id(
+        cls, vector_store_opts: Dict[str, Any]
+    ) -> None:
+        """
+        Rewrite the vector_store config so `vector_store_id` matches the actual
+        write target before the proxy authorizes it.
+
+        The proxy authorizes ingestion by the `vector_store_id` key. Providers
+        whose real write target is a different field (e.g. Milvus uses
+        `collection_name`) must override this so authorization covers the target
+        that will actually be written to. Default: no-op.
+        """
+        return None
+
     async def upload(
         self,
         file_data: Optional[Tuple[str, bytes, str]] = None,

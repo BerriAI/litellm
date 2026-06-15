@@ -265,7 +265,7 @@ async def test_embed_uses_litellm_aembedding(monkeypatch):
         return resp
 
     monkeypatch.setattr(
-        "litellm.rag.ingestion.milvus_ingestion.litellm.aembedding",
+        "litellm.rag.ingestion.base_ingestion.litellm.aembedding",
         fake_aembedding,
     )
 
