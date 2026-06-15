@@ -2277,24 +2277,26 @@ class TestCacheControlPreservation:
         assert result[0]["cache_control"] == {"type": "ephemeral"}
 
 
-def test_function_call_tool_id_prefers_unique_id_over_call_id():
-    """Bedrock Mantle returns a non-unique, index-based ``call_id`` (e.g. ``call_0``
-    that resets every response) alongside a unique ``id`` (``fc_...``). The converter
-    must expose the unique ``id``; otherwise every tool call across an agent's turns
-    collapses to the same id, the agent cannot correlate its tool results, and it
-    loops re-issuing the same call. Regression for the bedrock-mantle gpt-5.5
-    non-streaming path."""
+def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
+    """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0`` that
+    resets every response) alongside a unique ``id`` (``fc_...``). For that degenerate
+    form the converter must expose the unique ``id``; otherwise every tool call across
+    an agent's turns collapses to the same id, the agent cannot correlate its tool
+    results, and it loops re-issuing the same call. A normal (unique) ``call_id`` must
+    be preserved, since it is the canonical Responses API correlation key. Regression
+    for the bedrock-mantle gpt-5.5 non-streaming path."""
     from types import SimpleNamespace
 
-    tool_call_item = SimpleNamespace(
-        id="fc_unique_abc123",
-        call_id="call_0",
-        name="get_weather",
-        arguments='{"city": "Paris"}',
+    convert = (
+        LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call
     )
 
-    result = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
-        tool_call_item
+    mantle = SimpleNamespace(
+        id="fc_unique_abc123", call_id="call_0", name="get_weather", arguments="{}"
     )
+    assert convert(mantle)["id"] == "fc_unique_abc123"
 
-    assert result["id"] == "fc_unique_abc123"
+    openai = SimpleNamespace(
+        id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}"
+    )
+    assert convert(openai)["id"] == "call_tokyo"
