@@ -295,6 +295,12 @@ class CustomStreamWrapper:
         if len(self.chunks) < 2:
             return
 
+        # Providers like Vertex Gemini (Flash / Flash Lite with web search) emit
+        # metadata-only / usage-only chunks with no choices. These get stored in
+        # self.chunks but carry no comparable content, so skip repetition detection.
+        if not self.chunks[-1].choices or not self.chunks[-2].choices:
+            return
+
         last_content = self.chunks[-1].choices[0].delta.content
 
         if (
