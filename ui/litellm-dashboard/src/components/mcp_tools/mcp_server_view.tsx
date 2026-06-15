@@ -72,7 +72,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const { maskedUrl, hasToken } = urlValue ? getMaskedAndFullUrl(urlValue) : { maskedUrl: "—", hasToken: false };
 
   const coworkServerIdentifier = mcpServer.alias || mcpServer.server_name || mcpServer.server_id;
-  const coworkUrl = `${getProxyBaseUrl()}/${coworkServerIdentifier}/mcp`;
+  const coworkUrl = `${getProxyBaseUrl()}/${encodeURIComponent(coworkServerIdentifier ?? "")}/mcp`;
   const isUpstreamDelegated = mcpServer.delegate_auth_to_upstream === true;
 
   const renderUrlWithToggle = (url: string | null | undefined, showFull: boolean) => {
