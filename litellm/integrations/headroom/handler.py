@@ -210,11 +210,22 @@ class MTHeadroomAggressive(HeadroomCallback, CustomLogger):
         data: dict[str, Any],
         call_type: str,
     ) -> dict[str, Any]:
-        # upstream's hook bails for unsupported call_types itself; we just
-        # forward. Pull a stable string from user_api_key_dict for upstream's
-        # opaque key arg (it expects a str).
+        # Upstream's hook gates on ``call_type in ("completion", "acompletion")``
+        # which excludes Anthropic-shape /v1/messages (route_type =
+        # "anthropic_messages"). Claude Code uses /v1/messages exclusively,
+        # so without this lift the entire Claude-Code path skips compression.
+        # Spoof the call_type as ``acompletion`` for upstream's gate; the
+        # compress() function itself doesn't care about the route name and
+        # handles both OAI tool_calls/tool and Anthropic tool_use/tool_result
+        # content blocks (verified in-pod with both shapes returning ~60%
+        # reduction).
         ak = getattr(user_api_key_dict, "api_key", "") if user_api_key_dict else ""
-        return await HeadroomCallback.async_pre_call_hook(self, ak, data, call_type)
+        upstream_call_type = (
+            "acompletion" if call_type == "anthropic_messages" else call_type
+        )
+        return await HeadroomCallback.async_pre_call_hook(
+            self, ak, data, upstream_call_type
+        )
 
     def _local_compress(self, messages: list[dict], model: str) -> dict[str, Any] | None:
         from headroom.compress import compress  # type: ignore[import-not-found]
