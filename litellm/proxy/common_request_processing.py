@@ -137,25 +137,6 @@ async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None
             pass
 
 
-async def _check_request_disconnection(
-    request: Request,
-    llm_api_call_task: "asyncio.Task[Any]",
-    client_disconnect_triggered: Optional[list[bool]] = None,
-) -> None:
-    # only run this function for 10 mins -> if these don't get cancelled -> we don't want the server to have many while loops
-    start_time = time.time()
-    while time.time() - start_time < 600:
-        await asyncio.sleep(1)
-        try:
-            if await request.is_disconnected():
-                if client_disconnect_triggered is not None:
-                    client_disconnect_triggered[0] = True
-                llm_api_call_task.cancel()
-                return
-        except Exception:
-            return
-
-
 def _serialize_http_exception_detail(
     detail: Any,
 ) -> Tuple[str, Optional[dict]]:
