@@ -40,8 +40,9 @@ def _make_chunk(
     content: str = "",
     usage: Usage = None,
     finish_reason: str = None,
+    custom_llm_provider: str = "anthropic",
 ) -> ModelResponseStream:
-    return ModelResponseStream(
+    chunk = ModelResponseStream(
         id="msg_test",
         created=1738900000,
         model="claude-sonnet-4-6",
@@ -55,6 +56,10 @@ def _make_chunk(
         ],
         usage=usage,
     )
+    # The cursor reset is now gated on provider; populate the same field the
+    # real streaming_handler sets (see litellm/litellm_core_utils/streaming_handler.py).
+    chunk._hidden_params = {"custom_llm_provider": custom_llm_provider}
+    return chunk
 
 
 class TestAnthropicCursorBug:
@@ -210,14 +215,85 @@ class TestAnthropicCursorBug:
             messages=[],
         )
 
-        # Per-chunk completion is reset to 0 (cursor heuristic can't distinguish
-        # "real 1-token answer" from "cursor never updated"), but token_counter
-        # fallback on "Yes." gives a small number (~1-2). Either way the user
-        # is billed approximately what they used.
-        assert 0 <= usage.completion_tokens <= 3, (
-            f"Legitimate 1-token completion should bill ~1 token, got "
-            f"{usage.completion_tokens}"
+        # Two completion-bearing usage events (message_start AND message_delta
+        # both with output_tokens=1) is positive evidence that message_delta
+        # arrived — saw_non_cursor_completion goes True via the count >= 2
+        # branch and the reset is suppressed. Result: completion_tokens stays
+        # at the legitimate value of 1.
+        assert usage.completion_tokens == 1, (
+            f"Legitimate single-token completion should bill exactly 1 token "
+            f"(message_start + message_delta both saw output_tokens=1, "
+            f"confirming message_delta arrived), got {usage.completion_tokens}"
         )
+
+    def test_anthropic_cache_only_chunks_after_message_start_still_resets(self):
+        """
+        Cache-only chunks (cache_read_input_tokens > 0 but completion_tokens=0)
+        following message_start should not be mistaken for completion progress.
+        The cursor=1 from message_start stays the only completion update; reset
+        must fire so token_counter estimates from completion text instead of
+        billing the placeholder.
+        """
+        message_start_usage = Usage(
+            prompt_tokens=1024, completion_tokens=1, total_tokens=1025
+        )
+        message_start_usage.cache_read_input_tokens = 4096
+        message_start = _make_chunk(usage=message_start_usage)
+        # Subsequent chunks with cache fields but no completion_tokens
+        cache_chunk_usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        cache_chunk_usage.cache_read_input_tokens = 4096
+        cache_chunk = _make_chunk(content="partial", usage=cache_chunk_usage)
+        # No message_delta — stream was cancelled
+        chunks = [message_start, cache_chunk]
+
+        processor = ChunkProcessor(chunks=chunks, messages=[])
+        result = processor._calculate_usage_per_chunk(chunks=chunks)
+
+        assert result["cache_read_input_tokens"] == 4096
+        assert result["completion_tokens"] == 0, (
+            "cache chunks alone don't count as completion progress — only "
+            "completion_tokens > 0 in a usage event proves real output happened. "
+            "Reset to 0 forces token_counter fallback."
+        )
+
+
+class TestProviderGuard:
+    """Class A: the cursor-reset heuristic must NOT silently affect non-Anthropic
+    providers, even if they happen to report completion_tokens=1."""
+
+    def test_non_anthropic_provider_completion_tokens_one_not_reset(self):
+        """
+        Some non-Anthropic provider legitimately reports completion_tokens=1
+        in its single usage chunk. Without the provider guard the cursor
+        heuristic would silently reset it to 0 and bill via token_counter,
+        producing a different (often inflated) number than what the provider
+        actually charged.
+        """
+        chunks = [
+            _make_chunk(
+                usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+                finish_reason="stop",
+                custom_llm_provider="openai",
+            ),
+        ]
+        processor = ChunkProcessor(chunks=chunks, messages=[])
+        result = processor._calculate_usage_per_chunk(chunks=chunks)
+        assert result["completion_tokens"] == 1, (
+            "Non-Anthropic providers must not be subject to the message_start "
+            "cursor reset — their completion_tokens=1 is the real value."
+        )
+
+    def test_unknown_provider_completion_tokens_one_not_reset(self):
+        """No custom_llm_provider on hidden_params (older path or custom
+        plugin) — heuristic must not fire."""
+        chunk = _make_chunk(
+            usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+        )
+        # Explicitly clear hidden_params to simulate the unknown-provider case
+        chunk._hidden_params = {}
+        processor = ChunkProcessor(chunks=[chunk], messages=[])
+        result = processor._calculate_usage_per_chunk(chunks=[chunk])
+        assert result["completion_tokens"] == 1
 
 
 class TestNonAnthropicStreamingIntact:
