@@ -5307,3 +5307,59 @@ async def test_router_ttft_timeout_tags_failed_deployment_id():
             )
 
     assert getattr(exc_info.value, "failed_deployment_id", None) == "deploy-1"
+
+
+def test_router_ttft_timeout_resolution_chain():
+    """ttft_timeout / stream_idle_timeout resolve per-request kwarg > per-deployment data >
+    router-level > default_litellm_params, mirroring stream_timeout."""
+    model_list = [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "x"},
+        }
+    ]
+
+    router = litellm.Router(
+        model_list=model_list,
+        ttft_timeout=3.0,
+        stream_idle_timeout=30.0,
+        default_litellm_params={"ttft_timeout": 1.0, "stream_idle_timeout": 10.0},
+    )
+
+    # per-request kwarg wins over everything
+    assert (
+        router._get_ttft_timeout(
+            kwargs={"ttft_timeout": 9.0}, data={"ttft_timeout": 8.0}
+        )
+        == 9.0
+    )
+    assert (
+        router._get_stream_idle_timeout(
+            kwargs={"stream_idle_timeout": 99.0}, data={"stream_idle_timeout": 88.0}
+        )
+        == 99.0
+    )
+
+    # per-deployment data wins over router-level and default
+    assert router._get_ttft_timeout(kwargs={}, data={"ttft_timeout": 8.0}) == 8.0
+    assert (
+        router._get_stream_idle_timeout(kwargs={}, data={"stream_idle_timeout": 88.0})
+        == 88.0
+    )
+
+    # router-level wins over default_litellm_params
+    assert router._get_ttft_timeout(kwargs={}, data={}) == 3.0
+    assert router._get_stream_idle_timeout(kwargs={}, data={}) == 30.0
+
+    # falls back to default_litellm_params when nothing else is set
+    router_defaults_only = litellm.Router(
+        model_list=model_list,
+        default_litellm_params={"ttft_timeout": 1.0, "stream_idle_timeout": 10.0},
+    )
+    assert router_defaults_only._get_ttft_timeout(kwargs={}, data={}) == 1.0
+    assert router_defaults_only._get_stream_idle_timeout(kwargs={}, data={}) == 10.0
+
+    # None when unset anywhere
+    router_unset = litellm.Router(model_list=model_list)
+    assert router_unset._get_ttft_timeout(kwargs={}, data={}) is None
+    assert router_unset._get_stream_idle_timeout(kwargs={}, data={}) is None
