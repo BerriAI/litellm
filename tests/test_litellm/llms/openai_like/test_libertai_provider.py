@@ -94,3 +94,38 @@ class TestLibertAIProviderConfig:
 
         assert len(router.model_list) == 1
         assert router.model_list[0]["model_name"] == "libertai-chat"
+
+    def test_libertai_model_modes(self):
+        """Chat models carry mode 'chat'; the embedding model carries mode 'embedding'."""
+        model_cost = litellm.model_cost
+
+        # chat model
+        assert model_cost["libertai/qwen3.6-27b"]["mode"] == "chat"
+
+        # embedding model (bge-m3) must be normalized to mode 'embedding' so
+        # /embeddings routing and the supported-endpoints matrix stay consistent
+        assert "libertai/bge-m3" in model_cost
+        bge = model_cost["libertai/bge-m3"]
+        assert bge["litellm_provider"] == "libertai"
+        assert bge["mode"] == "embedding"
+
+    def test_libertai_supported_endpoints_matrix(self):
+        """The runtime-served backup matrix (GET /public/supported_endpoints) lists libertai."""
+        import json
+        from pathlib import Path
+
+        import litellm as _litellm
+
+        backup_path = (
+            Path(_litellm.__file__).parent / "provider_endpoints_support_backup.json"
+        )
+        matrix = json.loads(backup_path.read_text())
+
+        assert "libertai" in matrix["providers"]
+        endpoints = matrix["providers"]["libertai"]["endpoints"]
+        assert endpoints["chat_completions"] is True
+        # embeddings is advertised false: the JSON-configured-provider path only
+        # wires chat routing (the OpenAILike embedding handler is reached solely
+        # for the literal openai_like/llamafile/lm_studio providers), matching
+        # the llamagate precedent. bge-m3 stays in the cost map for metadata.
+        assert endpoints["embeddings"] is False
