@@ -2513,14 +2513,14 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
     )
 
     # thinking must be set (adaptive for 4.6+)
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "adaptive"
     # output_config must carry the mapped effort
-    assert "output_config" in result, (
-        f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "output_config" in result
+    ), f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["output_config"]["effort"] == "low"
 
 
@@ -2532,7 +2532,9 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
         {"effort": "low", "summary": "concise"},
     ],
 )
-def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_effort_value):
+def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(
+    reasoning_effort_value,
+):
     """
     Non-adaptive (pre-4.6) branch: dict-shape reasoning_effort must still map
     to ``thinking.type='enabled'`` + ``budget_tokens``. ``output_config`` must
@@ -2547,9 +2549,9 @@ def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_ef
         drop_params=False,
     )
 
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "enabled"
     assert "budget_tokens" in result["thinking"]
     assert result["thinking"]["budget_tokens"] > 0
@@ -2582,12 +2584,12 @@ def test_reasoning_effort_unparseable_dict_is_dropped(bad_value):
         model="claude-sonnet-4-6-20260219",
         drop_params=False,
     )
-    assert "thinking" not in result, (
-        f"thinking should not be set for bad value {bad_value!r}"
-    )
-    assert "output_config" not in result, (
-        f"output_config should not be set for bad value {bad_value!r}"
-    )
+    assert (
+        "thinking" not in result
+    ), f"thinking should not be set for bad value {bad_value!r}"
+    assert (
+        "output_config" not in result
+    ), f"output_config should not be set for bad value {bad_value!r}"
 
 
 @pytest.mark.parametrize(
@@ -4864,3 +4866,69 @@ def test_sanitize_tool_names_in_request_no_tools_is_noop():
     forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({"tools": []})
     assert forward == {}
     assert reverse == {}
+
+
+# ============ is_thinking_enabled None Safety (issue #28576) ============
+
+
+@pytest.mark.parametrize(
+    "thinking_value",
+    [
+        None,
+        "enabled",  # non-dict primitive value
+        123,
+        ["enabled"],
+    ],
+)
+def test_is_thinking_enabled_handles_non_dict_thinking(thinking_value):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/28576
+
+    `is_thinking_enabled` must not crash when ``non_default_params['thinking']``
+    exists with a non-dict value (most importantly ``None``). Previously the
+    chained ``.get("thinking", {}).get("type")`` call raised
+    ``AttributeError: 'NoneType' object has no attribute 'get'`` because
+    ``dict.get(key, default)`` only returns the default when the key is missing,
+    not when the value is ``None``.
+    """
+    config = AnthropicConfig()
+    assert config.is_thinking_enabled({"thinking": thinking_value}) is False
+
+
+def test_is_thinking_enabled_with_enabled_dict_returns_true():
+    config = AnthropicConfig()
+    assert config.is_thinking_enabled({"thinking": {"type": "enabled"}}) is True
+
+
+def test_is_thinking_enabled_with_reasoning_effort_returns_true_even_if_thinking_none():
+    """reasoning_effort still triggers thinking even when 'thinking' key is None."""
+    config = AnthropicConfig()
+    assert (
+        config.is_thinking_enabled({"thinking": None, "reasoning_effort": "high"})
+        is True
+    )
+
+
+def test_is_thinking_enabled_empty_or_none_params():
+    config = AnthropicConfig()
+    assert config.is_thinking_enabled({}) is False
+    assert config.is_thinking_enabled(None) is False
+
+
+def test_update_optional_params_with_thinking_tokens_handles_none_thinking():
+    """
+    Regression test: update_optional_params_with_thinking_tokens must not crash
+    when optional_params['thinking'] is None. This is the path that originally
+    surfaced the AttributeError in issue #28576 via
+    AnthropicConfig.map_openai_params -> update_optional_params_with_thinking_tokens.
+    """
+    config = AnthropicConfig()
+    optional_params = {"thinking": None}
+    non_default_params = {}
+    # Should not raise
+    config.update_optional_params_with_thinking_tokens(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+    )
+    # No max_tokens should be injected because thinking is not actually enabled
+    assert "max_tokens" not in optional_params

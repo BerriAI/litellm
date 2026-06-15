@@ -14,7 +14,6 @@ from typing import (
     Tuple,
     Type,
     Union,
-    cast,
 )
 
 import httpx
@@ -108,8 +107,14 @@ class BaseConfig(ABC):
         return type_to_response_format_param(response_format=response_format)
 
     def is_thinking_enabled(self, non_default_params: dict) -> bool:
+        if not non_default_params:
+            return False
+        thinking = non_default_params.get("thinking")
+        thinking_type_enabled = (
+            isinstance(thinking, dict) and thinking.get("type") == "enabled"
+        )
         return (
-            non_default_params.get("thinking", {}).get("type") == "enabled"
+            thinking_type_enabled
             or non_default_params.get("reasoning_effort") is not None
         )
 
@@ -137,8 +142,11 @@ class BaseConfig(ABC):
             "max_tokens" not in non_default_params
             and "max_completion_tokens" not in non_default_params
         ):
-            thinking_token_budget = cast(dict, optional_params["thinking"]).get(
-                "budget_tokens", None
+            thinking = optional_params.get("thinking")
+            thinking_token_budget = (
+                thinking.get("budget_tokens", None)
+                if isinstance(thinking, dict)
+                else None
             )
             if thinking_token_budget is not None:
                 optional_params["max_tokens"] = (
