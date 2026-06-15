@@ -481,3 +481,108 @@ async def test_bedrock_apply_guardrail_masking_written_back_to_correct_position(
             "assistant text",
             "tool text",
         ]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_masking_writes_back_to_user_message_through_handler():
+    """End-to-end through the unified translation handler (issue #23476).
+
+    `apply_guardrail` only sees a flat `texts` list; the handler is what
+    flattens messages into that list and re-inflates the guardrailed texts back
+    onto messages — positionally, by the order they were extracted. This test
+    exercises that whole contract with a real
+    OpenAIChatCompletionsHandler.process_input_messages (only the network call
+    is mocked), so a divergence between the handler's flattening and
+    apply_guardrail's slice reconstruction would surface as masked content
+    landing on the wrong message.
+
+    With experimental_use_latest_role_message_only enabled and a conversation
+    ending in a tool message, only the latest USER message is scanned; the
+    returned mask must overwrite that user message and leave system / assistant
+    / tool content untouched.
+    """
+    from litellm.llms.openai.chat.guardrail_translation.handler import (
+        OpenAIChatCompletionsHandler,
+    )
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    data = {
+        "model": "test-model",
+        "messages": [
+            {"role": "system", "content": "SYSTEM rules"},
+            {"role": "user", "content": "my SSN is 123-45-6789"},
+            {"role": "assistant", "content": "ASSISTANT let me check"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "TOOL secret output"},
+        ],
+    }
+
+    async def _fake_api(*args, **kwargs):
+        # Mask every text actually scanned (the handler/fix should only send the
+        # latest user message), one masked output per scanned message.
+        scanned = kwargs.get("messages") or []
+        return {
+            "action": "GUARDRAIL_INTERVENED",
+            "output": [{"text": "[MASKED]"} for _ in scanned],
+        }
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        mock_api.side_effect = _fake_api
+
+        result = await OpenAIChatCompletionsHandler().process_input_messages(
+            data=data, guardrail_to_apply=guardrail
+        )
+
+    # Only the latest user message was scanned...
+    assert mock_api.called
+    _, kwargs = mock_api.call_args
+    assert kwargs["messages"] == [data["messages"][1]]
+
+    # ...and the mask landed on the user message only — nothing else clobbered.
+    msgs = result["messages"]
+    assert msgs[0]["content"] == "SYSTEM rules"
+    assert msgs[1]["content"] == "[MASKED]"
+    assert msgs[2]["content"] == "ASSISTANT let me check"
+    assert msgs[3]["content"] == "TOOL secret output"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_handler_leaves_messages_untouched_when_no_user_message():
+    """Through the real handler: no user-role message → INPUT scan skipped and
+    every message is forwarded unchanged (no masking, no leak)."""
+    from litellm.llms.openai.chat.guardrail_translation.handler import (
+        OpenAIChatCompletionsHandler,
+    )
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    data = {
+        "model": "test-model",
+        "messages": [
+            {"role": "assistant", "content": "ASSISTANT text"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "TOOL output"},
+        ],
+    }
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        result = await OpenAIChatCompletionsHandler().process_input_messages(
+            data=data, guardrail_to_apply=guardrail
+        )
+
+    assert not mock_api.called
+    assert result["messages"][0]["content"] == "ASSISTANT text"
+    assert result["messages"][1]["content"] == "TOOL output"
