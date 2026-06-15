@@ -367,3 +367,21 @@ def test_azure_gpt5_response_format_falls_back_to_tools_on_old_api_version(model
     )
     assert "response_format" not in params
     assert "tools" in params
+
+
+def test_azure_gpt5_without_gated_params_is_unchanged():
+    """
+    When no api_version-gated params (tool_choice/response_format) are passed,
+    the GPT-5 mapping should behave exactly like the OpenAI GPT-5 path.
+    """
+    params = litellm.get_optional_params(
+        model="gpt-5",
+        custom_llm_provider="azure",
+        max_tokens=64,
+        reasoning_effort="high",
+        api_version="2024-02-01",
+        drop_params=False,
+    )
+    assert params["max_completion_tokens"] == 64
+    assert params["reasoning_effort"] == "high"
+    assert "tools" not in params

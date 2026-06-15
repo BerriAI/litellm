@@ -109,3 +109,21 @@ def test_azure_o_series_still_maps_max_tokens():
     )
     assert params["max_completion_tokens"] == 64
     assert "max_tokens" not in params
+
+
+def test_azure_o_series_without_gated_params_is_unchanged():
+    """
+    When no api_version-gated params (tool_choice/response_format) are passed,
+    the o-series mapping should behave exactly like the OpenAI o-series path.
+    """
+    params = litellm.get_optional_params(
+        model="o3-mini",
+        custom_llm_provider="azure",
+        max_tokens=64,
+        reasoning_effort="high",
+        api_version="2024-02-01",
+        drop_params=False,
+    )
+    assert params["max_completion_tokens"] == 64
+    assert params["reasoning_effort"] == "high"
+    assert "tools" not in params
