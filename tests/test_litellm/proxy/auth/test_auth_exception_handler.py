@@ -1,12 +1,10 @@
 import asyncio
-import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException, Request, status
-from prisma import errors as prisma_errors
+from fastapi import HTTPException, status
 from prisma.errors import (
     ClientNotConnectedError,
     DataError,
@@ -24,7 +22,6 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 
@@ -273,6 +270,48 @@ async def test_handle_authentication_error_genuine_auth_failure_stays_401(auth_e
 
 
 @pytest.mark.asyncio
+async def test_handle_authentication_error_expected_403_does_not_log_exception():
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.verbose_proxy_logger.exception"
+        ) as mock_exception_log,
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.verbose_proxy_logger.warning"
+        ) as mock_warning_log,
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(
+                HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route=/config/list. Your role=internal_user.",
+                ),
+                MagicMock(),
+                {},
+                "/config/list",
+                None,
+                "sk-non-admin",
+            )
+
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+    mock_exception_log.assert_not_called()
+    mock_warning_log.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_handle_authentication_error_budget_exceeded():
     handler = UserAPIKeyAuthExceptionHandler()
 
@@ -336,7 +375,7 @@ async def test_route_passed_to_post_call_failure_hook():
                     mock_span,
                     mock_api_key,
                 )
-            except Exception as e:
+            except Exception:
                 pass
             asyncio.sleep(1)
             # Verify post_call_failure_hook was called with the correct route

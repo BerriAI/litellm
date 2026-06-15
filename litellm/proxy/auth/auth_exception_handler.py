@@ -35,6 +35,14 @@ else:
 
 class UserAPIKeyAuthExceptionHandler:
     @staticmethod
+    def _is_expected_authorization_denial(e: Exception) -> bool:
+        if isinstance(e, HTTPException):
+            return e.status_code == status.HTTP_403_FORBIDDEN
+        if isinstance(e, ProxyException):
+            return str(e.code) == str(status.HTTP_403_FORBIDDEN)
+        return False
+
+    @staticmethod
     async def _handle_authentication_error(
         e: Exception,
         request: Request,
@@ -94,13 +102,20 @@ class UserAPIKeyAuthExceptionHandler:
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
             )
-            verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
-                    str(e),
-                    requester_ip,
-                ),
-                extra={"requester_ip": requester_ip},
+            log_message = "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
+                str(e),
+                requester_ip,
             )
+            if UserAPIKeyAuthExceptionHandler._is_expected_authorization_denial(e):
+                verbose_proxy_logger.warning(
+                    log_message,
+                    extra={"requester_ip": requester_ip},
+                )
+            else:
+                verbose_proxy_logger.exception(
+                    log_message,
+                    extra={"requester_ip": requester_ip},
+                )
 
             # Log this exception to OTEL, Datadog etc. Reuse the identity resolved
             # before the failure (team alias/id, metadata, user) so the failed span
