@@ -257,6 +257,54 @@ class TestCustomGuardrailShouldRunGuardrail:
             result is False
         ), "Admin config in metadata must be respected when other metadata key is empty"
 
+    def test_should_run_guardrail_key_disable_global_not_overruled_by_team_guardrail_list(
+        self,
+    ):
+        """Key disable_global_guardrails must take precedence over the guardrail
+        appearing in the team's explicit guardrails list."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="global_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        # Key disabled globals; team added the same guardrail to its explicit list
+        # (simulates what _add_guardrails_from_key_or_team_metadata produces).
+        data_key_disabled_team_listed = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "user_api_key_metadata": {"disable_global_guardrails": True},
+                "guardrails": ["global_guardrail"],
+            },
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_key_disabled_team_listed,
+                event_type=GuardrailEventHooks.pre_call,
+            )
+            is False
+        ), "Key disable_global_guardrails must win over team's explicit guardrail list"
+
+        # Complementary: key NOT disabled, team added guardrail → should run
+        data_key_enabled_team_listed = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "user_api_key_metadata": {},
+                "guardrails": ["global_guardrail"],
+            },
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_key_enabled_team_listed,
+                event_type=GuardrailEventHooks.pre_call,
+            )
+            is True
+        ), "Guardrail in team's explicit list should run when key has not disabled globals"
+
     def test_should_run_guardrail_with_opted_out_global_guardrails(self):
         """Test that per-guardrail opt-out only works from admin metadata"""
         from litellm.types.guardrails import GuardrailEventHooks

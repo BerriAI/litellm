@@ -567,6 +567,9 @@ class CustomGuardrail(CustomLogger):
         ):
             return False
 
+        if self.default_on is True and disable_global_guardrail is True:
+            return False
+
         if self.default_on is True and disable_global_guardrail is not True:
             if self._event_hook_is_event_type(event_type):
                 if isinstance(self.event_hook, Mode):
