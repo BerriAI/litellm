@@ -7,11 +7,15 @@ context_window_fallbacks dict, etc.) onto the message of the exception
 it re-raises. That message is then surfaced to clients by
 ProxyException, leaking the proxy's internal wiring.
 
-These tests verify that with the flag OFF (default) those strings do
-NOT appear in the raised exception's message, and with the flag ON the
-upstream debug behavior is restored.
+The flag defaults to True to preserve historical behavior (no
+breaking change for existing deployments). Set it to False to redact
+those strings from the raised exception's message.
 
-Five leak sites were gated in `litellm/router.py`:
+These tests verify that with the flag ON (default) the historical
+leak strings appear in the raised exception's message, and with the
+flag OFF the proxy's internal wiring is redacted.
+
+Five leak sites are gated in `litellm/router.py`:
 
 1. Deployment timeout debug after `litellm.Timeout`
 2. ContextWindowExceededError fallback hint
@@ -23,8 +27,6 @@ Five leak sites were gated in `litellm/router.py`:
 Site 5 is the broadest — it fires for every failing call that goes
 through the fallback orchestrator with any non-context-window /
 non-content-policy error, regardless of whether `fallbacks` is set.
-The tests below mainly exercise sites 2 and 5, which together prove
-the gate works for both ContextWindow-typed and generic errors.
 """
 
 from __future__ import annotations
@@ -76,24 +78,25 @@ def _router_with_context_window_failure() -> Router:
 
 @pytest.fixture(autouse=True)
 def _reset_expose_flag():
-    """Each test starts with the flag in its default (off) state."""
+    """Each test starts with the flag in its default (on) state."""
     original = litellm.expose_router_debug_in_errors
-    litellm.expose_router_debug_in_errors = False
+    litellm.expose_router_debug_in_errors = True
     try:
         yield
     finally:
         litellm.expose_router_debug_in_errors = original
 
 
-def test_flag_defaults_off():
-    assert litellm.expose_router_debug_in_errors is False
+def test_flag_defaults_on():
+    assert litellm.expose_router_debug_in_errors is True
 
 
 # --- Site 5: "Received Model Group=..." on terminal raise --------------------
 
 
 @pytest.mark.asyncio
-async def test_default_does_not_leak_received_model_group():
+async def test_flag_off_does_not_leak_received_model_group():
+    litellm.expose_router_debug_in_errors = False
     router = _router_with_rate_limit_failure()
     with pytest.raises(litellm.RateLimitError) as excinfo:
         await router.acompletion(
@@ -107,8 +110,7 @@ async def test_default_does_not_leak_received_model_group():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_leaks_received_model_group():
-    litellm.expose_router_debug_in_errors = True
+async def test_default_leaks_received_model_group():
     router = _router_with_rate_limit_failure()
     with pytest.raises(litellm.RateLimitError) as excinfo:
         await router.acompletion(
@@ -125,7 +127,8 @@ async def test_flag_on_leaks_received_model_group():
 
 
 @pytest.mark.asyncio
-async def test_default_does_not_leak_context_window_fallback_hint():
+async def test_flag_off_does_not_leak_context_window_fallback_hint():
+    litellm.expose_router_debug_in_errors = False
     router = _router_with_context_window_failure()
     with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
         await router.acompletion(
@@ -139,8 +142,7 @@ async def test_default_does_not_leak_context_window_fallback_hint():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_leaks_context_window_fallback_hint():
-    litellm.expose_router_debug_in_errors = True
+async def test_default_leaks_context_window_fallback_hint():
     router = _router_with_context_window_failure()
     with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
         await router.acompletion(
@@ -151,7 +153,7 @@ async def test_flag_on_leaks_context_window_fallback_hint():
     assert _CONTEXT_WINDOW_HINT_PHRASE in msg, msg
     # Site 5 also fires for ContextWindow errors that exit the
     # orchestrator without fallback resolution, so the model_group
-    # name should leak when the flag is on.
+    # name leaks under the default behavior.
     assert _INTERNAL_MODEL_GROUP_NAME in msg, msg
 
 
@@ -159,7 +161,8 @@ async def test_flag_on_leaks_context_window_fallback_hint():
 
 
 @pytest.mark.asyncio
-async def test_default_does_not_leak_when_no_fallback_group_found():
+async def test_flag_off_does_not_leak_when_no_fallback_group_found():
+    litellm.expose_router_debug_in_errors = False
     router = Router(
         model_list=[
             {
@@ -189,8 +192,7 @@ async def test_default_does_not_leak_when_no_fallback_group_found():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_leaks_when_no_fallback_group_found():
-    litellm.expose_router_debug_in_errors = True
+async def test_default_leaks_when_no_fallback_group_found():
     router = Router(
         model_list=[
             {
@@ -241,7 +243,8 @@ def _router_with_plain_deployment() -> Router:
 
 
 @pytest.mark.asyncio
-async def test_default_does_not_leak_deployment_timeout_debug():
+async def test_flag_off_does_not_leak_deployment_timeout_debug():
+    litellm.expose_router_debug_in_errors = False
     router = _router_with_plain_deployment()
     with pytest.raises(litellm.Timeout) as excinfo:
         await router.acompletion(
@@ -255,8 +258,7 @@ async def test_default_does_not_leak_deployment_timeout_debug():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_leaks_deployment_timeout_debug():
-    litellm.expose_router_debug_in_errors = True
+async def test_default_leaks_deployment_timeout_debug():
     router = _router_with_plain_deployment()
     with pytest.raises(litellm.Timeout) as excinfo:
         await router.acompletion(
@@ -281,7 +283,8 @@ def _content_policy_error() -> litellm.ContentPolicyViolationError:
 
 
 @pytest.mark.asyncio
-async def test_default_does_not_leak_content_policy_fallback_hint():
+async def test_flag_off_does_not_leak_content_policy_fallback_hint():
+    litellm.expose_router_debug_in_errors = False
     router = _router_with_plain_deployment()
     with pytest.raises(litellm.ContentPolicyViolationError) as excinfo:
         await router.acompletion(
@@ -295,8 +298,7 @@ async def test_default_does_not_leak_content_policy_fallback_hint():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_leaks_content_policy_fallback_hint():
-    litellm.expose_router_debug_in_errors = True
+async def test_default_leaks_content_policy_fallback_hint():
     router = _router_with_plain_deployment()
     with pytest.raises(litellm.ContentPolicyViolationError) as excinfo:
         await router.acompletion(
