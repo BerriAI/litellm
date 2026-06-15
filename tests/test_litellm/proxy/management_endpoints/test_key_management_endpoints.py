@@ -12306,6 +12306,29 @@ async def test_query_model_spend_for_period_db_error_returns_zero():
 
 
 @pytest.mark.asyncio
+async def test_query_model_spend_for_period_empty_rows_returns_zero():
+    """_query_model_spend_for_period returns 0.0 when the DB returns no rows."""
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _query_model_spend_for_period,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
+
+    result = await _query_model_spend_for_period(
+        api_key_hash="some-hash",
+        model="gpt-4o",
+        period_start=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        period_end=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        prisma_client=mock_prisma_client,
+    )
+    assert result == 0.0
+
+
+@pytest.mark.asyncio
 async def test_build_model_max_budget_usage_no_prisma_returns_empty():
     """_build_model_max_budget_usage returns {} immediately when prisma_client is None."""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
