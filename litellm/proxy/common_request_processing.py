@@ -287,6 +287,20 @@ def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
     return default_error
 
 
+async def _aclose_upstream_response(response: Any) -> None:
+    """Release the upstream HTTP connection when a stream ends for any
+    reason, including client disconnect. Mirrors the finally block of
+    async_data_generator in proxy_server.py."""
+    with anyio.CancelScope(shield=True):
+        if hasattr(response, "aclose"):
+            try:
+                await response.aclose()
+            except BaseException as e:
+                verbose_proxy_logger.debug(
+                    "error closing upstream response stream: %s", e
+                )
+
+
 class _UpstreamClosingStreamingResponse(StreamingResponse):
     """StreamingResponse that always closes its body iterator and the wrapped
     upstream generator.
@@ -309,7 +323,9 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
         status_code: int = status.HTTP_200_OK,
         upstream_generator: Optional[AsyncGenerator[str, None]] = None,
     ) -> None:
-        super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
+        super().__init__(
+            content, status_code=status_code, headers=headers, media_type=media_type
+        )
         self._upstream_generator = upstream_generator
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
