@@ -369,3 +369,33 @@ def test_vertex_backend_url_must_not_include_client_query_params():
     )
     assert "model=" in polluted_url
     assert polluted_url != backend_url
+
+
+def test_vertex_function_call_output_omits_id():
+    """Regression: Vertex Live rejects ``id`` on toolResponse.functionResponses (1007)."""
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+    cfg._tool_call_id_to_name["call_abc123"] = "terminate_call"
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": "call_abc123",
+                    "output": '{"status": "ok"}',
+                },
+            }
+        ),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request="existing",
+    )
+
+    assert len(messages) == 1
+    payload = json.loads(messages[0])
+    function_response = payload["toolResponse"]["functionResponses"][0]
+    assert "id" not in function_response
+    assert function_response["name"] == "terminate_call"
+    assert function_response["response"] == {"status": "ok"}
