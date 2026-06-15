@@ -1,4 +1,4 @@
-# Experimental Microservices Helm
+# Microservices Helm
 
 Run LiteLLM as **three independently scalable services** — a `gateway` for LLM
 traffic, a `backend` for the management/UI API, and a static `ui` — plus a
@@ -9,15 +9,6 @@ one-shot `migrations` Job.
 For the motivation behind splitting the proxy (why a slow control-plane query
 can otherwise recycle the pods serving inference), see the blog post
 [*One Slow Dashboard Query Shouldn't Take Down Your LLM Traffic*](/blog/componentized-deployment).
-
-:::warning Experimental
-
-This chart is experimental and its values schema may change between releases.
-Pin `--version` and review the diff before upgrading. The single-image
-deployment ([Docker, Helm, Terraform](/docs/proxy/deploy)) remains the
-supported default.
-
-:::
 
 ## Components
 
