@@ -280,7 +280,10 @@ async def test_mcp_result_no_text_items_is_noop():
 )
 async def test_mcp_result_injection_in_wrapped_result_is_replaced(wrap):
     g = _make_mcp()
-    items = [{"type": "text", "text": "benign context"}, {"type": "text", "text": ATTACK}]
+    items = [
+        {"type": "text", "text": "benign context"},
+        {"type": "text", "text": ATTACK},
+    ]
     resp = SimpleNamespace(mcp_tool_call_response=wrap(items))
     out = await g.async_post_mcp_tool_call_hook(
         kwargs={}, response_obj=resp, start_time=None, end_time=None

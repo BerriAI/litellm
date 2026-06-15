@@ -302,7 +302,9 @@ class BastionGuardrail(CustomGuardrail):
         ):
             return None
 
-        content = _mcp_content_list(getattr(response_obj, "mcp_tool_call_response", None))
+        content = _mcp_content_list(
+            getattr(response_obj, "mcp_tool_call_response", None)
+        )
         items = _mcp_text_items(content)
         if not items:
             return None
