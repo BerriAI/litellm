@@ -3455,6 +3455,7 @@ class SearchProviders(str, Enum):
     GOOGLE_PSE = "google_pse"
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"
+    FASTCRW = "fastcrw"
     SEARXNG = "searxng"
     LINKUP = "linkup"
     DUCKDUCKGO = "duckduckgo"
