@@ -1,0 +1,396 @@
+import os
+from datetime import datetime
+from typing import AsyncGenerator, Dict, List, Literal, Optional, Type, Union
+
+from fastapi import HTTPException
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import build_inspection_messages
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
+    RepelloAIAnalyzeResponse,
+)
+from litellm.types.utils import (
+    CallTypesLiteral,
+    GuardrailStatus,
+    ModelResponse,
+    ModelResponseStream,
+)
+
+DEFAULT_REPELLOAI_API_BASE = "https://argusapi.repello.ai/sdk/v1"
+DEFAULT_REPELLOAI_TIMEOUT = 30.0
+BLOCKED_VERDICT = "blocked"
+FLAGGED_VERDICT = "flagged"
+PASSED_VERDICT = "passed"
+UnreachableFallback = Literal["fail_closed", "fail_open"]
+
+# Argus returns these for a permanently broken guardrail (bad key, unknown
+# asset_id, malformed payload), not a transient outage. They must always
+# block, never honour fail_open.
+CONFIG_ERROR_STATUS_CODES = frozenset({400, 401, 403, 404, 422})
+
+
+class RepelloAIGuardrailMissingSecrets(Exception):
+    pass
+
+
+class RepelloAIGuardrail(CustomGuardrail):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        asset_id: Optional[str] = None,
+        unreachable_fallback: UnreachableFallback = "fail_closed",
+        **kwargs,
+    ):
+        """RepelloAI Argus guardrail.
+
+        Scans prompts (pre_call) and responses (post_call) by calling the
+        hosted RepelloAI Argus API. The set of policies enforced is configured per
+        asset_id in the Repello dashboard.
+
+        Args:
+            api_key: Repello API key. Falls back to the ARGUS_API_KEY env var
+                (or the legacy REPELLOAI_API_KEY).
+            api_base: Repello API base URL. Defaults to the hosted endpoint.
+            asset_id: Repello asset whose dashboard policies are enforced. Required.
+            unreachable_fallback: Behaviour when the Repello API is unreachable /
+                errors: fail_closed (block, the default) or fail_open
+                (allow + warn).
+        """
+        self.async_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback,
+            params={"timeout": DEFAULT_REPELLOAI_TIMEOUT},
+        )
+        self.repelloai_api_key = (
+            api_key
+            or os.environ.get("ARGUS_API_KEY")
+            or os.environ.get("REPELLOAI_API_KEY")
+            or ""
+        )
+        if not self.repelloai_api_key:
+            raise RepelloAIGuardrailMissingSecrets(
+                "Couldn't get Repello API key. Set `ARGUS_API_KEY` in the environment "
+                "or pass `api_key` to the guardrail in the config file."
+            )
+
+        self.asset_id = asset_id
+        if not self.asset_id:
+            raise ValueError(
+                "Repello guardrail requires an `asset_id`. Create an asset in the Repello "
+                "dashboard and set `asset_id` on the guardrail in the config file."
+            )
+
+        self.api_base = (
+            api_base
+            or get_secret_str("REPELLOAI_API_BASE")
+            or DEFAULT_REPELLOAI_API_BASE
+        )
+        self.unreachable_fallback: UnreachableFallback = (
+            "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
+        )
+        super().__init__(**kwargs)
+
+    async def _call_analyze(
+        self,
+        text: str,
+        stage: str,
+        request_data: Dict,
+        event_type: GuardrailEventHooks,
+    ) -> Optional[RepelloAIAnalyzeResponse]:
+        """stage ("prompt" or "response") selects both the endpoint path and the
+        scan_data key. Returns the parsed response, or None when the API is
+        unreachable and unreachable_fallback is fail_open (the caller then allows
+        the request through).
+        """
+        endpoint = f"{self.api_base}/analyze/{stage}"
+        request: Dict = {
+            "asset_id": self.asset_id or "",
+            "scan_data": {stage: text},
+        }
+
+        status: GuardrailStatus = "success"
+        exception_str: str = ""
+        start_time: datetime = datetime.now()
+        repelloai_response: Optional[RepelloAIAnalyzeResponse] = None
+        try:
+            verbose_proxy_logger.debug("RepelloAI Argus request: %s", request)
+            response = await self.async_handler.post(
+                url=endpoint,
+                headers={"X-API-Key": self.repelloai_api_key},
+                json=request,
+            )
+            self._raise_for_config_error(response)
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError(
+                    f"RepelloAI Argus returned a non-object response: {type(payload)}"
+                )
+            repelloai_response = RepelloAIAnalyzeResponse(**payload)
+            verbose_proxy_logger.debug(
+                "RepelloAI Argus response: %s", repelloai_response
+            )
+            if self._verdict_blocks(repelloai_response):
+                status = "guardrail_intervened"
+            return repelloai_response
+        except HTTPException:
+            # Misconfiguration / fail_closed -> block. Surface, never fail open.
+            status = "guardrail_failed_to_respond"
+            raise
+        except Exception as e:
+            status = "guardrail_failed_to_respond"
+            exception_str = str(e)
+            return self._handle_unreachable(e)
+        finally:
+            guardrail_json_response: Union[Exception, str, dict, List[dict]] = (
+                dict(repelloai_response) if repelloai_response else exception_str
+            )
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=guardrail_json_response,
+                guardrail_status=status,
+                request_data=request_data,
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+                masked_entity_count={},
+                event_type=event_type,
+            )
+
+    @staticmethod
+    def _raise_for_config_error(response) -> None:
+        """Surface auth/config failures instead of silently failing open.
+
+        These status codes mean the guardrail itself is misconfigured (bad API
+        key, unknown asset_id, malformed payload), not a transient network blip.
+        unreachable_fallback must not turn a permanently broken guardrail into a
+        silent no-op, so these always block.
+        """
+        if response.status_code in CONFIG_ERROR_STATUS_CODES:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "RepelloAI Argus guardrail is misconfigured",
+                    "status_code": response.status_code,
+                },
+            )
+
+    def _verdict_blocks(
+        self, repelloai_response: Optional[RepelloAIAnalyzeResponse]
+    ) -> bool:
+        """Return True if the verdict should block the request.
+
+        Blocks on the explicit blocked verdict and on any unrecognized verdict
+        (None, empty, or an unexpected value) so an upstream schema change can't
+        silently disable enforcement. passed/flagged are allowed.
+        """
+        if repelloai_response is None:
+            return False
+        verdict = repelloai_response.get("verdict")
+        if verdict == BLOCKED_VERDICT:
+            return True
+        if verdict in (PASSED_VERDICT, FLAGGED_VERDICT):
+            return False
+        verbose_proxy_logger.warning(
+            "RepelloAI Argus returned an unrecognized verdict (%s) - blocking.",
+            verdict,
+        )
+        return True
+
+    def _handle_unreachable(
+        self, error: Exception
+    ) -> Optional[RepelloAIAnalyzeResponse]:
+        """Apply the unreachable_fallback policy when the API call fails.
+
+        fail_closed blocks the request; fail_open logs a warning and
+        returns None so the caller lets the request through.
+        """
+        verbose_proxy_logger.warning("RepelloAI Argus unreachable: %s", str(error))
+        if self.unreachable_fallback == "fail_closed":
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "RepelloAI Argus guardrail unreachable"},
+            )
+        return None
+
+    def _raise_if_blocked(
+        self, repelloai_response: Optional[RepelloAIAnalyzeResponse]
+    ) -> None:
+        if repelloai_response is None:
+            return
+        if self._verdict_blocks(repelloai_response):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Blocked by RepelloAI Argus guardrail",
+                    "policies_violated": repelloai_response.get("policies_violated"),
+                },
+            )
+        if repelloai_response.get("verdict") == FLAGGED_VERDICT:
+            verbose_proxy_logger.warning(
+                "RepelloAI Argus flagged content (allowed): %s",
+                repelloai_response.get("policies_violated"),
+            )
+
+    @staticmethod
+    def _get_last_user_text(messages: List[Dict[str, str]]) -> Optional[str]:
+        """Return the latest user text the guardrail should inspect.
+
+        RepelloAI Argus scans a single prompt text, not the full conversation
+        history, so we intentionally prefer the most recent user turn.
+        """
+        for message in reversed(messages):
+            if message.get("role") == "user" and message.get("content"):
+                return message["content"]
+        if messages:
+            return messages[-1].get("content")
+        return None
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: litellm.DualCache,
+        data: Dict,
+        call_type: CallTypesLiteral,
+    ) -> Optional[Union[Exception, str, Dict]]:
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        verbose_proxy_logger.debug("RepelloAI Argus: pre_call_hook")
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return data
+
+        messages = build_inspection_messages(data)
+        text = self._get_last_user_text(messages)
+        if not text:
+            verbose_proxy_logger.warning(
+                "RepelloAI Argus: no inspectable prompt text in data - skipping."
+            )
+            return data
+
+        repelloai_response = await self._call_analyze(
+            text=text,
+            stage="prompt",
+            request_data=data,
+            event_type=event_type,
+        )
+        self._raise_if_blocked(repelloai_response)
+
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=self.guardrail_name
+        )
+        return data
+
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response,
+    ):
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        verbose_proxy_logger.debug("RepelloAI Argus: post_call_success_hook")
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return response
+
+        text = self._extract_response_text(response)
+        if not text:
+            verbose_proxy_logger.warning(
+                "RepelloAI Argus: no inspectable response text - skipping."
+            )
+            return response
+
+        repelloai_response = await self._call_analyze(
+            text=text,
+            stage="response",
+            request_data=data,
+            event_type=event_type,
+        )
+        self._raise_if_blocked(repelloai_response)
+
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=self.guardrail_name
+        )
+        return response
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        from litellm.main import stream_chunk_builder
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
+        if (
+            self.should_run_guardrail(data=request_data, event_type=event_type)
+            is not True
+        ):
+            async for chunk in response:
+                yield chunk
+            return
+
+        chunks: List[ModelResponseStream] = []
+        async for chunk in response:
+            chunks.append(chunk)
+
+        assembled = stream_chunk_builder(chunks=chunks)
+        text = (
+            self._extract_response_text(assembled)
+            if isinstance(assembled, ModelResponse)
+            else None
+        )
+        if text:
+            repelloai_response = await self._call_analyze(
+                text=text,
+                stage="response",
+                request_data=request_data,
+                event_type=event_type,
+            )
+            if self._verdict_blocks(repelloai_response):
+                from litellm.proxy.proxy_server import StreamingCallbackError
+
+                raise StreamingCallbackError("Blocked by RepelloAI Argus guardrail")
+
+        for chunk in chunks:
+            yield chunk
+
+    @staticmethod
+    def _extract_response_text(response) -> Optional[str]:
+        """Join non-empty assistant message contents across all choices.
+
+        Handles multi-choice responses and choices with null content
+        (e.g. tool-call-only) without raising.
+        """
+        response_dict = response.model_dump() if hasattr(response, "model_dump") else {}
+        parts: List[str] = []
+        for choice in response_dict.get("choices", []) or []:
+            message = choice.get("message") or {}
+            content = message.get("content")
+            if isinstance(content, str) and content:
+                parts.append(content)
+        return "\n".join(parts) if parts else None
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
+            RepelloAIGuardrailConfigModel,
+        )
+
+        return RepelloAIGuardrailConfigModel
