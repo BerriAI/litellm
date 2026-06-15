@@ -233,11 +233,14 @@ def test_google_ai_studio_provider_fields_expose_api_base():
     api_base_field = fields_by_key["api_base"]
     assert api_base_field["required"] is False
     assert api_base_field["field_type"] == "text"
-    # Default value should match the canonical Google AI Studio endpoint that
-    # LiteLLM's gemini provider talks to when api_base is unset, so leaving the
-    # default in the form behaves identically to leaving it blank.
+    # default_value MUST be null (not the canonical URL): saving it as the
+    # default would persist v1beta into every credential record and bypass
+    # `_get_gemini_url`'s automatic v1alpha routing for Gemini 3+ models. The
+    # placeholder shows the canonical URL so users still get the visual hint.
+    # (See greptileai threads on PR #30419.)
+    assert api_base_field["default_value"] is None
     assert (
-        api_base_field["default_value"]
+        api_base_field["placeholder"]
         == "https://generativelanguage.googleapis.com/v1beta"
     )
 

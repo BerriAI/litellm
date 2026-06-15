@@ -1247,11 +1247,11 @@
         "key": "api_base",
         "label": "API Base",
         "placeholder": "https://generativelanguage.googleapis.com/v1beta",
-        "tooltip": "Override only when using a Gemini-compatible gateway (e.g. /v1beta path on a self-hosted proxy). LiteLLM appends '/models/{model}:generateContent' so include '/v1beta' but not the trailing slash.",
+        "tooltip": "Leave blank to let LiteLLM pick the right Gemini API version automatically (v1alpha for Gemini 3+ models, v1beta otherwise). Override only when fronting Gemini through a custom gateway; if you do, include the version prefix (e.g. /v1beta) but not the trailing slash. LiteLLM appends '/models/{model}:generateContent'.",
         "required": false,
         "field_type": "text",
         "options": null,
-        "default_value": "https://generativelanguage.googleapis.com/v1beta"
+        "default_value": null
       },
       {
         "key": "api_key",
