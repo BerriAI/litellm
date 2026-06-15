@@ -230,6 +230,10 @@ class Metric:
 
     TOKEN_USAGE: Final = "gen_ai.client.token.usage"
     OPERATION_DURATION: Final = "gen_ai.client.operation.duration"
+    TOKEN_COST: Final = "gen_ai.client.token.cost"
+    TIME_TO_FIRST_TOKEN: Final = "gen_ai.client.response.time_to_first_token"
+    TIME_PER_OUTPUT_TOKEN: Final = "gen_ai.client.response.time_per_output_token"
+    RESPONSE_DURATION: Final = "gen_ai.client.response.duration"
 
 
 # litellm ``custom_llm_provider`` -> ``gen_ai.provider.name`` value.
