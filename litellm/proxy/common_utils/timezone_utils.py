@@ -15,6 +15,16 @@ def get_budget_reset_timezone():
     return getattr(litellm, "timezone", None) or "UTC"
 
 
+def get_report_timezone() -> str:
+    """
+    Get the report timezone for daily spend aggregation from litellm_settings.
+    Falls back to UTC if not specified.
+
+    Set via `litellm_settings: report_timezone: Asia/Shanghai` in config.
+    """
+    return getattr(litellm, "report_timezone", None) or "UTC"
+
+
 def get_budget_reset_time(budget_duration: str):
     """
     Get the budget reset time based on the configured timezone.

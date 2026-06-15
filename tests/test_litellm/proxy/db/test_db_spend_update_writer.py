@@ -3,9 +3,7 @@ import json
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 
 from datetime import datetime, timezone
@@ -13,7 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_spend_update_writer import (
+    DBSpendUpdateWriter,
+    _get_local_date_from_start_time,
+)
 
 
 @pytest.mark.asyncio
@@ -63,9 +64,7 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
         assert db_writer.add_spend_log_transaction_to_daily_user_transaction.called
 
         # Verify the payload passed to add_spend_log_transaction_to_daily_user_transaction
-        call_args = (
-            db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]
-        )
+        call_args = db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]
         assert "payload" in call_args
         assert call_args["payload"]["spend"] == 0.1
         assert call_args["payload"]["model"] == "gpt-4"
@@ -168,7 +167,7 @@ async def test_update_daily_spend_sorting():
     upsert_calls = []
     for i in range(50):
         daily_spend_transactions[f"test_key_{i}"] = {
-            "user_id": f"user{60-i}",  # user60 ... user11, reverse order
+            "user_id": f"user{60 - i}",  # user60 ... user11, reverse order
             "date": "2024-01-01",
             "api_key": "test-api-key",
             "model": "gpt-4",
@@ -184,7 +183,7 @@ async def test_update_daily_spend_sorting():
             call(
                 where={
                     "user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
-                        "user_id": f"user{i+11}",  # user11 ... user60, sorted order
+                        "user_id": f"user{i + 11}",  # user11 ... user60, sorted order
                         "date": "2024-01-01",
                         "api_key": "test-api-key",
                         "model": "gpt-4",
@@ -195,7 +194,7 @@ async def test_update_daily_spend_sorting():
                 },
                 data={
                     "create": {
-                        "user_id": f"user{i+11}",
+                        "user_id": f"user{i + 11}",
                         "date": "2024-01-01",
                         "api_key": "test-api-key",
                         "model": "gpt-4",
@@ -760,9 +759,9 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
         transaction_dict = call[1]["update"]
         # Each transaction should have one key with the format tag_date_api_key_model_provider
         for key, transaction in transaction_dict.items():
-            assert (
-                transaction["request_id"] == request_id
-            ), f"request_id should be {request_id} but got {transaction.get('request_id')}"
+            assert transaction["request_id"] == request_id, (
+                f"request_id should be {request_id} but got {transaction.get('request_id')}"
+            )
 
 
 @pytest.mark.asyncio
@@ -988,21 +987,15 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_calls_common
     }
 
     writer.daily_agent_spend_update_queue.add_update = AsyncMock()
-    original_common_helper = (
-        writer._common_add_spend_log_transaction_to_daily_transaction
-    )
-    writer._common_add_spend_log_transaction_to_daily_transaction = AsyncMock(
-        wraps=original_common_helper
-    )
+    original_common_helper = writer._common_add_spend_log_transaction_to_daily_transaction
+    writer._common_add_spend_log_transaction_to_daily_transaction = AsyncMock(wraps=original_common_helper)
 
     await writer.add_spend_log_transaction_to_daily_agent_transaction(
         payload=payload,
         prisma_client=mock_prisma,
     )
 
-    assert (
-        writer._common_add_spend_log_transaction_to_daily_transaction.await_count == 1
-    )
+    assert writer._common_add_spend_log_transaction_to_daily_transaction.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -1159,8 +1152,7 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
         assert "Daily user spend batch upsert failed" in formatted
         assert "Table: litellm_dailyuserspend" in formatted
         assert (
-            "Constraint: user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
-            in formatted
+            "Constraint: user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint" in formatted
         )
         assert "Batch size: 1" in formatted
         assert "Unique constraint violation" in formatted
@@ -1316,9 +1308,7 @@ async def test_update_database_creates_single_task():
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
-        patch(
-            "litellm.proxy.db.db_spend_update_writer.asyncio.create_task"
-        ) as mock_create_task,
+        patch("litellm.proxy.db.db_spend_update_writer.asyncio.create_task") as mock_create_task,
     ):
         await db_writer.update_database(
             token="test-token",
@@ -1419,9 +1409,7 @@ async def test_daily_agent_receives_deepcopied_payload():
     db_writer._update_agent_db = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock(
-        side_effect=capture_agent_payload
-    )
+    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock(side_effect=capture_agent_payload)
     db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
@@ -1483,8 +1471,8 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
     # Return all-None tuple (no data to commit)
-    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = (
-        AsyncMock(return_value=(None, None, None, None, None, None, None))
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 
@@ -1656,3 +1644,322 @@ async def test_commit_spend_updates_iterates_in_sorted_order(
     )
 
     assert captured_where_values == expected_order
+
+
+# ---------------------------------------------------------------------------
+# report_timezone tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_local_date_utc_default():
+    dt = datetime(2025, 1, 1, 23, 0, 0, tzinfo=timezone.utc)
+    with patch("litellm.report_timezone", None, create=True):
+        result = _get_local_date_from_start_time(dt)
+    assert result == "2025-01-01"
+
+
+def test_get_local_date_utc_plus8_crosses_midnight():
+    # 2025-01-01T16:00:00Z is 2025-01-02T00:00:00 Asia/Shanghai
+    dt = datetime(2025, 1, 1, 16, 0, 0, tzinfo=timezone.utc)
+    with patch("litellm.report_timezone", "Asia/Shanghai", create=True):
+        result = _get_local_date_from_start_time(dt)
+    assert result == "2025-01-02"
+
+
+def test_get_local_date_utc_minus8_crosses_midnight():
+    # 2025-01-02T03:00:00Z is 2025-01-01T19:00:00 America/Los_Angeles (UTC-8 in winter)
+    dt = datetime(2025, 1, 2, 3, 0, 0, tzinfo=timezone.utc)
+    with patch("litellm.report_timezone", "America/Los_Angeles", create=True):
+        result = _get_local_date_from_start_time(dt)
+    assert result == "2025-01-01"
+
+
+def test_get_local_date_naive_datetime_treated_as_utc():
+    dt = datetime(2025, 6, 15, 16, 0, 0)  # naive, treated as UTC
+    with patch("litellm.report_timezone", "Asia/Shanghai", create=True):
+        result = _get_local_date_from_start_time(dt)
+    assert result == "2025-06-16"
+
+
+@pytest.mark.asyncio
+async def test_daily_user_spend_date_uses_report_timezone():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+    writer.daily_spend_update_queue.add_update = AsyncMock()
+
+    # 2025-01-01T23:30:00Z is 2025-01-02T07:30:00 Asia/Shanghai
+    payload = {
+        "request_id": "req-tz-test",
+        "user": "user-tz",
+        "startTime": datetime(2025, 1, 1, 23, 30, 0, tzinfo=timezone.utc),
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "spend": 0.1,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    with patch("litellm.report_timezone", "Asia/Shanghai", create=True):
+        await writer.add_spend_log_transaction_to_daily_user_transaction(
+            payload=payload,
+            prisma_client=mock_prisma,
+        )
+
+    writer.daily_spend_update_queue.add_update.assert_called_once()
+    call_args = writer.daily_spend_update_queue.add_update.call_args[1]
+    update_dict = call_args["update"]
+    for _key, transaction in update_dict.items():
+        assert transaction["date"] == "2025-01-02"
+
+
+@pytest.mark.asyncio
+async def test_daily_user_spend_date_utc_default():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+    writer.daily_spend_update_queue.add_update = AsyncMock()
+
+    payload = {
+        "request_id": "req-utc-test",
+        "user": "user-utc",
+        "startTime": datetime(2025, 1, 1, 23, 30, 0, tzinfo=timezone.utc),
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "spend": 0.1,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    with patch("litellm.report_timezone", None, create=True):
+        await writer.add_spend_log_transaction_to_daily_user_transaction(
+            payload=payload,
+            prisma_client=mock_prisma,
+        )
+
+    writer.daily_spend_update_queue.add_update.assert_called_once()
+    call_args = writer.daily_spend_update_queue.add_update.call_args[1]
+    update_dict = call_args["update"]
+    for _key, transaction in update_dict.items():
+        assert transaction["date"] == "2025-01-01"
+
+
+def test_aggregate_spend_log_row_basic():
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _aggregate_spend_log_row,
+    )
+
+    row = MagicMock()
+    row.startTime = datetime(2025, 1, 1, 16, 0, 0, tzinfo=timezone.utc)
+    row.user = "user1"
+    row.team_id = None
+    row.organization_id = None
+    row.end_user = None
+    row.agent_id = None
+    row.request_tags = None
+    row.api_key = "key1"
+    row.model = "gpt-4"
+    row.model_group = "gpt-4-group"
+    row.custom_llm_provider = "openai"
+    row.mcp_namespaced_tool_name = None
+    row.call_type = "acompletion"
+    row.spend = 0.5
+    row.prompt_tokens = 100
+    row.completion_tokens = 50
+    row.status = "success"
+    row.metadata = {}
+
+    aggregated = {}
+    with patch("litellm.report_timezone", "Asia/Shanghai", create=True):
+        _aggregate_spend_log_row(
+            row=row,
+            tz_name="Asia/Shanghai",
+            start_date="2025-01-02",
+            end_date="2025-01-02",
+            tables=["user"],
+            aggregated=aggregated,
+        )
+
+    assert len(aggregated) == 1
+    entry = next(iter(aggregated.values()))
+    assert entry["date"] == "2025-01-02"
+    assert entry["entity_id"] == "user1"
+    assert entry["spend"] == 0.5
+    assert entry["api_requests"] == 1
+    assert entry["successful_requests"] == 1
+    assert entry["failed_requests"] == 0
+
+
+def test_aggregate_spend_log_row_outside_range_is_skipped():
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _aggregate_spend_log_row,
+    )
+
+    row = MagicMock()
+    row.startTime = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)  # UTC date 2025-01-01
+    row.user = "user1"
+    row.team_id = None
+    row.organization_id = None
+    row.end_user = None
+    row.agent_id = None
+    row.request_tags = None
+    row.api_key = "key1"
+    row.model = "gpt-4"
+    row.model_group = "gpt-4-group"
+    row.custom_llm_provider = "openai"
+    row.mcp_namespaced_tool_name = None
+    row.call_type = ""
+    row.spend = 0.5
+    row.prompt_tokens = 100
+    row.completion_tokens = 50
+    row.status = "success"
+    row.metadata = {}
+
+    aggregated = {}
+    _aggregate_spend_log_row(
+        row=row,
+        tz_name="UTC",
+        start_date="2025-01-02",  # later than log date
+        end_date="2025-01-03",
+        tables=["user"],
+        aggregated=aggregated,
+    )
+
+    assert len(aggregated) == 0
+
+
+def test_aggregate_spend_log_row_idempotency():
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _aggregate_spend_log_row,
+    )
+
+    row = MagicMock()
+    row.startTime = datetime(2025, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    row.user = "user-x"
+    row.team_id = None
+    row.organization_id = None
+    row.end_user = None
+    row.agent_id = None
+    row.request_tags = None
+    row.api_key = "key1"
+    row.model = "gpt-4"
+    row.model_group = ""
+    row.custom_llm_provider = "openai"
+    row.mcp_namespaced_tool_name = None
+    row.call_type = ""
+    row.spend = 1.0
+    row.prompt_tokens = 200
+    row.completion_tokens = 100
+    row.status = "success"
+    row.metadata = {}
+
+    aggregated = {}
+    _aggregate_spend_log_row(
+        row=row,
+        tz_name="UTC",
+        start_date="2025-06-15",
+        end_date="2025-06-15",
+        tables=["user"],
+        aggregated=aggregated,
+    )
+    assert len(aggregated) == 1
+    assert next(iter(aggregated.values()))["api_requests"] == 1
+
+    # Calling again with the same row should accumulate (simulates processing twice before delete)
+    _aggregate_spend_log_row(
+        row=row,
+        tz_name="UTC",
+        start_date="2025-06-15",
+        end_date="2025-06-15",
+        tables=["user"],
+        aggregated=aggregated,
+    )
+    assert len(aggregated) == 1
+    entry = next(iter(aggregated.values()))
+    assert entry["api_requests"] == 2
+    assert entry["spend"] == 2.0
+
+
+def test_aggregate_spend_log_row_multiple_tables():
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _aggregate_spend_log_row,
+    )
+
+    row = MagicMock()
+    row.startTime = datetime(2025, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
+    row.user = "user-multi"
+    row.team_id = "team-x"
+    row.organization_id = "org-y"
+    row.end_user = None
+    row.agent_id = None
+    row.request_tags = None
+    row.api_key = "key1"
+    row.model = "gpt-4"
+    row.model_group = ""
+    row.custom_llm_provider = "openai"
+    row.mcp_namespaced_tool_name = None
+    row.call_type = ""
+    row.spend = 1.0
+    row.prompt_tokens = 100
+    row.completion_tokens = 50
+    row.status = "success"
+    row.metadata = {}
+
+    aggregated = {}
+    _aggregate_spend_log_row(
+        row=row,
+        tz_name="UTC",
+        start_date="2025-06-15",
+        end_date="2025-06-15",
+        tables=["user", "team", "org"],
+        aggregated=aggregated,
+    )
+
+    table_names = {v["table"] for v in aggregated.values()}
+    assert table_names == {"user", "team", "org"}
+
+
+def test_aggregate_spend_log_row_tags():
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _aggregate_spend_log_row,
+    )
+
+    row = MagicMock()
+    row.startTime = datetime(2025, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
+    row.user = "user-tags"
+    row.team_id = None
+    row.organization_id = None
+    row.end_user = None
+    row.agent_id = None
+    row.request_tags = ["tag-a", "tag-b"]
+    row.api_key = "key1"
+    row.model = "gpt-4"
+    row.model_group = ""
+    row.custom_llm_provider = "openai"
+    row.mcp_namespaced_tool_name = None
+    row.call_type = ""
+    row.spend = 0.5
+    row.prompt_tokens = 50
+    row.completion_tokens = 25
+    row.status = "success"
+    row.metadata = {}
+
+    aggregated = {}
+    _aggregate_spend_log_row(
+        row=row,
+        tz_name="UTC",
+        start_date="2025-06-15",
+        end_date="2025-06-15",
+        tables=["tag"],
+        aggregated=aggregated,
+    )
+
+    assert len(aggregated) == 2
+    entity_ids = {v["entity_id"] for v in aggregated.values()}
+    assert entity_ids == {"tag-a", "tag-b"}
