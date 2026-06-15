@@ -32,6 +32,9 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         self._project = project
         self._location = location
 
+    def _include_function_response_id(self) -> bool:
+        return False
+
     # ------------------------------------------------------------------
     # URL
     # ------------------------------------------------------------------
