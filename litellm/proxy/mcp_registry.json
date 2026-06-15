@@ -34,7 +34,7 @@
       "category": "Developer Tools",
       "registry_url": "https://registry.modelcontextprotocol.io/servers/com.atlassian%2Fatlassian-mcp-server",
       "transport": "http",
-      "url": "https://mcp.atlassian.com/v1/mcp",
+      "url": "https://mcp.atlassian.com/v1/mcp/authv2",
       "env_vars": []
     },
     {

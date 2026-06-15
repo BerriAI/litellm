@@ -105,6 +105,14 @@ class TestMCPRegistryFile:
         assert "command" not in slack
         assert "args" not in slack
 
+    def test_atlassian_uses_authv2_endpoint(self, registry_path):
+        """Atlassian's MCP server should default to the streamable HTTP authv2 endpoint."""
+        with open(registry_path, "r") as f:
+            data = json.load(f)
+        atlassian = next(s for s in data["servers"] if s["name"] == "atlassian")
+        assert atlassian["transport"] == "http"
+        assert atlassian["url"] == "https://mcp.atlassian.com/v1/mcp/authv2"
+
     def test_well_known_servers_present(self, registry_path):
         """Ensure key well-known MCPs are in the registry."""
         with open(registry_path, "r") as f:
