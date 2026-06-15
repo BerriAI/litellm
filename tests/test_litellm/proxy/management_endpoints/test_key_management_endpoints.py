@@ -1548,6 +1548,51 @@ async def test_prepare_key_update_data_budget_limits_serializes_windows():
 
 
 @pytest.mark.asyncio
+async def test_prepare_key_update_data_disable_global_guardrails_false_no_premium(
+    monkeypatch,
+):
+    """
+    Regression #30285: editing a key via the UI sends disable_global_guardrails=False
+    (unchanged default). A non-premium user must NOT get a 403, and False must persist.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    data = UpdateKeyRequest(key="sk-1", disable_global_guardrails=False)
+    existing_key = LiteLLM_VerificationToken(token="hashed")
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["metadata"]["disable_global_guardrails"] is False
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_disable_global_guardrails_true_requires_premium(
+    monkeypatch,
+):
+    """Control: enabling the premium feature (True) without a license still 403s."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    data = UpdateKeyRequest(key="sk-1", disable_global_guardrails=True)
+    existing_key = LiteLLM_VerificationToken(token="hashed")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await prepare_key_update_data(data=data, existing_key_row=existing_key)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_disable_global_guardrails_true_premium_persists(
+    monkeypatch,
+):
+    """A premium user enabling the feature (True) succeeds and the value persists."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    data = UpdateKeyRequest(key="sk-1", disable_global_guardrails=True)
+    existing_key = LiteLLM_VerificationToken(token="hashed")
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["metadata"]["disable_global_guardrails"] is True
+
+
+@pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_requires_team_id():
     """
     Test that validate_team_id_used_in_service_account_request raises HTTPException
@@ -11862,7 +11907,6 @@ async def test_ghsa_q775_default_team_id_does_not_grant_session_token_exemption(
         assert "cannot exceed" in msg.lower()
 
 
-
 @pytest.mark.asyncio
 async def test_prepare_key_update_data_budget_duration_null_clears_fields():
     """
@@ -11939,5 +11983,3 @@ async def test_prepare_key_update_data_budget_duration_valid_sets_reset():
 
     assert result["budget_duration"] == "30d"
     assert result["budget_reset_at"] is not None
-
-
