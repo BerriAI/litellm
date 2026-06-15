@@ -69,3 +69,29 @@ def test_internal_jobs_user_has_proxy_admin_role():
     assert system_user.user_id == "system"
     assert system_user.team_id == "system"
     assert system_user.team_alias == "system"
+
+
+def test_team_membership_optional_budget_table_defaults_to_none():
+    """A team member with no joined budget table must construct cleanly.
+
+    Pydantic v2 treats ``Optional[X]`` without an explicit default as a
+    *required* field (unlike v1, where ``Optional`` implied a ``None``
+    default). ``LiteLLM_TeamMembership.litellm_budget_table`` was declared
+    without ``= None``, so building the model from a team-member row with
+    ``budget_id = NULL`` (no budget table joined) raised "Field required" and
+    the request failed with HTTP 401 instead of being processed.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/30437.
+    """
+    from litellm.proxy._types import LiteLLM_TeamMembership
+
+    membership = LiteLLM_TeamMembership(
+        user_id="user-123",
+        team_id="team-456",
+        spend=4.73,
+    )
+
+    assert membership.litellm_budget_table is None
+    # The rpm/tpm helpers must stay safe when no budget row is joined.
+    assert membership.safe_get_team_member_rpm_limit() is None
+    assert membership.safe_get_team_member_tpm_limit() is None
