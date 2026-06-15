@@ -2868,64 +2868,61 @@ class Router:
         chunks: List = []
         aiter = response.__aiter__()
 
-        if ttft_timeout is not None:
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + ttft_timeout
-            first_token_received = False
+        try:
+            if ttft_timeout is not None:
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + ttft_timeout
+                first_token_received = False
 
-            while not first_token_received:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    verbose_router_logger.warning(
-                        f"ttft_timeout={ttft_timeout}s exceeded for model={response.model}: "
-                        "provider accepted connection but sent no tokens"
-                    )
-                    raise litellm.Timeout(
-                        message=f"Router ttft_timeout={ttft_timeout}s exceeded: provider accepted connection but sent no tokens",
-                        model=response.model or "",
-                        llm_provider=response.custom_llm_provider or "",
-                    )
-                try:
-                    chunk = await asyncio.wait_for(aiter.__anext__(), timeout=remaining)
-                except asyncio.TimeoutError:
-                    verbose_router_logger.warning(
-                        f"ttft_timeout={ttft_timeout}s exceeded for model={response.model}: "
-                        "provider accepted connection but sent no tokens"
-                    )
-                    raise litellm.Timeout(
-                        message=f"Router ttft_timeout={ttft_timeout}s exceeded: provider accepted connection but sent no tokens",
-                        model=response.model or "",
-                        llm_provider=response.custom_llm_provider or "",
-                    )
-                except StopAsyncIteration:
-                    break
-                chunks.append(chunk)
-                delta = chunk.choices[0].delta if chunk.choices else None
-                if delta and (delta.content or delta.tool_calls):
-                    first_token_received = True
+                while not first_token_received:
+                    remaining = deadline - loop.time()
+                    try:
+                        if remaining <= 0:
+                            raise asyncio.TimeoutError
+                        chunk = await asyncio.wait_for(
+                            aiter.__anext__(), timeout=remaining
+                        )
+                    except asyncio.TimeoutError:
+                        verbose_router_logger.warning(
+                            f"ttft_timeout={ttft_timeout}s exceeded for model={response.model}: "
+                            "provider accepted connection but sent no tokens"
+                        )
+                        raise litellm.Timeout(
+                            message=f"Router ttft_timeout={ttft_timeout}s exceeded: provider accepted connection but sent no tokens",
+                            model=response.model or "",
+                            llm_provider=response.custom_llm_provider or "",
+                        )
+                    except StopAsyncIteration:
+                        break
+                    chunks.append(chunk)
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if delta and (delta.content or delta.tool_calls):
+                        first_token_received = True
 
-        if stream_idle_timeout is not None:
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(
-                        aiter.__anext__(), timeout=stream_idle_timeout
-                    )
-                except asyncio.TimeoutError:
-                    verbose_router_logger.warning(
-                        f"stream_idle_timeout={stream_idle_timeout}s exceeded for model={response.model}: "
-                        "provider stalled mid-stream"
-                    )
-                    raise litellm.Timeout(
-                        message=f"Router stream_idle_timeout={stream_idle_timeout}s exceeded: provider stalled mid-stream",
-                        model=response.model or "",
-                        llm_provider=response.custom_llm_provider or "",
-                    )
-                except StopAsyncIteration:
-                    break
-                chunks.append(chunk)
-        else:
-            async for chunk in aiter:
-                chunks.append(chunk)
+            if stream_idle_timeout is not None:
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(
+                            aiter.__anext__(), timeout=stream_idle_timeout
+                        )
+                    except asyncio.TimeoutError:
+                        verbose_router_logger.warning(
+                            f"stream_idle_timeout={stream_idle_timeout}s exceeded for model={response.model}: "
+                            "provider stalled mid-stream"
+                        )
+                        raise litellm.Timeout(
+                            message=f"Router stream_idle_timeout={stream_idle_timeout}s exceeded: provider stalled mid-stream",
+                            model=response.model or "",
+                            llm_provider=response.custom_llm_provider or "",
+                        )
+                    except StopAsyncIteration:
+                        break
+                    chunks.append(chunk)
+            else:
+                async for chunk in aiter:
+                    chunks.append(chunk)
+        finally:
+            await response.aclose()
 
         result = stream_chunk_builder(chunks, messages=messages)
         if result is None:
@@ -3039,6 +3036,19 @@ class Router:
                 "litellm_logging_obj", None
             )
 
+            async def _await_response() -> Union[ModelResponse, CustomStreamWrapper]:
+                awaited_response = await _response
+                if _forced_stream_for_ttft and isinstance(
+                    awaited_response, CustomStreamWrapper
+                ):
+                    return await self._collect_stream_with_ttft_timeout(
+                        response=awaited_response,
+                        messages=messages,
+                        ttft_timeout=_ttft_timeout,
+                        stream_idle_timeout=_stream_idle_timeout,
+                    )
+                return awaited_response
+
             rpm_semaphore = self._get_client(
                 deployment=deployment,
                 kwargs=kwargs,
@@ -3057,7 +3067,7 @@ class Router:
                         logging_obj=logging_obj,
                         parent_otel_span=parent_otel_span,
                     )
-                    response = await _response
+                    response = await _await_response()
             else:
                 await self.async_routing_strategy_pre_call_checks(
                     deployment=deployment,
@@ -3065,7 +3075,7 @@ class Router:
                     parent_otel_span=parent_otel_span,
                 )
 
-                response = await _response
+                response = await _await_response()
 
             ## CHECK CONTENT FILTER ERROR ##
             if isinstance(response, ModelResponse):
@@ -3091,22 +3101,6 @@ class Router:
             )
 
             if isinstance(response, CustomStreamWrapper):
-                if _forced_stream_for_ttft:
-                    reconstructed = await self._collect_stream_with_ttft_timeout(
-                        response=response,
-                        messages=messages,
-                        ttft_timeout=_ttft_timeout,
-                        stream_idle_timeout=_stream_idle_timeout,
-                    )
-                    if self._should_raise_content_policy_error(
-                        model=model, response=reconstructed, kwargs=kwargs
-                    ):
-                        raise litellm.ContentPolicyViolationError(
-                            message="Response output was blocked.",
-                            model=model,
-                            llm_provider="",
-                        )
-                    return reconstructed
                 return await self._acompletion_streaming_iterator(
                     model_response=response,
                     messages=messages,
