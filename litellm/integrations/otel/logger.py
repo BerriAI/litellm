@@ -10,6 +10,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span, Tracer, get_current_span, use_span
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.model.baggage import promoted_baggage
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
@@ -36,7 +37,12 @@ from litellm.integrations.otel.model.payloads import (
     SpanError,
     is_mcp_tool_call,
 )
+from litellm.integrations.otel.plumbing.metrics import (
+    GenAIMetricRecorder,
+    create_genai_metrics,
+)
 from litellm.integrations.otel.plumbing.providers import (
+    build_meter_provider,
     build_tracer_provider,
     get_tracer,
 )
@@ -95,7 +101,7 @@ class OpenTelemetryV2(CustomLogger):
         callback_name: str | None = None,
         tracer_provider: TracerProvider | None = None,
         logger_provider: Any | None = None,  # reserved for OTel logs
-        meter_provider: Any | None = None,  # reserved for metrics
+        meter_provider: Any | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -107,6 +113,8 @@ class OpenTelemetryV2(CustomLogger):
             else build_tracer_provider(self.config)
         )
         self.tracer: Tracer = get_tracer(self._tracer_provider, LITELLM_TRACER_NAME)
+        self._metrics_recorder = self._init_metrics(meter_provider)
+        self._metric_filter_error_logged = False
         self._emitter = SpanEmitter(
             self.tracer, self.config, mappers=resolve_mappers(self.config.mapper_names)
         )
@@ -115,6 +123,22 @@ class OpenTelemetryV2(CustomLogger):
         )
         self._open_llm_calls: "OrderedDict[str, _LLMCallSpan]" = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
+
+    def _init_metrics(self, meter_provider: Any | None) -> "GenAIMetricRecorder | None":
+        """Create the six GenAI histograms when metrics are enabled, else ``None``.
+
+        ``meter_provider`` is an explicit override (tests inject one); otherwise a
+        provider is built from the config's exporter selection.
+        """
+        if not self.config.enable_metrics:
+            return None
+        provider = (
+            meter_provider
+            if meter_provider is not None
+            else build_meter_provider(self.config)
+        )
+        meter = provider.get_meter(LITELLM_TRACER_NAME)
+        return GenAIMetricRecorder(create_genai_metrics(meter), self.callback_name)
 
     # ====================================================================== #
     #  Proxy global registration
@@ -208,6 +232,25 @@ class OpenTelemetryV2(CustomLogger):
         if self._emit_mcp_tool_call(kwargs, start_time, end_time):
             return
         self._close_llm_call(kwargs, start_time, end_time)
+        self._record_metrics(kwargs, response_obj, start_time, end_time)
+
+    def _record_metrics(self, kwargs, response_obj, start_time, end_time) -> None:
+        """Record the GenAI metrics for a successful LLM call. Best-effort: a
+        recording failure (e.g. a malformed payload) must never break the span
+        close or the request itself."""
+        if self._metrics_recorder is None:
+            return
+        try:
+            self._metrics_recorder.record(kwargs, response_obj, start_time, end_time)
+        except ValueError as exc:
+            if not self._metric_filter_error_logged:
+                verbose_logger.error(
+                    "OpenTelemetryV2: invalid otel.attributes metric filter, metrics disabled: %s",
+                    exc,
+                )
+                self._metric_filter_error_logged = True
+        except Exception as exc:
+            verbose_logger.debug("OpenTelemetryV2: metric recording failed: %s", exc)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         if self._emit_mcp_tool_call(kwargs, start_time, end_time):
