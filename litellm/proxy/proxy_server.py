@@ -13446,29 +13446,32 @@ async def model_info_v1(
                 },
             )
         # Authorize against user.models — by-id was previously
-        # short-circuiting before the listing-path filter.
-        from litellm.proxy.utils import get_available_models_for_user
+        # short-circuiting before the listing-path filter. Master
+        # key / service accounts (no user_id) bypass, matching
+        # `_apply_user_models_filter` semantics.
+        if user_api_key_dict.user_id is not None:
+            from litellm.proxy.utils import get_available_models_for_user
 
-        authorized_models = await get_available_models_for_user(
-            user_api_key_dict=user_api_key_dict,
-            llm_router=llm_router,
-            general_settings=general_settings,
-            user_model=user_model,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            team_id=None,
-            include_model_access_groups=False,
-            only_model_access_groups=False,
-            return_wildcard_routes=False,
-            user_api_key_cache=user_api_key_cache,
-        )
-        if deployment_info.model_name not in authorized_models:
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": f"Model id = {litellm_model_id} not authorized for this user"
-                },
+            authorized_models = await get_available_models_for_user(
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+                general_settings=general_settings,
+                user_model=user_model,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                team_id=None,
+                include_model_access_groups=False,
+                only_model_access_groups=False,
+                return_wildcard_routes=False,
+                user_api_key_cache=user_api_key_cache,
             )
+            if deployment_info.model_name not in authorized_models:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": f"Model id = {litellm_model_id} not authorized for this user"
+                    },
+                )
         _deployment_info_dict = _get_proxy_model_info(
             model=deployment_info.model_dump(exclude_none=True)
         )
