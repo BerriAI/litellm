@@ -136,6 +136,20 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         )
         new_messages: Optional[List[AllMessageValues]] = data.get("messages")
         if new_messages is None:
+            # Responses API uses "input" instead of "messages".
+            # Input can be a plain string or a list that may contain
+            # non-message items (e.g. tool-call outputs without a "role"
+            # key). Filter to only message-shaped dicts so get_user_prompt()
+            # doesn't break its reverse iteration on a non-message item.
+            input_data = data.get("input")
+            if isinstance(input_data, str):
+                new_messages = [{"role": "user", "content": input_data}]
+            elif isinstance(input_data, list):
+                new_messages = [
+                    item for item in input_data
+                    if isinstance(item, dict) and "role" in item
+                ]
+        if new_messages is None:
             verbose_proxy_logger.warning(
                 "Azure Prompt Shield: not running guardrail. No messages in data"
             )
