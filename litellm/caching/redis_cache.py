@@ -365,7 +365,7 @@ class RedisCache(BaseCache):
         self.redis_async_client = redis_async_client  # type: ignore
         return redis_async_client
 
-    def check_and_fix_namespace(self, key: str) -> str:
+    def check_and_fix_namespace(self, key: Optional[str]) -> Optional[str]:
         """
         Make sure each key starts with the given namespace
         """
