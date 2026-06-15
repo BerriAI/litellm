@@ -2,7 +2,16 @@
 Translates from OpenAI's `/v1/chat/completions` to ModelScope's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, Literal, Optional, Tuple, Union, cast, overload  # noqa: TID251
+from typing import (
+    Any,
+    Coroutine,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+    overload,
+)  # noqa: TID251
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
