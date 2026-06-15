@@ -1467,11 +1467,21 @@ def _attempt_json_repair(s: str) -> Optional[Any]:
             if opener_stack and opener_stack[-1] == ch:
                 opener_stack.pop()
 
-    if not opener_stack:
-        return None
+    # If we ended inside a string value, close it first.
+    # This handles truncated tool-call arguments where the JSON string
+    # value (e.g. a long shell heredoc) was cut off before its closing ".
+    if in_string:
+        candidate = stripped
+        # Strip trailing backslash so it does not escape our closing "
+        if escape_next:
+            candidate = candidate.rstrip("\\")
+        candidate += '"'
+    else:
+        # Remove trailing comma before we close brackets
+        candidate = stripped.rstrip(",")
 
-    # Remove trailing comma before we close brackets
-    candidate = stripped.rstrip(",")
+    if not opener_stack and not in_string:
+        return None
 
     # Close in reverse order of opening (respects nesting)
     candidate += "".join(reversed(opener_stack))
@@ -1482,6 +1492,38 @@ def _attempt_json_repair(s: str) -> Optional[Any]:
         pass
 
     return None
+
+
+def _escape_raw_newlines_in_json(s: str) -> str:
+    """Escape raw newline/CR chars that appear inside JSON string values.
+
+    JSON does not allow literal newlines in strings, but LLM tool call
+    arguments (e.g. shell heredocs) sometimes contain them.  This walks
+    the string character-by-character and escapes them to \\n/\\r only
+    when inside a quoted string, so that whitespace between tokens is
+    preserved as-is.
+    """
+    result: list[str] = []
+    in_string = False
+    escape_next = False
+    for ch in s:
+        if escape_next:
+            escape_next = False
+            result.append(ch)
+            continue
+        if ch == "\\":
+            escape_next = True
+            result.append(ch)
+            continue
+        if ch == '"':
+            in_string = not in_string
+            result.append(ch)
+            continue
+        if in_string and ch in "\n\r":
+            result.append("\\n" if ch == "\n" else "\\r")
+            continue
+        result.append(ch)
+    return "".join(result)
 
 
 def parse_tool_call_arguments(
@@ -1514,6 +1556,8 @@ def parse_tool_call_arguments(
 
     if not arguments or not arguments.strip():
         return {}
+
+    arguments = _escape_raw_newlines_in_json(arguments)
 
     try:
         return json.loads(arguments)
