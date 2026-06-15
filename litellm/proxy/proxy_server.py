@@ -966,7 +966,17 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping DB health watchdog task: {e}")
 
-    await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
+    # Shutdown disconnect failures must not abort the uvicorn lifespan — if the
+    # lifespan exits with an exception, uvicorn skips the Python-level
+    # `atexit`/SIGTERM cleanup and the Prisma query-engine subprocess is left
+    # as an orphan whose Postgres connections sit on the DB side for the OS
+    # keepalive default (~2h). See BerriAI/litellm#26619.
+    try:
+        await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
+    except Exception:
+        verbose_proxy_logger.exception(
+            "proxy_shutdown_event failed (continuing shutdown to avoid orphan subprocesses)"
+        )
 
 
 def _generate_stable_operation_id(route: Any) -> str:

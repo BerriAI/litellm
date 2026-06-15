@@ -4147,14 +4147,6 @@ class PrismaClient:
             )
             raise e
 
-    # Define a retrying strategy with exponential backoff
-    @backoff.on_exception(
-        backoff.expo,
-        Exception,  # base exception to catch for the backoff
-        max_tries=3,  # maximum number of retries
-        max_time=10,  # maximum total time to retry for
-        on_backoff=on_backoff,  # specifying the function to call on backoff
-    )
     async def disconnect(self):
         start_time = time.time()
         try:
@@ -4175,7 +4167,12 @@ class PrismaClient:
                     traceback_str=error_traceback,
                 )
             )
-            raise e
+            # Do NOT re-raise: propagating from disconnect() aborts the
+            # uvicorn lifespan shutdown and leaves the Prisma query-engine
+            # subprocess as an orphan with leaked Postgres connections.
+            # disconnect() is only called from shutdown paths; no caller
+            # benefits from the re-raise, and the lifespan is actively
+            # harmed by it. See BerriAI/litellm#26619.
 
     def _get_engine_pid(self) -> int:
         try:
