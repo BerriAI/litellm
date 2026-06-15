@@ -92,6 +92,7 @@ class TestMCPRegistryFile:
         linear = next(s for s in data["servers"] if s["name"] == "linear")
         assert linear["transport"] == "http"
         assert linear["url"] == "https://mcp.linear.app/mcp"
+        assert linear["auth_type"] == "oauth2"
         assert "/sse" not in linear["url"]
 
     def test_slack_defaults_to_streamable_http_oauth(self, registry_path):
