@@ -84,13 +84,20 @@ def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
     client_internal_user_viewer,
 ):
     """
-    internal_user_viewer with vector_store_id passes the role check.
+    internal_user_viewer with a vector_store_id that resolves to an existing
+    managed vector store passes the role check.
     (Actual ingest may fail due to missing API keys, but we get past 403.)
     """
-    with patch(
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
-        new_callable=AsyncMock,
-        return_value={"vector_store_id": "vs_existing", "file_id": "file_123"},
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new_callable=AsyncMock,
+            return_value={"vector_store_id": "vs_existing", "file_id": "file_123"},
+        ),
     ):
         response = client_internal_user_viewer.post(
             "/v1/rag/ingest",
@@ -105,6 +112,79 @@ def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
         f"internal_user_viewer with vector_store_id should pass role check. "
         f"Response: {response.json()}"
     )
+
+
+def test_internal_user_viewer_rag_ingest_with_nonexistent_vector_store_id_rejected(
+    client_internal_user_viewer,
+):
+    """
+    internal_user_viewer providing a vector_store_id that does not resolve to an
+    existing managed vector store is rejected - presence alone is not enough.
+    """
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new_callable=AsyncMock,
+            return_value={"vector_store_id": "vs_new", "file_id": "file_123"},
+        ),
+    ):
+        response = client_internal_user_viewer.post(
+            "/v1/rag/ingest",
+            files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
+            data={
+                "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai","vector_store_id":"vs_does_not_exist"}}}'
+            },
+        )
+
+    assert response.status_code == 403, (
+        f"internal_user_viewer with a non-existent vector_store_id must be denied. "
+        f"Response: {response.json()}"
+    )
+
+
+def test_internal_user_viewer_milvus_collection_name_auto_create_rejected(
+    client_internal_user_viewer,
+):
+    """
+    internal_user_viewer must not be able to auto-create a new Milvus collection.
+
+    The Milvus normalization mirrors collection_name onto vector_store_id, but an
+    unknown id resolves to no managed vector store, so the view-only caller is
+    denied before Milvus auto_create_collection can fire.
+    """
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new_callable=AsyncMock,
+            return_value={"vector_store_id": "brand_new_collection", "file_id": "f"},
+        ) as mock_aingest,
+    ):
+        response = client_internal_user_viewer.post(
+            "/v1/rag/ingest",
+            json={
+                "file_url": "https://example.com/doc.pdf",
+                "ingest_options": {
+                    "vector_store": {
+                        "custom_llm_provider": "milvus",
+                        "collection_name": "brand_new_collection",
+                    }
+                },
+            },
+        )
+
+    assert response.status_code == 403, (
+        "internal_user_viewer creating a new Milvus collection via collection_name "
+        f"must be denied. Got: {response.status_code} {response.json()}"
+    )
+    mock_aingest.assert_not_called()
 
 
 def test_internal_user_rag_ingest_without_vector_store_id_allowed(client_internal_user):

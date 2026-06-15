@@ -134,6 +134,45 @@ async def _authorize_nested_vector_store_ids(
         )
 
 
+async def _assert_view_only_role_targets_existing_vector_store(
+    ingest_options: Dict[str, Any],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    INTERNAL_USER_VIEW_ONLY may only ingest into an existing managed vector store.
+
+    Presence of `vector_store_id` is not enough: provider normalization mirrors a
+    write target (e.g. Milvus `collection_name`) onto `vector_store_id`, and
+    `assert_user_can_access_vector_store_id` lets unknown ids through as
+    provider-native targets. For a view-only caller an unknown id would otherwise
+    let a provider with `auto_create_collection` (Milvus) create a brand-new
+    collection, so require the id to resolve to a managed vector store.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value:
+        return
+    vector_store_id = ingest_options.get("vector_store", {}).get("vector_store_id")
+    if not vector_store_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "internal_user_viewer role can only ingest files to an existing vector store. "
+                "Provide 'vector_store_id' in ingest_options.vector_store."
+            },
+        )
+    existing_vector_store = await assert_user_can_access_vector_store_id(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if existing_vector_store is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "internal_user_viewer role can only ingest files to an existing vector store. "
+                f"'{vector_store_id}' does not resolve to a managed vector store."
+            },
+        )
+
+
 def _build_file_metadata_entry(
     response: Any,
     file_data: Optional[Tuple[str, bytes, str]] = None,
@@ -515,18 +554,10 @@ async def rag_ingest(
         )
 
         # INTERNAL_USER_VIEW_ONLY can ingest to existing vector stores only
-        if (
-            user_api_key_dict.user_role
-            == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-            and not ingest_options.get("vector_store", {}).get("vector_store_id")
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": "internal_user_viewer role can only ingest files to an existing vector store. "
-                    "Provide 'vector_store_id' in ingest_options.vector_store."
-                },
-            )
+        await _assert_view_only_role_targets_existing_vector_store(
+            ingest_options=ingest_options,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         await _authorize_nested_vector_store_ids(
             payload=ingest_options,
