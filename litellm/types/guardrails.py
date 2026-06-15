@@ -23,6 +23,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
+    OvalixGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
@@ -43,6 +46,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
+    CiscoAIDefenseGuardrailConfigModel,
 )
 
 """
@@ -77,6 +83,7 @@ class SupportedGuardrailIntegrations(Enum):
     PILLAR = "pillar"
     GRAYSWAN = "grayswan"
     PANW_PRISMA_AIRS = "panw_prisma_airs"
+    CISCO_AI_DEFENSE = "cisco_ai_defense"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
     MODEL_ARMOR = "model_armor"
@@ -97,6 +104,7 @@ class SupportedGuardrailIntegrations(Enum):
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
+    OVALIX = "ovalix"
     MICROSOFT_PURVIEW = "microsoft_purview"
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
@@ -849,6 +857,7 @@ class Mode(BaseModel):
 
 
 class LitellmParams(
+    CiscoAIDefenseGuardrailConfigModel,
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
@@ -866,6 +875,7 @@ class LitellmParams(
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
+    OvalixGuardrailConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,

@@ -6,7 +6,7 @@ import { modelAvailableCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { all_admin_roles } from "@/utils/roles";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "./RouterConfigBuilder";
 import ComplexityRouterConfig from "./ComplexityRouterConfig";
 import NotificationManager from "../molecules/notifications_manager";
