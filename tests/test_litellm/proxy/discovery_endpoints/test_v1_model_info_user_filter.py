@@ -236,3 +236,69 @@ def test_v1_model_info_alias_route_filters_identically(
     resp = client.get("/model/info", headers={"Authorization": "Bearer sk-test"})
     assert resp.status_code == 200
     assert _model_names(resp.json()) == ["claude-3-opus"]
+
+
+# ---------------------------------------------------------------------------
+# /v1/model/info Path A (?litellm_model_id=...) — by-id authorization
+# ---------------------------------------------------------------------------
+
+
+def _deployment_id(router, model_name):
+    for d in router.model_list:
+        if d["model_name"] == model_name:
+            return d["model_info"]["id"]
+    raise AssertionError(f"model {model_name!r} not in router")
+
+
+def test_v1_model_info_by_id_denied_when_model_not_in_user_models(
+    client, configure_router, monkeypatch
+):
+    """Regression: by-id lookup must respect user.models (veria-ai #29748)."""
+    _override_auth(user_id="u-test")
+    _patch_user(monkeypatch, models=["gpt-4"])
+    disallowed_id = _deployment_id(configure_router, "claude-3-opus")
+
+    resp = client.get(
+        f"/v1/model/info?litellm_model_id={disallowed_id}",
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    assert resp.status_code == 403
+    assert "not authorized" in resp.text.lower()
+
+
+def test_v1_model_info_by_id_allowed_when_model_in_user_models(
+    client, configure_router, monkeypatch
+):
+    """By-id lookup for a deployment whose model_name is in user.models -> 200."""
+    _override_auth(user_id="u-test")
+    _patch_user(monkeypatch, models=["claude-3-opus"])
+    allowed_id = _deployment_id(configure_router, "claude-3-opus")
+
+    resp = client.get(
+        f"/v1/model/info?litellm_model_id={allowed_id}",
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    assert resp.status_code == 200
+    assert _model_names(resp.json()) == ["claude-3-opus"]
+
+
+def test_v1_model_info_by_id_master_key_bypass(client, configure_router, monkeypatch):
+    """Master key / service account (user_id=None) -> by-id lookup unrestricted."""
+
+    async def _should_not_be_called(*args, **kwargs):
+        raise AssertionError("get_user_object must not be called when user_id is None")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        _should_not_be_called,
+    )
+
+    _override_auth(user_id=None)
+    any_id = _deployment_id(configure_router, "claude-3-opus")
+
+    resp = client.get(
+        f"/v1/model/info?litellm_model_id={any_id}",
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    assert resp.status_code == 200
+    assert _model_names(resp.json()) == ["claude-3-opus"]
