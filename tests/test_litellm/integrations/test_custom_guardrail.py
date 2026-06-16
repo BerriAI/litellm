@@ -84,6 +84,112 @@ class TestCustomGuardrailDeploymentHook:
         assert result["messages"] == mock_result["messages"]
         assert result["messages"] != original_messages
 
+    @pytest.mark.asyncio
+    async def test_deployment_hook_skips_when_pre_call_already_ran(self):
+        """The deployment hook must not re-run async_pre_call_hook once the proxy
+        pre-call loop has already run it for this request."""
+
+        class CountingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(guardrail_name="g1", default_on=True)
+                self.pre_call_count = 0
+
+            async def async_pre_call_hook(
+                self, user_api_key_dict, cache, data, call_type
+            ):
+                self.pre_call_count += 1
+                return data
+
+        guardrail = CountingGuardrail()
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-3.5-turbo",
+            "guardrails": ["g1"],
+            "metadata": {},
+        }
+
+        guardrail.mark_pre_call_hook_ran(kwargs)
+        await guardrail.async_pre_call_deployment_hook(
+            kwargs=kwargs, call_type=CallTypes.completion
+        )
+
+        assert guardrail.pre_call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_deployment_hook_runs_when_not_marked(self):
+        """Without the proxy marker (direct-SDK usage) the deployment hook is the
+        only execution path and must still run the guardrail exactly once."""
+
+        class CountingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(guardrail_name="g1", default_on=True)
+                self.pre_call_count = 0
+
+            async def async_pre_call_hook(
+                self, user_api_key_dict, cache, data, call_type
+            ):
+                self.pre_call_count += 1
+                return data
+
+        guardrail = CountingGuardrail()
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-3.5-turbo",
+            "guardrails": ["g1"],
+            "metadata": {},
+        }
+
+        await guardrail.async_pre_call_deployment_hook(
+            kwargs=kwargs, call_type=CallTypes.completion
+        )
+
+        assert guardrail.pre_call_count == 1
+
+    def test_mark_pre_call_hook_ran_uses_litellm_metadata(self):
+        """The marker is recorded in litellm_metadata when that is the metadata
+        bucket in use, and is then visible to the skip check."""
+        from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+
+        guardrail = CustomGuardrail(guardrail_name="g1")
+        kwargs = {"litellm_metadata": {}}
+
+        guardrail.mark_pre_call_hook_ran(kwargs)
+
+        assert kwargs["litellm_metadata"][PRE_CALL_EXECUTED_GUARDRAILS_KEY]
+        assert guardrail._pre_call_hook_already_ran(kwargs) is True
+
+    @pytest.mark.asyncio
+    async def test_deployment_hook_ignores_forged_caller_marker(self):
+        """A direct-SDK caller controls request metadata but cannot know the
+        per-process token, so a hand-crafted marker must not suppress a
+        requested guardrail in async_pre_call_deployment_hook."""
+        from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+
+        class CountingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(guardrail_name="g1", default_on=True)
+                self.pre_call_count = 0
+
+            async def async_pre_call_hook(
+                self, user_api_key_dict, cache, data, call_type
+            ):
+                self.pre_call_count += 1
+                return data
+
+        guardrail = CountingGuardrail()
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-3.5-turbo",
+            "guardrails": ["g1"],
+            "metadata": {PRE_CALL_EXECUTED_GUARDRAILS_KEY: ["g1"]},
+        }
+
+        await guardrail.async_pre_call_deployment_hook(
+            kwargs=kwargs, call_type=CallTypes.completion
+        )
+
+        assert guardrail.pre_call_count == 1
+
 
 class TestCustomGuardrailShouldRunGuardrail:
 
