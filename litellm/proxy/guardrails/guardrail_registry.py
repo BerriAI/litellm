@@ -5,6 +5,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Set, Type, cast
 
+from pydantic import ValidationError
+
 import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
@@ -690,7 +692,11 @@ class InMemoryGuardrailHandler:
         if isinstance(params, dict):
             try:
                 return LitellmParams(**params).model_dump()
-            except Exception:
+            except ValidationError as e:
+                verbose_proxy_logger.warning(
+                    f"Could not normalize guardrail litellm_params for comparison; "
+                    f"treating the guardrail as changed. Error: {e}"
+                )
                 return params
         return params
 

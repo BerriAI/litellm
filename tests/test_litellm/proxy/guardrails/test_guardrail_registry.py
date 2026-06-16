@@ -233,6 +233,27 @@ def test_changed_db_params_register_as_changed():
     assert handler._has_guardrail_params_changed(gid, new) is True
 
 
+def test_unnormalizable_db_params_register_as_changed_without_raising():
+    """
+    A DB row whose litellm_params fail LitellmParams validation must not crash the
+    poll loop. The comparison falls back to treating the guardrail as changed so it
+    re-initializes (and surfaces the bad row in logs) rather than propagating the
+    validation error up through the polling cycle.
+    """
+    handler = InMemoryGuardrailHandler()
+    raw = _db_litellm_params()
+    gid = "55555555-5555-5555-5555-555555555555"
+    handler.IN_MEMORY_GUARDRAILS[gid] = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params=LitellmParams(**raw),
+    )
+
+    malformed = {**raw, "default_on": "not-a-bool-xyz"}
+    new = Guardrail(guardrail_id=gid, guardrail_name="cf", litellm_params=malformed)
+    assert handler._has_guardrail_params_changed(gid, new) is True
+
+
 def _all_callback_lists():
     import litellm
 
