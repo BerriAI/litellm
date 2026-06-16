@@ -3145,7 +3145,7 @@ class SSOAuthenticationHandler:
         )
 
     @staticmethod
-    async def get_redirect_response_from_openid(  # noqa: PLR0915
+    async def get_redirect_response_from_openid(
         result: Union[OpenID, dict, CustomOpenID],
         request: Request,
         received_response: Optional[dict] = None,

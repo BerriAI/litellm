@@ -234,7 +234,7 @@ def extract_and_raise_litellm_exception(
                 )
 
 
-def exception_type(  # type: ignore  # noqa: PLR0915
+def exception_type(  # type: ignore
     model,
     original_exception,
     custom_llm_provider,

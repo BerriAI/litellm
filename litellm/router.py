@@ -241,7 +241,7 @@ class Router:
     lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
     optional_callbacks: Optional[List[Union[CustomLogger, Callable, str]]] = None
 
-    def __init__(  # noqa: PLR0915
+    def __init__(
         self,
         model_list: Optional[
             Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
@@ -2887,7 +2887,7 @@ class Router:
                 f"Silent experiment failed for model {silent_model}: {str(e)}"
             )
 
-    async def _acompletion(  # noqa: PLR0915
+    async def _acompletion(
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[
         ModelResponse,
@@ -5158,7 +5158,7 @@ class Router:
             )
             raise e
 
-    async def _acreate_file(  # noqa: PLR0915
+    async def _acreate_file(
         self,
         model: str,
         **kwargs,
@@ -6467,7 +6467,7 @@ class Router:
             # propagate so they remain visible.
             return None
 
-    async def async_function_with_fallbacks_common_utils(  # noqa: PLR0915
+    async def async_function_with_fallbacks_common_utils(
         self,
         e: Exception,
         disable_fallbacks: Optional[bool],
@@ -6843,7 +6843,7 @@ class Router:
             )
 
     @tracer.wrap()
-    async def async_function_with_retries(self, *args, **kwargs):  # noqa: PLR0915
+    async def async_function_with_retries(self, *args, **kwargs):
         verbose_router_logger.debug("Inside async function with retries.")
         original_function = kwargs.pop("original_function")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
@@ -9324,7 +9324,7 @@ class Router:
 
         return model_info
 
-    def _set_model_group_info(  # noqa: PLR0915
+    def _set_model_group_info(
         self, model_group: str, user_facing_model_group_name: str
     ) -> Optional[ModelGroupInfo]:
         """
@@ -10566,7 +10566,7 @@ class Router:
                 )
                 return client
 
-    def _pre_call_checks(  # noqa: PLR0915
+    def _pre_call_checks(
         self,
         model: str,
         healthy_deployments: List,

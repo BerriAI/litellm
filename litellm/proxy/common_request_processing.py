@@ -300,7 +300,7 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
                         )
 
 
-async def create_response(  # noqa: PLR0915
+async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
     headers: dict,
@@ -1148,7 +1148,7 @@ class ProxyBaseLLMRequestProcessing:
                 _payload_str,
             )
 
-    async def base_process_llm_request(  # noqa: PLR0915
+    async def base_process_llm_request(
         self,
         request: Request,
         fastapi_response: Response,

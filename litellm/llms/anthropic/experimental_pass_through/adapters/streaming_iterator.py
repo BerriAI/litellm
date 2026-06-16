@@ -372,7 +372,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             cache_read_input_tokens=0,
         )
 
-    def __next__(self):  # noqa: PLR0915
+    def __next__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
@@ -618,7 +618,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             )
             raise StopIteration
 
-    async def __anext__(self):  # noqa: PLR0915
+    async def __anext__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:

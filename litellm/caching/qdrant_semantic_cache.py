@@ -28,7 +28,7 @@ from .base_cache import BaseCache
 class QdrantSemanticCache(BaseCache):
     CACHE_KEY_FIELD_NAME = "litellm_cache_key"
 
-    def __init__(  # noqa: PLR0915
+    def __init__(
         self,
         qdrant_api_base=None,
         qdrant_api_key=None,

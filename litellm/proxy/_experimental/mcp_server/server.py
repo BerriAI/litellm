@@ -617,7 +617,7 @@ if MCP_AVAILABLE:
                 active_mcp_session_var.reset(_session_reset_token)
 
     @server.call_tool()
-    async def mcp_server_tool_call(  # noqa: PLR0915
+    async def mcp_server_tool_call(
         name: str, arguments: Dict[str, Any] | None
     ) -> CallToolResult:
         """
@@ -1591,7 +1591,7 @@ if MCP_AVAILABLE:
             _mcp_gateway_initialize_instructions.reset(instructions_token)
             _mcp_gateway_server_name.reset(server_name_token)
 
-    async def _get_tools_from_mcp_servers(  # noqa: PLR0915
+    async def _get_tools_from_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str],
         mcp_servers: Optional[List[str]],
@@ -2435,7 +2435,7 @@ if MCP_AVAILABLE:
                 },
             )
 
-    async def execute_mcp_tool(  # noqa: PLR0915
+    async def execute_mcp_tool(
         name: str,
         arguments: Dict[str, Any],
         allowed_mcp_servers: List[MCPServer],
@@ -3642,7 +3642,7 @@ if MCP_AVAILABLE:
                     detail="Forbidden",
                 )
 
-    async def handle_streamable_http_mcp(  # noqa: PLR0915
+    async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
         """Handle MCP requests through StreamableHTTP."""

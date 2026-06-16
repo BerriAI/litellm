@@ -814,7 +814,7 @@ class ProxyInitializationHelpers:
     default=False,
     help="Enable uvicorn hot reload (dev only). Also reloads when the --config YAML file changes. Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
 )
-def run_server(  # noqa: PLR0915
+def run_server(
     cli_args,
     host,
     port,

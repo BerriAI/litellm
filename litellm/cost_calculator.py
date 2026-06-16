@@ -288,7 +288,7 @@ def _transcription_usage_has_token_details(
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
 
 
-def cost_per_token(  # noqa: PLR0915
+def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
@@ -1136,7 +1136,7 @@ def _store_cost_breakdown_in_logging_obj(
         pass
 
 
-def completion_cost(  # noqa: PLR0915
+def completion_cost(
     completion_response=None,
     model: Optional[str] = None,
     prompt="",

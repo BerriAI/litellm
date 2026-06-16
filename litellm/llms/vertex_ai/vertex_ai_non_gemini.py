@@ -77,7 +77,7 @@ def _set_client_in_cache(client_cache_key: str, vertex_llm_model: Any):
     )
 
 
-def completion(  # noqa: PLR0915
+def completion(
     model: str,
     messages: list,
     model_response: ModelResponse,
@@ -485,7 +485,7 @@ def completion(  # noqa: PLR0915
         )
 
 
-async def async_completion(  # noqa: PLR0915
+async def async_completion(
     llm_model,
     mode: str,
     prompt: str,

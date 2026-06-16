@@ -605,7 +605,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _tool_choice
 
-    def _map_tool_helper(  # noqa: PLR0915
+    def _map_tool_helper(
         self,
         tool: ChatCompletionToolParam,
     ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
@@ -1399,7 +1399,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return None
 
-    def map_openai_params(  # noqa: PLR0915
+    def map_openai_params(
         self,
         non_default_params: dict,
         optional_params: dict,

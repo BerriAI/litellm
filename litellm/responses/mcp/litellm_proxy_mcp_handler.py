@@ -644,7 +644,7 @@ class LiteLLM_Proxy_MCP_Handler:
         return result_text or "Tool executed successfully"
 
     @staticmethod
-    async def _execute_tool_calls(  # noqa: PLR0915
+    async def _execute_tool_calls(
         tool_server_map: dict[str, str],
         tool_calls: List[Any],
         user_api_key_auth: Any,

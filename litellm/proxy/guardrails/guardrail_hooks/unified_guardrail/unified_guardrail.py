@@ -288,7 +288,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         return response
 
-    async def async_post_call_streaming_iterator_hook(  # noqa: PLR0915
+    async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,

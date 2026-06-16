@@ -21,7 +21,7 @@ from litellm.proxy.response_polling.polling_handler import ResponsePollingHandle
 from litellm.types.llms.openai import ResponsesAPIStatus
 
 
-async def background_streaming_task(  # noqa: PLR0915
+async def background_streaming_task(
     polling_id: str,
     data: dict,
     polling_handler: ResponsePollingHandler,

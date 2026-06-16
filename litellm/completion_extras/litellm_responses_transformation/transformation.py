@@ -1211,7 +1211,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         return self.chunk_parser(json.loads(str_line))
 
     @staticmethod
-    def translate_responses_chunk_to_openai_stream(  # noqa: PLR0915
+    def translate_responses_chunk_to_openai_stream(
         parsed_chunk: Union[dict, BaseModel],
     ) -> "ModelResponseStream":
         """

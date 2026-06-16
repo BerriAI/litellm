@@ -125,7 +125,7 @@ class MCPRequestHandler:
     LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME = SpecialHeaders.mcp_access_groups.value
 
     @staticmethod
-    async def process_mcp_request(  # noqa: PLR0915
+    async def process_mcp_request(
         scope: Scope,
     ) -> Tuple[
         UserAPIKeyAuth,
