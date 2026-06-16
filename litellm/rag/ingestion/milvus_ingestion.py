@@ -18,7 +18,7 @@ does not add a `pymilvus` dependency.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -69,7 +69,7 @@ class MilvusRAGIngestion(BaseRAGIngestion):
     def __init__(
         self,
         ingest_options: "RAGIngestOptions",
-        router: Optional["Router"] = None,
+        router: "Router | None" = None,
     ):
         BaseRAGIngestion.__init__(self, ingest_options=ingest_options, router=router)
 
@@ -208,12 +208,12 @@ class MilvusRAGIngestion(BaseRAGIngestion):
 
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
         chunks: list[str],
-        embeddings: Optional[list[list[float]]],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        embeddings: list[list[float]] | None,
+    ) -> tuple[str | None, str | None]:
         """
         Insert chunks + embeddings into a Milvus collection.
 

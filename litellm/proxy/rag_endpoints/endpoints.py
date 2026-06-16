@@ -98,7 +98,7 @@ def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
 
 
 def _normalize_collection_name_as_vector_store_id(
-    ingest_options: Dict[str, Any],
+    ingest_options: dict[str, Any],
 ) -> None:
     """
     Normalize provider-native write targets to `vector_store_id` for authorization.
@@ -135,7 +135,7 @@ async def _authorize_nested_vector_store_ids(
 
 
 def _ingestion_can_auto_create_vector_store(
-    vector_store_opts: Dict[str, Any],
+    vector_store_opts: dict[str, Any],
 ) -> bool:
     """
     Whether this ingestion could create a brand-new vector store on write.
@@ -154,7 +154,7 @@ def _ingestion_can_auto_create_vector_store(
 
 
 async def _assert_view_only_role_cannot_create_vector_store(
-    ingest_options: Dict[str, Any],
+    ingest_options: dict[str, Any],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
