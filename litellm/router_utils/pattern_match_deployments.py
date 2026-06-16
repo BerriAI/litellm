@@ -75,34 +75,6 @@ class PatternMatchRouter:
             self.patterns[regex] = []
         self.patterns[regex].append(llm_deployment)
 
-    def remove_deployment(self, model_id: Optional[str]) -> int:
-        """
-        Remove every stored entry whose model_info.id equals model_id.
-
-        Returns the number of entries removed. A regex whose deployment list
-        becomes empty is dropped so the patterns dict does not grow unboundedly.
-
-        Empty / falsy model_id is a no-op so callers cannot accidentally wipe
-        entries whose model_info.id is missing.
-        """
-        if not model_id:
-            return 0
-        removed_total = 0
-        for regex in list(self.patterns.keys()):
-            original = self.patterns[regex]
-            filtered = [
-                d for d in original if (d.get("model_info") or {}).get("id") != model_id
-            ]
-            removed_here = len(original) - len(filtered)
-            if removed_here == 0:
-                continue
-            removed_total += removed_here
-            if filtered:
-                self.patterns[regex] = filtered
-            else:
-                del self.patterns[regex]
-        return removed_total
-
     def _pattern_to_regex(self, pattern: str) -> str:
         """
         Convert a wildcard pattern to a regex pattern
