@@ -241,10 +241,11 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 # SSE path, which already omits total_tokens). Default False to preserve
 # backward compatibility for clients that read the LiteLLM-shaped
 # `usage.total_tokens` today. Planned to flip to True in a future major
-# release; opt in early with `litellm.strip_anthropic_total_tokens = True`.
-strip_anthropic_total_tokens: bool = (
-    os.getenv("LITELLM_STRIP_ANTHROPIC_TOTAL_TOKENS", "false").lower() == "true"
-)
+# release; opt in early via Python:
+#   `litellm.strip_anthropic_total_tokens = True`
+# Or via `litellm_settings.strip_anthropic_total_tokens: true` in
+# config.yaml.
+strip_anthropic_total_tokens: bool = False
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
