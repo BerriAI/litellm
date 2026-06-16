@@ -31,7 +31,7 @@ help:
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
 	@echo "  make lint-strict-budget - Gate the codebase total of each strict ruff rule against its ceiling"
 	@echo "  make lint-strict-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
-	@echo "  make lint-any           - Fail if changed lines under litellm/ hold an Any-typed value (incl. X | Any unions)"
+	@echo "  make lint-any           - Fail if changed lines under litellm/ hold an Any-typed value"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
