@@ -206,3 +206,49 @@ def test_backfill_cost_fields_from_canonical_direct_call():
             assert (
                 model_info_dict.get(field) == canonical[field]
             ), f"{field} should have been backfilled from canonical entry"
+
+
+def test_provider_prefixed_model_resolves_to_canonical():
+    """Regression for greptile P1 on #30383: dashboard /model/new stores
+    the user-facing model as `anthropic/claude-haiku-4-5-20251001` in
+    `litellm_params.model`, but `litellm.model_cost` keys are bare
+    (no `provider/` prefix). A raw `model_cost.get(litellm_params.model)`
+    misses; backfill must fall back to `get_llm_provider` to strip the
+    prefix, otherwise the entire fix silently no-ops for the most
+    common user-facing model-name shape.
+    """
+    deployment_uuid = "backfill-prefixed-uuid"
+    litellm.model_cost.pop(deployment_uuid, None)
+
+    # Verify the premise: prefixed lookup misses, bare lookup hits
+    assert litellm.model_cost.get(f"anthropic/{KNOWN_MODEL}") is None, (
+        "test premise broken — litellm.model_cost now contains "
+        "`anthropic/...` keys; review whether backfill stripping is "
+        "still required"
+    )
+    assert (
+        litellm.model_cost.get(KNOWN_MODEL) is not None
+    ), "bundled JSON should contain bare KNOWN_MODEL"
+
+    # litellm_params.model carries the user-facing `provider/model` form
+    _build_router(deployment_uuid=deployment_uuid, model=f"anthropic/{KNOWN_MODEL}")
+
+    entry = litellm.model_cost.get(deployment_uuid, {})
+    canonical = litellm.model_cost[KNOWN_MODEL]
+    # Cache rates must have been backfilled from the bare canonical entry
+    backfilled_at_least_one = False
+    for field in (
+        "cache_creation_input_token_cost",
+        "cache_read_input_token_cost",
+    ):
+        if canonical.get(field) is not None:
+            assert entry.get(field) == canonical[field], (
+                f"{field} must be backfilled from canonical bare entry "
+                f"when litellm_params.model has a provider/ prefix; "
+                f"got entry={entry.get(field)!r}, canonical={canonical[field]!r}"
+            )
+            backfilled_at_least_one = True
+    assert backfilled_at_least_one, (
+        "test setup expected canonical to carry at least one cache rate "
+        "to backfill; bundled JSON may have changed"
+    )

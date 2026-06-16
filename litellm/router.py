@@ -7946,10 +7946,27 @@ class Router:
         (those that have a static model_cost entry). Mutates
         ``model_info_dict`` in place.
         """
-        bare_model_name = litellm_params.get("model")
-        if not bare_model_name:
+        model_param = litellm_params.get("model")
+        if not model_param:
             return
-        canonical = litellm.model_cost.get(bare_model_name)
+        # litellm.model_cost keys are mostly bare (e.g. "claude-3-opus-20240229")
+        # while `litellm_params.model` carries the user-facing
+        # `<provider>/<model>` shape (e.g. "anthropic/claude-3-opus-20240229").
+        # Try the raw value first to cover entries that DO keep the slash
+        # (bedrock uses a `.` separator already, but some "provider/model"
+        # keys exist for non-OpenAI shapes); fall back to the
+        # `get_llm_provider` split, which is the same canonical normalization
+        # used by `get_model_info` and the cost calculator.
+        canonical = litellm.model_cost.get(model_param)
+        if canonical is None:
+            try:
+                bare_model_name, _, _, _ = get_llm_provider(model=model_param)
+                if bare_model_name and bare_model_name != model_param:
+                    canonical = litellm.model_cost.get(bare_model_name)
+            except Exception:
+                # Don't let an unknown-provider parsing exception break
+                # deployment creation. No canonical -> no backfill.
+                pass
         if not canonical:
             return
         for field in CustomPricingLiteLLMParams.model_fields.keys():
