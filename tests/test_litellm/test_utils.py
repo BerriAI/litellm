@@ -890,6 +890,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/speech",
                             "/v1/ocr",
                             "/vertex_ai/live",
+                            "/v1/realtime/transcription_sessions",
                         ],
                     },
                 },
@@ -4153,6 +4154,96 @@ class TestValidateAndFixThinkingParam:
         assert "budget_tokens" not in thinking
 
 
+def test_deepseek_v4_models_in_cost_map():
+    """
+    Test that deepseek-v4-flash and deepseek-v4-pro entries are correctly
+    configured in model_prices_and_context_window.json.
+
+    Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
+    - deepseek-v4-flash: $0.14/M input, $0.28/M output
+    - deepseek-v4-pro:   $0.435/M input, $0.87/M output (75% discounted active price)
+
+    Closes https://github.com/BerriAI/litellm/issues/26709
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    # --- bare model names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["max_input_tokens"] == 1_000_000
+        assert info["supports_function_calling"] is True
+        assert info["supports_tool_choice"] is True
+
+    # --- provider-prefixed names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["supports_function_calling"] is True
+        assert info["supports_tool_choice"] is True
+
+
+def test_deepseek_v4_models_in_backup_cost_map():
+    """
+    Test that deepseek-v4-flash and deepseek-v4-pro entries are correctly
+    configured in litellm/model_prices_and_context_window_backup.json.
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "litellm" / "model_prices_and_context_window_backup.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    # --- bare model names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from backup JSON"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["max_input_tokens"] == 1_000_000
+
+    # --- provider-prefixed names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from backup JSON"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+
+
 class TestBedrockBaseModelLabelKeepsTools:
     """Regression for #29618: a Bedrock deployment whose ``base_model`` is a friendly
     label must not silently drop ``tools``/``tool_choice`` under ``drop_params``."""
@@ -4217,3 +4308,4 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
 
     assert "aws_bedrock_project_id" not in result
     assert result["aws_region_name"] == "us-east-1"
+
