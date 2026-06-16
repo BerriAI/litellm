@@ -9,6 +9,7 @@ API Reference: https://modelscope.cn/docs/model-service/API-Inference/intro
 from typing import TYPE_CHECKING, Optional, Union
 
 import httpx
+from typing_extensions import override
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
@@ -75,6 +76,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         optional_params.update(non_default_params)
         return optional_params
 
+    @override
     def get_complete_url(
         self,
         api_base: Optional[str],
@@ -95,6 +97,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         # Return the images endpoint
         return f"{base_url}/images/generations"
 
+    @override
     def validate_environment(
         self,
         headers: dict,
@@ -151,6 +154,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
 
         return request_data
 
+    @override
     def transform_image_generation_response(
         self,
         model: str,
