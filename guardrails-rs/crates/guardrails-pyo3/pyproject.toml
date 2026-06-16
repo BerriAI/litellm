@@ -10,5 +10,5 @@ description = "Rust-accelerated guardrail engine for litellm"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
-module-name = "litellm_guardrails_rs"
+module-name = "litellm.proxy.guardrails._rust"
 manifest-path = "Cargo.toml"

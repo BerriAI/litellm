@@ -7,13 +7,6 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.types.guardrails import Guardrail, LitellmParams
 
-try:
-    import litellm_guardrails_rs  # noqa: F401
-
-    RUST_AVAILABLE = True
-except ImportError:
-    RUST_AVAILABLE = False
-
 
 _HOOKS = "litellm.proxy.guardrails.guardrail_hooks"
 _INITIALIZERS = "litellm.proxy.guardrails.guardrail_initializers"
@@ -22,7 +15,7 @@ _INITIALIZERS = "litellm.proxy.guardrails.guardrail_initializers"
 # initializer used as a fallback when the Rust wheel is not installed or the
 # config uses a feature Rust does not support yet (module_path, function_name).
 # This module is the single source of truth for routing these types; adding a
-# provider is one entry here plus a branch in build_rust_config.
+# provider is one entry here plus a branch in build_v2_config.
 _PYTHON_FALLBACKS: Dict[str, Tuple[str, str]] = {
     SupportedGuardrailIntegrations.GENERIC_GUARDRAIL_API.value: (
         f"{_HOOKS}.generic_guardrail_api",
@@ -62,21 +55,18 @@ def _initialize_rust(
     litellm_params: "LitellmParams",
     guardrail: "Guardrail",
 ) -> "CustomGuardrail | None":
-    """Build a RustGuardrail, or return None if Rust cannot handle this config."""
-    if not RUST_AVAILABLE:
-        return None
-
+    """Build a GuardrailV2, or return None if the engine cannot handle this config."""
     import litellm
     from litellm._logging import verbose_proxy_logger
 
-    from .rust_guardrail import RustGuardrail, build_rust_config
+    from .guardrail_v2 import GuardrailV2, build_v2_config
 
-    rust_config = build_rust_config(guardrail_type, litellm_params)
-    if rust_config is None:
+    engine_config = build_v2_config(guardrail_type, litellm_params)
+    if engine_config is None:
         return None
 
-    instance = RustGuardrail(
-        rust_config=rust_config,
+    instance = GuardrailV2(
+        engine_config=engine_config,
         extra_headers=getattr(litellm_params, "extra_headers", None),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,

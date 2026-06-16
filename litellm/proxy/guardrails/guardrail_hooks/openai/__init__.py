@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 # Runtime initialization is owned by the Rust dispatcher in
-# guardrail_hooks/rust_guardrail/__init__.py, which routes to Rust and calls
+# guardrail_hooks/guardrail_v2/__init__.py, which routes to Rust and calls
 # initialize_python_guardrail below as a fallback. This module only exposes the
 # class registry (UI config-field schemas) and that fallback initializer.
 

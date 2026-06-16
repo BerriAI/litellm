@@ -5,6 +5,7 @@ mod http;
 mod input;
 mod provider;
 pub mod providers;
+pub mod scanner;
 mod verdict;
 
 pub use config::*;

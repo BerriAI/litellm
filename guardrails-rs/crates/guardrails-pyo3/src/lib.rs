@@ -4,11 +4,12 @@ use std::time::{Duration, Instant};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use guardrails::HttpClient;
+use guardrails::scanner::{LiteralTerm, RegexTerm, Scanner as CoreScanner};
 use guardrails::{
     GuardrailInput, GuardrailOutcome, GuardrailStatus, InputType, ProviderConfig, RequestContext,
     Verdict,
 };
-use guardrails::HttpClient;
 
 static HTTP_CLIENT: OnceLock<Arc<HttpClient>> = OnceLock::new();
 
@@ -96,8 +97,64 @@ fn apply_guardrail<'py>(py: Python<'py>, request_json: String) -> PyResult<Bound
     })
 }
 
+#[derive(Deserialize)]
+struct ScannerConfig {
+    #[serde(default)]
+    literals: Vec<LiteralTerm>,
+    #[serde(default)]
+    regexes: Vec<RegexTerm>,
+}
+
+/// Compiled multi-pattern scanner. Built once from a keyword/pattern config and
+/// reused across requests; `scan` releases the GIL while matching so the event
+/// loop keeps serving other requests.
+#[pyclass]
+struct Scanner {
+    inner: CoreScanner,
+    compile_errors_json: String,
+}
+
+#[pymethods]
+impl Scanner {
+    #[new]
+    fn new(config_json: &str) -> PyResult<Self> {
+        let cfg: ScannerConfig = serde_json::from_str(config_json).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "invalid scanner config JSON: {e}"
+            ))
+        })?;
+        let (inner, errors) = CoreScanner::build(&cfg.literals, &cfg.regexes);
+        let compile_errors_json =
+            serde_json::to_string(&errors).unwrap_or_else(|_| "[]".to_owned());
+        Ok(Self {
+            inner,
+            compile_errors_json,
+        })
+    }
+
+    /// JSON array of terms that failed to compile (`{id, message}`), so the
+    /// caller can fall back to its own implementation for just those terms.
+    #[getter]
+    fn compile_errors(&self) -> &str {
+        &self.compile_errors_json
+    }
+
+    /// Return every match as `(id, start, end)`. Byte offsets index into the
+    /// UTF-8 text. Runs with the GIL released.
+    fn scan(&self, py: Python<'_>, text: String) -> Vec<(u32, usize, usize)> {
+        py.detach(|| {
+            self.inner
+                .scan(&text)
+                .into_iter()
+                .map(|m| (m.id, m.start, m.end))
+                .collect()
+        })
+    }
+}
+
 #[pymodule]
-fn litellm_guardrails_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(apply_guardrail, m)?)?;
+    m.add_class::<Scanner>()?;
     Ok(())
 }

@@ -2,7 +2,7 @@ import json
 import os
 from typing import TYPE_CHECKING, Literal, Optional
 
-import litellm_guardrails_rs
+from litellm.proxy.guardrails import _rust
 
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException
@@ -73,10 +73,10 @@ def _resolve_secret(value: Optional[str]) -> Optional[str]:
     return value
 
 
-def build_rust_config(
+def build_v2_config(
     guardrail_type: str, litellm_params: "LitellmParams"
 ) -> Optional[dict]:
-    """Map litellm_params to the Rust ProviderConfig JSON for this guardrail type.
+    """Map litellm_params to the engine ProviderConfig JSON for this guardrail type.
 
     Returns None when the config uses features the Rust engine does not support
     yet, in which case the caller must fall back to the Python implementation.
@@ -131,9 +131,9 @@ def build_rust_config(
             "api_key": api_key,
             "api_base": api_base,
             "api_version": getattr(litellm_params, "api_version", None),
-            "severity_threshold": int(severity_threshold)
-            if severity_threshold is not None
-            else None,
+            "severity_threshold": (
+                int(severity_threshold) if severity_threshold is not None else None
+            ),
             "severity_threshold_by_category": {
                 str(k): int(v) for k, v in by_category.items()
             },
@@ -234,14 +234,14 @@ def build_rust_config(
     return None
 
 
-class RustGuardrail(CustomGuardrail):
+class GuardrailV2(CustomGuardrail):
     def __init__(
         self,
-        rust_config: dict,
+        engine_config: dict,
         extra_headers: Optional[list] = None,
         **kwargs: object,
     ):
-        self.rust_config = rust_config
+        self.engine_config = engine_config
         self.extra_header_allowlist = [
             h for h in (extra_headers or []) if isinstance(h, str)
         ]
@@ -267,7 +267,7 @@ class RustGuardrail(CustomGuardrail):
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_body)
 
         payload = {
-            "config": self.rust_config,
+            "config": self.engine_config,
             "input": {
                 "texts": inputs.get("texts", []),
                 "images": inputs.get("images") or [],
@@ -278,12 +278,16 @@ class RustGuardrail(CustomGuardrail):
             },
             "input_type": input_type,
             "context": {
-                "litellm_call_id": getattr(logging_obj, "litellm_call_id", None)
-                if logging_obj
-                else None,
-                "litellm_trace_id": getattr(logging_obj, "litellm_trace_id", None)
-                if logging_obj
-                else None,
+                "litellm_call_id": (
+                    getattr(logging_obj, "litellm_call_id", None)
+                    if logging_obj
+                    else None
+                ),
+                "litellm_trace_id": (
+                    getattr(logging_obj, "litellm_trace_id", None)
+                    if logging_obj
+                    else None
+                ),
                 "user_api_key_metadata": _extract_user_metadata(request_data or {}),
                 "request_headers": _extract_raw_headers(
                     request_data or {}, logging_obj
@@ -295,9 +299,7 @@ class RustGuardrail(CustomGuardrail):
             "timeout_ms": 10000,
         }
 
-        result_json = await litellm_guardrails_rs.apply_guardrail(
-            json.dumps(payload, default=str)
-        )
+        result_json = await _rust.apply_guardrail(json.dumps(payload, default=str))
         result = json.loads(result_json)
         verdict = result.get("verdict", {})
         action = verdict.get("action")
@@ -305,7 +307,7 @@ class RustGuardrail(CustomGuardrail):
         if action == "block":
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name
-                or self.rust_config.get("guardrail", "rust_guardrail"),
+                or self.engine_config.get("guardrail", "guardrail_v2"),
                 message=verdict.get("violation_message", "Content violates policy"),
                 should_wrap_with_default_message=False,
             )

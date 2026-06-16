@@ -2,6 +2,7 @@
 """
 Test OpenAI Moderation Guardrail
 """
+
 import os
 import sys
 
@@ -36,7 +37,6 @@ async def test_openai_moderation_guardrail_init():
 async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
     """openai_moderation initializes through the Rust dispatcher and registers a callback."""
     import litellm
-    from litellm.proxy.guardrails.guardrail_hooks.rust_guardrail import RUST_AVAILABLE
     from litellm.proxy.guardrails.guardrail_registry import (
         guardrail_initializer_registry,
     )
@@ -46,11 +46,13 @@ async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
         SupportedGuardrailIntegrations,
     )
 
-    if not RUST_AVAILABLE:
-        pytest.skip("litellm-guardrails-rs engine not installed")
+    try:
+        from litellm.proxy.guardrails import _rust  # noqa: F401
+    except ImportError:
+        pytest.skip("litellm guardrails _rust engine not built")
 
-    from litellm.proxy.guardrails.guardrail_hooks.rust_guardrail.rust_guardrail import (
-        RustGuardrail,
+    from litellm.proxy.guardrails.guardrail_hooks.guardrail_v2.guardrail_v2 import (
+        GuardrailV2,
     )
 
     initialize = guardrail_initializer_registry[
@@ -77,7 +79,7 @@ async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
             )
 
             assert guardrail in litellm.callbacks
-            assert isinstance(guardrail, RustGuardrail)
+            assert isinstance(guardrail, GuardrailV2)
             assert guardrail.guardrail_name == "test-openai-moderation"
     finally:
         litellm.logging_callback_manager._reset_all_callbacks()

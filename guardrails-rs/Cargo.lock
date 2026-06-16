@@ -756,10 +756,12 @@ dependencies = [
 name = "guardrails"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "async-trait",
  "aws-config",
  "aws-credential-types",
  "aws-sigv4",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

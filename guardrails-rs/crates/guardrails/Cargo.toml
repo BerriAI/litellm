@@ -5,10 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+aho-corasick.workspace = true
 async-trait.workspace = true
 aws-config.workspace = true
 aws-credential-types.workspace = true
 aws-sigv4.workspace = true
+regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

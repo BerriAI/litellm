@@ -2,6 +2,7 @@ mod azure;
 mod bedrock;
 mod generic;
 mod lakera;
+mod local_pii;
 mod openai_moderation;
 mod presidio;
 
@@ -9,6 +10,7 @@ pub use azure::{AzurePromptShield, AzureTextModeration};
 pub use bedrock::BedrockGuardrail;
 pub use generic::GenericGuardrailApi;
 pub use lakera::LakeraV2;
+pub use local_pii::LocalPii;
 pub use openai_moderation::OpenaiModeration;
 pub use presidio::Presidio;
 
@@ -88,5 +90,6 @@ pub fn build(
             Ok(Box::new(LakeraV2::new(cfg, http.clone())))
         }
         ProviderConfig::Bedrock(cfg) => Ok(Box::new(BedrockGuardrail::new(cfg, http.clone()))),
+        ProviderConfig::LocalPii(cfg) => Ok(Box::new(LocalPii::new(cfg))),
     }
 }

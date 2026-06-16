@@ -8,12 +8,14 @@ license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
+aho-corasick = "1"
 async-trait = "0.1"
 aws-config = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
 aws-credential-types = "1"
 aws-sigv4 = "1"
 pyo3 = { version = "0.28", features = ["extension-module"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

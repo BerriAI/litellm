@@ -1,6 +1,8 @@
 .python-version
 .venv
 .venv_policy_test
+# compiled rust guardrail engine (build artifact, built by maturin)
+litellm/proxy/guardrails/_rust*.so
 .env
 .claude
 .newenv
