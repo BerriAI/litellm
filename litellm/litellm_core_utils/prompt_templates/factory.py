@@ -2690,9 +2690,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 # convert_to_anthropic_tool_invoke when its result didn't survive
                 # the round-trip — so skip the orphaned server-tool result here too.
                 _tc_id = user_message_types_block.get("tool_call_id")
-                if isinstance(_tc_id, str) and _tc_id.startswith("srvtoolu_"):
-                    pass
-                else:
+                if not (isinstance(_tc_id, str) and _tc_id.startswith("srvtoolu_")):
                     # OpenAI's tool message content will always be a string
                     user_content.append(
                         convert_to_anthropic_tool_result(
