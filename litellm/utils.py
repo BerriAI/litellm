@@ -488,7 +488,7 @@ def print_verbose(
         elif log_level == "ERROR":
             verbose_logger.error(print_statement)
         if litellm.set_verbose is True and logger_only is False:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
     except Exception:
         pass
 
@@ -8630,7 +8630,7 @@ class ProviderConfigManager:
         return LangFlowConfig()
 
     @staticmethod
-    def get_provider_chat_config(  # noqa: PLR0915
+    def get_provider_chat_config(
         model: str,
         provider: LlmProviders,
         base_model: Optional[str] = None,
