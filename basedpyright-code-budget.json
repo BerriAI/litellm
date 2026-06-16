@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "baseline": 24954,
+    "baseline": 25009,
     "slack": 10
   },
   "reportArgumentType": {
@@ -32,7 +32,7 @@
     "slack": 3
   },
   "reportExplicitAny": {
-    "baseline": 6931,
+    "baseline": 6951,
     "slack": 10
   },
   "reportFunctionMemberAccess": {
@@ -76,7 +76,7 @@
     "slack": 10
   },
   "reportMissingTypeArgument": {
-    "baseline": 10612,
+    "baseline": 10650,
     "slack": 10
   },
   "reportMissingTypeStubs": {
@@ -132,7 +132,7 @@
     "slack": 3
   },
   "reportUnknownArgumentType": {
-    "baseline": 30603,
+    "baseline": 30762,
     "slack": 10
   },
   "reportUnknownLambdaType": {
@@ -140,15 +140,15 @@
     "slack": 10
   },
   "reportUnknownMemberType": {
-    "baseline": 27322,
+    "baseline": 27375,
     "slack": 10
   },
   "reportUnknownParameterType": {
-    "baseline": 13636,
+    "baseline": 13678,
     "slack": 10
   },
   "reportUnknownVariableType": {
-    "baseline": 21776,
+    "baseline": 21828,
     "slack": 10
   },
   "reportUnnecessaryCast": {
