@@ -34,9 +34,13 @@ a persisted incremental cache (.mypy_cache_any).
 
 Rules
 -----
-ANY001  A value expression's inferred type is, or contains, `Any`.
+Codes share the `LIT***` namespace with `scripts/check_type_discipline.py` (PR
+#30500), which owns LIT001/003/004/006/007/008. This gate claims the rest:
+LIT002  A value expression's inferred type is, or contains, `Any`.
         Suppress with `# any-ok: <reason>` on the offending line.
-ANY002  `# any-ok` without a reason.
+LIT005  An `# any-ok` suppression without a reason (the shared
+        suppression-needs-a-reason code, same as `# cast-ok` / `# guard-ok`).
+LIT000  Setup failure: mypy could not build, or a target file could not be read.
 
 `Any`s produced purely by an already-reported error, and the special-form /
 implementation-artifact internal `Any`s, are ignored. A bound method *reference*
@@ -239,7 +243,7 @@ def find_any_in_tree(
 
 
 # --------------------------------------------------------------------------- #
-# Comment scanning (ANY002 + any-ok suppression)
+# Comment scanning (LIT005 + any-ok suppression)
 # --------------------------------------------------------------------------- #
 
 
@@ -248,7 +252,7 @@ def _reason_ok(reason: str | None) -> bool:
 
 
 def scan_any_ok(path: Path, source: str) -> tuple[frozenset[int], tuple[Violation, ...]]:
-    """Return (lines with a valid any-ok suppression, ANY002 violations)."""
+    """Return (lines with a valid any-ok suppression, LIT005 violations)."""
     try:
         tokens = tokenize.generate_tokens(iter(source.splitlines(keepends=True)).__next__)
         comments = tuple((t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT)
@@ -265,7 +269,7 @@ def scan_any_ok(path: Path, source: str) -> tuple[frozenset[int], tuple[Violatio
             ok_lines.add(line)
         else:
             violations.append(
-                Violation(path, line, 0, "ANY002", "any-ok requires a reason: `# any-ok: <reason>`")
+                Violation(path, line, 0, "LIT005", "any-ok requires a reason: `# any-ok: <reason>`")
             )
     return frozenset(ok_lines), tuple(violations)
 
@@ -328,7 +332,7 @@ def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
             res = build.build(sources, options=opts, fscache=fscache)
         except build.CompileError as exc:
             joined = "; ".join(exc.messages[:3]) or "blocking error"
-            return (Violation(Path(rel_paths[0]), 0, 0, "ANY000", f"mypy could not build: {joined}"),)
+            return (Violation(Path(rel_paths[0]), 0, 0, "LIT000", f"mypy could not build: {joined}"),)
         idmap = {id(expr): t for expr, t in res.types.items()}
         # Resolve trees to absolute source paths while cwd is the build dir, since
         # mypy stores the paths it was given (relative to this cwd).
@@ -348,7 +352,7 @@ def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
         try:
             source = abs_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
-            out.append(Violation(report_path, 0, 0, "ANY000", f"could not read file: {exc}"))
+            out.append(Violation(report_path, 0, 0, "LIT000", f"could not read file: {exc}"))
             continue
 
         ok_lines, ok_violations = scan_any_ok(report_path, source)
@@ -359,7 +363,7 @@ def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
         for line, col, typ in find_any_in_tree(tree, idmap):
             if line in ok_lines:
                 continue
-            out.append(Violation(report_path, line, col, "ANY001", f"value type contains Any -> {typ}"))
+            out.append(Violation(report_path, line, col, "LIT002", f"value type contains Any -> {typ}"))
     return tuple(out)
 
 
@@ -439,7 +443,7 @@ def _to_litellm_relative(paths: Iterable[Path]) -> list[str]:
 def _in_scope(v: Violation, line_map: dict[str, set[int] | None] | None) -> bool:
     """A finding survives if line filtering is off (explicit paths), it's a build
     error, or its line is one the diff added/edited."""
-    if line_map is None or v.code == "ANY000":
+    if line_map is None or v.code == "LIT000":
         return True
     lines = line_map.get(v.path.as_posix())
     return lines is ALL_LINES or (lines is not None and v.line in lines)
