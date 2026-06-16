@@ -344,9 +344,19 @@ class RepelloAIGuardrail(CustomGuardrail):
                 texts.append(content)
         return texts
 
+    @staticmethod
+    def _extract_prompt_field_text(data: Dict) -> List[str]:
+        prompt = data.get("prompt")
+        if isinstance(prompt, str) and prompt:
+            return [prompt]
+        if isinstance(prompt, list):
+            return [item for item in prompt if isinstance(item, str) and item]
+        return []
+
     @classmethod
     def _extract_prompt_text(cls, data: Dict) -> Optional[str]:
         texts = cls._extract_prompt_message_text(data)
+        texts.extend(cls._extract_prompt_field_text(data))
         instructions = data.get("instructions")
         if isinstance(instructions, str) and instructions:
             texts.append(instructions)
@@ -517,11 +527,13 @@ class RepelloAIGuardrail(CustomGuardrail):
             if not isinstance(choice, dict):
                 continue
             message = choice.get("message")
-            if not isinstance(message, dict):
-                continue
-            content = message.get("content")
-            if isinstance(content, str) and content:
-                parts.append(content)
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str) and content:
+                    parts.append(content)
+            text = choice.get("text")
+            if isinstance(text, str) and text:
+                parts.append(text)
         return "\n".join(parts) if parts else None
 
     @staticmethod

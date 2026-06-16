@@ -9,6 +9,10 @@ from .base import GuardrailConfigModel
 class RepelloAIGuardrailConfigModel(GuardrailConfigModel):
     """Config model for the RepelloAI Argus guardrail."""
 
+    api_key: Optional[str] = Field(
+        default=None,
+        description="API key for the RepelloAI Argus service. Falls back to ARGUS_API_KEY or REPELLOAI_API_KEY.",
+    )
     api_base: Optional[str] = Field(
         default=None,
         description="Base URL for the RepelloAI Argus API. Defaults to https://argusapi.repello.ai/sdk/v1",

@@ -112,6 +112,21 @@ class TestRepelloAIInitialization:
         guardrail = RepelloAIGuardrail(api_key="explicit-key", asset_id="asset-123", guardrail_name="t")
         assert guardrail.repelloai_api_key == "explicit-key"
 
+    @pytest.mark.asyncio
+    async def test_provider_specific_params_include_api_key(self):
+        from litellm.proxy.guardrails.guardrail_endpoints import (
+            get_provider_specific_params,
+        )
+
+        provider_params = await get_provider_specific_params()
+        repelloai_params = provider_params["repelloai"]
+
+        assert repelloai_params["ui_friendly_name"] == "RepelloAI Argus"
+        assert "api_key" in repelloai_params
+        assert "api_base" in repelloai_params
+        assert "asset_id" in repelloai_params
+        assert "unreachable_fallback" in repelloai_params
+
     def test_asset_id_optional_on_shared_litellm_params(self):
         """asset_id is enforced at runtime (test_missing_asset_id_raises), not as a
         hard-required Pydantic field. LitellmParams inherits the RepelloAI config
@@ -296,6 +311,20 @@ class TestRepelloAIInputCoverage:
         data = {"input": "scan this responses-api prompt"}
         prompt = await self._scanned_prompt(guardrail, data, monkeypatch)
         assert prompt == "scan this responses-api prompt"
+
+    @pytest.mark.asyncio
+    async def test_text_completion_prompt_scanned(self, monkeypatch):
+        guardrail = _guardrail()
+        data = {"prompt": "scan this text-completion prompt"}
+        prompt = await self._scanned_prompt(guardrail, data, monkeypatch)
+        assert prompt == "scan this text-completion prompt"
+
+    @pytest.mark.asyncio
+    async def test_text_completion_prompt_list_scanned(self, monkeypatch):
+        guardrail = _guardrail()
+        data = {"prompt": ["first completion prompt", "second completion prompt"]}
+        prompt = await self._scanned_prompt(guardrail, data, monkeypatch)
+        assert prompt == "first completion prompt\nsecond completion prompt"
 
     @pytest.mark.asyncio
     async def test_multimodal_text_parts_joined(self, monkeypatch):
@@ -524,6 +553,25 @@ class TestRepelloAIPostCall:
         await guardrail.async_post_call_success_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), response=response)
         assert captured["url"] == ANALYZE_RESPONSE_URL
         assert captured["json"]["scan_data"] == {"response": "the answer content"}
+
+    @pytest.mark.asyncio
+    async def test_text_completion_response_text_extracted_to_endpoint(self, monkeypatch):
+        guardrail = _guardrail(event_hook="post_call")
+        data = {"prompt": "q"}
+        response = {"choices": [{"text": "text completion answer"}]}
+        captured = {}
+
+        async def capture(url, headers, json):
+            captured["url"] = url
+            captured["json"] = json
+            return _verdict_response("passed", url)
+
+        monkeypatch.setattr(guardrail.async_handler, "post", capture)
+        await guardrail.async_post_call_success_hook(
+            data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
+        )
+        assert captured["url"] == ANALYZE_RESPONSE_URL
+        assert captured["json"]["scan_data"] == {"response": "text completion answer"}
 
     @pytest.mark.asyncio
     async def test_responses_api_output_extracted_to_endpoint(self, monkeypatch):
