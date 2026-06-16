@@ -1,0 +1,14 @@
+{
+  "import-not-found": {
+    "baseline": 8,
+    "slack": 3
+  },
+  "no-any-return": {
+    "baseline": 890,
+    "slack": 10
+  },
+  "no-untyped-def": {
+    "baseline": 4888,
+    "slack": 10
+  }
+}

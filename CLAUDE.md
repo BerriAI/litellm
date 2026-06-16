@@ -36,7 +36,7 @@ Don't hesitate to use values in .env to get needed API keys and other secrets, a
 
 Run tests, format your code, and lint your code before each commit
 
-When you fix strict-rule violations gated by `ruff-strict-budget.json`, run `make lint-strict-budget-update` and commit the lowered baselines so the ceilings ratchet down instead of leaving stale headroom
+When you fix strict-rule violations gated by `ruff-strict-budget.json`, run `make lint-strict-budget-update` and commit the lowered baselines so the ceilings ratchet down instead of leaving stale headroom. `mypy` and `basedpyright` ratchet the same way, gated per error rule rather than per file by `mypy-code-budget.json` and `basedpyright-code-budget.json` (each a `{rule: {baseline, slack}}` ceiling on that rule's codebase-wide error count, the same shape as the ruff budget); when you drive a rule's count down, run `make lint-mypy-budget-update` or `make lint-basedpyright-budget-update` and commit the lowered baselines
 
 The Any-discipline gate (`make lint-any`, also a CI job) fails when a line you changed under `litellm/` holds a value typed `Any`, including the `X | Any` unions that `mypy`/`basedpyright` quietly accept (e.g. `re.Match.group() -> str | Any`, `json.loads() -> Any`, bare `dict` -> `dict[Any, Any]`). It enforces the "no `Any`" convention above, but only on changed lines, so editing a legacy file never forces you to clean its existing debt. Fix the type at its source per the caller-validation rule below; reach for an inline `# any-ok: <reason>` only at a genuine typed/untyped boundary
 

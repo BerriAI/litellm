@@ -24,10 +24,10 @@ help:
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
 	@echo "  make lint               - Run all linting (Ruff, MyPy, Black check, circular imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
-	@echo "  make lint-mypy          - Run MyPy (disallow_untyped_defs), gated by per-file error counts"
-	@echo "  make lint-mypy-budget-update - Re-capture the MyPy per-file budget (ratchet)"
-	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-file error counts"
-	@echo "  make lint-basedpyright-budget-update - Re-capture the basedpyright per-file budget (ratchet)"
+	@echo "  make lint-mypy          - Run MyPy (disallow_untyped_defs), gated by per-rule error counts"
+	@echo "  make lint-mypy-budget-update - Re-capture the MyPy per-rule budget (ratchet)"
+	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-rule error counts"
+	@echo "  make lint-basedpyright-budget-update - Re-capture the basedpyright per-rule budget (ratchet)"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
 	@echo "  make lint-strict-budget - Gate the codebase total of each strict ruff rule against its ceiling"
 	@echo "  make lint-strict-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
@@ -132,10 +132,10 @@ lint-mypy-budget-update: install-dev
 	cd litellm && ($(UV_RUN) mypy . || true) | $(UV_RUN) python ../scripts/type_check_gate.py --tool mypy --update
 
 lint-basedpyright: install-dev
-	($(UV_RUN) basedpyright || true) | $(UV_RUN) python scripts/type_check_gate.py --tool basedpyright
+	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --tool basedpyright
 
 lint-basedpyright-budget-update: install-dev
-	($(UV_RUN) basedpyright || true) | $(UV_RUN) python scripts/type_check_gate.py --tool basedpyright --update
+	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --tool basedpyright --update
 
 lint-black: format-check
 

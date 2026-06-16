@@ -84,7 +84,7 @@ jobs:
 
       - name: Run basedpyright type checking
         run: |
-          (uv run --no-sync basedpyright || true) | uv run --no-sync python scripts/type_check_gate.py --tool basedpyright
+          (uv run --no-sync basedpyright --outputjson || true) | uv run --no-sync python scripts/type_check_gate.py --tool basedpyright
 
       - name: Check for circular imports
         run: |
