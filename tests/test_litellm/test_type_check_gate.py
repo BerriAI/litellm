@@ -68,7 +68,11 @@ def test_paths_outside_repo_are_skipped():
     text = "/tmp/elsewhere.py:1: error: missing annotation  [no-untyped-def]"
     assert gate.count_errors(text, "mypy") == {}
     payload = json.dumps(
-        {"generalDiagnostics": [_bpr("/tmp/elsewhere.py", "error", "reportArgumentType")]}
+        {
+            "generalDiagnostics": [
+                _bpr("/tmp/elsewhere.py", "error", "reportArgumentType")
+            ]
+        }
     )
     assert gate.count_errors(payload, "basedpyright") == {}
 
@@ -96,3 +100,34 @@ def test_unbudgeted_new_code_uses_default_slack():
     assert gate.evaluate({"brand-new": gate.DEFAULT_SLACK + 1}, {}) == [
         gate.Breach("brand-new", gate.DEFAULT_SLACK + 1, gate.DEFAULT_SLACK)
     ]
+
+
+def test_no_output_against_a_nonempty_budget_is_a_vacuous_run():
+    # A crashed type checker emits nothing; the gate must not certify it as clean.
+    budget = {"no-untyped-def": {"baseline": 4888, "slack": 10}}
+    assert gate.is_vacuous_run({}, budget) is True
+
+
+def test_genuine_zero_and_empty_budget_are_not_vacuous():
+    assert gate.is_vacuous_run({}, {}) is False
+    assert (
+        gate.is_vacuous_run({}, {"no-untyped-def": {"baseline": 0, "slack": 3}})
+        is False
+    )
+    assert (
+        gate.is_vacuous_run({"arg-type": 1}, {"arg-type": {"baseline": 9, "slack": 1}})
+        is False
+    )
+
+
+def test_malformed_basedpyright_json_exits_loudly_not_as_zero_errors():
+    import pytest
+
+    with pytest.raises(SystemExit):
+        gate.count_errors("startup warning\n{not json", "basedpyright")
+
+
+def test_empty_basedpyright_payload_counts_zero():
+    # Empty (not malformed) output parses to zero; the vacuous-run guard, not the
+    # parser, is what rejects an empty run.
+    assert gate.count_errors("", "basedpyright") == {}

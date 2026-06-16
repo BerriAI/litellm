@@ -89,7 +89,15 @@ def count_mypy(lines: Iterable[str]) -> dict[str, int]:
 def count_basedpyright(payload: str) -> dict[str, int]:
     """Count in-repo basedpyright errors per rule from `--outputjson`. Warnings
     and information are ignored; only `severity == "error"` is gated."""
-    data = json.loads(payload or "{}")
+    try:
+        data = json.loads(payload or "{}")
+    except json.JSONDecodeError as exc:
+        sys.stderr.write(
+            f"basedpyright did not emit valid JSON ({exc}); it likely crashed or "
+            f"printed text before the JSON. First 500 chars of its output:\n"
+            f"{payload[:500]}\n"
+        )
+        raise SystemExit(1) from exc
     counts: Counter[str] = Counter()
     for diag in data.get("generalDiagnostics", []):
         if diag.get("severity") != "error":
@@ -106,7 +114,9 @@ def count_errors(stdin_text: str, tool: str) -> dict[str, int]:
     return count_mypy(stdin_text.splitlines())
 
 
-def evaluate(counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]) -> list[Breach]:
+def evaluate(
+    counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]
+) -> list[Breach]:
     breaches = []
     for code, total in counts.items():
         spec = budget.get(code)
@@ -114,6 +124,16 @@ def evaluate(counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]])
         if total > cap:
             breaches.append(Breach(code, total, cap))
     return sorted(breaches)
+
+
+def is_vacuous_run(
+    counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]
+) -> bool:
+    """True when nothing was parsed but the budget expects errors -- the
+    signature of a type checker that crashed or produced no output. The CI pipe
+    swallows the tool's exit code (`tool || true`), so without this guard an
+    empty run would clear every ceiling and pass silently."""
+    return not counts and any(spec["baseline"] for spec in budget.values())
 
 
 def budget_path(tool: str) -> Path:
@@ -126,7 +146,9 @@ def cmd_update(tool: str, counts: Mapping[str, int]) -> None:
     budget = {
         code: {
             "baseline": count,
-            "slack": existing[code]["slack"] if code in existing else _seed_slack(count),
+            "slack": (
+                existing[code]["slack"] if code in existing else _seed_slack(count)
+            ),
         }
         for code, count in sorted(counts.items())
     }
@@ -138,9 +160,19 @@ def cmd_update(tool: str, counts: Mapping[str, int]) -> None:
 
 def cmd_check(tool: str, counts: Mapping[str, int]) -> None:
     budget = json.loads(budget_path(tool).read_text())
+    if is_vacuous_run(counts, budget):
+        expected = sum(spec["baseline"] for spec in budget.values())
+        print(
+            f"FAIL: {tool} produced no errors, but {budget_path(tool).name} expects "
+            f"~{expected}. The type checker almost certainly crashed or emitted "
+            f"nothing; refusing to certify a vacuous run."
+        )
+        raise SystemExit(1)
     breaches = evaluate(counts, budget)
     if not breaches:
-        print(f"OK: every rule is within its {tool} ceiling ({sum(counts.values())} errors total)")
+        print(
+            f"OK: every rule is within its {tool} ceiling ({sum(counts.values())} errors total)"
+        )
         return
     print(f"FAIL: {tool} errors exceed the per-rule ceiling:")
     for breach in breaches:

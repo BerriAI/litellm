@@ -220,9 +220,7 @@ def _walk_file(tree: Node) -> tuple[list[Expression], set[int]]:
     return exprs, skip_lvalues
 
 
-def find_any_in_tree(
-    tree: Node, idmap: dict[int, Type]
-) -> list[tuple[int, int, str]]:
+def find_any_in_tree(tree: Node, idmap: dict[int, Type]) -> list[tuple[int, int, str]]:
     exprs, skip_lvalues = _walk_file(tree)
     findings: list[tuple[int, int, str]] = []
     for expr in exprs:
@@ -251,11 +249,17 @@ def _reason_ok(reason: str | None) -> bool:
     return reason is not None and len(reason.strip()) >= MIN_REASON_LEN
 
 
-def scan_any_ok(path: Path, source: str) -> tuple[frozenset[int], tuple[Violation, ...]]:
+def scan_any_ok(
+    path: Path, source: str
+) -> tuple[frozenset[int], tuple[Violation, ...]]:
     """Return (lines with a valid any-ok suppression, LIT005 violations)."""
     try:
-        tokens = tokenize.generate_tokens(iter(source.splitlines(keepends=True)).__next__)
-        comments = tuple((t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT)
+        tokens = tokenize.generate_tokens(
+            iter(source.splitlines(keepends=True)).__next__
+        )
+        comments = tuple(
+            (t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT
+        )
     except tokenize.TokenError:
         return frozenset(), ()
 
@@ -269,7 +273,13 @@ def scan_any_ok(path: Path, source: str) -> tuple[frozenset[int], tuple[Violatio
             ok_lines.add(line)
         else:
             violations.append(
-                Violation(path, line, 0, "LIT005", "any-ok requires a reason: `# any-ok: <reason>`")
+                Violation(
+                    path,
+                    line,
+                    0,
+                    "LIT005",
+                    "any-ok requires a reason: `# any-ok: <reason>`",
+                )
             )
     return frozenset(ok_lines), tuple(violations)
 
@@ -332,7 +342,15 @@ def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
             res = build.build(sources, options=opts, fscache=fscache)
         except build.CompileError as exc:
             joined = "; ".join(exc.messages[:3]) or "blocking error"
-            return (Violation(Path(rel_paths[0]), 0, 0, "LIT000", f"mypy could not build: {joined}"),)
+            return (
+                Violation(
+                    Path(rel_paths[0]),
+                    0,
+                    0,
+                    "LIT000",
+                    f"mypy could not build: {joined}",
+                ),
+            )
         idmap = {id(expr): t for expr, t in res.types.items()}
         # Resolve trees to absolute source paths while cwd is the build dir, since
         # mypy stores the paths it was given (relative to this cwd).
@@ -352,7 +370,9 @@ def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
         try:
             source = abs_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
-            out.append(Violation(report_path, 0, 0, "LIT000", f"could not read file: {exc}"))
+            out.append(
+                Violation(report_path, 0, 0, "LIT000", f"could not read file: {exc}")
+            )
             continue
 
         ok_lines, ok_violations = scan_any_ok(report_path, source)
@@ -363,7 +383,15 @@ def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
         for line, col, typ in find_any_in_tree(tree, idmap):
             if line in ok_lines:
                 continue
-            out.append(Violation(report_path, line, col, "LIT009", f"value type contains Any -> {typ}"))
+            out.append(
+                Violation(
+                    report_path,
+                    line,
+                    col,
+                    "LIT009",
+                    f"value type contains Any -> {typ}",
+                )
+            )
     return tuple(out)
 
 
@@ -371,8 +399,17 @@ def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
 # File selection (changed-only, changed-lines) + driver
 # --------------------------------------------------------------------------- #
 
-# Sentinel: every line of the file is in scope (a wholly new / untracked file).
-ALL_LINES = None
+
+class _AllLines:
+    """Sentinel: a wholly new / untracked file -- every line is in scope.
+
+    A distinct object, not None, so that `line_map.get(path)` returning None for
+    a path absent from the map is never mistaken for "whole file in scope"."""
+
+
+# A changed file's in-scope lines: a specific set, or every line.
+LineScope = set[int] | _AllLines
+ALL_LINES = _AllLines()
 
 
 def _is_boundary(path: Path) -> bool:
@@ -405,7 +442,7 @@ def _parse_added_lines(diff_text: str) -> dict[str, set[int]]:
     return changed
 
 
-def changed_line_map(base: str) -> dict[str, set[int] | None] | None:
+def changed_line_map(base: str) -> dict[str, LineScope] | None:
     """Repo-relative `.py` path under litellm/ -> changed line numbers (or
     ALL_LINES for untracked files). Compares the working tree to the merge-base
     with `base`, so it covers committed-on-branch + unstaged edits. None if git
@@ -414,13 +451,21 @@ def changed_line_map(base: str) -> dict[str, set[int] | None] | None:
         merge_base = _git("merge-base", base, "HEAD")
         point = merge_base[0].strip() if merge_base else base
         diff = "\n".join(
-            _git("diff", "--unified=0", "--no-color", "--diff-filter=d", point, "--", "litellm")
+            _git(
+                "diff",
+                "--unified=0",
+                "--no-color",
+                "--diff-filter=d",
+                point,
+                "--",
+                "litellm",
+            )
         )
         untracked = _git("ls-files", "--others", "--exclude-standard", "--", "litellm")
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
 
-    out: dict[str, set[int] | None] = {}
+    out: dict[str, LineScope] = {}
     for name, lines in _parse_added_lines(diff).items():
         if name.endswith(".py") and (REPO_ROOT / name).exists():
             out[name] = lines
@@ -440,7 +485,7 @@ def _to_litellm_relative(paths: Iterable[Path]) -> list[str]:
     return rels
 
 
-def _in_scope(v: Violation, line_map: dict[str, set[int] | None] | None) -> bool:
+def _in_scope(v: Violation, line_map: dict[str, LineScope] | None) -> bool:
     """A finding survives if line filtering is off (explicit paths), it's a build
     error, or its line is one the diff added/edited."""
     if line_map is None or v.code == "LIT000":
@@ -450,19 +495,34 @@ def _in_scope(v: Violation, line_map: dict[str, set[int] | None] | None) -> bool
 
 
 def main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(description="Any-discipline gate (changed-only, changed-lines).")
-    parser.add_argument("paths", nargs="*", help="explicit files (repo-root relative); whole-file, no line filter")
-    parser.add_argument("--changed", action="store_true", help="check changed lines under litellm/ vs --base")
+    parser = argparse.ArgumentParser(
+        description="Any-discipline gate (changed-only, changed-lines)."
+    )
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        help="explicit files (repo-root relative); whole-file, no line filter",
+    )
+    parser.add_argument(
+        "--changed",
+        action="store_true",
+        help="check changed lines under litellm/ vs --base",
+    )
     parser.add_argument("--base", default=os.environ.get("ANY_GATE_BASE", DEFAULT_BASE))
     args = parser.parse_args(list(argv))
 
-    line_map: dict[str, set[int] | None] | None = None
+    line_map: dict[str, LineScope] | None = None
     if args.changed:
         line_map = changed_line_map(args.base)
         if line_map is None:
-            print("check_any_discipline: not a git repository; nothing to check", file=sys.stderr)
+            print(
+                "check_any_discipline: not a git repository; nothing to check",
+                file=sys.stderr,
+            )
             return 0
-        rel_paths = _to_litellm_relative((REPO_ROOT / name).resolve() for name in line_map)
+        rel_paths = _to_litellm_relative(
+            (REPO_ROOT / name).resolve() for name in line_map
+        )
     elif args.paths:
         rel_paths = _to_litellm_relative((REPO_ROOT / p).resolve() for p in args.paths)
     else:
@@ -486,7 +546,9 @@ def main(argv: Sequence[str]) -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"OK: {len(rel_paths)} changed file(s) under litellm/ have no Any-typed values on changed lines")
+    print(
+        f"OK: {len(rel_paths)} changed file(s) under litellm/ have no Any-typed values on changed lines"
+    )
     return 0
 
 
