@@ -3,6 +3,10 @@
     "baseline": 21452,
     "slack": 10
   },
+  "LIT002": {
+    "baseline": 25222,
+    "slack": 10
+  },
   "LIT003": {
     "baseline": 516,
     "slack": 0
@@ -25,10 +29,6 @@
   },
   "LIT008": {
     "baseline": 914,
-    "slack": 10
-  },
-  "LIT009": {
-    "baseline": 25222,
     "slack": 10
   }
 }

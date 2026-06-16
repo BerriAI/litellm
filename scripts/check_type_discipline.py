@@ -13,8 +13,14 @@ LIT001  Mutable collection in a type annotation, anywhere it appears: function
         frozenset[X], or a frozen dataclass / NamedTuple / ReadOnly TypedDict) and
         build it functionally (comprehension / map, not append-in-a-loop).
         Suppress with `# mutable-ok: <reason>` on the offending line.
-LIT002  Retired: annotation *presence* on *args/**kwargs is ruff's job (ANN002/ANN003).
-        The code is left unused (not reused) so older messages stay unambiguous.
+LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehension, or
+        a call to a mutable constructor (list/dict/set/deque/defaultdict/Counter/...).
+        Catches the unannotated seed-then-mutate pattern LIT001 cannot see (`acc = []`).
+        Build the value in one shot and freeze it: a `tuple`/`frozenset` wrapping a
+        generator (`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass /
+        NamedTuple / ReadOnly TypedDict. Generator expressions and `tuple`/`frozenset`
+        calls are not construction and pass. Annotation-internal lists (`Callable[[int],
+        str]`) are exempt. Suppress with `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  type/pyright/mypy ignore without bracketed codes or without a reason.
@@ -34,14 +40,10 @@ LIT008  `**kwargs` parameter. The keyword contract is erased and everything it c
         is effectively Any. ruff can force it to be typed (ANN003) but can't ban the
         syntax. Declare explicit keyword params, or accept one frozen payload. `*args`,
         by contrast, is fine when typed (it's just a tuple). Suppress: `# kwargs-ok: <reason>`.
-LIT009  Mutable-collection *construction*: a list/dict/set literal or comprehension, or
-        a call to a mutable constructor (list/dict/set/deque/defaultdict/Counter/...).
-        Catches the unannotated seed-then-mutate pattern LIT001 cannot see (`acc = []`).
-        Build the value in one shot and freeze it: a `tuple`/`frozenset` wrapping a
-        generator (`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass /
-        NamedTuple / ReadOnly TypedDict. Generator expressions and `tuple`/`frozenset`
-        calls are not construction and pass. Annotation-internal lists (`Callable[[int],
-        str]`) are exempt. Suppress with `# mutable-ok: <reason>`.
+
+LIT000 and LIT009 are the sibling Any gate's (check_any_discipline.py, #30379): a mypy
+build/read failure and an Any-typed value. They share this LIT namespace but are emitted
+by that checker, not this one.
  
 Usage
 -----
@@ -75,7 +77,7 @@ MUTABLE_COLLECTIONS = frozenset((
     "MutableMapping", "MutableSequence", "MutableSet",
 ))
 
-# Callables whose result is a fresh *mutable* collection (LIT009). `tuple` and
+# Callables whose result is a fresh *mutable* collection (LIT002). `tuple` and
 # `frozenset` are deliberately absent -- they are the wrappers you reach for, and
 # a generator expression fed to them is the blessed one-shot build.
 MUTABLE_CONSTRUCTORS = frozenset((
@@ -336,7 +338,7 @@ def iter_guard_violations(path: Path, tree: ast.AST, comments: Comments) -> Iter
  
  
 # --------------------------------------------------------------------------- #
-# Mutable-collection construction (LIT009)
+# Mutable-collection construction (LIT002)
 # --------------------------------------------------------------------------- #
 
 
@@ -355,7 +357,7 @@ def _annotation_node_ids(tree: ast.AST) -> frozenset[int]:
     """ids() of every node living inside an annotation.
 
     A list display inside an annotation (`Callable[[int], str]`) is type syntax,
-    not construction, so the LIT009 walk must skip those subtrees.
+    not construction, so the LIT002 walk must skip those subtrees.
     """
     return frozenset(
         id(sub)
@@ -401,7 +403,7 @@ def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) 
         if kind is None or node.lineno in comments.mutable_ok_lines:
             continue
         yield Violation(
-            path, node.lineno, "LIT009",
+            path, node.lineno, "LIT002",
             f"mutable {kind}: this builds a collection that can be grown or rewritten. "
             f"Build it in one shot and freeze it -- a tuple/frozenset wrapping a generator "
             f"(`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass / NamedTuple "
