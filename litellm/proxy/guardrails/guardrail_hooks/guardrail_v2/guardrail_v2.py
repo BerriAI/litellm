@@ -2,7 +2,7 @@ import json
 import os
 from typing import TYPE_CHECKING, Literal, Optional
 
-from litellm.proxy.guardrails import _rust
+from litellm.proxy.guardrails import _rust  # type: ignore[attr-defined]
 
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException
@@ -71,6 +71,16 @@ def _resolve_secret(value: Optional[str]) -> Optional[str]:
     if value and value.startswith("os.environ/"):
         return os.environ.get(value.removeprefix("os.environ/"))
     return value
+
+
+def _get_optional_param(litellm_params: "LitellmParams", name: str) -> object:
+    """Read a guardrail param from optional_params, then litellm_params itself."""
+    optional_params = getattr(litellm_params, "optional_params", None)
+    if optional_params is not None:
+        value = getattr(optional_params, name, None)
+        if value is not None:
+            return value
+    return getattr(litellm_params, name, None)
 
 
 def build_v2_config(
@@ -239,12 +249,25 @@ class GuardrailV2(CustomGuardrail):
         self,
         engine_config: dict,
         extra_headers: Optional[list] = None,
+        streaming_end_of_stream_only: Optional[bool] = None,
+        streaming_sampling_rate: Optional[int] = None,
         **kwargs: object,
     ):
         self.engine_config = engine_config
         self.extra_header_allowlist = [
             h for h in (extra_headers or []) if isinstance(h, str)
         ]
+        # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook to
+        # drive streaming moderation; the apply call still routes to the Rust
+        # engine. Defaults match the Python moderation guardrail.
+        self.streaming_end_of_stream_only: bool = (
+            False
+            if streaming_end_of_stream_only is None
+            else streaming_end_of_stream_only
+        )
+        self.streaming_sampling_rate: int = (
+            5 if streaming_sampling_rate is None else streaming_sampling_rate
+        )
 
         if "supported_event_hooks" not in kwargs:
             kwargs["supported_event_hooks"] = [

@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Set, Tuple
 
-from litellm.proxy.guardrails import _rust
+from litellm.proxy.guardrails import _rust  # type: ignore[attr-defined]
 
 
 @dataclass

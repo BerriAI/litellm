@@ -1,5 +1,5 @@
 import importlib
-from typing import TYPE_CHECKING, Callable, Dict, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, Optional, Tuple, cast
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -55,11 +55,16 @@ def _initialize_rust(
     litellm_params: "LitellmParams",
     guardrail: "Guardrail",
 ) -> "CustomGuardrail | None":
-    """Build a GuardrailV2, or return None if the engine cannot handle this config."""
+    """Build a GuardrailV2, or return None when the engine is unavailable or
+    cannot handle this config; the caller then uses the Python implementation."""
     import litellm
     from litellm._logging import verbose_proxy_logger
 
-    from .guardrail_v2 import GuardrailV2, build_v2_config
+    try:
+        from .guardrail_v2 import GuardrailV2, _get_optional_param, build_v2_config
+    except ImportError:
+        # Rust engine not built/installed; fall back to the Python implementation.
+        return None
 
     engine_config = build_v2_config(guardrail_type, litellm_params)
     if engine_config is None:
@@ -68,6 +73,14 @@ def _initialize_rust(
     instance = GuardrailV2(
         engine_config=engine_config,
         extra_headers=getattr(litellm_params, "extra_headers", None),
+        streaming_end_of_stream_only=cast(
+            Optional[bool],
+            _get_optional_param(litellm_params, "streaming_end_of_stream_only"),
+        ),
+        streaming_sampling_rate=cast(
+            Optional[int],
+            _get_optional_param(litellm_params, "streaming_sampling_rate"),
+        ),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
