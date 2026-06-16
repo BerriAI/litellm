@@ -196,7 +196,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # OpenAI priority service tier pricing
     cache_read_input_token_cost_above_200k_tokens: Optional[float]
+    cache_read_input_token_cost_above_200k_tokens_priority: Optional[float]
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
+    cache_read_input_token_cost_above_272k_tokens_priority: Optional[float]
     cache_read_input_token_cost_above_512k_tokens: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
@@ -204,9 +206,11 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_200k_tokens: Optional[
         float
     ]  # only for vertex ai gemini-2.5-pro models
+    input_cost_per_token_above_200k_tokens_priority: Optional[float]
     input_cost_per_token_above_272k_tokens: Optional[
         float
     ]  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
+    input_cost_per_token_above_272k_tokens_priority: Optional[float]
     input_cost_per_token_above_512k_tokens: Optional[
         float
     ]  # MiniMax-M3: prompts >512K priced at 2x input
@@ -240,9 +244,11 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_200k_tokens: Optional[
         float
     ]  # only for vertex ai gemini-2.5-pro models
+    output_cost_per_token_above_200k_tokens_priority: Optional[float]
     output_cost_per_token_above_272k_tokens: Optional[
         float
     ]  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
+    output_cost_per_token_above_272k_tokens_priority: Optional[float]
     output_cost_per_token_above_512k_tokens: Optional[
         float
     ]  # MiniMax-M3: prompts >512K priced at 2x output
@@ -3093,6 +3099,8 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_flex: Optional[float] = None
     cache_read_input_token_cost_priority: Optional[float] = None
     cache_read_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_read_input_token_cost_above_200k_tokens_priority: Optional[float] = None
+    cache_read_input_token_cost_above_272k_tokens_priority: Optional[float] = None
     cache_read_input_audio_token_cost: Optional[float] = None
     input_cost_per_character: Optional[float] = None
     input_cost_per_character_above_128k_tokens: Optional[float] = None
@@ -3100,6 +3108,8 @@ class CustomPricingLiteLLMParams(BaseModel):
     input_cost_per_token_cache_hit: Optional[float] = None
     input_cost_per_token_above_128k_tokens: Optional[float] = None
     input_cost_per_token_above_200k_tokens: Optional[float] = None
+    input_cost_per_token_above_200k_tokens_priority: Optional[float] = None
+    input_cost_per_token_above_272k_tokens_priority: Optional[float] = None
     input_cost_per_query: Optional[float] = None
     input_cost_per_image: Optional[float] = None
     input_cost_per_image_above_128k_tokens: Optional[float] = None
@@ -3117,6 +3127,8 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_audio_token: Optional[float] = None
     output_cost_per_token_above_128k_tokens: Optional[float] = None
     output_cost_per_token_above_200k_tokens: Optional[float] = None
+    output_cost_per_token_above_200k_tokens_priority: Optional[float] = None
+    output_cost_per_token_above_272k_tokens_priority: Optional[float] = None
     output_cost_per_character_above_128k_tokens: Optional[float] = None
     output_cost_per_image: Optional[float] = None
     output_cost_per_image_token: Optional[float] = None
