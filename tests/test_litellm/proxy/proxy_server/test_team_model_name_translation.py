@@ -623,8 +623,8 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)
-    # opt-in flag ON -> listing surfaces public names
-    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": True})
+    # Default behavior: listing surfaces public names.
+    monkeypatch.setattr(ps, "general_settings", {})
 
     # virtual key granted access via the access group (no team membership)
     key = UserAPIKeyAuth(
@@ -638,11 +638,12 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_v1_models_keeps_internal_names_when_flag_off(monkeypatch):
-    """Default (flag off): /v1/models stays backward-compatible and lists the
-    internal routing name, so consumers that scripted against those ids are not
-    broken. Translation is opt-in via
-    general_settings['use_team_public_model_name'].
+async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
+    monkeypatch,
+):
+    """Compatibility override: /v1/models can still list the internal routing
+    name for consumers that scripted against those ids. Translation is enabled
+    by default and disabled via general_settings['use_team_public_model_name'].
     """
     team_dep = {
         "model_name": "model_name_teamX_uuid9",
@@ -663,7 +664,7 @@ async def test_v1_models_keeps_internal_names_when_flag_off(monkeypatch):
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)
-    monkeypatch.setattr(ps, "general_settings", {})  # flag absent -> default off
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
 
     key = UserAPIKeyAuth(
         user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
