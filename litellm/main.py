@@ -392,7 +392,7 @@ class AsyncCompletions:
 
 @tracer.wrap()
 @client
-async def acompletion(  # noqa: PLR0915
+async def acompletion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
@@ -7572,7 +7572,7 @@ def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
     except Exception:
         pass
 

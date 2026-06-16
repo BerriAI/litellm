@@ -3647,7 +3647,7 @@ async def team_info(
         ## REMOVE HASHED TOKEN INFO before returning ##
         for key in keys:
             try:
-                key = key.model_dump()  # noqa
+                key = key.model_dump()
             except Exception:
                 # if using pydantic v1
                 key = key.dict()
