@@ -447,6 +447,13 @@ serviceMonitor:
     # kubernetes.io/test: test
   interval: 15s
   scrapeTimeout: 10s
+  # Authorization secret for Prometheus to scrape /metrics
+  # When enabled: false (default), uses the LiteLLM master-key secret automatically
+  # When enabled: true, you must provide the secret name and key below
+  authSecret:
+    enabled: false
+    name: ""
+    key: ""
   relabelings: []
   # - targetLabel: __meta_kubernetes_pod_node_name
   #   replacement: $1
