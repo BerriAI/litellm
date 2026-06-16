@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Union, cast
 import litellm.constants as _c
 from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
 from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+    _sse,
     build_content_block_chunks,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -397,9 +398,6 @@ def _advisor_result_block(advisor_use_block: Dict, advisor_text: str) -> Dict:
         "content": {"type": "advisor_result", "text": advisor_text},
     }
 
-
-def _sse(event: str, data: Dict) -> bytes:
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
 
 _USAGE_TOKEN_KEYS = (
