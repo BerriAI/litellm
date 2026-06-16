@@ -368,6 +368,9 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime/calls",
         "/v1/realtime/calls",
         "/openai/v1/realtime/calls",
+        "/realtime/transcription_sessions",
+        "/v1/realtime/transcription_sessions",
+        "/openai/v1/realtime/transcription_sessions",
         # responses API
         "/responses",
         "/v1/responses",

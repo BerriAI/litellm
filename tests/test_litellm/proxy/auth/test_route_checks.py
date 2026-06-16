@@ -469,6 +469,9 @@ def test_mcp_inference_routes_classified_as_llm_api(route):
         "/realtime/calls",
         "/v1/realtime/calls",
         "/openai/v1/realtime/calls",
+        "/realtime/transcription_sessions",
+        "/v1/realtime/transcription_sessions",
+        "/openai/v1/realtime/transcription_sessions",
     ],
 )
 def test_realtime_webrtc_http_routes_classified_as_llm_api(route):
