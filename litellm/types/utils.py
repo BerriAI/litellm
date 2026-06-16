@@ -1672,6 +1672,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
             prompt_tokens_details=_prompt_tokens_details or None,
         )
 
+        if isinstance(server_tool_use, dict):
+            server_tool_use = ServerToolUse(**server_tool_use)
+
         if server_tool_use is not None:
             self.server_tool_use = server_tool_use
         else:  # maintain openai compatibility in usage object if possible
