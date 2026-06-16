@@ -1299,6 +1299,46 @@ def test_get_model_info_shows_supports_computer_use():
     )  # Expecting None due to the default in ModelInfoBase
 
 
+def test_get_model_info_forward_custom_tier_thresholds():
+    """
+    Regression test: custom input_cost_per_token_above_<N>_tokens tiers
+    must survive get_model_info instead of being silently dropped when N
+    is not one of the hard-coded values (128k/200k/272k/512k).
+
+    See: https://github.com/BerriAI/litellm/issues/30344
+    """
+    import litellm
+    from litellm.utils import _get_model_info_helper
+
+    model_name = "test-custom-tier-model-30344"
+    custom_tier_key = "input_cost_per_token_above_500k_tokens"
+
+    # Register via the standard public API path
+    litellm.register_model({
+        model_name: {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "max_tokens": 1000,
+            custom_tier_key: 9e-6,
+        }
+    })
+
+    try:
+        info = litellm.get_model_info(model=model_name, custom_llm_provider="openai")
+
+        # The custom tier must survive round-trip through get_model_info
+        assert info.get(custom_tier_key) == 9e-6, (
+            f"Custom tier '{custom_tier_key}' was dropped by get_model_info; "
+            f"got {info.get(custom_tier_key)}"
+        )
+    finally:
+        # Teardown: remove the test model from global state
+        if hasattr(litellm, "model_cost"):
+            litellm.model_cost.pop(model_name, None)
+
+
 @pytest.mark.parametrize(
     "model, custom_llm_provider",
     [
