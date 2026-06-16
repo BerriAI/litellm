@@ -3,7 +3,6 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -11,6 +10,17 @@ sys.path.insert(
 from unittest.mock import AsyncMock
 
 from litellm.caching.redis_cache import RedisCache
+from litellm._redis import _get_redis_kwargs
+
+
+def test_get_redis_kwargs_includes_connection_args():
+    """Regression test: _get_redis_kwargs must return host/port/password even when
+    redis-py wraps Redis.__init__ with decorators that hide the signature from
+    inspect.getfullargspec."""
+    kwargs = _get_redis_kwargs()
+    assert "host" in kwargs
+    assert "port" in kwargs
+    assert "password" in kwargs
 
 
 @pytest.fixture
