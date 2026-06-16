@@ -220,6 +220,58 @@ async def test_pre_call_hook_runs_once_with_model_level_guardrails():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_runs_once_when_hook_returns_fresh_dict():
+    """
+    async_pre_call_hook may return a brand-new request dict instead of mutating
+    or spreading the one it received. The exactly-once marker must live on the
+    data that flows downstream, so the deployment hook still skips the guardrail
+    even when the proxy loop swapped in a fresh dict that never carried it.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class FreshDictGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="counting-guardrail",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+            self.pre_call_count = 0
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            self.pre_call_count += 1
+            return {"model": data["model"], "messages": data["messages"]}
+
+    guardrail = FreshDictGuardrail()
+
+    with patch("litellm.callbacks", [guardrail]):
+        ProxyLogging._callback_capabilities_cache.clear()
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {},
+        }
+
+        data = await proxy_logging.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type="acompletion",
+        )
+
+        data["guardrails"] = ["counting-guardrail"]
+        await guardrail.async_pre_call_deployment_hook(data, CallTypes.acompletion)
+
+    assert guardrail.pre_call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_deployment_hook_runs_pre_call_without_proxy_loop():
     """
     Direct-SDK usage (litellm.acompletion(..., guardrails=[...]) without the
