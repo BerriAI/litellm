@@ -16,7 +16,6 @@ from typing import (
     overload,
 )
 
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
@@ -204,10 +203,12 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                 if isinstance(existing_content, list):
                     text_parts = []
                     tool_calls: List[ChatCompletionAssistantToolCall] = []
-                    dropped_types = []
+                    content_blocks: List[Union[str, Dict[str, Any]]] = []
+                    has_structured_content = False
                     for c in existing_content:
                         if isinstance(c, dict) and c.get("type") == "text":
                             text_parts.append(c.get("text", ""))
+                            content_blocks.append(c)
                         elif isinstance(c, dict) and c.get("type") == "tool_use":
                             tool_input = c.get("input", {})
                             tool_calls.append(
@@ -224,23 +225,19 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                                     ),
                                 )
                             )
-                        elif isinstance(c, dict):
-                            dropped_types.append(c.get("type", "unknown"))
+                        else:
+                            content_blocks.append(c)
+                            has_structured_content = True
                     if tool_calls:
                         existing_tool_calls = message.get("tool_calls")
                         if isinstance(existing_tool_calls, list):
                             message["tool_calls"] = existing_tool_calls + tool_calls
                         else:
                             message["tool_calls"] = tool_calls
-                    if dropped_types:
-                        verbose_logger.debug(
-                            "HostedVLLMChatConfig: dropping non-text assistant content "
-                            "block types %s (vLLM is OpenAI-compatible; tool calls "
-                            "belong in tool_calls, not content)",
-                            dropped_types,
-                        )
                     content_str = "\n".join(text_parts)
-                    message["content"] = content_str
+                    message["content"] = (
+                        content_blocks if has_structured_content else content_str
+                    )
             elif message["role"] == "user":
                 message_content = message.get("content")
                 if message_content and isinstance(message_content, list):

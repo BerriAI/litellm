@@ -245,6 +245,34 @@ def test_hosted_vllm_thinking_blocks_with_list_content():
     assert "thinking_blocks" not in assistant_msg
 
 
+def test_hosted_vllm_assistant_structured_content_is_preserved():
+    config = HostedVLLMChatConfig()
+    image_block = {
+        "type": "image_url",
+        "image_url": {"url": "https://example.com/image.png"},
+    }
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Here is the image"}, image_block],
+        },
+    ]
+
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assistant_msg = transformed["messages"][0]
+    assert assistant_msg["content"] == [
+        {"type": "text", "text": "Here is the image"},
+        image_block,
+    ]
+
+
 def test_hosted_vllm_assistant_tool_use_content_becomes_tool_calls():
     config = HostedVLLMChatConfig()
     messages = [
