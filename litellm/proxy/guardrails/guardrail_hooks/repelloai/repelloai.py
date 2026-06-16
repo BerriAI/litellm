@@ -1,8 +1,8 @@
 from datetime import datetime
-from typing import AsyncGenerator, Dict, List, Literal, Optional, Type, Union, cast
+from typing import AsyncGenerator, Literal, Optional, Type, Union, cast
 
 from fastapi import HTTPException
-from httpx import Response as HttpxResponse
+from httpx import HTTPError, Response as HttpxResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -56,8 +56,8 @@ class RepelloAIGuardrail(CustomGuardrail):
         return getattr(obj, key, None)
 
     @classmethod
-    def _extract_tool_call_args_from_message(cls, message: object) -> List[str]:
-        args: List[str] = []
+    def _extract_tool_call_args_from_message(cls, message: object) -> list[str]:
+        args: list[str] = []
 
         tool_calls = cls._get_field(message, "tool_calls")
         if isinstance(tool_calls, list):
@@ -75,9 +75,9 @@ class RepelloAIGuardrail(CustomGuardrail):
         return args
 
     @staticmethod
-    def _iter_schema_text(node: object) -> List[str]:
-        texts: List[str] = []
-        stack: List[object] = [node]
+    def _iter_schema_text(node: object) -> list[str]:
+        texts: list[str] = []
+        stack: list[object] = [node]
 
         while stack:
             current = stack.pop()
@@ -107,8 +107,8 @@ class RepelloAIGuardrail(CustomGuardrail):
         return texts
 
     @classmethod
-    def _extract_tool_definition_text(cls, data: Dict) -> List[str]:
-        texts: List[str] = []
+    def _extract_tool_definition_text(cls, data: dict) -> list[str]:
+        texts: list[str] = []
 
         for tool in data.get("tools") or []:
             if not isinstance(tool, dict):
@@ -183,7 +183,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         self,
         text: str,
         stage: AnalyzeStage,
-        request_data: Dict,
+        request_data: dict,
         event_type: GuardrailEventHooks,
     ) -> Optional[RepelloAIAnalyzeResponse]:
         """stage ("prompt" or "response") selects both the endpoint path and the
@@ -192,13 +192,13 @@ class RepelloAIGuardrail(CustomGuardrail):
         the request through).
         """
         endpoint = f"{self.api_base}/analyze/{stage}"
-        request: Dict = {
+        request: dict = {
             "asset_id": self.asset_id or "",
             "scan_data": {stage: text},
         }
 
         status: GuardrailStatus = "success"
-        guardrail_json_response: Union[str, dict, List[dict]] = ""
+        guardrail_json_response: Union[str, dict, list[dict]] = ""
         start_time: datetime = datetime.now()
         repelloai_response: Optional[RepelloAIAnalyzeResponse] = None
         try:
@@ -213,10 +213,23 @@ class RepelloAIGuardrail(CustomGuardrail):
             response: HttpxResponse = raw_response
             self._raise_for_config_error(response)
             response.raise_for_status()
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "RepelloAI Argus guardrail returned invalid JSON",
+                        "status_code": response.status_code,
+                    },
+                ) from e
             if not isinstance(payload, dict):
-                raise ValueError(
-                    f"RepelloAI Argus returned a non-object response: {type(payload)}"
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "RepelloAI Argus guardrail returned invalid response",
+                        "response_type": type(payload).__name__,
+                    },
                 )
             repelloai_response = RepelloAIAnalyzeResponse(**payload)
             verbose_proxy_logger.debug(
@@ -234,10 +247,17 @@ class RepelloAIGuardrail(CustomGuardrail):
             else:
                 guardrail_json_response = str(detail)
             raise
-        except Exception as e:
+        except HTTPError as e:
             status = "guardrail_failed_to_respond"
             guardrail_json_response = str(e)
             return self._handle_unreachable(e)
+        except Exception as e:
+            status = "guardrail_failed_to_respond"
+            guardrail_json_response = str(e)
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "RepelloAI Argus guardrail failed"},
+            ) from e
         finally:
             end_time = datetime.now()
             if repelloai_response is not None:
@@ -317,12 +337,42 @@ class RepelloAIGuardrail(CustomGuardrail):
         if self._verdict_blocks(repelloai_response):
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "error": "Blocked by RepelloAI Argus guardrail",
-                    "policies_violated": repelloai_response.get("policies_violated"),
-                },
+                detail=self._format_blocked_detail(repelloai_response),
             )
         self._log_flagged_verdict(repelloai_response)
+
+    @classmethod
+    def _format_blocked_detail(
+        cls, repelloai_response: RepelloAIAnalyzeResponse
+    ) -> str:
+        policies = repelloai_response.get("policies_violated")
+        if not isinstance(policies, list) or not policies:
+            return "Blocked by RepelloAI Argus guardrail."
+
+        formatted_policies: list[str] = []
+        for policy in policies:
+            if not isinstance(policy, dict):
+                continue
+            policy_name = policy.get("policy_name") or "unknown_policy"
+            details: list[str] = []
+            action_taken = policy.get("action_taken")
+            if action_taken:
+                details.append(f"action: {action_taken}")
+            policy_details = policy.get("details")
+            if (
+                isinstance(policy_details, dict)
+                and policy_details.get("score") is not None
+            ):
+                details.append(f"score: {policy_details['score']}")
+            suffix = f" ({', '.join(details)})" if details else ""
+            formatted_policies.append(f"{policy_name}{suffix}")
+
+        if not formatted_policies:
+            return "Blocked by RepelloAI Argus guardrail."
+        return (
+            "Blocked by RepelloAI Argus guardrail. "
+            f"Policies violated: {'; '.join(formatted_policies)}."
+        )
 
     @staticmethod
     def _log_flagged_verdict(
@@ -335,9 +385,9 @@ class RepelloAIGuardrail(CustomGuardrail):
             )
 
     @staticmethod
-    def _extract_prompt_message_text(data: Dict) -> List[str]:
+    def _extract_prompt_message_text(data: dict) -> list[str]:
         messages = build_inspection_messages(data)
-        texts: List[str] = []
+        texts: list[str] = []
         for message in messages:
             content = message.get("content")
             if isinstance(content, str) and content:
@@ -345,7 +395,25 @@ class RepelloAIGuardrail(CustomGuardrail):
         return texts
 
     @staticmethod
-    def _extract_prompt_field_text(data: Dict) -> List[str]:
+    def _extract_input_text_parts(content: object) -> list[str]:
+        """Extract text from Responses API content parts with type 'input_text'.
+
+        build_inspection_messages only handles type='text'; this covers the
+        Responses API variant so input_text parts are not silently dropped.
+        """
+        if not isinstance(content, list):
+            return []
+        return [
+            part["text"]
+            for part in content
+            if isinstance(part, dict)
+            and part.get("type") == "input_text"
+            and isinstance(part.get("text"), str)
+            and part["text"]
+        ]
+
+    @staticmethod
+    def _extract_prompt_field_text(data: dict) -> list[str]:
         prompt = data.get("prompt")
         if isinstance(prompt, str) and prompt:
             return [prompt]
@@ -354,7 +422,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         return []
 
     @classmethod
-    def _extract_prompt_text(cls, data: Dict) -> Optional[str]:
+    def _extract_prompt_text(cls, data: dict) -> Optional[str]:
         texts = cls._extract_prompt_message_text(data)
         texts.extend(cls._extract_prompt_field_text(data))
         instructions = data.get("instructions")
@@ -371,6 +439,7 @@ class RepelloAIGuardrail(CustomGuardrail):
             for item in raw_input:
                 if isinstance(item, dict) and "role" in item:
                     texts.extend(cls._extract_tool_call_args_from_message(item))
+                    texts.extend(cls._extract_input_text_parts(item.get("content")))
 
         texts.extend(cls._extract_tool_definition_text(data))
         return "\n".join(text for text in texts if text) if texts else None
@@ -379,9 +448,9 @@ class RepelloAIGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
-        data: Dict,
+        data: dict,
         call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, Dict]]:
+    ) -> Optional[Union[Exception, str, dict]]:
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
@@ -468,7 +537,7 @@ class RepelloAIGuardrail(CustomGuardrail):
                 yield chunk
             return
 
-        chunks: List[ModelResponseStream] = []
+        chunks: list[ModelResponseStream] = []
         async for chunk in response:
             chunks.append(chunk)
 
@@ -509,7 +578,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         if isinstance(response, dict):
             response_dict = response
         elif hasattr(response, "model_dump"):
-            response_dict = cast(Dict, response.model_dump())  # type: ignore[union-attr]
+            response_dict = cast(dict, response.model_dump())  # type: ignore[union-attr]
         else:
             response_dict = {}
         text = RepelloAIGuardrail._extract_chat_completion_text(response_dict)
@@ -517,9 +586,9 @@ class RepelloAIGuardrail(CustomGuardrail):
             return text
         return RepelloAIGuardrail._extract_responses_api_text(response_dict)
 
-    @staticmethod
-    def _extract_chat_completion_text(response_dict: Dict) -> Optional[str]:
-        parts: List[str] = []
+    @classmethod
+    def _extract_chat_completion_text(cls, response_dict: dict) -> Optional[str]:
+        parts: list[str] = []
         choices = response_dict.get("choices")
         if not isinstance(choices, list):
             return None
@@ -531,14 +600,15 @@ class RepelloAIGuardrail(CustomGuardrail):
                 content = message.get("content")
                 if isinstance(content, str) and content:
                     parts.append(content)
+                parts.extend(cls._extract_tool_call_args_from_message(message))
             text = choice.get("text")
             if isinstance(text, str) and text:
                 parts.append(text)
         return "\n".join(parts) if parts else None
 
     @staticmethod
-    def _extract_responses_api_text(response_dict: Dict) -> Optional[str]:
-        texts: List[str] = []
+    def _extract_responses_api_text(response_dict: dict) -> Optional[str]:
+        texts: list[str] = []
         output = response_dict.get("output")
         if not isinstance(output, list):
             return None
