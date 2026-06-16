@@ -308,6 +308,7 @@ class TestCheckResponsesCost:
             prisma_client=mock_prisma_client,
             llm_router=mock_llm_router,
         )
+        checker._expire_stale_rows = AsyncMock(return_value=0)
 
         assert checker.proxy_logging_obj == mock_proxy_logging_obj
         assert checker.prisma_client == mock_prisma_client
@@ -332,12 +333,13 @@ class TestCheckResponsesCost:
             prisma_client=mock_prisma_client,
             llm_router=mock_llm_router,
         )
+        checker._expire_stale_rows = AsyncMock(return_value=0)
 
         # Should not raise any errors
         await checker.check_responses_cost()
 
         # Verify find_many was called with correct parameters (includes pagination)
-        mock_prisma_client.db.litellm_managedobjecttable.find_many.assert_called_once_with(
+        mock_prisma_client.db.litellm_managedobjecttable.find_many.assert_any_call(
             where={
                 "status": {"in": ["queued", "in_progress"]},
                 "file_purpose": "response",
@@ -388,6 +390,7 @@ class TestCheckResponsesCost:
             prisma_client=mock_prisma_client,
             llm_router=mock_llm_router,
         )
+        checker._expire_stale_rows = AsyncMock(return_value=0)
 
         # Mock litellm.aget_responses to return completed response
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
@@ -444,14 +447,15 @@ class TestCheckResponsesCost:
             prisma_client=mock_prisma_client,
             llm_router=mock_llm_router,
         )
+        checker._expire_stale_rows = AsyncMock(return_value=0)
 
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
             mock_aget.return_value = failed_response
 
             await checker.check_responses_cost()
 
-            # Verify job was marked as completed even though it failed
-            # (stale cleanup also calls update_many, so check the specific completion call)
+            # Verify job was marked as failed
+            # (stale cleanup also calls update_many, so check the specific status call)
             update_many_calls = (
                 mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
             )
@@ -461,6 +465,8 @@ class TestCheckResponsesCost:
                 if c.kwargs.get("where", {}).get("id") is not None
             ]
             assert len(completion_calls) == 1
+            assert completion_calls[0].kwargs["where"]["id"]["in"] == ["job-456"]
+            assert completion_calls[0].kwargs["data"]["status"] == "failed"
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_in_progress_job(
@@ -497,6 +503,7 @@ class TestCheckResponsesCost:
             prisma_client=mock_prisma_client,
             llm_router=mock_llm_router,
         )
+        checker._expire_stale_rows = AsyncMock(return_value=0)
 
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
             mock_aget.return_value = in_progress_response
@@ -540,6 +547,7 @@ class TestCheckResponsesCost:
             prisma_client=mock_prisma_client,
             llm_router=mock_llm_router,
         )
+        checker._expire_stale_rows = AsyncMock(return_value=0)
 
         # Mock litellm.aget_responses to raise an exception
         with patch(

@@ -225,6 +225,7 @@ from litellm.constants import (
     PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
     PROXY_BATCH_POLLING_ENABLED,
     PROXY_BATCH_POLLING_INTERVAL,
+    PROXY_RESPONSES_POLLING_INTERVAL,
     PROXY_BATCH_WRITE_AT,
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
@@ -746,7 +747,7 @@ async def _initialize_shared_aiohttp_session():
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, proxy_responses_polling_interval, shared_aiohttp_session
     import json
 
     init_verbose_loggers()
@@ -1913,6 +1914,7 @@ ui_access_mode: Union[Literal["admin", "all"], Dict] = "all"
 proxy_budget_rescheduler_min_time = PROXY_BUDGET_RESCHEDULER_MIN_TIME
 proxy_budget_rescheduler_max_time = PROXY_BUDGET_RESCHEDULER_MAX_TIME
 proxy_batch_polling_interval = PROXY_BATCH_POLLING_INTERVAL
+proxy_responses_polling_interval = PROXY_RESPONSES_POLLING_INTERVAL
 proxy_batch_write_at = PROXY_BATCH_WRITE_AT
 litellm_master_key_hash = None
 disable_spend_logs = False
@@ -3904,7 +3906,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, proxy_responses_polling_interval, config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -4420,6 +4422,10 @@ class ProxyConfig:
             ## BATCH POLLING INTERVAL ##
             proxy_batch_polling_interval = general_settings.get(
                 "proxy_batch_polling_interval", proxy_batch_polling_interval
+            )
+            ## RESPONSES POLLING INTERVAL ##
+            proxy_responses_polling_interval = general_settings.get(
+                "proxy_responses_polling_interval", proxy_responses_polling_interval
             )
             ## BATCH WRITER ##
             proxy_batch_write_at = general_settings.get(
@@ -7742,18 +7748,21 @@ class ProxyStartupEvent:
                     prisma_client=prisma_client,
                     llm_router=llm_router,
                 )
+                _effective_responses_interval = (
+                    proxy_responses_polling_interval + random.randint(0, 30)
+                )
                 scheduler.add_job(
                     check_responses_cost_job.check_responses_cost,
                     "interval",
-                    seconds=proxy_batch_polling_interval
-                    + random.randint(0, 30),  # Add small random offset
+                    seconds=_effective_responses_interval,
                     # REMOVED jitter parameter - major cause of memory leak
                     id="check_responses_cost_job",
                     replace_existing=True,
                     misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
                 verbose_proxy_logger.info(
-                    "Responses cost check job scheduled successfully"
+                    "Responses cost check job scheduled successfully (interval=%ss)",
+                    _effective_responses_interval,
                 )
 
             except Exception as e:

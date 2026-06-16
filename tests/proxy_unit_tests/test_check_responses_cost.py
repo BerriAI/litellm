@@ -105,6 +105,48 @@ class TestCheckResponsesCost:
         assert call_args[0][1] == STALE_OBJECT_CLEANUP_BATCH_SIZE
 
     @pytest.mark.asyncio
+    async def test_expire_stale_rows_rechecks_terminal_status_on_update(
+        self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
+    ):
+        """update_many should include terminal-status guard to avoid race clobber."""
+        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
+            CheckResponsesCost,
+        )
+
+        check_responses_cost_instance = CheckResponsesCost(
+            proxy_logging_obj=mock_proxy_logging_obj,
+            prisma_client=mock_prisma_client,
+            llm_router=mock_llm_router,
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[MagicMock(id="row-1"), MagicMock(id="row-2")]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        marked = await check_responses_cost_instance._expire_stale_rows(
+            cutoff=datetime.now(), batch_size=10
+        )
+
+        assert marked == 2
+        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_awaited_once()
+        where = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1][
+                "where"
+            ]
+        )
+        assert where["id"]["in"] == ["row-1", "row-2"]
+        assert where["status"]["not_in"] == [
+            "completed",
+            "complete",
+            "failed",
+            "expired",
+            "cancelled",
+            "stale_expired",
+        ]
+
+    @pytest.mark.asyncio
     async def test_check_responses_cost_with_completed_response(
         self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
@@ -189,12 +231,12 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # update_many should only contain the job completion call
+        # update_many should only contain the failed-status call
         calls = (
             mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
         )
         assert len(calls) == 1
-        assert calls[0][1]["data"]["status"] == "completed"
+        assert calls[0][1]["data"]["status"] == "failed"
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_cancelled_response(
@@ -232,12 +274,12 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # update_many should only contain the job completion call
+        # update_many should only contain the cancelled-status call
         calls = (
             mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
         )
         assert len(calls) == 1
-        assert calls[0][1]["data"]["status"] == "completed"
+        assert calls[0][1]["data"]["status"] == "cancelled"
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_in_progress_response(
@@ -363,6 +405,72 @@ class TestCheckResponsesCost:
         assert len(calls) == 0
         # Stale cleanup still ran via _expire_stale_rows
         check_responses_cost_instance._expire_stale_rows.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_check_responses_cost_retries_transient_error_then_succeeds(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_retry"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-retry"
+        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_retry"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_retry",
+            object="response",
+            status="completed",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=ResponseAPIUsage(
+                input_tokens=10,
+                output_tokens=10,
+                total_tokens=20,
+            ),
+        )
+
+        with (
+            patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget,
+            patch(
+                "litellm_enterprise.proxy.common_utils.check_responses_cost.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_aget.side_effect = [Exception("temp failure"), mock_response]
+            await check_responses_cost_instance.check_responses_cost()
+            assert mock_aget.await_count == 2
+
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
+        assert len(calls) == 1
+        assert calls[0][1]["data"]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_cleanup_stale_managed_objects_runs_multiple_batches(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        from litellm.constants import STALE_OBJECT_CLEANUP_BATCH_SIZE
+
+        check_responses_cost_instance._expire_stale_rows = AsyncMock(
+            side_effect=[
+                STALE_OBJECT_CLEANUP_BATCH_SIZE,
+                3,
+            ]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[]
+        )
+
+        await check_responses_cost_instance.check_responses_cost()
+        assert check_responses_cost_instance._expire_stale_rows.await_count == 2
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_multiple_jobs(

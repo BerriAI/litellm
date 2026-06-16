@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -744,6 +745,93 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
             call[0] for call in mock_proxy_config.get_credentials.mock_calls
         ]
         assert len(mock_scheduler_calls) > 0
+
+
+@pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_uses_dedicated_responses_polling_interval():
+    """
+    Responses cost polling must not share the batch polling interval.
+    """
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    # Stub enterprise-only modules used by scheduler wiring.
+    check_batch_cost_mod = types.ModuleType(
+        "litellm_enterprise.proxy.common_utils.check_batch_cost"
+    )
+    check_responses_cost_mod = types.ModuleType(
+        "litellm_enterprise.proxy.common_utils.check_responses_cost"
+    )
+
+    class _FakeCheckBatchCost:
+        def __init__(self, proxy_logging_obj, prisma_client, llm_router):
+            self.proxy_logging_obj = proxy_logging_obj
+            self.prisma_client = prisma_client
+            self.llm_router = llm_router
+
+        async def check_batch_cost(self):
+            return None
+
+    class _FakeCheckResponsesCost:
+        def __init__(self, proxy_logging_obj, prisma_client, llm_router):
+            self.proxy_logging_obj = proxy_logging_obj
+            self.prisma_client = prisma_client
+            self.llm_router = llm_router
+
+        async def check_responses_cost(self):
+            return None
+
+    check_batch_cost_mod.CheckBatchCost = _FakeCheckBatchCost
+    check_responses_cost_mod.CheckResponsesCost = _FakeCheckResponsesCost
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+
+    with (
+        patch.dict(
+            "sys.modules",
+            {
+                "litellm_enterprise.proxy.common_utils.check_batch_cost": check_batch_cost_mod,
+                "litellm_enterprise.proxy.common_utils.check_responses_cost": check_responses_cost_mod,
+            },
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.PROXY_BATCH_POLLING_ENABLED", True),
+        patch("litellm.proxy.proxy_server.proxy_batch_polling_interval", 3600),
+        patch("litellm.proxy.proxy_server.proxy_responses_polling_interval", 120),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
+        patch("litellm.proxy.proxy_server.random.randint", return_value=0),
+        patch(
+            "litellm.proxy.proxy_server.ProxyStartupEvent._initialize_slack_alerting_jobs",
+            new=AsyncMock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.ProxyStartupEvent._initialize_spend_tracking_background_jobs",
+            new=AsyncMock(),
+        ),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={"disable_reset_budget": True, "disable_spend_logs": True},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        from litellm.proxy import proxy_server as ps
+
+        try:
+            batch_job = ps.scheduler.get_job("check_batch_cost_job")
+            responses_job = ps.scheduler.get_job("check_responses_cost_job")
+            assert batch_job is not None
+            assert responses_job is not None
+
+            assert batch_job.trigger.interval.total_seconds() == 3600
+            assert responses_job.trigger.interval.total_seconds() == 120
+        finally:
+            ps.scheduler.shutdown(wait=False)
 
 
 def test_update_config_fields_deep_merge_db_wins():

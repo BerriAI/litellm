@@ -3,14 +3,18 @@ Polls LiteLLM_ManagedObjectTable to check if the response is complete.
 Cost tracking is handled automatically by litellm.aget_responses().
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
+    RESPONSES_COST_POLL_RETRY_ATTEMPTS,
+    RESPONSES_COST_POLL_RETRY_DELAY_SECONDS,
+    STALE_OBJECT_CLEANUP_MAX_BATCHES_PER_POLL_CYCLE,
     STALE_OBJECT_CLEANUP_BATCH_SIZE,
 )
 
@@ -36,32 +40,47 @@ class CheckResponsesCost:
     async def _expire_stale_rows(
         self, cutoff: datetime, batch_size: int
     ) -> int:
-        """Execute the bounded UPDATE that marks stale rows as 'stale_expired'.
-
-        Isolated so it can be swapped / mocked in tests without touching the
-        orchestration logic in ``_cleanup_stale_managed_objects``.
-
-        Uses PostgreSQL syntax (``$1::timestamptz``, ``LIMIT``, double-quoted
-        identifiers) which is the only dialect the proxy supports — every
-        ``schema.prisma`` in the repo sets ``provider = "postgresql"``.
-        Same pattern as ``spend_log_cleanup.py``.
-        """
-        return await self.prisma_client.db.execute_raw(
-            """
-            UPDATE "LiteLLM_ManagedObjectTable"
-            SET "status" = 'stale_expired'
-            WHERE "id" IN (
-                SELECT "id" FROM "LiteLLM_ManagedObjectTable"
-                WHERE "file_purpose" = 'response'
-                AND "status" NOT IN ('completed', 'complete', 'failed', 'expired', 'cancelled', 'stale_expired')
-                AND "created_at" < $1::timestamptz
-                ORDER BY "created_at" ASC
-                LIMIT $2
-            )
-            """,
-            cutoff,
-            batch_size,
+        """Mark up to `batch_size` stale response rows as `stale_expired`."""
+        stale_rows: List[Any] = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+            where={
+                "file_purpose": "response",
+                "status": {
+                    "not_in": [
+                        "completed",
+                        "complete",
+                        "failed",
+                        "expired",
+                        "cancelled",
+                        "stale_expired",
+                    ]
+                },
+                "created_at": {"lt": cutoff},
+            },
+            take=batch_size,
+            order={"created_at": "asc"},
+            select={"id": True},
         )
+        stale_ids = [row.id for row in stale_rows]
+        if not stale_ids:
+            return 0
+
+        await self.prisma_client.db.litellm_managedobjecttable.update_many(
+            where={
+                "id": {"in": stale_ids},
+                "status": {
+                    "not_in": [
+                        "completed",
+                        "complete",
+                        "failed",
+                        "expired",
+                        "cancelled",
+                        "stale_expired",
+                    ]
+                },
+            },
+            data={"status": "stale_expired"},
+        )
+        return len(stale_ids)
 
     async def _cleanup_stale_managed_objects(self) -> None:
         """
@@ -74,13 +93,55 @@ class CheckResponsesCost:
         rows per invocation to avoid overwhelming the DB when there is a large
         backlog.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
-        result = await self._expire_stale_rows(cutoff, STALE_OBJECT_CLEANUP_BATCH_SIZE)
-        if result > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS
+        )
+        total_marked = 0
+        runs = 0
+
+        for _ in range(STALE_OBJECT_CLEANUP_MAX_BATCHES_PER_POLL_CYCLE):
+            result = await self._expire_stale_rows(cutoff, STALE_OBJECT_CLEANUP_BATCH_SIZE)
+            runs += 1
+            total_marked += result
+            if result < STALE_OBJECT_CLEANUP_BATCH_SIZE:
+                break
+
+        if total_marked > 0:
             verbose_proxy_logger.warning(
-                f"CheckResponsesCost: marked {result} stale managed objects "
-                f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
+                f"CheckResponsesCost: marked {total_marked} stale managed objects "
+                f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired "
+                f"across {runs} cleanup run(s)"
             )
+
+    async def _fetch_response_with_retries(
+        self, unified_object_id: str, metadata: Dict[str, str]
+    ) -> Optional[Any]:
+        from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
+
+        responses_id_security, _, _ = ResponsesIDSecurity()._decrypt_response_id(
+            unified_object_id
+        )
+
+        last_error: Optional[Exception] = None
+        for attempt in range(1, RESPONSES_COST_POLL_RETRY_ATTEMPTS + 1):
+            try:
+                return await litellm.aget_responses(
+                    response_id=responses_id_security,
+                    litellm_metadata=metadata,
+                )
+            except Exception as e:
+                last_error = e
+                if attempt == RESPONSES_COST_POLL_RETRY_ATTEMPTS:
+                    break
+                await asyncio.sleep(RESPONSES_COST_POLL_RETRY_DELAY_SECONDS)
+
+        verbose_proxy_logger.info(
+            "Skipping job %s after %d failed poll attempt(s): %s",
+            unified_object_id,
+            RESPONSES_COST_POLL_RETRY_ATTEMPTS,
+            last_error,
+        )
+        return None
 
     async def check_responses_cost(self):
         """
@@ -107,23 +168,21 @@ class CheckResponsesCost:
         )
         
         verbose_proxy_logger.debug(f"Found {len(jobs)} response jobs to check")
-        completed_jobs = []
+        status_to_job_ids: Dict[str, List[str]] = {
+            "completed": [],
+            "failed": [],
+            "cancelled": [],
+            "expired": [],
+        }
 
         for job in jobs:
             unified_object_id = job.unified_object_id
 
             try:
-                from litellm.proxy.hooks.responses_id_security import (
-                    ResponsesIDSecurity,
-                )
-
                 # Get the stored response object to extract model information
-                stored_response = job.file_object
+                stored_response = job.file_object or {}
                 model_name = stored_response.get("model", None)
-                
-                # Decrypt the response ID
-                responses_id_security, _, _ = ResponsesIDSecurity()._decrypt_response_id(unified_object_id)
-                
+
                 # Prepare metadata with model information for cost tracking
                 litellm_metadata = {
                     "user_api_key_user_id": job.created_by or "default-user-id",
@@ -133,16 +192,17 @@ class CheckResponsesCost:
                 if model_name:
                     litellm_metadata["model"] = model_name
                     litellm_metadata["model_group"] = model_name  # Use same value for model_group
-                
-                response = await litellm.aget_responses(
-                    response_id=responses_id_security,
-                    litellm_metadata=litellm_metadata,
+
+                response = await self._fetch_response_with_retries(
+                    unified_object_id=unified_object_id,
+                    metadata=litellm_metadata,
                 )
-                
+                if response is None:
+                    continue
+
                 verbose_proxy_logger.debug(
                     f"Response {unified_object_id} status: {response.status}, model: {model_name}"
                 )
-                
             except Exception as e:
                 verbose_proxy_logger.info(
                     f"Skipping job {unified_object_id} due to error: {e}"
@@ -154,21 +214,20 @@ class CheckResponsesCost:
                 verbose_proxy_logger.info(
                     f"Response {unified_object_id} is complete. Cost automatically tracked by aget_responses."
                 )
-                completed_jobs.append(job)
-                
-            elif response.status in ["failed", "cancelled"]:
+                status_to_job_ids["completed"].append(job.id)
+            elif response.status in ["failed", "cancelled", "expired"]:
                 verbose_proxy_logger.info(
-                    f"Response {unified_object_id} has status {response.status}, marking as complete"
+                    f"Response {unified_object_id} has status {response.status}, marking as {response.status}"
                 )
-                completed_jobs.append(job)
+                status_to_job_ids[response.status].append(job.id)
 
         # Mark completed jobs in the database
-        if len(completed_jobs) > 0:
+        for status, job_ids in status_to_job_ids.items():
+            if not job_ids:
+                continue
             await self.prisma_client.db.litellm_managedobjecttable.update_many(
-                where={"id": {"in": [job.id for job in completed_jobs]}},
-                data={"status": "completed"},
+                where={"id": {"in": job_ids}},
+                data={"status": status},
             )
-            verbose_proxy_logger.info(
-                f"Marked {len(completed_jobs)} response jobs as completed"
-            )
+            verbose_proxy_logger.info(f"Marked {len(job_ids)} response jobs as {status}")
 
