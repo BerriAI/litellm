@@ -9,12 +9,11 @@ violations it adds, never for drift that already exists in the base.
 
 Rules not present in the budget are ignored, but today every rule the checker
 emits is gated: LIT001 (mutable collection in any annotation), LIT002
-(mutable-collection construction), LIT006 (cast), and LIT008 (`**kwargs`) carry
-slack-buffered ceilings to ratchet down; LIT003/LIT004 (noqa / ignore without
-codes or reason) and LIT005 (`*-ok` suppression without a reason) are frozen at
-slack 0 so any net-new unexplained suppression trips the gate; and LIT007
-(TypeGuard/TypeIs) is a hard zero. Re-baseline with `--update` to ratchet a
-ceiling down.
+(mutable-collection construction), LIT003/LIT004 (noqa / ignore without codes or
+reason), LIT006 (cast), and LIT008 (`**kwargs`) carry slack-buffered ceilings to
+ratchet down; LIT005 (`*-ok` suppression without a reason) is frozen at slack 0
+so any net-new reasonless suppression trips the gate; and LIT007 (TypeGuard/TypeIs)
+is a hard zero. Re-baseline with `--update` to ratchet a ceiling down.
 """
 
 import argparse
