@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from litellm.caching.caching_handler import (
     LLMCachingHandler,
     CachingHandlerResponse,
+    _is_chat_completion_cached_dict,
     _should_defer_streaming_cache_hit_callbacks,
 )
 from litellm.caching.caching import LiteLLMCacheType
@@ -40,6 +41,7 @@ from litellm.types.utils import (
 from litellm.types.llms.openai import ResponsesAPIResponse
 from datetime import timedelta, datetime
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm._logging import verbose_logger
 import logging
 
@@ -1070,6 +1072,70 @@ def test_convert_cached_streaming_responses_result_to_iterator():
     assert streamed_events[-1].response.output[0].content[0].text == (
         "Streaming cache replay test."
     )
+
+
+def test_is_chat_completion_cached_dict():
+    assert _is_chat_completion_cached_dict(
+        {"id": "chatcmpl-abc", "object": "chat.completion", "choices": []}
+    )
+    assert _is_chat_completion_cached_dict(
+        {"id": "other", "object": "chat.completion.chunk", "choices": []}
+    )
+    assert not _is_chat_completion_cached_dict(
+        {"id": "resp_abc", "object": "response", "output": []}
+    )
+
+
+def test_convert_cached_aresponses_bridge_chat_completion_stream():
+    """
+    openai/responses chat-completions bridge caches ModelResponse JSON on aresponses
+    cache keys; replay must not call ResponsesAPIResponse(**chatcmpl_dict).
+    """
+    caching_handler = LLMCachingHandler(
+        original_function=aresponses, request_kwargs={}, start_time=datetime.now()
+    )
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.aresponses.value,
+        model="gpt-5.4",
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=True,
+        start_time=datetime.now(),
+    )
+    cached_result = {
+        "id": "chatcmpl-bridge-cache-test",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": "gpt-5.4",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi!"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 11,
+            "total_tokens": 18,
+        },
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.aresponses.value,
+        kwargs={
+            "model": "gpt-5.4",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        logging_obj=logging_obj,
+        model="gpt-5.4",
+        args=(),
+    )
+
+    assert isinstance(result, CustomStreamWrapper)
 
 
 def test_convert_cached_streaming_reasoning_result_to_iterator():

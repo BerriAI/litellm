@@ -87,6 +87,16 @@ class CachingHandlerResponse(BaseModel):
 in_memory_cache_obj = InMemoryCache()
 
 
+def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
+    cached_id = cached_result.get("id")
+    if isinstance(cached_id, str) and cached_id.startswith("chatcmpl"):
+        return True
+    obj = cached_result.get("object")
+    if isinstance(obj, str):
+        return obj.startswith("chat.completion")
+    return "choices" in cached_result
+
+
 def _should_defer_streaming_cache_hit_callbacks(*, kwargs: Dict[str, Any]) -> bool:
     """
     When stream=True, do not run success callbacks at cache-hit time.
@@ -384,7 +394,7 @@ class LLMCachingHandler:
                 return cr["model"]
         return None
 
-    def _process_async_embedding_cached_response(
+    def _process_async_embedding_cached_response(  # noqa: PLR0915
         self,
         final_embedding_cached_response: Optional[EmbeddingResponse],
         cached_result: List[Optional[CachedEmbedding]],
@@ -446,7 +456,10 @@ class LLMCachingHandler:
                             index=idx,
                             object="embedding",
                         )
-                    if isinstance(kwargs_input_as_list[idx], str):
+                    cached_prompt_tokens = cr.get("prompt_tokens")
+                    if cached_prompt_tokens is not None:
+                        prompt_tokens += cached_prompt_tokens
+                    elif isinstance(kwargs_input_as_list[idx], str):
                         from litellm.utils import token_counter
 
                         prompt_tokens += token_counter(
@@ -861,27 +874,47 @@ class LLMCachingHandler:
         elif (call_type == "aresponses" or call_type == "responses") and isinstance(
             cached_result, dict
         ):
-            from litellm.responses.streaming_iterator import (
-                CachedResponsesAPIStreamingIterator,
-            )
-
-            response_obj = ResponsesAPIResponse(**cached_result)
-            if (
-                hasattr(response_obj, "_hidden_params")
-                and response_obj._hidden_params is not None
-                and isinstance(response_obj._hidden_params, dict)
-            ):
-                response_obj._hidden_params["cache_hit"] = True
-
-            if kwargs.get("stream", False) is True:
-                cached_result = CachedResponsesAPIStreamingIterator(
-                    response=response_obj,
-                    logging_obj=logging_obj,
-                    request_data=kwargs,
-                    call_type=call_type,
-                )
+            use_chat_completion_cache = _is_chat_completion_cached_dict(cached_result)
+            if use_chat_completion_cache:
+                if kwargs.get("stream", False) is True:
+                    bridge_call_type = (
+                        CallTypes.acompletion.value
+                        if call_type == "aresponses"
+                        else CallTypes.completion.value
+                    )
+                    cached_result = self._convert_cached_stream_response(
+                        cached_result=cached_result,
+                        call_type=bridge_call_type,
+                        logging_obj=logging_obj,
+                        model=model,
+                    )
+                else:
+                    cached_result = convert_to_model_response_object(
+                        response_object=cached_result,
+                        model_response_object=ModelResponse(),
+                    )
             else:
-                cached_result = response_obj
+                from litellm.responses.streaming_iterator import (
+                    CachedResponsesAPIStreamingIterator,
+                )
+
+                response_obj = ResponsesAPIResponse(**cached_result)
+                if (
+                    hasattr(response_obj, "_hidden_params")
+                    and response_obj._hidden_params is not None
+                    and isinstance(response_obj._hidden_params, dict)
+                ):
+                    response_obj._hidden_params["cache_hit"] = True
+
+                if kwargs.get("stream", False) is True:
+                    cached_result = CachedResponsesAPIStreamingIterator(
+                        response=response_obj,
+                        logging_obj=logging_obj,
+                        request_data=kwargs,
+                        call_type=call_type,
+                    )
+                else:
+                    cached_result = response_obj
 
         if (
             hasattr(cached_result, "_hidden_params")

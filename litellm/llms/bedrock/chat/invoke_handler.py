@@ -68,9 +68,9 @@ from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
-    BEDROCK_RESPONSE_STREAM_SHAPE,
     BedrockError,
     ModelResponseIterator,
+    get_bedrock_response_stream_shape,
     get_bedrock_tool_name,
 )
 
@@ -197,7 +197,7 @@ async def make_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: Optional[int] = None,
 ):
     try:
         if client is None:
@@ -294,7 +294,7 @@ def make_sync_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: Optional[int] = None,
 ):
     try:
         if client is None:
@@ -790,7 +790,7 @@ class BedrockLLM(BaseAWSLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
-        stream_chunk_size = optional_params.pop("stream_chunk_size", 1024)
+        stream_chunk_size = optional_params.pop("stream_chunk_size", None)
 
         provider = self.get_bedrock_invoke_provider(model)
         modelId = self.get_bedrock_model_id(
@@ -1203,7 +1203,7 @@ class BedrockLLM(BaseAWSLLM):
         extra_headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
-        stream_chunk_size: int = 1024,
+        stream_chunk_size: Optional[int] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         transformed_request = (
             await litellm.AmazonAnthropicClaudeConfig().async_transform_request(
@@ -1350,7 +1350,7 @@ class BedrockLLM(BaseAWSLLM):
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
-        stream_chunk_size: int = 1024,
+        stream_chunk_size: Optional[int] = None,
     ) -> CustomStreamWrapper:
         # The call is not made here; instead, we prepare the necessary objects for the stream.
 
@@ -1828,7 +1828,8 @@ class AWSEventStreamDecoder:
                     yield self._chunk_parser(chunk_data=_data)
 
     def _parse_message_from_event(self, event) -> Optional[str]:
-        if BEDROCK_RESPONSE_STREAM_SHAPE is None:
+        response_stream_shape = get_bedrock_response_stream_shape()
+        if response_stream_shape is None:
             raise BedrockError(
                 status_code=500,
                 message=(
@@ -1837,9 +1838,7 @@ class AWSEventStreamDecoder:
                 ),
             )
         response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(
-            response_dict, BEDROCK_RESPONSE_STREAM_SHAPE
-        )
+        parsed_response = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             decoded_body = response_dict["body"].decode()

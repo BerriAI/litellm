@@ -133,6 +133,9 @@ class ModelInfo(BaseModel):
     # the model_name that can be used by the team when making LLM calls
     team_public_model_name: Optional[str] = None
 
+    # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
+    blocked: Optional[bool] = None
+
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
@@ -175,6 +178,7 @@ class CredentialLiteLLMParams(BaseModel):
     aws_secret_access_key: Optional[str] = None
     aws_region_name: Optional[str] = None
     aws_bedrock_runtime_endpoint: Optional[str] = None
+    aws_bedrock_project_id: Optional[str] = None
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str] = None
 
@@ -217,6 +221,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     use_in_pass_through: Optional[bool] = False
     use_litellm_proxy: Optional[bool] = False
     use_chat_completions_api: Optional[bool] = None
+    use_xai_oauth: Optional[bool] = Field(
+        default=False,
+        description="Use stored xAI OAuth credentials when no xAI API key is configured.",
+    )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
@@ -323,6 +331,7 @@ class updateDeployment(BaseModel):
     model_name: Optional[str] = None
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
+    blocked: Optional[bool] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -356,6 +365,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     aws_access_key_id: Optional[str]
     aws_secret_access_key: Optional[str]
     aws_region_name: Optional[str]
+    aws_bedrock_project_id: Optional[str]
     ## AWS S3 VECTORS ##
     vector_bucket_name: Optional[str]
     index_name: Optional[str]
@@ -394,6 +404,8 @@ SPECIAL_MODEL_INFO_PARAMS = [
     "output_cost_per_token",
     "input_cost_per_character",
     "output_cost_per_character",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
 ]
 
 

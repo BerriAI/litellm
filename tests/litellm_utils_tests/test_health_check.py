@@ -99,7 +99,7 @@ async def test_azure_img_gen_health_check():
     for attempt in range(max_retries):
         response = await litellm.ahealth_check(
             model_params={
-                "model": "azure/dall-e-3",
+                "model": "azure/gpt-image-1",
                 "api_base": os.getenv("AZURE_AI_API_BASE"),
                 "api_key": os.getenv("AZURE_AI_API_KEY"),
             },
@@ -256,9 +256,9 @@ def test_update_litellm_params_for_health_check():
     from litellm.proxy.health_check import _update_litellm_params_for_health_check
 
     # Test with health_check_model
-    model_info = {"health_check_model": "gpt-3.5-turbo"}
+    model_info = {"health_check_model": "gpt-5-mini"}
     litellm_params = {
-        "model": "gpt-4",
+        "model": "gpt-5.5",
         "api_key": "fake_key",
     }
 
@@ -266,12 +266,12 @@ def test_update_litellm_params_for_health_check():
 
     assert "messages" in updated_params
     assert isinstance(updated_params["messages"], list)
-    assert updated_params["model"] == "gpt-3.5-turbo"
+    assert updated_params["model"] == "gpt-5-mini"
 
     # Test without health_check_model
     model_info = {}
     litellm_params = {
-        "model": "gpt-4",
+        "model": "gpt-5.5",
         "api_key": "fake_key",
     }
 
@@ -279,12 +279,12 @@ def test_update_litellm_params_for_health_check():
 
     assert "messages" in updated_params
     assert isinstance(updated_params["messages"], list)
-    assert updated_params["model"] == "gpt-4"
+    assert updated_params["model"] == "gpt-5.5"
 
     # Test with health_check_voice for audio_speech mode
     model_info = {"mode": "audio_speech", "health_check_voice": "en-US-JennyNeural"}
     litellm_params = {
-        "model": "gpt-4",
+        "model": "gpt-5.5",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
@@ -294,7 +294,7 @@ def test_update_litellm_params_for_health_check():
     # Test without health_check_voice for audio_speech mode
     model_info = {"mode": "audio_speech"}
     litellm_params = {
-        "model": "gpt-4",
+        "model": "gpt-5.5",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
@@ -304,7 +304,7 @@ def test_update_litellm_params_for_health_check():
     # Test with health_check_voice for non-audio_speech mode
     model_info = {"mode": "chat", "health_check_voice": "en-US-JennyNeural"}
     litellm_params = {
-        "model": "gpt-4",
+        "model": "gpt-5.5",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
@@ -339,11 +339,11 @@ def test_update_litellm_params_for_health_check():
 
     # Test that non-Bedrock models are not affected by Bedrock-specific logic
     litellm_params = {
-        "model": "openai/gpt-4",
+        "model": "openai/gpt-5.5",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "openai/gpt-4"  # Should remain unchanged
+    assert updated_params["model"] == "openai/gpt-5.5"  # Should remain unchanged
 
     # Test ALL cross-region inference profile prefixes (CRIS)
     cris_prefixes = ["us.", "eu.", "apac.", "jp.", "au.", "us-gov.", "global."]
@@ -458,14 +458,14 @@ async def test_perform_health_check_filters_by_model_id():
     # Two deployments with same model_name but different ids
     model_list = [
         {
-            "model_name": "gpt-4",
+            "model_name": "gpt-5.5",
             "model_info": {"id": "deployment-id-1"},
-            "litellm_params": {"model": "gpt-4", "api_key": "fake-key-1"},
+            "litellm_params": {"model": "gpt-5.5", "api_key": "fake-key-1"},
         },
         {
-            "model_name": "gpt-4",
+            "model_name": "gpt-5.5",
             "model_info": {"id": "deployment-id-2"},
-            "litellm_params": {"model": "gpt-4", "api_key": "fake-key-2"},
+            "litellm_params": {"model": "gpt-5.5", "api_key": "fake-key-2"},
         },
     ]
 
@@ -474,7 +474,7 @@ async def test_perform_health_check_filters_by_model_id():
     async def mock_perform_health_check(m_list, details=True, **kwargs):
         captured_list.append(m_list)
         return (
-            [{"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}],
+            [{"model": "gpt-5.5", "api_key": m_list[0]["litellm_params"]["api_key"]}],
             [],
             {},
         )
@@ -549,7 +549,7 @@ async def test_perform_health_check_with_health_check_model():
             "litellm_params": {"model": "openai/*", "api_key": "fake-key"},
             "model_info": {
                 "mode": "chat",
-                "health_check_model": "openai/gpt-4o-mini",  # Override model for health check
+                "health_check_model": "openai/gpt-5-mini",  # Override model for health check
             },
         }
     ]
@@ -568,10 +568,10 @@ async def test_perform_health_check_with_health_check_model():
         print("health check calls: ", health_check_calls)
 
         # Verify the health check used the override model
-        assert health_check_calls[0] == "openai/gpt-4o-mini"
+        assert health_check_calls[0] == "openai/gpt-5-mini"
         # Verify the result still shows the original model
         print("healthy endpoints: ", healthy_endpoints)
-        assert healthy_endpoints[0]["model"] == "openai/gpt-4o-mini"
+        assert healthy_endpoints[0]["model"] == "openai/gpt-5-mini"
         assert len(healthy_endpoints) == 1
         assert len(unhealthy_endpoints) == 0
 
@@ -768,7 +768,7 @@ async def test_image_generation_health_check_prompt(monkeypatch):
 
         model_list = [
             {
-                "litellm_params": {"model": "dall-e-3", "api_key": "fake-key"},
+                "litellm_params": {"model": "gpt-image-1", "api_key": "fake-key"},
                 "model_info": {
                     "mode": "image_generation",
                 },

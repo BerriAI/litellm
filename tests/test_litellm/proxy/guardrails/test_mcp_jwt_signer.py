@@ -219,7 +219,7 @@ def test_build_claims_scope_with_tool():
 
 
 def test_build_claims_scope_without_tool():
-    """_build_claims() includes mcp:tools/list when no specific tool is called."""
+    """_build_claims() emits only mcp:tools/list when no specific tool is called."""
     signer = _make_signer()
     user_dict = _make_user_api_key_dict()
     data: Dict[str, Any] = {}
@@ -227,10 +227,11 @@ def test_build_claims_scope_without_tool():
     claims = signer._build_claims(user_dict, data)
 
     scopes = set(claims["scope"].split())
-    assert "mcp:tools/call" in scopes
     assert "mcp:tools/list" in scopes
+    # List-only JWTs must NOT carry mcp:tools/call — least-privilege
+    assert "mcp:tools/call" not in scopes
     # No per-tool call scope when no tool name was given
-    assert not any(s.endswith(":call") and s != "mcp:tools/call" for s in scopes)
+    assert not any(s.endswith(":call") for s in scopes)
 
 
 def test_build_claims_act_fallback_to_litellm_proxy():
@@ -338,7 +339,7 @@ async def test_hook_skips_non_mcp_call_types():
     user_dict = _make_user_api_key_dict()
     data = {"messages": [{"role": "user", "content": "hello"}]}
 
-    for call_type in ("completion", "acompletion", "embedding", "list_mcp_tools"):
+    for call_type in ("completion", "acompletion", "embedding"):
         original_data = {**data}
         result = await signer.async_pre_call_hook(
             user_api_key_dict=user_dict,
@@ -349,6 +350,33 @@ async def test_hook_skips_non_mcp_call_types():
         assert "extra_headers" not in (
             result or {}
         ), f"extra_headers should not be set for {call_type}"
+
+
+@pytest.mark.asyncio
+async def test_hook_signs_list_mcp_tools():
+    """async_pre_call_hook() signs JWT for list_mcp_tools with list scope."""
+    signer = _make_signer(
+        issuer="https://litellm.example.com", audience="mcp", ttl_seconds=300
+    )
+    user_dict = _make_user_api_key_dict(user_id="alice", team_id="backend")
+    data = {"mcp_tool_name": "should_be_cleared"}
+
+    result = await signer.async_pre_call_hook(
+        user_api_key_dict=user_dict,
+        cache=MagicMock(),
+        data=data,
+        call_type="list_mcp_tools",
+    )
+
+    assert isinstance(result, dict)
+    assert "extra_headers" in result
+    assert result["extra_headers"]["Authorization"].startswith("Bearer ")
+    token = result["extra_headers"]["Authorization"].removeprefix("Bearer ")
+    decoded = _decode_unverified(token)
+    scopes = set(decoded["scope"].split())
+    assert "mcp:tools/list" in scopes
+    # List-only JWTs must NOT carry mcp:tools/call — least-privilege
+    assert "mcp:tools/call" not in scopes
 
 
 @pytest.mark.asyncio
@@ -1128,3 +1156,116 @@ async def test_hook_raises_401_when_jwt_verification_fails():
                 )
 
     assert exc_info.value.status_code == 401
+
+
+# --- _build_scope branches: call_mcp_tool with empty tool name, list_mcp_tools ---
+
+
+def test_build_scope_call_type_call_mcp_tool_without_tool_name():
+    """call_mcp_tool with empty tool name emits a generic mcp:tools/call only."""
+    signer = _make_signer()
+    scope = signer._build_scope("", call_type="call_mcp_tool")
+    scopes = set(scope.split())
+    assert scopes == {"mcp:tools/call"}
+
+
+def test_build_scope_call_type_list_mcp_tools_only_list():
+    """list_mcp_tools (no tool) emits only mcp:tools/list, never tools/call."""
+    signer = _make_signer()
+    scope = signer._build_scope("", call_type="list_mcp_tools")
+    scopes = set(scope.split())
+    assert scopes == {"mcp:tools/list"}
+
+
+def test_build_scope_default_is_list_only_when_no_call_type():
+    """No call_type and no tool falls through to tools/list (least-privilege default)."""
+    signer = _make_signer()
+    scope = signer._build_scope("")
+    scopes = set(scope.split())
+    assert "mcp:tools/list" in scopes
+    assert "mcp:tools/call" not in scopes
+
+
+# --- inject_mcp_jwt_headers_for_upstream ---
+
+
+@pytest.mark.asyncio
+async def test_inject_mcp_jwt_returns_unchanged_when_signer_not_configured():
+    """No signer configured -> return a fresh copy of extra_headers untouched."""
+    import litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer as mod
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mod._mcp_jwt_signer_instance = None
+    headers = {"X-Trace-Id": "abc"}
+    user_dict = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+    result = await mod.inject_mcp_jwt_headers_for_upstream(
+        user_api_key_dict=user_dict,
+        extra_headers=headers,
+    )
+    assert result == headers
+    assert result is not headers  # must be a copy
+
+
+@pytest.mark.asyncio
+async def test_inject_mcp_jwt_returns_unchanged_when_user_dict_none():
+    """No user_api_key_dict -> short-circuit without invoking the signer."""
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+        inject_mcp_jwt_headers_for_upstream,
+    )
+
+    _make_signer()  # ensure instance is created
+    result = await inject_mcp_jwt_headers_for_upstream(
+        user_api_key_dict=None,
+        extra_headers={"X-Trace-Id": "abc"},
+    )
+    assert result == {"X-Trace-Id": "abc"}
+
+
+@pytest.mark.asyncio
+async def test_inject_mcp_jwt_signs_for_list_tools_path():
+    """When for_list_tools=True, signer is invoked with list_mcp_tools call_type."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+        inject_mcp_jwt_headers_for_upstream,
+    )
+
+    _make_signer(issuer="https://litellm.example.com", audience="mcp", ttl_seconds=300)
+    user_dict = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+    result = await inject_mcp_jwt_headers_for_upstream(
+        user_api_key_dict=user_dict,
+        extra_headers={"X-Trace": "1"},
+        raw_headers={"Authorization": "Bearer incoming.opaque.token"},
+        for_list_tools=True,
+    )
+    assert result["X-Trace"] == "1"
+    assert result["Authorization"].startswith("Bearer ")
+    token = result["Authorization"].removeprefix("Bearer ")
+    decoded = _decode_unverified(token)
+    scopes = set(decoded["scope"].split())
+    assert scopes == {"mcp:tools/list"}
+
+
+@pytest.mark.asyncio
+async def test_inject_mcp_jwt_signs_for_tool_call_path():
+    """for_list_tools=False with a tool name signs a call_mcp_tool JWT."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+        inject_mcp_jwt_headers_for_upstream,
+    )
+
+    _make_signer(issuer="https://litellm.example.com", audience="mcp", ttl_seconds=300)
+    user_dict = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+    result = await inject_mcp_jwt_headers_for_upstream(
+        user_api_key_dict=user_dict,
+        for_list_tools=False,
+        mcp_tool_name="search_web",
+    )
+    assert result["Authorization"].startswith("Bearer ")
+    token = result["Authorization"].removeprefix("Bearer ")
+    decoded = _decode_unverified(token)
+    scopes = set(decoded["scope"].split())
+    assert "mcp:tools/call" in scopes
+    assert "mcp:tools/search_web:call" in scopes

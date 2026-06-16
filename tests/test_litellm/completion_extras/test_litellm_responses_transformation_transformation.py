@@ -230,3 +230,30 @@ def test_transform_request_drops_user_metadata_with_additional_drop_params():
 
     assert "metadata" not in result
     assert result["litellm_metadata"]["internal_key"] == "secret"
+
+
+def test_translate_responses_chunk_passthrough_chat_completion_chunk():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    chat_chunk = {
+        "id": "chatcmpl-cache-passthrough",
+        "object": "chat.completion.chunk",
+        "created": 1779104834,
+        "model": "gpt-5.4",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "content": "Hi! How can I help?"},
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        chat_chunk
+    )
+
+    assert result.choices[0].delta.content == "Hi! How can I help?"
+    assert result.choices[0].finish_reason is None

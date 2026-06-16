@@ -338,9 +338,9 @@ sequenceDiagram
 
 The CLI provides three authentication commands:
 
-- **`litellm-proxy login`** - Start SSO authentication flow
-- **`litellm-proxy logout`** - Clear stored authentication token
-- **`litellm-proxy whoami`** - Show current authentication status
+- **`lite login`** - Start SSO authentication flow
+- **`lite logout`** - Clear stored authentication token
+- **`lite whoami`** - Show current authentication status
 
 ### Authentication Flow Steps
 
@@ -350,7 +350,7 @@ The CLI provides three authentication commands:
 4. **User Authentication**: User completes SSO authentication in browser
 5. **Callback Processing**: SSO provider redirects back to proxy with state parameter
 6. **User Code Verification**: Browser confirms the verification code shown in the CLI
-7. **Polling**: CLI polls `/sso/cli/poll/{login_id}` with the polling secret header until the JWT is ready
+7. **Polling**: CLI polls `/sso/cli/poll/{login_id}` with the polling secret header until the JWT is ready. When `CLI_SSO_CLAIM_MAP` is configured on the proxy, the poll response may include `attribution_metadata` (allowlisted scalar OIDC claims for client attribution).
 8. **Token Storage**: CLI saves the authentication token to `~/.litellm/token.json`
 
 ### Benefits of This Approach
@@ -382,14 +382,14 @@ Once authenticated, the CLI will automatically use the stored token for all requ
 
 ```bash
 # Login
-litellm-proxy login
+lite login
 
 # Use CLI without specifying API key
-litellm-proxy models list
+lite models list
 
 # Check authentication status
-litellm-proxy whoami
+lite whoami
 
 # Logout
-litellm-proxy logout
+lite logout
 ``` 

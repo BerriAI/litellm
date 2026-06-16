@@ -150,6 +150,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     ) -> dict:
         ## SETUP ##
         stream = optional_params.pop("stream", None)
+        optional_params.pop("stream_chunk_size", None)
         custom_prompt_dict: dict = litellm_params.pop("custom_prompt_dict", None) or {}
         hf_model_name = litellm_params.get("hf_model_name", None)
 

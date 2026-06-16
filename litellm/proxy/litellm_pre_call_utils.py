@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.callback_utils import (
+    decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
@@ -160,6 +161,8 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS = (
     "secret_fields",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
+    "client_disconnected",
+    "error_information",
 )
 
 _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS = frozenset(
@@ -332,8 +335,10 @@ def _get_metadata_variable_name(request: Request) -> str:
 
     For ALL other endpoints we call this "metadata"
     """
-    path = request.url.path
+    # Inline imports — auth_utils/route_checks participate in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
+    path = get_request_route(request)
     if "thread" in path or "assistant" in path:
         return "litellm_metadata"
 
@@ -391,6 +396,32 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
         normalized.get("x-litellm-trace-id")
         or normalized.get("x-litellm-session-id")
         or _extract_generic_session_id_from_headers(normalized)
+    )
+
+
+def is_claude_code_user_agent(user_agent: str) -> bool:
+    """Claude Code identifies itself as ``claude-cli/<version> ...``; the IDE
+    extensions and the Agent SDK run through the same CLI and share that prefix."""
+    return user_agent.startswith("claude-cli/")
+
+
+def should_auto_drop_params_for_claude_code(
+    user_agent: str, data: dict, proxy_config: ProxyConfig
+) -> bool:
+    """drop_params defaults to on for Claude Code so its Anthropic-specific
+    params (e.g. thinking) don't fail requests routed to non-Anthropic
+    providers. An explicit drop_params from the caller or in the operator's
+    ``litellm_settings`` always wins over this default."""
+    if not is_claude_code_user_agent(user_agent):
+        return False
+    if "drop_params" in data:
+        return False
+    config = getattr(proxy_config, "config", None)
+    litellm_settings = (
+        config.get("litellm_settings") if isinstance(config, dict) else None
+    )
+    return not (
+        isinstance(litellm_settings, dict) and "drop_params" in litellm_settings
     )
 
 
@@ -477,7 +508,7 @@ class KeyAndTeamLoggingSettings:
             user_api_key_dict.metadata is not None
             and "logging" in user_api_key_dict.metadata
         ):
-            return user_api_key_dict.metadata["logging"]
+            return decrypt_callback_vars(user_api_key_dict.metadata).get("logging")
         return None
 
     @staticmethod
@@ -486,7 +517,7 @@ class KeyAndTeamLoggingSettings:
             user_api_key_dict.team_metadata is not None
             and "logging" in user_api_key_dict.team_metadata
         ):
-            return user_api_key_dict.team_metadata["logging"]
+            return decrypt_callback_vars(user_api_key_dict.team_metadata).get("logging")
         return None
 
 
@@ -540,7 +571,7 @@ def _get_dynamic_logging_metadata(
         }
         }
         """
-        team_metadata = user_api_key_dict.team_metadata
+        team_metadata = decrypt_callback_vars(user_api_key_dict.team_metadata)
         callback_settings = team_metadata.get("callback_settings", None) or {}
         callback_settings_obj = TeamCallbackMetadata(**callback_settings)
         verbose_proxy_logger.debug(
@@ -1191,6 +1222,36 @@ class LiteLLMProxyRequestSetup:
         return tags
 
     @staticmethod
+    def apply_key_tags_pre_auth(
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """Merge key metadata tags into request_data before _tag_max_budget_check."""
+        key_metadata = user_api_key_dict.metadata
+        if not key_metadata:
+            return
+
+        key_tags = key_metadata.get("tags")
+        if not key_tags or not isinstance(key_tags, list):
+            return
+
+        _metadata_variable_name = get_metadata_variable_name_from_kwargs(request_data)
+        metadata = request_data.get(_metadata_variable_name)
+        if isinstance(metadata, str):
+            parsed = safe_json_loads(metadata)
+            metadata = parsed if isinstance(parsed, dict) else {}
+            request_data[_metadata_variable_name] = metadata
+        elif not isinstance(metadata, dict):
+            metadata = {}
+            request_data[_metadata_variable_name] = metadata
+
+        existing_tags = metadata.get("tags")
+        metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=existing_tags if isinstance(existing_tags, list) else None,
+            tags_to_add=key_tags,
+        )
+
+    @staticmethod
     def apply_client_tag_policy_pre_auth(
         request: Request,
         request_data: dict,
@@ -1510,10 +1571,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # spend_tracking_utils, streaming_iterator) read `body` to audit the
     # request; taking the snapshot here ensures they see cleaned metadata.
     #
-    # Exclude secret_fields (which contains raw_headers with Authorization
-    # tokens) from the snapshot — they must never be persisted in spend logs
-    # or any other audit trail.
-    _body_snapshot = {k: v for k, v in data.items() if k != "secret_fields"}
+    # Exclude:
+    #   - secret_fields: contains raw_headers with Authorization tokens; must
+    #     never be persisted in spend logs or any other audit trail.
+    #   - proxy_server_request: already a key on `data` at this point (set
+    #     earlier in this function); including it would make the snapshot
+    #     self-reference — body.proxy_server_request.body would be the same
+    #     dict as body, producing an infinite traversal loop for any consumer
+    #     that walks the structure.
+    _body_snapshot_exclude = {"secret_fields", "proxy_server_request"}
+    _body_snapshot = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
     data["proxy_server_request"]["body"] = _body_snapshot
 
     # Snapshot the requester-supplied metadata for downstream consumers.
@@ -1651,6 +1718,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
+    # Carry the proxy-receive instant via metadata (like `endpoint`) so the
+    # OTel layer can compute pre-request latency, including on the failure
+    # path after the logging object is popped.
+    data[_metadata_variable_name]["litellm_received_at"] = getattr(
+        request.state, "litellm_received_at", None
+    )
 
     # OTEL Controls / Tracing
     # Add the OTEL Parent Trace before sending it LiteLLM
@@ -1696,6 +1769,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ):
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
+
+    if should_auto_drop_params_for_claude_code(user_agent, data, proxy_config):
+        data["drop_params"] = True
 
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
     # into request metadata for tag-based routing and spend attribution.

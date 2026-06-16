@@ -2838,3 +2838,125 @@ def test_enforce_user_info_access_blocks_cross_user_lookup():
 
     assert exc_info.value.status_code == 403
     assert "key not allowed to access this user's info" in str(exc_info.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for GHSA-wvg4-6222-3q4r: budget self-escalation via
+# /user/update
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ghsa_wvg4_non_admin_cannot_self_escalate_max_budget(mocker):
+    """Non-admin updating their own record must be blocked from modifying
+    max_budget (self-escalation)."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {
+        "user_id": "user-1",
+        "max_budget": 100,
+    }
+    existing_user.user_id = "user-1"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=existing_user
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    user_request = UpdateUserRequest(
+        user_id="user-1",
+        max_budget=999999,
+    )
+    caller = UserAPIKeyAuth(
+        user_id="user-1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_single_user_helper(
+            user_request=user_request, user_api_key_dict=caller
+        )
+    assert exc.value.status_code == 403
+    assert "max_budget" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_ghsa_wvg4_non_admin_cannot_self_escalate_spend(mocker):
+    """Non-admin must not be able to reset their own spend to zero."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {
+        "user_id": "user-1",
+        "spend": 50.0,
+    }
+    existing_user.user_id = "user-1"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=existing_user
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    user_request = UpdateUserRequest(
+        user_id="user-1",
+        spend=0,
+    )
+    caller = UserAPIKeyAuth(
+        user_id="user-1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_single_user_helper(
+            user_request=user_request, user_api_key_dict=caller
+        )
+    assert exc.value.status_code == 403
+    assert "spend" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_ghsa_wvg4_proxy_admin_can_update_user_budget(mocker):
+    """PROXY_ADMIN must still be able to modify another user's budget."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {
+        "user_id": "target-user",
+        "max_budget": 100,
+    }
+    existing_user.user_id = "target-user"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=existing_user
+    )
+    mock_prisma_client.update_data = mocker.AsyncMock(
+        return_value={"user_id": "target-user", "max_budget": 500}
+    )
+    mock_prisma_client.jsonify_object = mocker.MagicMock(side_effect=lambda x: x)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    user_request = UpdateUserRequest(
+        user_id="target-user",
+        max_budget=500,
+    )
+    admin_caller = UserAPIKeyAuth(
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    result = await _update_single_user_helper(
+        user_request=user_request, user_api_key_dict=admin_caller
+    )
+    assert result is not None

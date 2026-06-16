@@ -798,3 +798,56 @@ def test_get_httpx_client_applies_httpx_timeout_object_without_mocking_handler()
         assert handler.client.timeout == t
     finally:
         handler.close()
+
+
+def test_sync_get_forwards_per_request_timeout():
+    """HTTPHandler.get(timeout=...) must apply the timeout to that request,
+    overriding the client default rather than silently ignoring it."""
+    captured = {}
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        captured["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = HTTPHandler()
+    handler.client.close()
+    handler.client = httpx.Client(
+        transport=httpx.MockTransport(mock_handler),
+        timeout=httpx.Timeout(5.0),
+    )
+    try:
+        handler.get("https://example.com/poll", timeout=99.0)
+        assert captured["timeout"] == {
+            "connect": 99.0,
+            "read": 99.0,
+            "write": 99.0,
+            "pool": 99.0,
+        }
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_get_forwards_per_request_timeout():
+    captured = {}
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        captured["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = AsyncHTTPHandler()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(mock_handler),
+        timeout=httpx.Timeout(5.0),
+    )
+    try:
+        await handler.get("https://example.com/poll", timeout=99.0)
+        assert captured["timeout"] == {
+            "connect": 99.0,
+            "read": 99.0,
+            "write": 99.0,
+            "pool": 99.0,
+        }
+    finally:
+        await handler.close()

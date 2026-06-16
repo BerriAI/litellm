@@ -33,7 +33,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
             "endTime": 1234567891.0,
             "completionStartTime": 1234567890.5,
             "response_time": 1.0,
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "model_id": "model-123",
             "api_base": "https://api.openai.com",
             "cache_hit": False,
@@ -57,7 +57,7 @@ async def test_create_posthog_event_payload():
     event_payload = posthog_logger.create_posthog_event_payload(kwargs)
 
     assert event_payload["event"] == "$ai_generation"
-    assert event_payload["properties"]["$ai_model"] == "gpt-3.5-turbo"
+    assert event_payload["properties"]["$ai_model"] == "gpt-5-mini"
     assert event_payload["properties"]["$ai_input_tokens"] == 20
     assert event_payload["properties"]["$ai_output_tokens"] == 10
 
@@ -251,7 +251,7 @@ async def test_custom_metadata_with_no_metadata():
 
     # Should not error and should have standard properties
     assert event_payload["event"] == "$ai_generation"
-    assert event_payload["properties"]["$ai_model"] == "gpt-3.5-turbo"
+    assert event_payload["properties"]["$ai_model"] == "gpt-5-mini"
 
     # Test with empty metadata
     kwargs = {
@@ -262,7 +262,7 @@ async def test_custom_metadata_with_no_metadata():
 
     # Should not error and should have standard properties
     assert event_payload["event"] == "$ai_generation"
-    assert event_payload["properties"]["$ai_model"] == "gpt-3.5-turbo"
+    assert event_payload["properties"]["$ai_model"] == "gpt-5-mini"
 
 
 @pytest.mark.asyncio

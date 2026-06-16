@@ -58,11 +58,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
             medium: "orange",
             low: "yellow",
           } as const;
-          return (
-            <Tag color={colorMap[severity as keyof typeof colorMap]}>
-              {severity.toUpperCase()}
-            </Tag>
-          );
+          return <Tag color={colorMap[severity as keyof typeof colorMap]}>{severity.toUpperCase()}</Tag>;
         }
         return (
           <Select
@@ -85,11 +81,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
       width: 150,
       render: (action: string, record: ContentCategory) => {
         if (readOnly) {
-          return (
-            <Tag color={action === "BLOCK" ? "red" : "blue"}>
-              {action}
-            </Tag>
-          );
+          return <Tag color={action === "BLOCK" ? "red" : "blue"}>{action}</Tag>;
         }
         return (
           <Select
@@ -112,13 +104,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
       key: "actions",
       width: 100,
       render: (_: any, record: ContentCategory) => (
-        <Button
-          type="text"
-          danger
-          size="small"
-          icon={<DeleteOutlined />}
-          onClick={() => onRemove?.(record.id)}
-        >
+        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove?.(record.id)}>
           Delete
         </Button>
       ),
@@ -126,22 +112,10 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
   }
 
   if (categories.length === 0) {
-    return (
-      <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>
-        No categories configured.
-      </div>
-    );
+    return <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>No categories configured.</div>;
   }
 
-  return (
-    <Table
-      dataSource={categories}
-      columns={columns}
-      rowKey="id"
-      pagination={false}
-      size="small"
-    />
-  );
+  return <Table dataSource={categories} columns={columns} rowKey="id" pagination={false} size="small" />;
 };
 
 export default CategoryTable;

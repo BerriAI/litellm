@@ -59,6 +59,51 @@ async def test_get_daily_activity_empty_entity_id_list():
     assert where_conditions["team_id"] == {"in": []}
 
 
+@pytest.mark.asyncio
+async def test_get_daily_activity_order_has_id_tiebreaker():
+    """Regression for #30164.
+
+    ``date`` alone is not a unique sort key for either
+    ``LiteLLM_DailyUserSpend`` or ``LiteLLM_DailyTeamSpend`` -- a busy
+    tenant has many rows per date (one per api_key, model, model_group,
+    provider, endpoint, ...).  Offset pagination over a non-unique sort
+    landed on arbitrary page boundaries between queries, so summing
+    per-page totals across pages produced non-deterministic results
+    (sometimes inflated, sometimes deflated).  The tiebreaker on the
+    UUID primary key pins the row order so a client paging through all
+    results gets the correct total.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=0)
+    mock_table.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_dailyspend = mock_table
+
+    await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-02",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=10,
+    )
+
+    mock_table.find_many.assert_called_once()
+    order = mock_table.find_many.call_args[1]["order"]
+    assert order == [{"date": "desc"}, {"id": "asc"}], (
+        f"order must include the id tiebreaker after date for stable offset "
+        f"pagination (see #30164); got {order!r}"
+    )
+
+
 def test_is_user_agent_tag():
     """Test _is_user_agent_tag function."""
     # Test None and empty string
@@ -709,3 +754,59 @@ class TestBuildAggregatedSqlQuery:
         ]
         assert "model = $4" in sql
         assert "api_key = $5" in sql
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_empty_result_set():
+    """Regression test for the empty-range 500.
+
+    When the date filter matches zero rows, Postgres still emits the
+    grand-total () grouping-set row with every SUM column NULL. The
+    endpoint must return an empty result set with zeroed totals, not
+    crash on None + None.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    mock_rows = [
+        {
+            "date": None,
+            "api_key": None,
+            "model": None,
+            "model_group": None,
+            "custom_llm_provider": None,
+            "mcp_namespaced_tool_name": None,
+            "endpoint": None,
+            "group_level": 127,
+            "spend": None,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "cache_read_input_tokens": None,
+            "cache_creation_input_tokens": None,
+            "api_requests": None,
+            "successful_requests": None,
+            "failed_requests": None,
+        }
+    ]
+    mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-06-16",
+        end_date="2026-06-16",
+        model=None,
+        api_key=None,
+    )
+
+    assert result.results == []
+    assert result.metadata.total_spend == 0.0
+    assert result.metadata.total_prompt_tokens == 0
+    assert result.metadata.total_completion_tokens == 0
+    assert result.metadata.total_tokens == 0
+    assert result.metadata.total_api_requests == 0
+    assert result.metadata.total_successful_requests == 0
+    assert result.metadata.total_failed_requests == 0
+    assert result.metadata.total_cache_read_input_tokens == 0
+    assert result.metadata.total_cache_creation_input_tokens == 0

@@ -45,7 +45,7 @@ async def test_assistants_passthrough_logging():
         "instructions": "You are a personal math tutor. When asked a question, write and run Python code to answer the question.",
         "name": "Math Tutor",
         "tools": [{"type": "code_interpreter"}],
-        "model": "gpt-4o",
+        "model": "gpt-4.1-mini",
     }
     TARGET_METHOD = "POST"
 
