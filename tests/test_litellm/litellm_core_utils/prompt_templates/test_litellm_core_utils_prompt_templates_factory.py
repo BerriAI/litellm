@@ -1827,6 +1827,45 @@ def test_convert_to_anthropic_tool_invoke_server_tool_dropped_without_result():
     assert convert_to_anthropic_tool_invoke(tool_calls) == []
 
 
+def test_convert_to_anthropic_tool_invoke_server_tool_paired_with_result():
+    """
+    When the matching *_tool_result IS available (provider_specific_fields was
+    preserved, e.g. the litellm SDK round-trip), the server_tool_use is emitted
+    immediately followed by its web_search_tool_result — the existing valid-pair
+    behavior is unchanged. See https://github.com/BerriAI/litellm/issues/17737
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_invoke,
+    )
+
+    tool_calls = [
+        {
+            "id": "srvtoolu_01ABC123",
+            "type": "function",
+            "function": {"name": "web_search", "arguments": '{"query": "x"}'},
+        }
+    ]
+    web_search_results = [
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01ABC123",
+            "content": [
+                {"type": "web_search_result", "url": "https://example.com", "title": "t"}
+            ],
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls, web_search_results=web_search_results
+    )
+
+    assert len(result) == 2
+    assert result[0]["type"] == "server_tool_use"
+    assert result[0]["id"] == "srvtoolu_01ABC123"
+    assert result[1]["type"] == "web_search_tool_result"
+    assert result[1]["tool_use_id"] == "srvtoolu_01ABC123"
+
+
 def test_anthropic_messages_pt_drops_orphan_server_tool_from_generic_client():
     """
     A generic OpenAI client (e.g. Open WebUI) replays a prior web-search turn as
