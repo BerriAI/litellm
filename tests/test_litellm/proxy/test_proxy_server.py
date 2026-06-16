@@ -1928,23 +1928,6 @@ async def test_delete_deployment_type_mismatch():
     # Create mock ProxyConfig instance
     pc = ProxyConfig()
 
-    pc.get_config = MagicMock(
-        return_value={
-            "model_list": [
-                {
-                    "model_name": "openai-gpt-4o",
-                    "litellm_params": {"model": "gpt-4o"},
-                    "model_info": {"id": 12345678},
-                },
-                {
-                    "model_name": "openai-gpt-4o",
-                    "litellm_params": {"model": "gpt-4o"},
-                    "model_info": {"id": 12345679},
-                },
-            ]
-        }
-    )
-
     # Mock llm_router with string IDs (this is the source of the type mismatch)
     mock_llm_router = MagicMock()
     mock_llm_router.get_model_ids.return_value = [
@@ -1963,11 +1946,23 @@ async def test_delete_deployment_type_mismatch():
 
     mock_llm_router.delete_deployment = MagicMock(side_effect=mock_delete_deployment)
 
-    # Mock get_config to return empty config (no config models)
     async def mock_get_config(config_file_path):
-        return {}
+        return {
+            "model_list": [
+                {
+                    "model_name": "openai-gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": 12345678},
+                },
+                {
+                    "model_name": "openai-gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": 12345679},
+                },
+            ]
+        }
 
-    pc.get_config = MagicMock(side_effect=mock_get_config)
+    pc.get_config = AsyncMock(side_effect=mock_get_config)
 
     # Patch the global llm_router
     with (
@@ -1977,20 +1972,29 @@ async def test_delete_deployment_type_mismatch():
         # Call the function under test
         deleted_count = await pc._delete_deployment(db_models=[])
 
-        # Assertions: Models 12345678 and 12345679 should NOT be deleted
-        # because they exist in combined_id_list (as integers) even though
-        # router has them as strings
+    # The two SHA-hash models have no corresponding entry in combined_id_list
+    # and must be evicted.
+    assert (
+        deleted_count == 2
+    ), f"Expected 2 deletions (SHA-hash models), got {deleted_count}"
+    assert (
+        "a96e12e76b36a57cfae57a41288eb41567629cac89b4828c6f7074afc3534695"
+        in deleted_ids
+    )
+    assert (
+        "a40186dd0fdb9b7282380277d7f57044d29de95bfbfcd7f4322b3493702d5cd3"
+        in deleted_ids
+    )
 
-        # The function should delete the other 2 models that are not in combined_id_list
-        assert deleted_count == 0, f"Expected 0 deletions, got {deleted_count}"
-
-        # Verify that 12345678 and 12345679 were NOT deleted
-        assert (
-            "12345678" not in deleted_ids
-        ), f"Model 12345678 should NOT be deleted. Deleted IDs: {deleted_ids}"
-        assert (
-            "12345679" not in deleted_ids
-        ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
+    # Models 12345678 and 12345679 exist in the config (as integers); str()
+    # conversion in _delete_deployment makes them match the router's string IDs,
+    # so they must NOT be evicted.
+    assert (
+        "12345678" not in deleted_ids
+    ), f"Model 12345678 should NOT be deleted. Deleted IDs: {deleted_ids}"
+    assert (
+        "12345679" not in deleted_ids
+    ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
 
 
 @pytest.mark.asyncio
@@ -2317,6 +2321,36 @@ async def test_custom_ui_sso_sign_in_handler_config_loading():
         import os
 
         os.unlink(config_file_path)
+
+
+@pytest.mark.asyncio
+async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeypatch):
+    """
+    max_budget configured as os.environ/MAX_BUDGET resolves to a string;
+    load_config must coerce it to float so the startup check
+    `litellm.max_budget > 0` doesn't raise TypeError.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("MAX_BUDGET", "10")
+    test_config = {
+        "model_list": [],
+        "litellm_settings": {"max_budget": "os.environ/MAX_BUDGET"},
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original_max_budget = litellm.max_budget
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert isinstance(litellm.max_budget, float)
+        assert litellm.max_budget == 10.0
+        assert litellm.max_budget > 0
+    finally:
+        litellm.max_budget = original_max_budget
 
 
 @pytest.mark.asyncio
@@ -3810,14 +3844,15 @@ async def test_model_info_v1_oci_secrets_not_leaked():
 
     # Mock the llm_router to return our test data
     mock_router = MagicMock()
+    mock_router.model_list = [mock_model_data]
     mock_router.get_model_names.return_value = ["oci-grok-test"]
     mock_router.get_model_access_groups.return_value = {}
-    mock_router.get_model_list.return_value = [mock_model_data]
 
     # Mock global variables
     with (
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
         patch("litellm.proxy.proxy_server.llm_model_list", [mock_model_data]),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {"infer_model_from_keys": False},
@@ -4292,6 +4327,111 @@ async def test_init_sso_settings_in_db_empty_settings():
 
         # Verify empty dictionary
         assert uppercased_settings == {}
+
+
+@pytest.mark.asyncio
+async def test_init_sso_settings_in_db_retries_on_transport_error():
+    """`_init_sso_settings_in_db` self-heals across one ClientNotConnectedError
+    via call_with_db_reconnect_retry — mirrors the auth-path behavior so
+    startup/reload bursts don't spam the log."""
+    import prisma
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_sso_config = MagicMock()
+    mock_sso_config.sso_settings = {"GOOGLE_CLIENT_ID": "xxx"}
+
+    invocations: list = []
+
+    async def _flaky_find_unique(**kwargs):
+        invocations.append(None)
+        if len(invocations) == 1:
+            raise prisma.errors.ClientNotConnectedError()
+        return mock_sso_config
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        side_effect=_flaky_find_unique
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    with patch.object(
+        proxy_config, "_decrypt_and_set_db_env_variables"
+    ) as mock_decrypt:
+        await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+
+    assert len(invocations) == 2
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
+    assert reconnect_kwargs["reason"] == "init_sso_settings_in_db_lookup_failure"
+    mock_decrypt.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_init_sso_settings_in_db_propagates_when_reconnect_fails():
+    """When reconnect returns False (cooldown / lock contention), the original
+    ClientNotConnectedError is caught by the function's `except Exception` and
+    logged — no retry storm, no crash."""
+    import prisma
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        side_effect=prisma.errors.ClientNotConnectedError()
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    # Should NOT raise — the function's own try/except swallows the propagated error.
+    await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_init_hashicorp_vault_config_override_retries_on_transport_error():
+    """`_init_hashicorp_vault_config_override` self-heals across one
+    ClientNotConnectedError via call_with_db_reconnect_retry."""
+    import prisma
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._last_hashicorp_vault_config = None
+
+    invocations: list = []
+
+    async def _flaky_find_unique(**kwargs):
+        invocations.append(None)
+        if len(invocations) == 1:
+            raise prisma.errors.ClientNotConnectedError()
+        return None  # No config in DB → function returns early after retry.
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_configoverrides.find_unique = AsyncMock(
+        side_effect=_flaky_find_unique
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    await proxy_config._init_hashicorp_vault_config_override(
+        prisma_client=mock_prisma_client
+    )
+
+    assert len(invocations) == 2
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
+    assert (
+        reconnect_kwargs["reason"]
+        == "init_hashicorp_vault_config_override_lookup_failure"
+    )
 
 
 def test_update_config_fields_uppercases_env_vars(monkeypatch):
@@ -6474,7 +6614,12 @@ async def test_increment_spend_counters_finalizes_none_cost_reservation():
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_invalidates_bad_reserved_counter_without_failing():
+async def test_increment_spend_counters_falls_back_to_direct_increment_on_bad_reserved_counter():
+    """When the reservation reconcile fails, the reserved counters are
+    invalidated and the actual response cost must still be written via the
+    direct increment fallback. Leaving the counter at ``None`` lets the next
+    request reseed a stale value from the DB and silently stops budget gating,
+    which is the bug this fix addresses."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import increment_spend_counters
 
@@ -6515,7 +6660,7 @@ async def test_increment_spend_counters_invalidates_bad_reserved_counter_without
             counter_cache.in_memory_cache.get_cache(
                 key="spend:key:key-bad-reserved-counter"
             )
-            is None
+            == 0.25
         )
     finally:
         ps.spend_counter_cache = orig_counter
@@ -7796,3 +7941,106 @@ class TestSortModelsByDisplayName:
             all_models=models, sort_by="model_name", sort_order="asc"
         )
         assert [m["model_name"] for m in sorted_models] == ["alpha", "beta"]
+
+
+class TestDeleteDeploymentSync:
+    @pytest.mark.asyncio
+    async def test_delete_deployment_evicts_model_when_all_db_models_deleted(self):
+        """
+        Regression test for #28443.
+        When all DB models are deleted, _delete_deployment must evict them from
+        the router. The old code returned 0 early when db_models was empty.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_router = MagicMock()
+        mock_router.get_model_ids.return_value = ["model-id-to-evict"]
+        mock_router.delete_deployment.return_value = MagicMock()
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            with patch.object(
+                proxy_config, "get_config", AsyncMock(return_value={"model_list": []})
+            ):
+                count = await proxy_config._delete_deployment(db_models=[])
+
+        mock_router.delete_deployment.assert_called_once_with(id="model-id-to-evict")
+        assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_update_llm_router_skips_update_on_db_fetch_failure(self):
+        """
+        When _get_models_from_db returns None (transient DB failure), _update_llm_router
+        must return early without touching the router.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_router = MagicMock()
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            with patch.object(proxy_config, "get_config", AsyncMock(return_value={})):
+                await proxy_config._update_llm_router(
+                    new_models=None, proxy_logging_obj=MagicMock()
+                )
+
+        mock_router.delete_deployment.assert_not_called()
+        mock_router.upsert_deployment.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_models_from_db_returns_none_on_exception(self):
+        """
+        _get_models_from_db must return None (not []) when the DB raises an exception,
+        so callers can distinguish a transient failure from a genuinely empty DB.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            side_effect=Exception("DB connection lost")
+        )
+
+        result = await proxy_config._get_models_from_db(prisma_client=mock_prisma)
+
+        assert (
+            result is None
+        ), f"Expected None on DB failure to signal fetch error, got {result!r}"
+
+
+def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
+    """Follow-up to #30223: the flag must be discoverable via /config/list,
+    which requires both the ConfigGeneralSettings field and the allowed_args
+    entry in get_config_list; missing either silently hides it from the UI."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert "cancel_on_disconnect" in fields
+        assert fields["cancel_on_disconnect"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()

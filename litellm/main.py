@@ -86,6 +86,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_for_health_check,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -1407,11 +1408,19 @@ def completion(  # type: ignore # noqa: PLR0915
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
+        _supplemental_provider_params = {
+            k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs
+        }
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             api_key=api_key,
+            litellm_params=(
+                GenericLiteLLMParams(**_supplemental_provider_params)
+                if _supplemental_provider_params
+                else None
+            ),
         )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
@@ -1638,6 +1647,8 @@ def completion(  # type: ignore # noqa: PLR0915
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
+            use_xai_oauth=kwargs.get("use_xai_oauth", False),
+            aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
@@ -2134,9 +2145,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             headers = headers or litellm.headers
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
-
             ## LOAD CONFIG - if set
             config = litellm.OpenAITextCompletionConfig.get_config()
             for k, v in config.items():
@@ -2162,6 +2170,7 @@ def completion(  # type: ignore # noqa: PLR0915
             _response = openai_text_completions.completion(
                 model=model,
                 messages=messages,
+                headers=headers,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 api_key=api_key,
@@ -7761,6 +7770,9 @@ def stream_chunk_builder(  # noqa: PLR0915
                     "cost",
                     logging_obj._response_cost_calculator(result=response),
                 )
+            processor.apply_provider_assembled_streaming_metadata(
+                response, chunks, logging_obj
+            )
             return response
 
         tool_call_chunks = [
@@ -7940,6 +7952,9 @@ def stream_chunk_builder(  # noqa: PLR0915
                 usage, "cost", logging_obj._response_cost_calculator(result=response)
             )
 
+        processor.apply_provider_assembled_streaming_metadata(
+            response, chunks, logging_obj
+        )
         return response
     except Exception as e:
         verbose_logger.exception(

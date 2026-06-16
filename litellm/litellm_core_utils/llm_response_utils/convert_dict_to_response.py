@@ -633,11 +633,6 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         thinking_blocks = choice["message"]["thinking_blocks"]
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
-                    if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
-
                     message = Message(
                         content=content,
                         role=choice["message"]["role"] or "assistant",

@@ -5,7 +5,8 @@
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
-	install-dev install-proxy-dev install-test-deps \
+	lint-strict-budget lint-strict-budget-update \
+	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
 # Default target
@@ -17,12 +18,15 @@ help:
 	@echo "  make install-proxy-dev-ci - Install proxy dev dependencies (CI-compatible)"
 	@echo "  make install-test-deps  - Install the full local test environment"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
+	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
 	@echo "  make format             - Apply Black code formatting"
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
 	@echo "  make lint               - Run all linting (Ruff, MyPy, Black check, circular imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-mypy          - Run MyPy type checking only"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
+	@echo "  make lint-strict-budget - Gate the codebase total of each strict ruff rule against its ceiling"
+	@echo "  make lint-strict-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -67,6 +71,11 @@ install-test-deps: install-proxy-dev
 
 install-helm-unittest:
 	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"
+
+# Install git hooks that enforce Conventional Commits and Conventional Branches.
+# Opt-in: not chained into install-dev.
+install-hooks:
+	./scripts/install_git_hooks.sh
 
 # Formatting
 format: install-dev
@@ -116,6 +125,12 @@ lint-mypy: install-dev
 
 lint-black: format-check
 
+lint-strict-budget: install-dev
+	$(UV_RUN) python scripts/ruff_strict_gate.py
+
+lint-strict-budget-update: install-dev
+	$(UV_RUN) python scripts/ruff_strict_gate.py --update
+
 check-circular-imports: install-dev
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
 
@@ -123,7 +138,7 @@ check-import-safety: install-dev
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
 # Combined linting (matches test-linting.yml workflow)
-lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety
+lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety lint-strict-budget
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed lint-mypy check-circular-imports check-import-safety

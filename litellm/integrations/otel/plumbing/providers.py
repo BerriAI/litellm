@@ -1,6 +1,6 @@
 """Provider / exporter factory + the Baggage span processor."""
 
-from typing import Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from opentelemetry import baggage
 from opentelemetry.context import Context
@@ -17,12 +17,17 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 from opentelemetry.trace import Span, SpanKind, Tracer
 
+from litellm._version import version as litellm_version
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.semconv import LiteLLM
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 
 # Re-exported so ``providers.parse_headers`` remains a stable entry point.
 from litellm.integrations.otel.model.utils import parse_headers as parse_headers
+
+if TYPE_CHECKING:
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import MetricReader
 
 _SPAN_KIND_BY_ROLE_KIND: dict[LiteLLMSpanKind, SpanKind] = {
     LiteLLMSpanKind.SERVER: SpanKind.SERVER,
@@ -156,6 +161,91 @@ def build_span_exporter(config: OpenTelemetryV2Config) -> SpanExporter:
     )
 
 
+def _otlp_metrics_endpoint(endpoint: str | None) -> str | None:
+    """Point an OTLP/HTTP base endpoint at the ``/v1/metrics`` signal path.
+
+    The OTLP/HTTP exporter only appends ``/v1/metrics`` when it reads
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` itself; an explicitly passed endpoint is used
+    verbatim, so a base URL would POST to the root. Mirror ``_otlp_traces_endpoint``
+    for the metrics signal (rewriting a sibling signal path when present).
+    """
+    if not endpoint:
+        return endpoint
+    endpoint = endpoint.rstrip("/")
+    if endpoint.endswith("/v1/metrics"):
+        return endpoint
+    for other_signal in ("/v1/traces", "/v1/logs"):
+        if endpoint.endswith(other_signal):
+            return endpoint[: -len(other_signal)] + "/v1/metrics"
+    return endpoint + "/v1/metrics"
+
+
+def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
+    """Build a metric reader mirroring v1's exporter selection.
+
+    ``console`` (and any unrecognized kind) exports to the console; ``otlp_http``
+    and ``otlp_grpc`` export over OTLP with the configured endpoint/headers. The
+    reader exports on a 5s period, matching v1.
+    """
+    from opentelemetry.sdk.metrics.export import (
+        ConsoleMetricExporter,
+        PeriodicExportingMetricReader,
+    )
+
+    kind = (config.exporter or "console").lower()
+    if kind in ("otlp_http", "http", "http/protobuf", "http/json"):
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+            OTLPMetricExporter as HTTPMetricExporter,
+        )
+        from opentelemetry.sdk.metrics import Histogram
+        from opentelemetry.sdk.metrics.export import AggregationTemporality
+
+        exporter: Any = HTTPMetricExporter(
+            endpoint=_otlp_metrics_endpoint(config.endpoint),
+            headers=parse_headers(config.headers),
+            preferred_temporality={Histogram: AggregationTemporality.DELTA},
+        )
+    elif kind in ("otlp_grpc", "grpc"):
+        from opentelemetry.sdk.metrics import Histogram
+        from opentelemetry.sdk.metrics.export import AggregationTemporality
+
+        try:
+            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+                OTLPMetricExporter as GRPCMetricExporter,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "OpenTelemetry OTLP gRPC metric exporter is not available. Install "
+                "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
+            ) from exc
+
+        exporter = GRPCMetricExporter(
+            endpoint=config.endpoint,
+            headers=parse_headers(config.headers),
+            preferred_temporality={Histogram: AggregationTemporality.DELTA},
+        )
+    else:
+        exporter = ConsoleMetricExporter()
+
+    return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
+
+
+def build_meter_provider(
+    config: OpenTelemetryV2Config,
+    metric_reader: "MetricReader | None" = None,
+) -> "MeterProvider":
+    """Build the :class:`MeterProvider` for GenAI metrics.
+
+    ``metric_reader`` is an explicit override (tests inject an
+    ``InMemoryMetricReader``); otherwise the reader is selected from the config's
+    exporter kind via :func:`build_metric_reader`.
+    """
+    from opentelemetry.sdk.metrics import MeterProvider
+
+    reader = metric_reader if metric_reader is not None else build_metric_reader(config)
+    return MeterProvider(metric_readers=[reader], resource=build_resource(config))
+
+
 def build_resource(config: OpenTelemetryV2Config) -> Resource:
     attributes: dict[str, str] = {"service.name": config.service_name}
     if config.deployment_environment:
@@ -207,7 +297,10 @@ def build_tracer_provider(
 
 
 def get_tracer(provider: TracerProvider, name: str = "litellm") -> Tracer:
-    return provider.get_tracer(name)
+    # Stamp the instrumentation scope with the LiteLLM package version so every
+    # emitted span carries a deterministic ``scope.version`` (the standard OTel
+    # location for the emitting library's version) for downstream consumers.
+    return provider.get_tracer(name, litellm_version)
 
 
 def in_memory_provider(

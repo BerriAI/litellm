@@ -3182,6 +3182,310 @@ def test_build_decode_kwargs_no_warning_when_scoped(
     assert matching == []
 
 
+# ---------------------------------------------------------------------------
+# Defer to single-team DB fallback (PR #26418) when JWT claims are present
+# but do not resolve to a LiteLLM team.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_unresolved_claim_returns_none():
+    """With `team_claim_fallback=True`: team_id claim is present in the JWT
+    but the team is missing in the DB — return (None, None) so the
+    auth_builder single-team fallback can run, instead of raising and
+    failing auth."""
+    from fastapi import HTTPException
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        team_id_jwt_field="team_id",
+        team_claim_fallback=True,
+    )
+    token = {"sub": "user-1", "team_id": "claim-team-not-in-db"}
+
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_team_object",
+        new_callable=AsyncMock,
+    ) as mock_get_team:
+        mock_get_team.side_effect = HTTPException(status_code=404, detail="missing")
+
+        team_id, team_object = await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=token,
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert team_id is None
+    assert team_object is None
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_unresolved_group_claim_returns_none(
+    monkeypatch,
+):
+    """With `team_claim_fallback=True`: group claim resolves to team_ids that
+    don't exist in the DB — return (None, None) instead of raising 403, so
+    the single-team fallback can run."""
+    import sys
+    import types
+
+    from fastapi import HTTPException
+
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}}
+        ]
+    )
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = router
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    async def raise_404(*_args, **_kwargs):
+        raise HTTPException(status_code=404, detail="missing")
+
+    monkeypatch.setattr("litellm.proxy.auth.handle_jwt.get_team_object", raise_404)
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_claim_fallback=True)
+
+    team_id, team_object = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"idp-group-a", "idp-group-b"},
+        requested_model="gpt-4o-mini",
+        route="/chat/completions",
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=None,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+
+    assert team_id is None
+    assert team_object is None
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_non_http_exception_still_propagates():
+    """Regression guard: only the 404 HTTPException raised by
+    `get_team_object` ("team doesn't exist in db") is softened. Other
+    errors — e.g. "No DB Connected" — must still propagate so operator-side
+    problems are loud."""
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_jwt_field="team_id")
+    token = {"sub": "user-1", "team_id": "some-claim-team"}
+
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_team_object",
+        new_callable=AsyncMock,
+    ) as mock_get_team:
+        mock_get_team.side_effect = RuntimeError("simulated infrastructure error")
+
+        with pytest.raises(RuntimeError, match="simulated infrastructure error"):
+            await JWTAuthManager.find_and_validate_specific_team_id(
+                jwt_handler=jwt_handler,
+                jwt_valid_token=token,
+                prisma_client=None,
+                user_api_key_cache=None,
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_non_404_http_exception_propagates():
+    """Regression guard: only 404 HTTPException is softened. If
+    `get_team_object` is ever updated to raise a different HTTP status code
+    (e.g. 403 for a blocked team), that error must still propagate rather
+    than silently fall through to the single-team DB fallback."""
+    from fastapi import HTTPException
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_jwt_field="team_id")
+    token = {"sub": "user-1", "team_id": "some-claim-team"}
+
+    for status_code in (400, 403, 500):
+        with patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team:
+            mock_get_team.side_effect = HTTPException(
+                status_code=status_code, detail="non-404 failure"
+            )
+
+            with pytest.raises(HTTPException) as exc_info:
+                await JWTAuthManager.find_and_validate_specific_team_id(
+                    jwt_handler=jwt_handler,
+                    jwt_valid_token=token,
+                    prisma_client=None,
+                    user_api_key_cache=None,
+                    parent_otel_span=None,
+                    proxy_logging_obj=None,
+                )
+            assert exc_info.value.status_code == status_code
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_enforce_team_based_access_still_raises():
+    """Regression guard: when no group claims are present and
+    `enforce_team_based_model_access` is on, the original 403 still fires —
+    the new soft-fail only applies to the unresolved-claim path inside the
+    loop, not to the no-team-claims-at-all path at the top."""
+    from fastapi import HTTPException
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(enforce_team_based_model_access=True)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await JWTAuthManager.find_team_with_model_access(
+            team_ids=set(),
+            requested_model="gpt-4o-mini",
+            route="/chat/completions",
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "enforce_team_based_model_access" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_resolved_team_without_model_still_raises_403(
+    monkeypatch,
+):
+    """Regression guard: when the JWT group claim DOES resolve to a real
+    LiteLLM team but that team does not grant the requested model, keep the
+    original 403. Only the unresolved-claim case is softened."""
+    import sys
+    import types
+
+    from fastapi import HTTPException
+
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            },
+        ]
+    )
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = router
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    team = LiteLLM_TeamTable(team_id="real-team", models=["gpt-3.5-turbo"])
+
+    async def mock_get_team_object(*_args, **_kwargs):
+        return team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await JWTAuthManager.find_team_with_model_access(
+            team_ids={"real-team"},
+            requested_model="gpt-4o-mini",
+            route="/chat/completions",
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "No team has access to the requested model" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_unresolved_claim_default_raises():
+    """Default `team_claim_fallback=False`: unresolved team_id claim must
+    still raise — preserves the strict claim-based authorization boundary
+    when the operator has not opted in to the fallback."""
+    from fastapi import HTTPException
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_jwt_field="team_id")
+    token = {"sub": "user-1", "team_id": "claim-team-not-in-db"}
+
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_team_object",
+        new_callable=AsyncMock,
+    ) as mock_get_team:
+        mock_get_team.side_effect = HTTPException(status_code=404, detail="missing")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await JWTAuthManager.find_and_validate_specific_team_id(
+                jwt_handler=jwt_handler,
+                jwt_valid_token=token,
+                prisma_client=None,
+                user_api_key_cache=None,
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+            )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_unresolved_group_claim_default_raises(
+    monkeypatch,
+):
+    """Default `team_claim_fallback=False`: group claims that don't resolve
+    to any LiteLLM team must still raise 403 — preserves the strict
+    claim-based authorization boundary."""
+    import sys
+    import types
+
+    from fastapi import HTTPException
+
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}}
+        ]
+    )
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = router
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    async def raise_404(*_args, **_kwargs):
+        raise HTTPException(status_code=404, detail="missing")
+
+    monkeypatch.setattr("litellm.proxy.auth.handle_jwt.get_team_object", raise_404)
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await JWTAuthManager.find_team_with_model_access(
+            team_ids={"idp-group-a", "idp-group-b"},
+            requested_model="gpt-4o-mini",
+            route="/chat/completions",
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
 # GH #26789: JWT claim user_id must rebind to legacy DB row after fuzzy match.
 
 
