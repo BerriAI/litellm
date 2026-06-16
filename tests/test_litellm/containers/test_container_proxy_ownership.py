@@ -1222,3 +1222,21 @@ async def test_other_team_cannot_access_team_visible_container(monkeypatch):
             custom_llm_provider="openai",
         )
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_access_check_reads_owner_and_team_in_one_query(monkeypatch):
+    """created_by and team_id live on one row, so a cold-cache access check
+    must issue a single query, not one per field. Guards against the owner and
+    team lookups drifting back into two independent (and separately evictable)
+    DB reads."""
+    table = _prisma(monkeypatch, find_first=_row("alice", "team-1", "cntr_one"))
+    service_account = UserAPIKeyAuth(team_id="team-1")
+
+    await ownership.assert_user_can_access_container(
+        container_id="cntr_one",
+        user_api_key_dict=service_account,
+        custom_llm_provider="openai",
+    )
+
+    assert table.find_first.await_count == 1

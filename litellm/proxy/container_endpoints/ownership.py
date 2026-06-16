@@ -279,9 +279,12 @@ async def record_container_owner(
         model_object_id, effective_team_id or _NEGATIVE_TEAM_SENTINEL
     )
     # Drop the caller's own list-cache entry so the just-created container
-    # shows up on their next ``GET /v1/containers``. Other callers with
-    # disjoint scope tuples have their own entries; intersecting-scope
-    # tuples self-correct on the 60s TTL.
+    # shows up on their next ``GET /v1/containers``. Teammates who can also see
+    # a team-visible container hold their own (disjoint) scope-tuple entries;
+    # those are not eagerly invalidated, so a teammate's list view can lag by up
+    # to the 60s TTL. This is a list-view freshness tradeoff only — the access
+    # check reads the per-container owner/team caches directly and is never
+    # stale in the same way.
     caller_scopes = get_resource_owner_scopes(user_api_key_dict)
     if caller_scopes:
         _ALLOWED_CONTAINER_IDS_CACHE.delete_cache(
@@ -290,22 +293,30 @@ async def record_container_owner(
     return response
 
 
-async def _get_container_owner(
+async def _get_container_owner_and_team(
     original_container_id: str, custom_llm_provider: str
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return ``(created_by, team_id)`` for a container in a single DB read.
+
+    Both values live on the same row, so the access check fetches them together
+    rather than calling two helpers and relying on the second being a cache hit
+    off the first. An independent eviction of either cache entry would otherwise
+    cost a second, uncorrelated query; here a miss on either triggers exactly
+    one refetch that repopulates both (plus the stored-id cache)."""
     model_object_id = _container_model_object_id(
         original_container_id, custom_llm_provider
     )
 
-    cached = _CONTAINER_OWNER_CACHE.get_cache(model_object_id)
-    if cached == _NEGATIVE_OWNER_SENTINEL:
-        return None
-    if cached is not None:
-        return cached
+    owner_cached = _CONTAINER_OWNER_CACHE.get_cache(model_object_id)
+    team_cached = _CONTAINER_TEAM_CACHE.get_cache(model_object_id)
+    if owner_cached is not None and team_cached is not None:
+        owner = None if owner_cached == _NEGATIVE_OWNER_SENTINEL else owner_cached
+        team = None if team_cached == _NEGATIVE_TEAM_SENTINEL else team_cached
+        return owner, team
 
     prisma_client = await _get_prisma_client()
     if prisma_client is None:
-        return None
+        return None, None
 
     row = await ManagedObjectRepository(prisma_client).table.find_first(
         where={
@@ -314,10 +325,15 @@ async def _get_container_owner(
         }
     )
     owner = getattr(row, "created_by", None) if row is not None else None
+    team_id = getattr(row, "team_id", None) if row is not None else None
+    stored_id = getattr(row, "unified_object_id", None) if row is not None else None
     _CONTAINER_OWNER_CACHE.set_cache(
         model_object_id, owner if owner is not None else _NEGATIVE_OWNER_SENTINEL
     )
-    stored_id = getattr(row, "unified_object_id", None) if row is not None else None
+    _CONTAINER_TEAM_CACHE.set_cache(
+        model_object_id,
+        team_id if isinstance(team_id, str) and team_id else _NEGATIVE_TEAM_SENTINEL,
+    )
     _CONTAINER_STORED_ID_CACHE.set_cache(
         model_object_id,
         (
@@ -326,10 +342,14 @@ async def _get_container_owner(
             else _NEGATIVE_STORED_ID_SENTINEL
         ),
     )
-    team_id = getattr(row, "team_id", None) if row is not None else None
-    _CONTAINER_TEAM_CACHE.set_cache(
-        model_object_id,
-        team_id if isinstance(team_id, str) and team_id else _NEGATIVE_TEAM_SENTINEL,
+    return owner, (team_id if isinstance(team_id, str) and team_id else None)
+
+
+async def _get_container_owner(
+    original_container_id: str, custom_llm_provider: str
+) -> Optional[str]:
+    owner, _ = await _get_container_owner_and_team(
+        original_container_id, custom_llm_provider
     )
     return owner
 
@@ -376,40 +396,6 @@ async def _get_stored_container_id(
     return stored_id if isinstance(stored_id, str) and stored_id else None
 
 
-async def _get_container_team_id(
-    original_container_id: str, custom_llm_provider: str
-) -> Optional[str]:
-    """Return the team a container is shared with, or ``None`` if it is
-    private to its creator. ``_get_container_owner`` populates this cache from
-    the same row, so calling it right after an owner lookup is a cache hit."""
-    model_object_id = _container_model_object_id(
-        original_container_id, custom_llm_provider
-    )
-
-    cached = _CONTAINER_TEAM_CACHE.get_cache(model_object_id)
-    if cached == _NEGATIVE_TEAM_SENTINEL:
-        return None
-    if isinstance(cached, str) and cached:
-        return cached
-
-    prisma_client = await _get_prisma_client()
-    if prisma_client is None:
-        return None
-
-    row = await ManagedObjectRepository(prisma_client).table.find_first(
-        where={
-            "model_object_id": model_object_id,
-            "file_purpose": CONTAINER_OBJECT_PURPOSE,
-        }
-    )
-    team_id = getattr(row, "team_id", None) if row is not None else None
-    _CONTAINER_TEAM_CACHE.set_cache(
-        model_object_id,
-        team_id if isinstance(team_id, str) and team_id else _NEGATIVE_TEAM_SENTINEL,
-    )
-    return team_id if isinstance(team_id, str) and team_id else None
-
-
 async def assert_user_can_access_container(
     container_id: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -425,8 +411,7 @@ async def assert_user_can_access_container(
     # Untracked rows (no ownership) are admin-only. Pre-isolation rows
     # that pre-date this enforcement need an admin to either re-create
     # via the now-tracked flow or assign ``created_by`` on the row.
-    owner = await _get_container_owner(original_container_id, resolved_provider)
-    resource_team_id = await _get_container_team_id(
+    owner, resource_team_id = await _get_container_owner_and_team(
         original_container_id, resolved_provider
     )
     if not user_can_access_resource_owner_or_team(
