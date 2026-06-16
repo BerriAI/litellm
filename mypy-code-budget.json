@@ -4,11 +4,15 @@
     "slack": 3
   },
   "no-any-return": {
-    "baseline": 890,
+    "baseline": 902,
     "slack": 10
   },
   "no-untyped-def": {
     "baseline": 4888,
     "slack": 10
+  },
+  "valid-type": {
+    "baseline": 1,
+    "slack": 3
   }
 }
