@@ -2,6 +2,7 @@
 ## Helper utilities for token counting
 import base64
 import io
+import math
 import struct
 from typing import (
     Any,
@@ -43,6 +44,47 @@ from litellm.types.llms.openai import (
     OpenAIMessageContent,
 )
 from litellm.types.utils import Message, SelectTokenizerResponse
+
+DEFAULT_VIDEO_TOKEN_COUNT_PER_SECOND = 263
+DEFAULT_AUDIO_TOKEN_COUNT_PER_SECOND = 32
+
+
+def messages_contain_video_url(messages: Any) -> bool:
+    if not isinstance(messages, list):
+        return False
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(
+            isinstance(content_block, dict) and content_block.get("type") == "video_url"
+            for content_block in content
+        ):
+            return True
+    return False
+
+
+def get_token_count_for_limit_enforcement(
+    input_tokens: int,
+    messages: Any,
+    token_limit: Optional[Union[int, float]],
+) -> int:
+    if not messages_contain_video_url(messages):
+        return input_tokens
+    if (
+        token_limit is None
+        or isinstance(token_limit, bool)
+        or not isinstance(token_limit, (int, float))
+        or not math.isfinite(token_limit)
+    ):
+        return input_tokens
+
+    # Video metadata in the request is client-provided. For admission gates,
+    # reserve the full finite limit rather than trusting understated duration/fps.
+    return max(input_tokens, math.ceil(token_limit))
 
 
 def get_modified_max_tokens(
@@ -631,6 +673,155 @@ def _count_image_tokens(
         )
 
 
+def _coerce_float(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        number = value.strip()
+        if number.endswith("s"):
+            number = number[:-1]
+        try:
+            return float(number)
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_duration_seconds(value: Any) -> Optional[float]:
+    if isinstance(value, dict):
+        seconds = _coerce_float(value.get("seconds"))
+        nanos = _coerce_float(value.get("nanos"))
+        if seconds is None:
+            return None
+        return seconds + ((nanos or 0) / 1_000_000_000)
+    return _coerce_float(value)
+
+
+def _get_video_value(
+    video_url: Mapping[str, Any],
+    video_metadata: Mapping[str, Any],
+    keys: Tuple[str, ...],
+) -> Any:
+    for key in keys:
+        if key in video_url:
+            return video_url[key]
+        if key in video_metadata:
+            return video_metadata[key]
+    return None
+
+
+def _coerce_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered_value = value.strip().lower()
+        if lowered_value in ("true", "1", "yes"):
+            return True
+        if lowered_value in ("false", "0", "no"):
+            return False
+    return None
+
+
+def _get_video_duration_seconds(
+    video_url: Mapping[str, Any],
+    video_metadata: Mapping[str, Any],
+) -> Optional[float]:
+    duration_seconds = _coerce_duration_seconds(
+        _get_video_value(
+            video_url,
+            video_metadata,
+            ("duration_seconds", "duration", "seconds"),
+        )
+    )
+    if duration_seconds is not None:
+        return duration_seconds
+
+    start_offset = _coerce_duration_seconds(
+        _get_video_value(
+            video_url,
+            video_metadata,
+            ("start_offset", "startOffset"),
+        )
+    )
+    end_offset = _coerce_duration_seconds(
+        _get_video_value(
+            video_url,
+            video_metadata,
+            ("end_offset", "endOffset"),
+        )
+    )
+    if start_offset is not None and end_offset is not None:
+        return end_offset - start_offset
+    return None
+
+
+def _count_video_tokens(video_url: Any) -> int:
+    """
+    Count tokens for a video_url content block without tokenizing the URL/base64 bytes.
+    """
+    video_metadata: Mapping[str, Any] = {}
+    if isinstance(video_url, dict):
+        url = video_url.get("url")
+        if not url:
+            raise ValueError("Missing required key 'url' in video_url dict.")
+        metadata = video_url.get("video_metadata")
+        if isinstance(metadata, Mapping):
+            video_metadata = metadata
+    elif isinstance(video_url, str):
+        if not video_url.strip():
+            raise ValueError("Empty video_url string is not valid.")
+    else:
+        raise ValueError(
+            f"Invalid video_url type: {type(video_url).__name__}. "
+            "Expected str or dict with 'url' field."
+        )
+
+    # If callers do not provide duration metadata, avoid inspecting/fetching media
+    # and use a one-second minimum rather than counting URL or base64 text.
+    duration_seconds = 1.0
+    if isinstance(video_url, dict):
+        parsed_duration_seconds = _get_video_duration_seconds(video_url, video_metadata)
+        if parsed_duration_seconds is not None:
+            duration_seconds = parsed_duration_seconds
+
+    if duration_seconds < 0:
+        raise ValueError("video_url duration must be non-negative.")
+
+    fps = 1.0
+    if isinstance(video_url, dict):
+        parsed_fps = _coerce_duration_seconds(
+            _get_video_value(video_url, video_metadata, ("fps",))
+        )
+        if parsed_fps is not None:
+            fps = parsed_fps
+    if fps < 0:
+        raise ValueError("video_url fps must be non-negative.")
+
+    has_audio = True
+    if isinstance(video_url, dict):
+        parsed_has_audio = _coerce_bool(
+            _get_video_value(
+                video_url,
+                video_metadata,
+                ("has_audio", "contains_audio", "audio"),
+            )
+        )
+        if parsed_has_audio is not None:
+            has_audio = parsed_has_audio
+
+    video_tokens = math.ceil(
+        duration_seconds * fps * DEFAULT_VIDEO_TOKEN_COUNT_PER_SECOND
+    )
+    audio_tokens = (
+        math.ceil(duration_seconds * DEFAULT_AUDIO_TOKEN_COUNT_PER_SECOND)
+        if has_audio
+        else 0
+    )
+    return video_tokens + audio_tokens
+
+
 def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
     """
     Validate and determine which Anthropic TypedDict applies.
@@ -731,6 +922,8 @@ def _count_content_list(
                 num_tokens += _count_image_tokens(
                     image_url, use_default_image_token_count
                 )
+            elif c["type"] == "video_url":
+                num_tokens += _count_video_tokens(c.get("video_url"))
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
@@ -752,7 +945,7 @@ def _count_content_list(
                 )
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking)."
+                    f"Expected str or dict with 'type' field (text, image_url, video_url, tool_use, tool_result, thinking)."
                 )
         return num_tokens
     except Exception as e:

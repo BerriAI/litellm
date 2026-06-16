@@ -8,6 +8,9 @@ from litellm import token_counter
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.token_counter import (
+    get_token_count_for_limit_enforcement,
+)
 from litellm.types.utils import LiteLLMPydanticObjectBase
 from litellm.utils import print_verbose
 
@@ -225,6 +228,11 @@ class LowestTPMLoggingHandler(CustomLogger):
                 _deployment_tpm = _deployment.get("model_info", {}).get("tpm")
             if _deployment_tpm is None:
                 _deployment_tpm = float("inf")
+            input_tokens_for_tpm = get_token_count_for_limit_enforcement(
+                input_tokens=input_tokens,
+                messages=messages,
+                token_limit=_deployment_tpm,
+            )
 
             _deployment_rpm = None
             if _deployment_rpm is None:
@@ -236,7 +244,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             if _deployment_rpm is None:
                 _deployment_rpm = float("inf")
 
-            if item_tpm + input_tokens > _deployment_tpm:
+            if item_tpm + input_tokens_for_tpm > _deployment_tpm:
                 continue
             elif (rpm_dict is not None and item in rpm_dict) and (
                 rpm_dict[item] + 1 >= _deployment_rpm

@@ -270,6 +270,71 @@ def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
         litellm.model_cost.pop(custom_model_id, None)
 
 
+def test_response_cost_calculator_passes_messages_for_video_cost_fallback():
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    model = "openai/test-video-logging-cost-fallback"
+    input_cost_per_token = 0.125
+    max_input_tokens = 16
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": input_cost_per_token,
+                "output_cost_per_token": 0.0,
+                "max_tokens": max_input_tokens,
+                "max_input_tokens": max_input_tokens,
+                "max_output_tokens": 4,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "https://example.com/video.mp4",
+                        "video_metadata": {
+                            "duration_seconds": 0,
+                            "fps": 0,
+                            "has_audio": False,
+                        },
+                    },
+                }
+            ],
+        }
+    ]
+
+    try:
+        logging_obj = LiteLLMLoggingObj(
+            model=model,
+            messages=messages,
+            stream=False,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="test-video-fallback",
+            function_id="test-fn",
+        )
+        logging_obj.update_environment_variables(
+            model=model,
+            user="",
+            optional_params={},
+            litellm_params={"api_base": ""},
+        )
+
+        cost = logging_obj._response_cost_calculator(
+            result={"model": model, "usage": {}}
+        )
+
+        assert cost == pytest.approx(max_input_tokens * input_cost_per_token)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
 class TestGetRouterModelId:
     """Tests for the get_router_model_id helper method."""
 

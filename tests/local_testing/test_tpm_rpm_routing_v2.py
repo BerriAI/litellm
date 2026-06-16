@@ -725,6 +725,50 @@ def test_return_potential_deployments():
     assert len(potential_deployments) == 1
 
 
+def test_return_potential_deployments_uses_full_tpm_for_video_url():
+    test_cache = DualCache()
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    deployment_id = "video-deployment"
+
+    potential_deployments = lowest_tpm_logger._return_potential_deployments(
+        healthy_deployments=[
+            {
+                "model_name": "model-test",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                },
+                "model_info": {
+                    "id": deployment_id,
+                    "tpm": 100,
+                },
+            },
+        ],
+        all_deployments={
+            f"{deployment_id}:tpm:02-17": 1,
+        },
+        input_tokens=10,
+        rpm_dict={},
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video_url",
+                        "video_url": {
+                            "url": "https://example.com/long-video.mp4",
+                            "duration_seconds": 1,
+                            "fps": 0,
+                            "has_audio": False,
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert potential_deployments == []
+
+
 @pytest.mark.asyncio
 async def test_tpm_rpm_routing_model_name_checks():
     deployment = {

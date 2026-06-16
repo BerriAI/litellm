@@ -1,9 +1,20 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
 import logging
+import math
 import time
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 from httpx import Response
 from pydantic import BaseModel
@@ -31,6 +42,10 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
     get_billable_input_tokens,
     select_cost_metric_for_model,
+)
+from litellm.litellm_core_utils.token_counter import (
+    get_token_count_for_limit_enforcement,
+    messages_contain_video_url,
 )
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
@@ -168,6 +183,13 @@ _SEARCH_CALL_TYPES = frozenset(
     }
 )
 
+_CHAT_COMPLETION_CALL_TYPES = frozenset(
+    {
+        CallTypes.completion.value,
+        CallTypes.acompletion.value,
+    }
+)
+
 _AREALTIME_CALL_TYPE = CallTypes.arealtime.value
 _MCP_CALL_TYPE = CallTypes.call_mcp_tool.value
 
@@ -286,6 +308,141 @@ def _transcription_usage_has_token_details(
             return True
 
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
+
+
+def _is_positive_finite_number(value: Any) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def _get_metadata_model_infos_for_cost_fallback(
+    litellm_logging_obj: Optional[LitellmLoggingObject],
+) -> List[Mapping[str, Any]]:
+    litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
+    if not isinstance(litellm_params, dict):
+        return []
+
+    model_infos: List[Mapping[str, Any]] = []
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = litellm_params.get(metadata_key, {}) or {}
+        if not isinstance(metadata, dict):
+            continue
+        model_info = metadata.get("model_info", {}) or {}
+        if isinstance(model_info, Mapping):
+            model_infos.append(model_info)
+    return model_infos
+
+
+def _get_max_input_tokens_for_cost_fallback(
+    model: Optional[str],
+    custom_llm_provider: Optional[str],
+    litellm_logging_obj: Optional[LitellmLoggingObject],
+) -> Optional[Union[int, float]]:
+    if model is None:
+        return None
+
+    provider = custom_llm_provider
+    model_names_to_try = [model]
+    if "/" in model:
+        provider_from_model, model_without_provider = model.split("/", 1)
+        provider = provider or provider_from_model
+        model_names_to_try.append(model_without_provider)
+
+    for model_name in model_names_to_try:
+        try:
+            model_info = litellm.get_model_info(
+                model=model_name, custom_llm_provider=provider
+            )
+        except Exception:
+            continue
+        for token_limit_key in ("max_input_tokens", "max_tokens"):
+            token_limit = model_info.get(token_limit_key)
+            if _is_positive_finite_number(token_limit):
+                return cast(Union[int, float], token_limit)
+
+    # Request metadata can be caller-controlled on proxy paths. Prefer the
+    # registered model info above; use metadata only as a final compatibility
+    # fallback for router/deployment paths that have not registered the model.
+    metadata_model_infos = _get_metadata_model_infos_for_cost_fallback(
+        litellm_logging_obj=litellm_logging_obj
+    )
+    for metadata_model_info in metadata_model_infos:
+        for token_limit_key in ("max_input_tokens", "max_tokens"):
+            token_limit = metadata_model_info.get(token_limit_key)
+            if _is_positive_finite_number(token_limit):
+                return cast(Union[int, float], token_limit)
+    return None
+
+
+def _usage_has_prompt_token_counts(usage_object: Optional[Usage]) -> bool:
+    if usage_object is None:
+        return False
+
+    if _is_positive_finite_number(getattr(usage_object, "prompt_tokens", 0)):
+        return True
+
+    prompt_details = getattr(usage_object, "prompt_tokens_details", None)
+    if prompt_details is not None:
+        for attr in (
+            "audio_tokens",
+            "cached_tokens",
+            "cache_creation_tokens",
+            "character_count",
+            "image_count",
+            "image_tokens",
+            "text_tokens",
+            "video_length_seconds",
+        ):
+            if _is_positive_finite_number(getattr(prompt_details, attr, 0)):
+                return True
+
+    return False
+
+
+def _usage_with_conservative_prompt_tokens(
+    usage_object: Optional[Usage],
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> Usage:
+    if usage_object is not None:
+        usage_dict = usage_object.model_dump()
+    else:
+        usage_dict = {}
+
+    usage_dict["prompt_tokens"] = prompt_tokens
+    usage_dict["completion_tokens"] = completion_tokens
+    usage_dict["total_tokens"] = max(
+        int(usage_dict.get("total_tokens") or 0),
+        prompt_tokens + completion_tokens,
+    )
+    return Usage(**usage_dict)
+
+
+def _get_conservative_video_prompt_tokens_for_cost_fallback(
+    *,
+    prompt_tokens: int,
+    messages: List,
+    model: Optional[str],
+    custom_llm_provider: Optional[str],
+    litellm_logging_obj: Optional[LitellmLoggingObject],
+) -> int:
+    if not messages_contain_video_url(messages):
+        return prompt_tokens
+
+    token_limit = _get_max_input_tokens_for_cost_fallback(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        litellm_logging_obj=litellm_logging_obj,
+    )
+    return get_token_count_for_limit_enforcement(
+        input_tokens=prompt_tokens,
+        messages=messages,
+        token_limit=token_limit,
+    )
 
 
 def cost_per_token(  # noqa: PLR0915
@@ -1140,7 +1297,7 @@ def completion_cost(  # noqa: PLR0915
     completion_response=None,
     model: Optional[str] = None,
     prompt="",
-    messages: List = [],
+    messages: Optional[List] = None,
     completion="",
     total_time: Optional[float] = 0.0,  # used for replicate, sagemaker
     call_type: Optional[CallTypesLiteral] = None,
@@ -1197,6 +1354,7 @@ def completion_cost(  # noqa: PLR0915
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
     try:
+        messages = messages or []
         call_type = _infer_call_type(call_type, completion_response) or "completion"
 
         if (
@@ -1576,6 +1734,32 @@ def completion_cost(  # noqa: PLR0915
                     return MCPCostCalculator.calculate_mcp_tool_call_cost(
                         litellm_logging_obj=litellm_logging_obj
                     )
+
+                if (
+                    call_type in _CHAT_COMPLETION_CALL_TYPES
+                    and not _usage_has_prompt_token_counts(cost_per_token_usage_object)
+                ):
+                    # Video metadata is client-provided. When provider usage is
+                    # missing, keep spend reconciliation conservative.
+                    conservative_prompt_tokens = (
+                        _get_conservative_video_prompt_tokens_for_cost_fallback(
+                            prompt_tokens=prompt_tokens or 0,
+                            messages=messages,
+                            model=model,
+                            custom_llm_provider=custom_llm_provider,
+                            litellm_logging_obj=litellm_logging_obj,
+                        )
+                    )
+                    if conservative_prompt_tokens != (prompt_tokens or 0):
+                        prompt_tokens = conservative_prompt_tokens
+                        cost_per_token_usage_object = (
+                            _usage_with_conservative_prompt_tokens(
+                                usage_object=cost_per_token_usage_object,
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=completion_tokens or 0,
+                            )
+                        )
+
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model
@@ -1856,6 +2040,7 @@ def response_cost_calculator(
     cache_hit: Optional[bool] = None,
     base_model: Optional[str] = None,
     custom_pricing: Optional[bool] = None,
+    messages: Optional[List] = None,
     prompt: str = "",
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
@@ -1894,6 +2079,7 @@ def response_cost_calculator(
                 optional_params=optional_params,
                 custom_pricing=custom_pricing,
                 base_model=base_model,
+                messages=messages,
                 prompt=prompt,
                 standard_built_in_tools_params=standard_built_in_tools_params,
                 litellm_model_name=litellm_model_name,
