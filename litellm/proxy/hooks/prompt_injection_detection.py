@@ -72,7 +72,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
 
         if litellm.set_verbose is True:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
 
     def update_environment(self, router: Optional[Router] = None):
         self.llm_router = router

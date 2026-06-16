@@ -604,6 +604,8 @@ class ChunkProcessor:
                 usage_chunk = chunk._hidden_params.get("usage", None)
 
             if usage_chunk is not None:
+                if isinstance(usage_chunk, dict):
+                    usage_chunk = Usage(**usage_chunk)
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
                 if (
                     usage_chunk_dict["prompt_tokens"] is not None
