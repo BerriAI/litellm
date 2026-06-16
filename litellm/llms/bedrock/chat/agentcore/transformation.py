@@ -253,7 +253,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 isinstance(block, dict) and block.get("type") not in (None, "text")
                 for block in last_content
             ):
-                payload["content"] = last_content
+                # Copy so the payload never aliases messages[-1]["content"]; shallow,
+                # not deep, to avoid cloning large base64 media on the request path.
+                payload["content"] = list(last_content)
 
         # Get or generate session ID - this goes in the header
         runtime_session_id = self._get_runtime_session_id(optional_params)

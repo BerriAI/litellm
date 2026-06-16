@@ -481,8 +481,9 @@ class TestAgentCoreMultimodalContent:
         messages = [{"role": "user", "content": content}]
         payload = config.transform_request(messages=messages, **opted_in_kwargs)
         assert payload["prompt"] == "summarize this report"
-        # The list is forwarded verbatim — same identity, same contents.
-        assert payload["content"] is content
+        # Contents forwarded verbatim, but as a distinct list (no aliasing).
+        assert payload["content"] == content
+        assert payload["content"] is not content
 
     def test_image_url_block_passthrough(self, config, opted_in_kwargs):
         """Opted in: an image_url block → "content" carries it verbatim."""
@@ -496,7 +497,8 @@ class TestAgentCoreMultimodalContent:
         messages = [{"role": "user", "content": content}]
         payload = config.transform_request(messages=messages, **opted_in_kwargs)
         assert payload["prompt"] == "what is in this image?"
-        assert payload["content"] is content
+        assert payload["content"] == content
+        assert payload["content"] is not content
 
     def test_mixed_text_and_files_payload_shape(self, config, opted_in_kwargs):
         """Opted in: text + file + image → both "prompt" (text-only) and "content"."""
@@ -524,6 +526,25 @@ class TestAgentCoreMultimodalContent:
         assert "iVBORw0KGgo=" not in payload["prompt"]
         # content carries every block in original order.
         assert payload["content"] == content
+
+    def test_forwarded_content_does_not_alias_message(self, config, opted_in_kwargs):
+        """Regression: the forwarded list is a shallow copy, so mutating the
+        returned payload before serialization must not leak back into the caller's
+        messages[-1]["content"]."""
+        content = [
+            {"type": "text", "text": "describe this"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        messages = [{"role": "user", "content": content}]
+        payload = config.transform_request(messages=messages, **opted_in_kwargs)
+
+        payload["content"].append({"type": "text", "text": "injected"})
+
+        assert len(messages[-1]["content"]) == 2
+        assert {"type": "text", "text": "injected"} not in messages[-1]["content"]
 
     def test_only_last_message_content_preserved(self, config, opted_in_kwargs):
         """Opted in: file blocks in earlier messages don't trigger "content" — last only."""
@@ -560,7 +581,8 @@ class TestAgentCoreMultimodalContent:
         messages = [{"role": "user", "content": content}]
         payload = config.transform_request(messages=messages, **opted_in_kwargs)
         assert payload["prompt"] == "transcribe this"
-        assert payload["content"] is content
+        assert payload["content"] == content
+        assert payload["content"] is not content
 
     def test_forward_flag_as_string_true(self, config, transform_kwargs):
         """The opt-in flag accepts config/env string values like "true"."""
@@ -577,7 +599,8 @@ class TestAgentCoreMultimodalContent:
             "optional_params": {"forward_multimodal_content": "true"},
         }
         payload = config.transform_request(messages=messages, **kwargs)
-        assert payload["content"] is content
+        assert payload["content"] == content
+        assert payload["content"] is not content
 
     def test_forward_flag_false_explicit(self, config, transform_kwargs):
         """Explicit falsy flag → no content field."""
@@ -611,4 +634,5 @@ class TestAgentCoreMultimodalContent:
             "litellm_params": {"forward_multimodal_content": True},
         }
         payload = config.transform_request(messages=messages, **kwargs)
-        assert payload["content"] is content
+        assert payload["content"] == content
+        assert payload["content"] is not content
