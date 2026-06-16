@@ -619,18 +619,9 @@ class InMemoryGuardrailHandler:
         if custom_guardrail_callback is None:
             return
 
-        for callback_list in (
-            litellm.callbacks,
-            litellm.success_callback,
-            litellm.failure_callback,
-            litellm._async_success_callback,
-            litellm._async_failure_callback,
-        ):
-            litellm.logging_callback_manager.remove_callback_from_list_by_object(
-                callback_list=callback_list,
-                obj=custom_guardrail_callback,
-                require_self=False,
-            )
+        litellm.logging_callback_manager.remove_callback_from_all_lists(
+            custom_guardrail_callback
+        )
 
     def list_in_memory_guardrails(self) -> List[Guardrail]:
         """
