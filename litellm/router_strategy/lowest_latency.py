@@ -1,7 +1,9 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
+import asyncio
 import random
 from datetime import datetime, timedelta
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import litellm
@@ -34,6 +36,25 @@ class LowestLatencyLoggingHandler(CustomLogger):
     def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
+        # Per-key locks to prevent lost-update race between concurrent
+        # completions on the same model group (#24720).
+        self._latency_key_locks: Dict[str, Lock] = {}
+        self._async_latency_key_locks: Dict[str, asyncio.Lock] = {}
+        self._lock_factory_lock = Lock()
+
+    def _get_lock(self, latency_key: str) -> Lock:
+        """Return a threading.Lock for *latency_key*, creating it lazily."""
+        if latency_key not in self._latency_key_locks:
+            with self._lock_factory_lock:
+                if latency_key not in self._latency_key_locks:
+                    self._latency_key_locks[latency_key] = Lock()
+        return self._latency_key_locks[latency_key]
+
+    def _get_async_lock(self, latency_key: str) -> "asyncio.Lock":
+        """Return an asyncio.Lock for *latency_key*, creating it lazily."""
+        if latency_key not in self._async_latency_key_locks:
+            self._async_latency_key_locks[latency_key] = asyncio.Lock()
+        return self._async_latency_key_locks[latency_key]
 
     def log_success_event(  # noqa: PLR0915
         self, kwargs, response_obj, start_time, end_time
@@ -123,6 +144,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
+                # Acquire per-key lock to serialise read-modify-write
+                # and prevent lost-update race (#24720).
+                lock = self._get_lock(latency_key)
+                lock.acquire()
                 parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 request_count_dict = (
                     self.router_cache.get_cache(
@@ -176,6 +201,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 self.router_cache.set_cache(
                     key=latency_key, value=request_count_dict, ttl=self.routing_args.ttl
                 )  # reset map within window
+                lock.release()
 
                 ### TESTING ###
                 if self.test_flag:
@@ -225,6 +251,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     }
                     """
                     latency_key = f"{model_group}_map"
+                    async_lock = self._get_async_lock(latency_key)
+                    await async_lock.acquire()
                     request_count_dict = (
                         await self.router_cache.async_get_cache(key=latency_key) or {}
                     )
@@ -248,6 +276,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         value=request_count_dict,
                         ttl=self.routing_args.ttl,
                     )  # reset map within window
+                    async_lock.release()
             else:
                 # do nothing if it's not a timeout error
                 return
@@ -346,6 +375,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
+                async_lock = self._get_async_lock(latency_key)
+                await async_lock.acquire()
                 parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 request_count_dict = (
                     await self.router_cache.async_get_cache(
@@ -401,6 +432,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 await self.router_cache.async_set_cache(
                     key=latency_key, value=request_count_dict, ttl=self.routing_args.ttl
                 )  # reset map within window
+                async_lock.release()
 
                 ### TESTING ###
                 if self.test_flag:
