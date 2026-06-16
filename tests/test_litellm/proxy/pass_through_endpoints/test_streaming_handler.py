@@ -34,7 +34,7 @@ def _build_logging_obj(true_start: datetime, completion_start_time=None):
     return logging_obj
 
 
-async def _build_response_with_chunks(chunks):
+def _build_response_with_chunks(chunks):
     """Wrap a list of bytes chunks into an httpx.Response-shaped mock that
     yields them via aiter_bytes()."""
 
@@ -68,7 +68,7 @@ def test_chunk_processor_uses_logging_obj_start_time_when_earlier(monkeypatch):
 
     logging_obj = _build_logging_obj(true_start=earlier)
 
-    response = asyncio.run(_build_response_with_chunks([b"chunk-1", b"chunk-2"]))
+    response = _build_response_with_chunks([b"chunk-1", b"chunk-2"])
     captured_start_time = {}
 
     async def fake_log_streaming_request(*args, **kwargs):
@@ -91,6 +91,9 @@ def test_chunk_processor_uses_logging_obj_start_time_when_earlier(monkeypatch):
     )
     _drain(gen)
 
+    assert (
+        "start_time" in captured_start_time
+    ), "logging task never reached the route_streaming_logging_to_handler stub"
     assert captured_start_time["start_time"] == earlier, (
         "Handler must override the later caller-supplied start_time with the "
         "earlier logging-obj start_time."
@@ -106,7 +109,7 @@ def test_chunk_processor_keeps_caller_start_time_when_earlier(monkeypatch):
 
     logging_obj = _build_logging_obj(true_start=later)
 
-    response = asyncio.run(_build_response_with_chunks([b"chunk-1"]))
+    response = _build_response_with_chunks([b"chunk-1"])
     captured_start_time = {}
 
     async def fake_log_streaming_request(*args, **kwargs):
@@ -130,6 +133,9 @@ def test_chunk_processor_keeps_caller_start_time_when_earlier(monkeypatch):
     _drain(gen)
 
     assert (
+        "start_time" in captured_start_time
+    ), "logging task never reached the route_streaming_logging_to_handler stub"
+    assert (
         captured_start_time["start_time"] == earlier
     ), "Caller-supplied start_time should win when it's already the earlier value."
 
@@ -143,7 +149,7 @@ def test_chunk_processor_records_completion_start_on_first_chunk(monkeypatch):
         completion_start_time=None,
     )
 
-    response = asyncio.run(_build_response_with_chunks([b"chunk-1", b"chunk-2"]))
+    response = _build_response_with_chunks([b"chunk-1", b"chunk-2"])
 
     monkeypatch.setattr(
         PassThroughStreamingHandler,
@@ -175,7 +181,7 @@ def test_chunk_processor_does_not_overwrite_existing_completion_start(monkeypatc
         completion_start_time=pre_set,
     )
 
-    response = asyncio.run(_build_response_with_chunks([b"chunk-1"]))
+    response = _build_response_with_chunks([b"chunk-1"])
 
     monkeypatch.setattr(
         PassThroughStreamingHandler,

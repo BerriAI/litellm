@@ -43,11 +43,19 @@ class PassThroughStreamingHandler:
         # entered the proxy. Without this override, SpendLogs.startTime
         # is artificially deflated by the full TTFT, making
         # `endTime - startTime` shorter than reality.
+        # Guard the `<` comparison: a tz-aware vs tz-naive mix raises
+        # `TypeError: can't compare offset-naive and offset-aware datetimes`,
+        # which would propagate before the first chunk is yielded and
+        # break the whole stream.
         true_start = getattr(litellm_logging_obj, "start_time", None)
-        if isinstance(true_start, datetime) and (
-            not isinstance(start_time, datetime) or true_start < start_time
-        ):
-            start_time = true_start
+        if isinstance(true_start, datetime):
+            try:
+                if not isinstance(start_time, datetime) or true_start < start_time:
+                    start_time = true_start
+            except TypeError:
+                # tzinfo mismatch — skip the override rather than
+                # crashing the stream. The caller-supplied start_time stays.
+                pass
 
         raw_bytes: List[bytes] = []
         logging_scheduled = False
