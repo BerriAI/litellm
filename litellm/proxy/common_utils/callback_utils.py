@@ -497,6 +497,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS = frozenset(
         "guardrail_config",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
+        "_pre_call_executed_guardrails",
         "disable_global_guardrails",
         "disable_global_guardrail",
         "opted_out_global_guardrails",

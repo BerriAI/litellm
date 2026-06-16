@@ -1135,6 +1135,8 @@ class ProxyLogging:
         if callback.should_run_guardrail(data=data, event_type=event_type) is not True:
             return None
 
+        callback.mark_pre_call_hook_ran(data)
+
         guardrail_name = callback.guardrail_name
 
         # Track timing and errors for prometheus metrics

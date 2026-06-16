@@ -50,6 +50,8 @@ from litellm.exceptions import (
     SensitiveDataRouteException,
 )
 
+PRE_CALL_EXECUTED_GUARDRAILS_KEY = "_pre_call_executed_guardrails"
+
 
 def get_session_id_from_request_data(request_data: Dict[str, Any]) -> Optional[str]:
     """Extract session_id from request data (litellm_session_id or metadata)."""
@@ -458,6 +460,43 @@ class CustomGuardrail(CustomLogger):
 
         return False
 
+    def mark_pre_call_hook_ran(self, data: Dict[str, Any]) -> None:
+        """
+        Record that this guardrail's ``async_pre_call_hook`` already ran for this
+        request, so the deployment-level hook does not run it a second time.
+
+        The proxy runs pre-call guardrails in ``ProxyLogging.pre_call_hook``. The
+        router later spreads a deployment's model-level ``guardrails`` into the
+        top-level request kwargs, which would otherwise re-trigger the same hook
+        from ``async_pre_call_deployment_hook``.
+        """
+        name = self.guardrail_name
+        if not name:
+            return
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = data.get(meta_key)
+            if isinstance(meta, dict):
+                executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
+                if isinstance(executed, list):
+                    if name not in executed:
+                        executed.append(name)
+                else:
+                    meta[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [name]
+                return
+        data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [name]}
+
+    def _pre_call_hook_already_ran(self, data: Dict[str, Any]) -> bool:
+        name = self.guardrail_name
+        if not name:
+            return False
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = data.get(meta_key)
+            if isinstance(meta, dict):
+                executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
+                if isinstance(executed, list) and name in executed:
+                    return True
+        return False
+
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
@@ -466,6 +505,9 @@ class CustomGuardrail(CustomLogger):
         # should run guardrail
         litellm_guardrails = kwargs.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
+            return kwargs
+
+        if self._pre_call_hook_already_ran(kwargs):
             return kwargs
 
         if (

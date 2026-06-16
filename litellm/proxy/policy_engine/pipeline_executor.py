@@ -165,6 +165,8 @@ class PipelineExecutor:
                 target = UnifiedLLMGuardrails()
 
             if mode == "pre_call":
+                if isinstance(callback, CustomGuardrail):
+                    callback.mark_pre_call_hook_ran(data)
                 response = await target.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
                     cache=None,  # type: ignore
