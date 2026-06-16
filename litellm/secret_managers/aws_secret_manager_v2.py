@@ -380,6 +380,12 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         if not replica_regions:
             return {}
 
+        verbose_logger.info(
+            "ReplicateSecretToRegions called for secret '%s' in regions %s",
+            secret_name,
+            replica_regions,
+        )
+
         data: Dict[str, Any] = {
             "SecretId": secret_name,
             "AddReplicaRegions": [{"Region": r} for r in replica_regions],

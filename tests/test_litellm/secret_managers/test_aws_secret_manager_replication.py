@@ -182,7 +182,9 @@ async def test_async_replicate_secret_correct_payload():
             b"{}",
         )
 
-    with patch.object(AWSSecretsManagerV2, "_prepare_request", side_effect=capture_prepare):
+    with patch.object(
+        AWSSecretsManagerV2, "_prepare_request", side_effect=capture_prepare
+    ):
         with patch(
             "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client",
             return_value=_mock_http_client(_REPLICATE_RESPONSE),
@@ -199,6 +201,35 @@ async def test_async_replicate_secret_correct_payload():
         {"Region": "us-west-2"},
         {"Region": "eu-west-1"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_replication_fires_on_create(caplog):
+    """async_replicate_secret emits an INFO log line mentioning ReplicateSecretToRegions."""
+    import logging
+
+    manager = AWSSecretsManagerV2()
+
+    with patch.object(
+        AWSSecretsManagerV2,
+        "_prepare_request",
+        return_value=(
+            "https://secretsmanager.us-east-1.amazonaws.com",
+            {"Content-Type": "application/x-amz-json-1.1"},
+            b"{}",
+        ),
+    ):
+        with patch(
+            "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client",
+            return_value=_mock_http_client(_REPLICATE_RESPONSE),
+        ):
+            with caplog.at_level(logging.INFO, logger="LiteLLM"):
+                await manager.async_replicate_secret(
+                    secret_name="litellm/test-key",
+                    replica_regions=["us-west-2"],
+                )
+
+    assert "ReplicateSecretToRegions" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +259,10 @@ def test_load_aws_secret_manager_passes_replica_regions():
         )
 
         assert isinstance(litellm.secret_manager_client, AWSSecretsManagerV2)
-        assert litellm.secret_manager_client.replica_regions == ["us-west-2", "eu-west-1"]
+        assert litellm.secret_manager_client.replica_regions == [
+            "us-west-2",
+            "eu-west-1",
+        ]
     finally:
         litellm.secret_manager_client = original
 
