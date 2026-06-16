@@ -3234,6 +3234,11 @@ all_litellm_params = (
         "order",
         "enable_json_schema_validation",
         "use_xai_oauth",
+        "_litellm_rate_limit_descriptors",
+        "_litellm_tpm_reserved_tokens",
+        "_litellm_tpm_reserved_model",
+        "_litellm_tpm_reserved_scopes",
+        "_litellm_tpm_reservation_released",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
