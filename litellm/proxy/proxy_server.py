@@ -8341,6 +8341,12 @@ async def model_list(
         if hidden_names:
             all_models = [m for m in all_models if m not in hidden_names]
 
+        # Opt-in (default off): surface the public name for team-scoped rows.
+        # Off by default so /v1/models model ids stay backward-compatible for
+        # callers that scripted against the internal routing name.
+        if general_settings.get("use_team_public_model_name", False):
+            all_models = _translate_model_names_for_listing(all_models, llm_router)
+
         # Build response data with all proxy models
         model_data = []
         for model in all_models:
@@ -8377,6 +8383,12 @@ async def model_list(
     # Hide paused/unhealthy models from the public listing
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
+
+    # Opt-in (default off): surface the public name for team-scoped rows.
+    # Off by default so /v1/models model ids stay backward-compatible for
+    # callers that scripted against the internal routing name.
+    if general_settings.get("use_team_public_model_name", False):
+        all_models = _translate_model_names_for_listing(all_models, llm_router)
 
     # Build response data
     model_data = []
@@ -12585,6 +12597,34 @@ def _translate_model_name_for_response(model: dict) -> dict:
     if not current.startswith(f"model_name_{team_id}_"):
         return model
     return {**model, "model_name": team_public}
+
+
+def _translate_model_names_for_listing(model_names: List[str], llm_router) -> List[str]:
+    """Swap internal team routing keys for their public names in list-style
+    responses (e.g. `/v1/models`, `/models`).
+
+    `/v1/models` builds from bare model-name strings produced by access-group
+    expansion (`get_model_access_groups`), which surfaces the internal routing
+    key `model_name_{team_id}_{uuid}` for team-scoped (BYOK) deployments. This
+    is a presentation-layer swap only -- access-group/auth semantics are
+    unchanged (see issue #28382). Sibling deployments collapse to one public
+    name, so the result is de-duplicated while preserving order.
+    """
+    if llm_router is None:
+        return model_names
+    internal_to_public: Dict[str, str] = {}
+    for m in getattr(llm_router, "model_list", None) or []:
+        model_info = m.get("model_info") or {}
+        if not isinstance(model_info, dict):
+            continue
+        team_id = model_info.get("team_id")
+        team_public = model_info.get("team_public_model_name")
+        name = m.get("model_name") or ""
+        if team_id and team_public and name.startswith(f"model_name_{team_id}_"):
+            internal_to_public[name] = team_public
+    if not internal_to_public:
+        return model_names
+    return list(dict.fromkeys(internal_to_public.get(n, n) for n in model_names))
 
 
 def _get_proxy_model_info(model: dict) -> dict:
