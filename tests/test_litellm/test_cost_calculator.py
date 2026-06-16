@@ -3,9 +3,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 from pydantic import BaseModel
@@ -101,9 +99,7 @@ def test_completion_cost_uses_response_model_for_dynamic_routing():
 
 def test_cost_calculator_with_response_cost_in_additional_headers():
     class MockResponse(BaseModel):
-        _hidden_params = {
-            "additional_headers": {"llm_provider-x-litellm-response-cost": 1000}
-        }
+        _hidden_params = {"additional_headers": {"llm_provider-x-litellm-response-cost": 1000}}
 
     result = response_cost_calculator(
         response_object=MockResponse(),
@@ -246,13 +242,12 @@ def test_cost_calculator_with_usage(monkeypatch):
 
     # Step 1: Test a model where input_cost_per_image_token is not set.
     # In this case the calculation should use input_cost_per_token as fallback.
-    assert (
-        model_info.get("input_cost_per_image_token") is None
-    ), "Test case expects that input_cost_per_image_token is not set"
+    assert model_info.get("input_cost_per_image_token") is None, (
+        "Test case expects that input_cost_per_image_token is not set"
+    )
 
     expected_cost = (
-        usage.prompt_tokens_details.audio_tokens
-        * model_info["input_cost_per_audio_token"]
+        usage.prompt_tokens_details.audio_tokens * model_info["input_cost_per_audio_token"]
         + usage.prompt_tokens_details.text_tokens * model_info["input_cost_per_token"]
         + usage.prompt_tokens_details.image_tokens * model_info["input_cost_per_token"]
         + usage.completion_tokens * model_info["output_cost_per_token"]
@@ -287,12 +282,9 @@ def test_cost_calculator_with_usage(monkeypatch):
     )
 
     expected_cost = (
-        usage.prompt_tokens_details.audio_tokens
-        * temp_model_info_object["input_cost_per_audio_token"]
-        + usage.prompt_tokens_details.text_tokens
-        * temp_model_info_object["input_cost_per_token"]
-        + usage.prompt_tokens_details.image_tokens
-        * temp_model_info_object["input_cost_per_image_token"]
+        usage.prompt_tokens_details.audio_tokens * temp_model_info_object["input_cost_per_audio_token"]
+        + usage.prompt_tokens_details.text_tokens * temp_model_info_object["input_cost_per_token"]
+        + usage.prompt_tokens_details.image_tokens * temp_model_info_object["input_cost_per_image_token"]
         + usage.completion_tokens * temp_model_info_object["output_cost_per_token"]
     )
 
@@ -309,9 +301,7 @@ def test_transcription_cost_uses_token_pricing():
         prompt_tokens=14,
         completion_tokens=45,
         total_tokens=59,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=0, audio_tokens=14
-        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=0, audio_tokens=14),
     )
     response = TranscriptionResponse(text="demo text")
     response.usage = usage
@@ -355,9 +345,7 @@ def test_handle_realtime_stream_cost_calculation():
         {"type": "session.created", "session": {"model": "gpt-3.5-turbo"}},
         {
             "type": "response.done",
-            "response": {
-                "usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}
-            },
+            "response": {"usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}},
         },
         {
             "type": "response.done",
@@ -388,9 +376,7 @@ def test_handle_realtime_stream_cost_calculation():
     expected_cost = (300 * 0.0015 / 1000) + (  # input tokens (100 + 200)
         150 * 0.002 / 1000
     )  # output tokens (50 + 100)
-    assert (
-        abs(cost - expected_cost) <= 0.00075
-    )  # Allow small floating point differences
+    assert abs(cost - expected_cost) <= 0.00075  # Allow small floating point differences
 
     # Test with different model name in session
     results[0]["session"]["model"] = "gpt-4"
@@ -493,9 +479,7 @@ def test_realtime_logging_object_allows_null_transcript_in_conversation_item_add
         },
     ]
 
-    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
-        results=results
-    )
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(results=results)
     logging_result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
         usage=usage,
         results=results,
@@ -521,9 +505,7 @@ def test_realtime_transcription_duration_cost(monkeypatch):
             "type": "session.created",
             "session": {
                 "type": "transcription",
-                "audio": {
-                    "input": {"transcription": {"model": "gpt-realtime-whisper"}}
-                },
+                "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}},
             },
         },
         {
@@ -538,9 +520,7 @@ def test_realtime_transcription_duration_cost(monkeypatch):
         },
     ]
 
-    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
-        results=results
-    )
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(results=results)
     cost = handle_realtime_stream_cost_calculation(
         results=results,
         combined_usage_object=combined,
@@ -609,9 +589,7 @@ def test_realtime_transcription_token_billed_fallback(monkeypatch):
 
     # gpt-4o-transcribe: input_cost_per_audio_token = 2.5e-06, input_cost_per_token = 2.5e-06,
     # output_cost_per_token = 1e-05
-    model_info = litellm.get_model_info(
-        model="gpt-4o-transcribe", custom_llm_provider="openai"
-    )
+    model_info = litellm.get_model_info(model="gpt-4o-transcribe", custom_llm_provider="openai")
     usage = {
         "type": "tokens",
         "input_tokens": 40,
@@ -648,6 +626,57 @@ def test_get_transcription_model_falls_back_to_session_model(monkeypatch):
     ]
     assert _get_transcription_model_name_from_results(results) == "gpt-realtime-whisper"
 
+
+def test_realtime_logging_object_tolerates_unknown_ga_event_types():
+    """Regression: gpt-realtime-2 emits GA-only event types (rate_limits.updated,
+    response.function_call_arguments.delta) that are not in the OpenAIRealtimeEvents
+    union. LiteLLMRealtimeStreamLoggingObject must not raise ValidationError on them."""
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
+
+    results = [
+        {
+            "type": "session.created",
+            "event_id": "event_session",
+            "session": {"id": "sess_abc", "model": "gpt-realtime-2"},
+        },
+        {
+            "type": "rate_limits.updated",
+            "event_id": "event_rl",
+            "rate_limits": [{"name": "requests", "limit": 1000, "remaining": 999, "reset_seconds": 0.009}],
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "event_id": "event_fca_delta",
+            "response_id": "resp_xyz",
+            "item_id": "item_xyz",
+            "output_index": 0,
+            "call_id": "call_xyz",
+            "delta": '{"key":',
+        },
+        {
+            "type": "response.done",
+            "event_id": "event_done",
+            "response": {
+                "id": "resp_xyz",
+                "object": "realtime.response",
+                "status": "completed",
+                "usage": {"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
+            },
+        },
+    ]
+
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(results=results)
+    logging_result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+        usage=usage,
+        results=results,
+    )
+
+    assert logging_result.usage.total_tokens == 8
+    assert logging_result.results[1]["type"] == "rate_limits.updated"
+    assert logging_result.results[2]["type"] == "response.function_call_arguments.delta"
+
+
+def test_custom_pricing_with_router_model_id():
     from litellm import Router
 
     router = Router(
@@ -692,10 +721,7 @@ def test_get_transcription_model_falls_back_to_session_model(monkeypatch):
         mock_response=True,
     )
 
-    assert (
-        result._hidden_params["response_cost"]
-        > result_2._hidden_params["response_cost"]
-    )
+    assert result._hidden_params["response_cost"] > result_2._hidden_params["response_cost"]
 
     model_info = router.get_deployment_model_info(
         model_id="my-unique-model-id", model_name="anthropic/claude-sonnet-4-5-20250929"
@@ -836,9 +862,7 @@ def test_azure_realtime_cost_calculator():
         combined_usage_object=Usage(
             prompt_tokens=100,
             completion_tokens=100,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                text_tokens=10, audio_tokens=90
-            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=10, audio_tokens=90),
         ),
         custom_llm_provider="azure",
         litellm_model_name="my-custom-azure-deployment",
@@ -915,14 +939,10 @@ def test_azure_audio_output_cost_calculation():
     wrong_total_cost = expected_input_cost + wrong_output_cost
 
     # Verify audio tokens are NOT charged at text rate (the bug)
-    assert (
-        abs(cost - wrong_total_cost) > 0.001
-    ), "Bug: Audio tokens are being charged at text token rate"
+    assert abs(cost - wrong_total_cost) > 0.001, "Bug: Audio tokens are being charged at text token rate"
 
     # Verify cost matches
-    assert (
-        abs(cost - expected_total_cost) < 0.0000001
-    ), f"Expected cost {expected_total_cost}, got {cost}"
+    assert abs(cost - expected_total_cost) < 0.0000001, f"Expected cost {expected_total_cost}, got {cost}"
 
 
 def test_default_image_cost_calculator(monkeypatch):
@@ -936,9 +956,7 @@ def test_default_image_cost_calculator(monkeypatch):
     monkeypatch.setattr(
         litellm,
         "model_cost",
-        {
-            "azure/bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b": temp_object
-        },
+        {"azure/bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b": temp_object},
     )
 
     args = {
@@ -1154,9 +1172,7 @@ def test_gemini_25_implicit_caching_cost():
     expected_cost = 0.00068708
 
     # Allow for small floating point differences
-    assert (
-        abs(result - expected_cost) < 1e-8
-    ), f"Expected cost {expected_cost}, but got {result}"
+    assert abs(result - expected_cost) < 1e-8, f"Expected cost {expected_cost}, but got {result}"
 
     print(f"✓ Gemini 2.5 implicit caching cost calculation is correct: ${result:.8f}")
 
@@ -1227,9 +1243,7 @@ def test_log_context_cost_calculation():
     # Get model info to understand the pricing
     from litellm import get_model_info
 
-    model_info = get_model_info(
-        model="claude-4-sonnet-20250514", custom_llm_provider="anthropic"
-    )
+    model_info = get_model_info(model="claude-4-sonnet-20250514", custom_llm_provider="anthropic")
 
     # Calculate expected cost based on actual model pricing
     input_cost_per_token = model_info.get("input_cost_per_token", 0)
@@ -1237,12 +1251,8 @@ def test_log_context_cost_calculation():
     cache_creation_cost_per_token = model_info.get("cache_creation_input_token_cost", 0)
 
     # Check if tiered pricing is applied
-    input_cost_above_200k = model_info.get(
-        "input_cost_per_token_above_200k_tokens", input_cost_per_token
-    )
-    output_cost_above_200k = model_info.get(
-        "output_cost_per_token_above_200k_tokens", output_cost_per_token
-    )
+    input_cost_above_200k = model_info.get("input_cost_per_token_above_200k_tokens", input_cost_per_token)
+    output_cost_above_200k = model_info.get("output_cost_per_token_above_200k_tokens", output_cost_per_token)
     cache_creation_above_200k = model_info.get(
         "cache_creation_input_token_cost_above_200k_tokens",
         cache_creation_cost_per_token,
@@ -1250,31 +1260,23 @@ def test_log_context_cost_calculation():
 
     print(f"DEBUG: Base input cost per token: ${input_cost_per_token:.2e}")
     print(f"DEBUG: Base output cost per token: ${output_cost_per_token:.2e}")
-    print(
-        f"DEBUG: Base cache creation cost per token: ${cache_creation_cost_per_token:.2e}"
-    )
+    print(f"DEBUG: Base cache creation cost per token: ${cache_creation_cost_per_token:.2e}")
 
     # Handle tiered pricing - if not available, use base pricing
     if input_cost_above_200k is not None:
-        print(
-            f"DEBUG: Tiered input cost per token (>200k): ${input_cost_above_200k:.2e}"
-        )
+        print(f"DEBUG: Tiered input cost per token (>200k): ${input_cost_above_200k:.2e}")
     else:
         print("DEBUG: No tiered input pricing available, using base pricing")
         input_cost_above_200k = input_cost_per_token
 
     if output_cost_above_200k is not None:
-        print(
-            f"DEBUG: Tiered output cost per token (>200k): ${output_cost_above_200k:.2e}"
-        )
+        print(f"DEBUG: Tiered output cost per token (>200k): ${output_cost_above_200k:.2e}")
     else:
         print("DEBUG: No tiered output pricing available, using base pricing")
         output_cost_above_200k = output_cost_per_token
 
     if cache_creation_above_200k is not None:
-        print(
-            f"DEBUG: Tiered cache creation cost per token (>200k): ${cache_creation_above_200k:.2e}"
-        )
+        print(f"DEBUG: Tiered cache creation cost per token (>200k): ${cache_creation_above_200k:.2e}")
     else:
         print("DEBUG: No tiered cache creation pricing available, using base pricing")
         cache_creation_above_200k = cache_creation_cost_per_token
@@ -1288,13 +1290,9 @@ def test_log_context_cost_calculation():
     print(f"DEBUG: Expected total: ${expected_total:.6f}")
 
     # Allow for small floating point differences
-    assert (
-        abs(result - expected_total) < 1e-6
-    ), f"Expected cost ${expected_total:.6f}, but got ${result:.6f}"
+    assert abs(result - expected_total) < 1e-6, f"Expected cost ${expected_total:.6f}, but got ${result:.6f}"
 
-    print(
-        f"✓ Log context cost calculation with tiered pricing is correct: ${result:.6f}"
-    )
+    print(f"✓ Log context cost calculation with tiered pricing is correct: ${result:.6f}")
     print(f"  - Input tokens (300k): ${expected_input_cost:.6f}")
     print(f"  - Output tokens (50k): ${expected_output_cost:.6f}")
     print(f"  - Cache creation (1k): ${expected_cache_cost:.6f}")
@@ -1353,8 +1351,7 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
 
     expected_actual_cost = (
         model_info["input_cost_per_token"] * usage.prompt_tokens_details.text_tokens
-        + model_info["cache_read_input_token_cost"]
-        * usage.prompt_tokens_details.cached_tokens
+        + model_info["cache_read_input_token_cost"] * usage.prompt_tokens_details.cached_tokens
         + model_info["output_cost_per_token"] * usage.completion_tokens
     )
 
@@ -1429,12 +1426,12 @@ def test_azure_ai_cache_cost_calculation():
     print(f"Output cost: {output_cost}, Expected: {expected_output_cost}")
     print(f"Total cost: {total_cost}")
 
-    assert (
-        abs(input_cost - expected_input_cost) < 1e-10
-    ), f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
-    assert (
-        abs(output_cost - expected_output_cost) < 1e-10
-    ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
+    assert abs(input_cost - expected_input_cost) < 1e-10, (
+        f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
+    )
+    assert abs(output_cost - expected_output_cost) < 1e-10, (
+        f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
+    )
 
 
 def test_cost_discount_vertex_ai():
@@ -1668,9 +1665,7 @@ def test_cost_margin_combined():
     )
 
     # Set 8% margin + $0.0005 fixed for openai
-    litellm.cost_margin_config = {
-        "openai": {"percentage": 0.08, "fixed_amount": 0.0005}
-    }
+    litellm.cost_margin_config = {"openai": {"percentage": 0.08, "fixed_amount": 0.0005}}
 
     # Calculate cost with margin
     cost_with_margin = completion_cost(
@@ -1790,9 +1785,7 @@ def test_cost_margin_provider_overrides_global():
 
     print("✓ Cost margin provider override test passed:")
     print(f"  - Original cost: ${cost_without_margin:.6f}")
-    print(
-        f"  - Cost with provider margin (10%, overrides 5% global): ${cost_with_provider_margin:.6f}"
-    )
+    print(f"  - Cost with provider margin (10%, overrides 5% global): ${cost_with_provider_margin:.6f}")
     print(f"  - Margin added: ${cost_with_provider_margin - cost_without_margin:.6f}")
 
 
@@ -1878,9 +1871,7 @@ def test_azure_image_generation_cost_calculator():
             size=None,
             usage=ImageUsage(
                 input_tokens=0,
-                input_tokens_details=ImageUsageInputTokensDetails(
-                    image_tokens=0, text_tokens=0
-                ),
+                input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=0),
                 output_tokens=0,
                 total_tokens=0,
             ),
@@ -1953,9 +1944,7 @@ def test_completion_cost_extracts_service_tier_from_response():
     assert flex_cost < standard_cost, "Flex cost should be less than standard cost"
 
     flex_ratio = flex_cost / standard_cost
-    assert (
-        0.45 <= flex_ratio <= 0.55
-    ), f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
+    assert 0.45 <= flex_ratio <= 0.55, f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
 
 
 def test_completion_cost_extracts_service_tier_from_usage():
@@ -1969,9 +1958,7 @@ def test_completion_cost_extracts_service_tier_from_usage():
     model = "gpt-5-nano"
 
     # Create usage object with service_tier
-    usage_with_service_tier = Usage(
-        prompt_tokens=1000, completion_tokens=500, total_tokens=1500
-    )
+    usage_with_service_tier = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
     # Set service_tier as an attribute on the usage object
     setattr(usage_with_service_tier, "service_tier", "flex")
 
@@ -1989,9 +1976,7 @@ def test_completion_cost_extracts_service_tier_from_usage():
     )
 
     # Create usage object without service_tier
-    usage_without_service_tier = Usage(
-        prompt_tokens=1000, completion_tokens=500, total_tokens=1500
-    )
+    usage_without_service_tier = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
     # Create ModelResponse with usage without service_tier
     response_standard = ModelResponse(
@@ -2012,9 +1997,7 @@ def test_completion_cost_extracts_service_tier_from_usage():
     assert flex_cost < standard_cost, "Flex cost should be less than standard cost"
 
     flex_ratio = flex_cost / standard_cost
-    assert (
-        0.45 <= flex_ratio <= 0.55
-    ), f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
+    assert 0.45 <= flex_ratio <= 0.55, f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
 
 
 def test_completion_cost_service_tier_priority():
@@ -2072,9 +2055,7 @@ def test_completion_cost_service_tier_priority():
     assert cost_from_usage > 0, "Cost from usage should be greater than 0"
 
     # Costs should be similar (all using flex)
-    assert (
-        abs(cost_from_params - cost_from_usage) < 1e-6
-    ), "Costs from params and usage should be similar (both flex)"
+    assert abs(cost_from_params - cost_from_usage) < 1e-6, "Costs from params and usage should be similar (both flex)"
 
 
 def test_completion_cost_service_tier_for_bedrock():
@@ -2164,28 +2145,26 @@ def test_gemini_cache_tokens_details_no_negative_values():
     usage = VertexGeminiConfig._calculate_usage(completion_response)
 
     # Text tokens should be non-cached text only: 9402 - 9393 = 9
-    assert (
-        usage.prompt_tokens_details.text_tokens == 9
-    ), f"Expected text_tokens=9, got {usage.prompt_tokens_details.text_tokens}"
+    assert usage.prompt_tokens_details.text_tokens == 9, (
+        f"Expected text_tokens=9, got {usage.prompt_tokens_details.text_tokens}"
+    )
 
     # Image tokens should be non-cached image only: 258 - 258 = 0
-    assert (
-        usage.prompt_tokens_details.image_tokens == 0
-    ), f"Expected image_tokens=0, got {usage.prompt_tokens_details.image_tokens}"
+    assert usage.prompt_tokens_details.image_tokens == 0, (
+        f"Expected image_tokens=0, got {usage.prompt_tokens_details.image_tokens}"
+    )
 
     # Total cached should match
-    assert (
-        usage.prompt_tokens_details.cached_tokens == 9651
-    ), f"Expected cached_tokens=9651, got {usage.prompt_tokens_details.cached_tokens}"
+    assert usage.prompt_tokens_details.cached_tokens == 9651, (
+        f"Expected cached_tokens=9651, got {usage.prompt_tokens_details.cached_tokens}"
+    )
 
     # MOST IMPORTANT: text_tokens should NEVER be negative
-    assert (
-        usage.prompt_tokens_details.text_tokens >= 0
-    ), f"BUG: text_tokens is negative ({usage.prompt_tokens_details.text_tokens})! This was the issue in #18750"
-
-    print(
-        "✅ Issue #18750 fix verified: text_tokens is correctly calculated and non-negative"
+    assert usage.prompt_tokens_details.text_tokens >= 0, (
+        f"BUG: text_tokens is negative ({usage.prompt_tokens_details.text_tokens})! This was the issue in #18750"
     )
+
+    print("✅ Issue #18750 fix verified: text_tokens is correctly calculated and non-negative")
 
 
 def test_gemini_without_cache_tokens_details():
@@ -2253,18 +2232,18 @@ def test_gemini_implicit_caching_cost_calculation():
     usage = VertexGeminiConfig._calculate_usage(completion_response)
 
     # Verify parsing
-    assert (
-        usage.cache_read_input_tokens == 8000
-    ), f"cache_read_input_tokens should be 8000, got {usage.cache_read_input_tokens}"
-    assert (
-        usage.prompt_tokens_details.cached_tokens == 8000
-    ), f"cached_tokens should be 8000, got {usage.prompt_tokens_details.cached_tokens}"
+    assert usage.cache_read_input_tokens == 8000, (
+        f"cache_read_input_tokens should be 8000, got {usage.cache_read_input_tokens}"
+    )
+    assert usage.prompt_tokens_details.cached_tokens == 8000, (
+        f"cached_tokens should be 8000, got {usage.prompt_tokens_details.cached_tokens}"
+    )
 
     # CRITICAL: text_tokens should be (10000 - 8000) = 2000, NOT 10000
     # This is the fix for issue #16341
-    assert (
-        usage.prompt_tokens_details.text_tokens == 2000
-    ), f"text_tokens should be 2000 (10000 - 8000), got {usage.prompt_tokens_details.text_tokens}"
+    assert usage.prompt_tokens_details.text_tokens == 2000, (
+        f"text_tokens should be 2000 (10000 - 8000), got {usage.prompt_tokens_details.text_tokens}"
+    )
 
     # Verify cost calculation uses cached token pricing
     response = ModelResponse(
@@ -2302,9 +2281,7 @@ def test_gemini_implicit_caching_cost_calculation():
         f"Cached tokens may not be using reduced pricing."
     )
 
-    print(
-        "✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly"
-    )
+    print("✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly")
 
 
 def test_additional_costs_only_for_azure_ai():
@@ -2467,12 +2444,7 @@ def test_custom_pricing_applies_cache_creation_input_cost_via_prompt_details():
         },
     )
 
-    expected = (
-        (4000 - 1000 - 500) * 0.0000025
-        + 1000 * 0.00000025
-        + 500 * 0.000003125
-        + 100 * 0.000015
-    )
+    expected = (4000 - 1000 - 500) * 0.0000025 + 1000 * 0.00000025 + 500 * 0.000003125 + 100 * 0.000015
 
     assert cost == pytest.approx(expected)
 
@@ -2517,9 +2489,7 @@ def test_custom_pricing_applies_cache_creation_input_cost_via_cache_write_tokens
         },
     )
 
-    expected_prompt = (
-        (4000 - 1000 - 500) * 0.0000025 + 1000 * 0.00000025 + 500 * 0.000003125
-    )
+    expected_prompt = (4000 - 1000 - 500) * 0.0000025 + 1000 * 0.00000025 + 500 * 0.000003125
     expected_completion = 100 * 0.000015
 
     assert prompt_cost == pytest.approx(expected_prompt)
@@ -2559,10 +2529,7 @@ def test_extract_cache_read_tokens_zero_when_missing():
 
     assert _extract_cache_read_tokens({}) == 0
     assert _extract_cache_read_tokens({"cache_read_input_tokens": None}) == 0
-    assert (
-        _extract_cache_read_tokens({"prompt_tokens_details": {"cached_tokens": None}})
-        == 0
-    )
+    assert _extract_cache_read_tokens({"prompt_tokens_details": {"cached_tokens": None}}) == 0
 
 
 def test_extract_cache_creation_tokens_anthropic_top_level():
@@ -2612,12 +2579,7 @@ def test_extract_cache_creation_tokens_zero_when_missing():
 
     assert _extract_cache_creation_tokens({}) == 0
     assert _extract_cache_creation_tokens({"cache_creation_input_tokens": None}) == 0
-    assert (
-        _extract_cache_creation_tokens(
-            {"prompt_tokens_details": {"cache_write_tokens": None}}
-        )
-        == 0
-    )
+    assert _extract_cache_creation_tokens({"prompt_tokens_details": {"cache_write_tokens": None}}) == 0
 
 
 def test_custom_pricing_anthropic_style_cache_tokens_not_double_counted():
