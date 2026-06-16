@@ -2521,9 +2521,21 @@ class Router:
         from litellm.exceptions import MidStreamFallbackError
         from litellm.responses.streaming_iterator import (
             BaseResponsesAPIStreamingIterator,
+            _get_openai_response_types,
         )
 
         source_iterator = response
+
+        # Pre-resolve the set of terminal stream event types so the
+        # per-chunk type check inside FallbackResponsesStreamWrapper
+        # stays cheap; mirrors the source-iterator filter at
+        # responses/streaming_iterator.py:243-247.
+        _openai_types = _get_openai_response_types()
+        _RESPONSES_TERMINAL_EVENT_TYPES = (
+            _openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            _openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            _openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
+        )
 
         class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
             """
@@ -2550,9 +2562,16 @@ class Router:
                 # is missing many of these attributes — use getattr fallbacks
                 # so wrapper construction never raises AttributeError. The
                 # bridge stores the logging object as `litellm_logging_obj`.
-                self.response = getattr(source_iterator, "response", None)
-                self.model = getattr(source_iterator, "model", None)
-                self.logging_obj = getattr(
+                # base class declares non-Optional types for these
+                # fields but the bridge path (LiteLLMCompletionStreamingIterator)
+                # can legitimately omit them at runtime — keep the None
+                # fallback. Same lines passed mypy on the pre-fix file
+                # because the surrounding function body wasn't fully
+                # type-narrowed; the new typed terminal-event tuple above
+                # is what made these surface.
+                self.response = getattr(source_iterator, "response", None)  # type: ignore[assignment]
+                self.model = getattr(source_iterator, "model", None)  # type: ignore[assignment]
+                self.logging_obj = getattr(  # type: ignore[assignment]
                     source_iterator,
                     "logging_obj",
                     getattr(source_iterator, "litellm_logging_obj", None),
@@ -2587,7 +2606,23 @@ class Router:
                 return self
 
             async def __anext__(self):
-                return await self._async_generator.__anext__()
+                chunk = await self._async_generator.__anext__()
+                # Sniff the terminal stream event off each forwarded chunk
+                # so ``self.completed_response`` is populated regardless of
+                # which inner iterator produced it (source_iterator,
+                # fallback_iterator, or any future wrapper). Without this
+                # the proxy's container-ownership hook (which reads
+                # ``getattr(stream_response, "completed_response", None)``
+                # via _extract_completed_responses_response) silently
+                # records nothing on streaming /v1/responses calls — every
+                # follow-up /v1/containers/<id>/files call then 403s for
+                # the very key that created the container (#30210).
+                if (
+                    self.completed_response is None
+                    and getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES
+                ):
+                    self.completed_response = chunk
+                return chunk
 
             async def aclose(self):
                 # async generators always expose aclose — no defensive check needed.
@@ -2691,7 +2726,7 @@ class Router:
 
         return FallbackResponsesStreamWrapper(stream_with_fallbacks())
 
-    def _completion_streaming_iterator(  # noqa: PLR0915
+    def _completion_streaming_iterator(
         self,
         model_response: CustomStreamWrapper,
         messages: List[Dict[str, str]],

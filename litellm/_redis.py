@@ -567,7 +567,7 @@ def get_redis_client(**env_overrides):
     return redis.Redis(**redis_kwargs)
 
 
-def get_redis_async_client(  # noqa: PLR0915
+def get_redis_async_client(
     connection_pool: Optional[async_redis.BlockingConnectionPool] = None,
     **env_overrides,
 ) -> Union[async_redis.Redis, async_redis.RedisCluster]:

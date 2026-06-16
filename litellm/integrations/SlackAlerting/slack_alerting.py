@@ -1179,7 +1179,7 @@ Model Info:
         if response.status_code == 200:
             return True
         else:
-            print("Error sending webhook alert. Error=", response.text)  # noqa
+            print("Error sending webhook alert. Error=", response.text)  # noqa: T201
 
         return False
 
