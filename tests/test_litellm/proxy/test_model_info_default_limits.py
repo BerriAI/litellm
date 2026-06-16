@@ -115,6 +115,11 @@ class TestModelInfoEndpointWithRouter:
 
         mock_router = MagicMock()
         mock_router.get_deployment.return_value = deployment
+        # By-id now authorizes against the listing-path filter; stub
+        # what `get_available_models_for_user` reads from the router so
+        # "model1" is in the allowlist.
+        mock_router.get_model_names.return_value = ["model1"]
+        mock_router.get_model_access_groups.return_value = {}
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
 
@@ -122,6 +127,14 @@ class TestModelInfoEndpointWithRouter:
             patch("litellm.proxy.proxy_server.llm_router", mock_router),
             patch("litellm.proxy.proxy_server.llm_model_list", []),
             patch("litellm.proxy.proxy_server.user_model", None),
+            patch("litellm.proxy.proxy_server.get_key_models", return_value=["model1"]),
+            patch(
+                "litellm.proxy.proxy_server.get_team_models", return_value=["model1"]
+            ),
+            patch(
+                "litellm.proxy.proxy_server.get_complete_model_list",
+                return_value=["model1"],
+            ),
         ):
             response = await model_info_v1(
                 user_api_key_dict=user_api_key_dict,
