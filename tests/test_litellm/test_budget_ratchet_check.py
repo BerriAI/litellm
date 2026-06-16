@@ -61,6 +61,15 @@ def test_new_budget_file_has_nothing_to_ratchet():
     assert ratchet.regressions_for("b.json", None, {"LIT006": _spec_of(1, 0)}) == []
 
 
+def test_default_budgets_watch_every_budget_file_in_the_repo():
+    # This job is the repo's only ceiling-raise alarm, so every *-budget.json on disk must be
+    # watched; a budget left out of DEFAULT_BUDGETS (e.g. basedpyright-code-budget.json) can be
+    # loosened with no signal. Equality also catches a phantom entry that no longer exists.
+    repo_root = _MODULE_PATH.parents[1]
+    on_disk = frozenset(p.name for p in repo_root.glob("*budget*.json"))
+    assert on_disk == frozenset(ratchet.DEFAULT_BUDGETS)
+
+
 # --------------------------------------------------------------------------- #
 # Base-ref resolution: a bad ref must fail loudly, never pass vacuously
 # --------------------------------------------------------------------------- #
