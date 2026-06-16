@@ -1446,3 +1446,11 @@ model LiteLLM_BenchRun {
 
   @@index([model_name])
 }
+
+// Service accounts for programmatic access
+model LiteLLM_ServiceAccountTable {
+  user_id    String   @id
+  owner_ids  String[] @default([])
+  created_at DateTime @default(now()) @map("created_at")
+  updated_at DateTime @default(now()) @updatedAt @map("updated_at")
+}
