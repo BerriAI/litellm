@@ -40,6 +40,20 @@ def test_scan_comments_tokenizes_every_comment():
     assert comments.cast_ok_lines == frozenset({2})
 
 
+def test_scan_comments_does_not_crash_on_malformed_source():
+    # A dedent mismatch makes tokenize raise IndentationError (a SyntaxError subclass);
+    # scan_comments must swallow it, not propagate and crash the whole run.
+    comments, violations = checker.scan_comments(Path("x.py"), "if True:\n    a = 1\n  b = 2\n")
+    assert violations == ()
+    assert comments.cast_ok_lines == frozenset()
+
+
+def test_malformed_source_degrades_to_lit000(tmp_path):
+    # The checker's contract is "bad file -> LIT000, never crash". An untokenizable file
+    # falls through scan_comments to ast.parse, which is reported as a single LIT000.
+    assert _codes(tmp_path, "if True:\n    a = 1\n  b = 2\n") == ["LIT000"]
+
+
 def test_noqa_without_codes_is_flagged(tmp_path):
     assert "LIT003" in _codes(tmp_path, "x = 1  # noqa\n")
 

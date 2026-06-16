@@ -178,7 +178,10 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
     try:
         tokens = tokenize.generate_tokens(io.StringIO(source).readline)
         comment_toks = tuple((t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT)
-    except tokenize.TokenError:
+    except (tokenize.TokenError, SyntaxError):
+        # tokenize raises TokenError (EOF mid-construct) or a SyntaxError subclass
+        # (IndentationError / TabError) on malformed source; defer to ast.parse below,
+        # which re-raises and is reported as LIT000 rather than crashing the run.
         return Comments(frozenset(), frozenset(), frozenset(), frozenset()), ()
 
     def _lines_with(regex: re.Pattern[str]) -> frozenset[int]:
