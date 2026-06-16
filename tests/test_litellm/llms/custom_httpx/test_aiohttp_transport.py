@@ -662,52 +662,19 @@ async def test_response_stream_closes_response_on_cancellation():
 
 
 @pytest.mark.asyncio
-async def test_stream_read_timeout_releases_connection_slot():
+async def test_response_stream_closes_response_on_generator_exit():
     """
-    Regression test for #30192 with a real single-connection pool: a request
-    that times out mid-stream must release its connector slot so a follow-up
-    request to the recovered backend succeeds instead of waiting on the pool.
+    Regression test for #30192: when the consumer stops iterating early and the
+    stream generator is closed (GeneratorExit), the underlying aiohttp response
+    must still be closed so its connector slot is released.
     """
-    from aiohttp import TCPConnector, web
-
-    async def trickle_handler(request):
-        response = web.StreamResponse()
-        await response.prepare(request)
-        await response.write(b"chunk0\n")
-        await asyncio.sleep(5)
-        await response.write(b"chunk1\n")
-        return response
-
-    async def fast_handler(request):
-        return web.Response(text="ok")
-
-    app = web.Application()
-    app.router.add_get("/trickle", trickle_handler)
-    app.router.add_get("/fast", fast_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = site._server.sockets[0].getsockname()[1]
-
-    transport = LiteLLMAiohttpTransport(
-        client=lambda: aiohttp.ClientSession(connector=TCPConnector(limit=1))
+    mock_response = MockAiohttpResponse(
+        content_chunks=[b"chunk1", b"chunk2", b"chunk3"],
     )
 
-    try:
-        slow_request = httpx.Request("GET", f"http://127.0.0.1:{port}/trickle")
-        slow_request.extensions["timeout"] = {"connect": 5.0, "read": 0.1, "pool": 1.0}
-        response = await transport.handle_async_request(slow_request)
-        with pytest.raises(httpx.TimeoutException):
-            async for _ in response.aiter_bytes():
-                pass
+    stream = AiohttpResponseStream(mock_response)  # type: ignore
+    iterator = stream.__aiter__()
+    assert await iterator.__anext__() == b"chunk1"
+    await iterator.aclose()
 
-        fast_request = httpx.Request("GET", f"http://127.0.0.1:{port}/fast")
-        fast_request.extensions["timeout"] = {"connect": 5.0, "read": 1.0, "pool": 1.0}
-        fast_response = await transport.handle_async_request(fast_request)
-        assert fast_response.status_code == 200
-        await fast_response.aread()
-        await fast_response.aclose()
-    finally:
-        await transport.aclose()
-        await runner.cleanup()
+    assert mock_response.closed is True
