@@ -152,12 +152,13 @@ def build_content_block_chunks(block_dict: Dict[str, Any], index: int) -> List[b
             )
         )
 
-    chunks.append(
-        _sse(
-            "content_block_stop",
-            {"type": "content_block_stop", "index": index},
+    if chunks:
+        chunks.append(
+            _sse(
+                "content_block_stop",
+                {"type": "content_block_stop", "index": index},
+            )
         )
-    )
     return chunks
 
 

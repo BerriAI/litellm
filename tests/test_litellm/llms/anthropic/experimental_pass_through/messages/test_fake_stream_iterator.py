@@ -80,3 +80,12 @@ def test_server_tool_use_emits_input_json_delta():
         and e["delta"].get("type") == "input_json_delta"
     ]
     assert any(d["delta"]["partial_json"] == "{}" for d in deltas)
+
+
+def test_unknown_block_type_produces_no_chunks():
+    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        build_content_block_chunks,
+    )
+
+    chunks = build_content_block_chunks({"type": "unknown_future_type", "data": 42}, 0)
+    assert chunks == []
