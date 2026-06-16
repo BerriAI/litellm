@@ -1672,6 +1672,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
             prompt_tokens_details=_prompt_tokens_details or None,
         )
 
+        if isinstance(server_tool_use, dict):
+            server_tool_use = ServerToolUse(**server_tool_use)
+
         if server_tool_use is not None:
             self.server_tool_use = server_tool_use
         else:  # maintain openai compatibility in usage object if possible
@@ -3025,6 +3028,12 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Weave (W&B) dynamic params
     wandb_api_key: Optional[str]
     weave_project_id: Optional[str]
+
+    # Datadog dynamic params
+    dd_api_key: Optional[str]
+    dd_site: Optional[str]
+    dd_agent_host: Optional[str]
+    dd_agent_port: Optional[str]
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
