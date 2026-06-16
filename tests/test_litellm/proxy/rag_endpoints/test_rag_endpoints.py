@@ -14,9 +14,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -63,19 +61,13 @@ def test_internal_user_viewer_rag_ingest_without_vector_store_id_rejected(
     response = client_internal_user_viewer.post(
         "/v1/rag/ingest",
         files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-        data={
-            "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
-        },
+        data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
     )
 
     assert response.status_code == 403
     detail = response.json()
     assert "detail" in detail
-    error_msg = (
-        detail["detail"]["error"]
-        if isinstance(detail["detail"], dict)
-        else str(detail["detail"])
-    )
+    error_msg = detail["detail"]["error"] if isinstance(detail["detail"], dict) else str(detail["detail"])
     assert "internal_user_viewer" in error_msg
     assert "vector_store_id" in error_msg
 
@@ -102,8 +94,7 @@ def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
 
     # Should not be 403 (role check passed)
     assert response.status_code != 403, (
-        f"internal_user_viewer with vector_store_id should pass role check. "
-        f"Response: {response.json()}"
+        f"internal_user_viewer with vector_store_id should pass role check. Response: {response.json()}"
     )
 
 
@@ -183,14 +174,16 @@ def test_internal_user_viewer_milvus_collection_name_auto_create_rejected(
     mock_aingest.assert_not_called()
 
 
-def test_internal_user_viewer_milvus_auto_create_disabled_allowed(
+def test_internal_user_viewer_milvus_auto_create_disabled_still_requires_managed_store(
     client_internal_user_viewer,
 ):
     """
-    With auto_create_collection disabled, a Milvus ingest cannot create a new
-    collection, so a view-only caller is treated like any write into an existing
-    store: the managed-store requirement no longer applies and the role check
-    passes (the ingest itself still fails later if the collection is missing).
+    Regression: auto_create_collection is request-controlled, so a view-only key
+    must not be able to set it to false, name any existing unmanaged collection,
+    and skip the managed-store check. Milvus can always auto-create, so the
+    target must still resolve to a managed vector store regardless of the flag;
+    an unmanaged collection (assert_user_can_access_vector_store_id returns None)
+    is denied before aingest fires.
     """
     with (
         patch(
@@ -201,7 +194,7 @@ def test_internal_user_viewer_milvus_auto_create_disabled_allowed(
             "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
             new_callable=AsyncMock,
             return_value={"vector_store_id": "existing_collection", "file_id": "f"},
-        ),
+        ) as mock_aingest,
     ):
         response = client_internal_user_viewer.post(
             "/v1/rag/ingest",
@@ -217,9 +210,50 @@ def test_internal_user_viewer_milvus_auto_create_disabled_allowed(
             },
         )
 
+    assert response.status_code == 403, (
+        "view-only Milvus ingest with auto_create_collection disabled must still "
+        "require the collection to resolve to a managed vector store. "
+        f"Got: {response.status_code} {response.json()}"
+    )
+    mock_aingest.assert_not_called()
+
+
+def test_internal_user_viewer_milvus_managed_collection_passes_with_auto_create_disabled(
+    client_internal_user_viewer,
+):
+    """
+    The capability-based managed-store requirement must not over-block: when the
+    Milvus collection does resolve to a managed vector store the caller can
+    access, a view-only ingest with auto_create_collection disabled passes.
+    """
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
+            new=AsyncMock(return_value=object()),
+        ),
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new_callable=AsyncMock,
+            return_value={"vector_store_id": "managed_collection", "file_id": "f"},
+        ),
+    ):
+        response = client_internal_user_viewer.post(
+            "/v1/rag/ingest",
+            json={
+                "file_url": "https://example.com/doc.pdf",
+                "ingest_options": {
+                    "vector_store": {
+                        "custom_llm_provider": "milvus",
+                        "collection_name": "managed_collection",
+                        "auto_create_collection": False,
+                    }
+                },
+            },
+        )
+
     assert response.status_code != 403, (
-        "view-only Milvus ingest with auto_create_collection disabled must pass "
-        f"the role check. Got: {response.status_code} {response.json()}"
+        "view-only Milvus ingest into a managed collection must pass the role "
+        f"check. Got: {response.status_code} {response.json()}"
     )
 
 
@@ -235,15 +269,12 @@ def test_internal_user_rag_ingest_without_vector_store_id_allowed(client_interna
         response = client_internal_user.post(
             "/v1/rag/ingest",
             files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-            data={
-                "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
-            },
+            data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
         )
 
     # Should not be 403
     assert response.status_code != 403, (
-        f"internal_user should be allowed to create new vector stores. "
-        f"Response: {response.json()}"
+        f"internal_user should be allowed to create new vector stores. Response: {response.json()}"
     )
 
 
@@ -291,13 +322,11 @@ def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_
             },
         },
     )
-    assert (
-        response.status_code == 400
-    ), f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
+    assert response.status_code == 400, (
+        f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
+    )
     body = response.json()
-    assert blocked_field in str(
-        body
-    ), f"Response should mention '{blocked_field}': {body}"
+    assert blocked_field in str(body), f"Response should mention '{blocked_field}': {body}"
 
 
 class TestRagIngestSSRFBlocked:
@@ -316,9 +345,7 @@ class TestRagIngestSSRFBlocked:
             ("aws_bedrock_runtime_endpoint", "https://attacker.example/bedrock"),
         ],
     )
-    def test_ssrf_field_in_vector_store_config_rejected(
-        self, field, value, client_internal_user
-    ):
+    def test_ssrf_field_in_vector_store_config_rejected(self, field, value, client_internal_user):
         payload = {
             "file_url": "https://example.com/doc.pdf",
             "ingest_options": {
@@ -338,12 +365,8 @@ class TestRagIngestSSRFBlocked:
         )
         body = response.json()
         detail = body.get("detail", {})
-        error_text = (
-            detail.get("error", "") if isinstance(detail, dict) else str(detail)
-        )
-        assert (
-            field in error_text
-        ), f"Error should name the offending field: {error_text}"
+        error_text = detail.get("error", "") if isinstance(detail, dict) else str(detail)
+        assert field in error_text, f"Error should name the offending field: {error_text}"
 
     def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user):
         with patch(
@@ -355,14 +378,10 @@ class TestRagIngestSSRFBlocked:
                 "/v1/rag/ingest",
                 json={
                     "file_url": "https://example.com/doc.pdf",
-                    "ingest_options": {
-                        "vector_store": {"custom_llm_provider": "bedrock"}
-                    },
+                    "ingest_options": {"vector_store": {"custom_llm_provider": "bedrock"}},
                 },
             )
-        assert (
-            response.status_code != 400
-        ), f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
+        assert response.status_code != 400, f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
 
 
 class TestMilvusCollectionNameAuthorization:
@@ -387,9 +406,7 @@ class TestMilvusCollectionNameAuthorization:
             }
         }
         _normalize_collection_name_as_vector_store_id(ingest_options)
-        assert (
-            ingest_options["vector_store"]["vector_store_id"] == "other_team_collection"
-        )
+        assert ingest_options["vector_store"]["vector_store_id"] == "other_team_collection"
 
     def test_normalize_overrides_vector_store_id_with_collection_name(self):
         """
@@ -410,9 +427,7 @@ class TestMilvusCollectionNameAuthorization:
             }
         }
         _normalize_collection_name_as_vector_store_id(ingest_options)
-        assert (
-            ingest_options["vector_store"]["vector_store_id"] == "other_team_collection"
-        )
+        assert ingest_options["vector_store"]["vector_store_id"] == "other_team_collection"
 
     def test_normalize_ignores_non_milvus_providers(self):
         from litellm.proxy.rag_endpoints.endpoints import (
@@ -468,9 +483,7 @@ class TestMilvusCollectionNameAuthorization:
             f"must be authorized and denied. Got: {response.status_code} {response.json()}"
         )
 
-    def test_milvus_collection_name_bypass_with_both_fields_is_denied(
-        self, client_internal_user
-    ):
+    def test_milvus_collection_name_bypass_with_both_fields_is_denied(self, client_internal_user):
         async def fake_assert(vector_store_id, user_api_key_dict, **kwargs):
             if vector_store_id == "other_team_collection":
                 raise HTTPException(
@@ -527,13 +540,10 @@ class TestIngestionAutoCreateDetection:
         )
 
         assert (
-            _ingestion_can_auto_create_vector_store(
-                {"custom_llm_provider": "milvus", "collection_name": "c"}
-            )
-            is True
+            _ingestion_can_auto_create_vector_store({"custom_llm_provider": "milvus", "collection_name": "c"}) is True
         )
 
-    def test_milvus_auto_create_disabled(self):
+    def test_milvus_auto_create_flag_is_not_request_trusted(self):
         from litellm.proxy.rag_endpoints.endpoints import (
             _ingestion_can_auto_create_vector_store,
         )
@@ -546,7 +556,7 @@ class TestIngestionAutoCreateDetection:
                     "auto_create_collection": False,
                 }
             )
-            is False
+            is True
         )
 
     def test_openai_never_auto_creates(self):
@@ -555,9 +565,7 @@ class TestIngestionAutoCreateDetection:
         )
 
         assert (
-            _ingestion_can_auto_create_vector_store(
-                {"custom_llm_provider": "openai", "vector_store_id": "vs_x"}
-            )
+            _ingestion_can_auto_create_vector_store({"custom_llm_provider": "openai", "vector_store_id": "vs_x"})
             is False
         )
 
@@ -566,9 +574,4 @@ class TestIngestionAutoCreateDetection:
             _ingestion_can_auto_create_vector_store,
         )
 
-        assert (
-            _ingestion_can_auto_create_vector_store(
-                {"custom_llm_provider": "not_a_real_provider"}
-            )
-            is False
-        )
+        assert _ingestion_can_auto_create_vector_store({"custom_llm_provider": "not_a_real_provider"}) is False

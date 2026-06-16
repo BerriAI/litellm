@@ -111,9 +111,7 @@ def test_server_api_key_used_only_with_server_api_base(monkeypatch):
 
 def test_config_supplied_api_key_used_with_config_api_base(monkeypatch):
     monkeypatch.setenv("MILVUS_API_KEY", "server-secret")
-    ingestion = _make_ingestion(
-        api_base="https://tenant.milvus.example", api_key="tenant-token"
-    )
+    ingestion = _make_ingestion(api_base="https://tenant.milvus.example", api_key="tenant-token")
     assert ingestion.api_key == "tenant-token"
 
 
@@ -230,9 +228,7 @@ async def test_post_raises_on_milvus_error_code():
     ingestion = _make_ingestion(auto_create_collection=False)
 
     post_mock = AsyncMock()
-    post_mock.return_value = _json_response(
-        {"code": 1100, "message": "collection not found"}
-    )
+    post_mock.return_value = _json_response({"code": 1100, "message": "collection not found"})
     ingestion.async_httpx_client = MagicMock()
     ingestion.async_httpx_client.post = post_mock
 
@@ -273,9 +269,7 @@ async def test_db_name_and_partition_from_env_propagated(monkeypatch):
 @pytest.mark.asyncio
 async def test_partition_name_from_request_is_ignored(monkeypatch):
     monkeypatch.delenv("MILVUS_PARTITION_NAME", raising=False)
-    ingestion = _make_ingestion(
-        auto_create_collection=False, partition_name="victim_partition"
-    )
+    ingestion = _make_ingestion(auto_create_collection=False, partition_name="victim_partition")
 
     assert ingestion.partition_name is None
 
@@ -383,14 +377,12 @@ async def test_collection_exists_false_on_error():
 
 def test_can_auto_create_vector_store_default_true():
     assert (
-        MilvusRAGIngestion.can_auto_create_vector_store(
-            {"custom_llm_provider": "milvus", "collection_name": "c"}
-        )
+        MilvusRAGIngestion.can_auto_create_vector_store({"custom_llm_provider": "milvus", "collection_name": "c"})
         is True
     )
 
 
-def test_can_auto_create_vector_store_respects_disabled_flag():
+def test_can_auto_create_vector_store_ignores_request_supplied_disabled_flag():
     assert (
         MilvusRAGIngestion.can_auto_create_vector_store(
             {
@@ -399,5 +391,5 @@ def test_can_auto_create_vector_store_respects_disabled_flag():
                 "auto_create_collection": False,
             }
         )
-        is False
+        is True
     )

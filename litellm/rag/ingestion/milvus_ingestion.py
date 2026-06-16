@@ -76,13 +76,12 @@ class MilvusRAGIngestion(BaseRAGIngestion):
         if not self.embedding_config:
             self.embedding_config = {"model": "text-embedding-3-small"}
 
-        self.collection_name = self.vector_store_config.get(
-            "collection_name"
-        ) or self.vector_store_config.get("vector_store_id")
+        self.collection_name = self.vector_store_config.get("collection_name") or self.vector_store_config.get(
+            "vector_store_id"
+        )
         if not self.collection_name:
             raise ValueError(
-                "Milvus RAG ingestion requires 'collection_name' (or 'vector_store_id') "
-                "in the vector_store config."
+                "Milvus RAG ingestion requires 'collection_name' (or 'vector_store_id') in the vector_store config."
             )
 
         config_api_base = self.vector_store_config.get("api_base")
@@ -95,34 +94,18 @@ class MilvusRAGIngestion(BaseRAGIngestion):
         self.api_base = self.api_base.rstrip("/")
 
         config_api_key = self.vector_store_config.get("api_key")
-        self.api_key = (
-            config_api_key
-            if config_api_base
-            else config_api_key or get_secret_str("MILVUS_API_KEY")
-        )
-        self.vector_field = self.vector_store_config.get(
-            "vector_field", MILVUS_DEFAULT_VECTOR_FIELD
-        )
-        self.text_field = self.vector_store_config.get(
-            "text_field", MILVUS_DEFAULT_TEXT_FIELD
-        )
-        self.metric_type = self.vector_store_config.get(
-            "metric_type", MILVUS_DEFAULT_METRIC_TYPE
-        )
+        self.api_key = config_api_key if config_api_base else config_api_key or get_secret_str("MILVUS_API_KEY")
+        self.vector_field = self.vector_store_config.get("vector_field", MILVUS_DEFAULT_VECTOR_FIELD)
+        self.text_field = self.vector_store_config.get("text_field", MILVUS_DEFAULT_TEXT_FIELD)
+        self.metric_type = self.vector_store_config.get("metric_type", MILVUS_DEFAULT_METRIC_TYPE)
         self.db_name = get_secret_str("MILVUS_DB_NAME")
         self.partition_name = get_secret_str("MILVUS_PARTITION_NAME")
-        self.auto_create_collection = self.vector_store_config.get(
-            "auto_create_collection", True
-        )
+        self.auto_create_collection = self.vector_store_config.get("auto_create_collection", True)
 
-        self.async_httpx_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.RAG
-        )
+        self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.RAG)
 
     @classmethod
-    def normalize_authorized_vector_store_id(
-        cls, vector_store_opts: dict[str, object]
-    ) -> None:
+    def normalize_authorized_vector_store_id(cls, vector_store_opts: dict[str, object]) -> None:
         """
         Milvus resolves its write target from `collection_name` first (falling
         back to `vector_store_id`). Always mirror `collection_name` onto
@@ -137,10 +120,14 @@ class MilvusRAGIngestion(BaseRAGIngestion):
     @classmethod
     def can_auto_create_vector_store(cls, vector_store_opts: dict[str, object]) -> bool:
         """
-        Milvus creates the target collection on ingest unless
-        `auto_create_collection` is disabled (default: enabled).
+        Milvus is capable of creating the target collection on ingest, so the
+        view-only guard must always require the target to resolve to a managed
+        vector store. This reports the provider's capability, not the
+        request-supplied `auto_create_collection` flag: that flag is caller
+        controlled, and trusting it would let a view-only key set it to false,
+        name any existing collection, and skip the managed-store check.
         """
-        return bool(vector_store_opts.get("auto_create_collection", True))
+        return True
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -155,17 +142,14 @@ class MilvusRAGIngestion(BaseRAGIngestion):
 
     async def _post(self, path: str, body: dict[str, object]) -> dict[str, object]:
         url = f"{self.api_base}{path}"
-        response = await self.async_httpx_client.post(
-            url, json=body, headers=self._headers()
-        )
+        response = await self.async_httpx_client.post(url, json=body, headers=self._headers())
         response.raise_for_status()
         data = response.json()
         # Milvus REST returns {"code": 0, "data": ...} on success,
         # {"code": <non-zero>, "message": "..."} on error.
         if isinstance(data, dict) and data.get("code") not in (0, None):
             raise RuntimeError(
-                f"Milvus API call to {path} failed: "
-                f"code={data.get('code')} message={data.get('message')}"
+                f"Milvus API call to {path} failed: code={data.get('code')} message={data.get('message')}"
             )
         return data
 
@@ -188,8 +172,7 @@ class MilvusRAGIngestion(BaseRAGIngestion):
             return
 
         verbose_logger.debug(
-            f"Creating Milvus collection '{self.collection_name}' "
-            f"(dimension={dimension}, metric={self.metric_type})"
+            f"Creating Milvus collection '{self.collection_name}' (dimension={dimension}, metric={self.metric_type})"
         )
         # Quick-setup create: enables a dynamic field so chunk text + metadata
         # are stored alongside the vector without declaring a full schema.
@@ -252,9 +235,6 @@ class MilvusRAGIngestion(BaseRAGIngestion):
             body["partitionName"] = self.partition_name
 
         await self._post("/v2/vectordb/entities/insert", body)
-        verbose_logger.info(
-            f"Inserted {len(rows)} vectors into Milvus collection "
-            f"'{self.collection_name}'"
-        )
+        verbose_logger.info(f"Inserted {len(rows)} vectors into Milvus collection '{self.collection_name}'")
 
         return self.collection_name, filename
