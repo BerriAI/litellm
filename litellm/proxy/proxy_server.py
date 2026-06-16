@@ -8712,6 +8712,7 @@ async def chat_completion(  # noqa: PLR0915
                 response=_streaming_response,
                 user_api_key_dict=user_api_key_dict,
                 request_data=_data,
+                request=request,
             )
 
             return StreamingResponse(
@@ -8746,6 +8747,7 @@ async def chat_completion(  # noqa: PLR0915
                 response=_streaming_response,
                 user_api_key_dict=user_api_key_dict,
                 request_data=_data,
+                request=request,
             )
 
             return StreamingResponse(
@@ -8894,6 +8896,7 @@ async def completion(  # noqa: PLR0915
                 response=_streaming_response,
                 user_api_key_dict=user_api_key_dict,
                 request_data=_data,
+                request=request,
             )
 
             return StreamingResponse(
@@ -8940,6 +8943,7 @@ async def completion(  # noqa: PLR0915
                 response=_streaming_response,
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
+                request=request,
             )
 
             return StreamingResponse(
@@ -13412,6 +13416,7 @@ async def async_queue_request(
                     user_api_key_dict=user_api_key_dict,
                     response=response,
                     request_data=data,
+                    request=request,
                 ),
                 media_type="text/event-stream",
             )
