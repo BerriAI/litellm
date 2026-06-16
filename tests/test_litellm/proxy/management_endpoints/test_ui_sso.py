@@ -2121,6 +2121,164 @@ class TestCLIKeyRegenerationFlow:
         mock_cache.set_cache.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_cli_sso_start_returns_verification_uri_complete(self):
+        """Test CLI SSO start returns a verification_uri_complete that round-trips the user_code through the browser SSO start route"""
+        from urllib.parse import parse_qs, urlparse
+
+        from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_start
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.headers = {}
+        mock_request.base_url = "https://proxy.example.com/"
+        mock_cache = MagicMock()
+        mock_cache.increment_cache.return_value = 1
+
+        with (
+            patch.dict(
+                os.environ,
+                {"PROXY_BASE_URL": "https://proxy.example.com", "SERVER_ROOT_PATH": ""},
+            ),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        ):
+            result = await cli_sso_start(request=mock_request)
+
+        verification_uri_complete = result["verification_uri_complete"]
+        parsed = urlparse(verification_uri_complete)
+        query = parse_qs(parsed.query)
+
+        assert parsed.path.endswith("/sso/key/generate")
+        assert query["source"] == [LITELLM_CLI_SOURCE_IDENTIFIER]
+        assert query["key"] == [result["login_id"]]
+        assert query["user_code"] == [result["user_code"]]
+
+    def test_get_cli_state_appends_user_code_for_prefill(self):
+        """Test the OAuth state carries the user_code only for the opt-in prefill flow"""
+        from litellm.constants import (
+            LITELLM_CLI_SESSION_TOKEN_PREFIX,
+            LITELLM_CLI_SOURCE_IDENTIFIER,
+        )
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        manual_state = SSOAuthenticationHandler._get_cli_state(
+            source=LITELLM_CLI_SOURCE_IDENTIFIER, key="cli-abc123"
+        )
+        prefill_state = SSOAuthenticationHandler._get_cli_state(
+            source=LITELLM_CLI_SOURCE_IDENTIFIER,
+            key="cli-abc123",
+            user_code="WXYZ-2345",
+        )
+
+        assert manual_state == f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-abc123"
+        assert (
+            prefill_state == f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-abc123:WXYZ-2345"
+        )
+        assert (
+            SSOAuthenticationHandler._get_cli_state(
+                source="not-cli", key="cli-abc123", user_code="WXYZ-2345"
+            )
+            is None
+        )
+
+    def test_cli_state_round_trips_user_code_to_callback_parser(self):
+        """Test the callback's state parser recovers login_id and user_code from the state _get_cli_state builds"""
+        from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        state = SSOAuthenticationHandler._get_cli_state(
+            source=LITELLM_CLI_SOURCE_IDENTIFIER,
+            key="cli-abc123",
+            user_code="WXYZ-2345",
+        )
+
+        state_parts = state.split(":", 2)
+        key_id = state_parts[1] if len(state_parts) > 1 else None
+        prefill_user_code = state_parts[2] if len(state_parts) > 2 else None
+
+        assert key_id == "cli-abc123"
+        assert prefill_user_code == "WXYZ-2345"
+
+    def test_render_cli_sso_verification_page_prefills_user_code(self):
+        """Test the verify page pre-fills the user_code input (HTML-escaped) when provided"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _render_cli_sso_verification_page,
+        )
+
+        html = _render_cli_sso_verification_page(
+            verify_url="https://proxy.example.com/sso/cli/complete/cli-abc123",
+            browser_complete_token="browser-token",
+            prefill_user_code='WXYZ-2345"><script>',
+        )
+
+        assert 'name="user_code"' in html
+        assert "WXYZ-2345&quot;&gt;&lt;script&gt;" in html
+        assert '"><script>' not in html
+
+    def test_render_cli_sso_verification_page_omits_value_without_prefill(self):
+        """Test the verify page renders the empty manual input when no prefill is provided (backward compatible)"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _render_cli_sso_verification_page,
+        )
+
+        html = _render_cli_sso_verification_page(
+            verify_url="https://proxy.example.com/sso/cli/complete/cli-abc123",
+            browser_complete_token="browser-token",
+        )
+
+        input_line = next(
+            line for line in html.splitlines() if 'name="user_code"' in line
+        )
+        assert "value=" not in input_line
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_callback_prefills_user_code_on_verify_page(self):
+        """Test the CLI SSO callback threads prefill_user_code into the rendered verify page"""
+        from litellm.proxy._types import LiteLLM_UserTable
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.base_url = "https://proxy.example.com/"
+
+        mock_user_info = LiteLLM_UserTable(
+            user_id="test-user-123",
+            user_role="internal_user",
+            teams=[],
+            models=[],
+        )
+        mock_sso_result = {"user_email": "test@example.com", "user_id": "test-user-123"}
+
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": "poll-secret-hash",
+            "user_code_hash": "user-code-hash",
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+        }
+        with (
+            patch.dict(
+                os.environ,
+                {"PROXY_BASE_URL": "https://proxy.example.com", "SERVER_ROOT_PATH": ""},
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+                return_value=mock_user_info,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        ):
+            result = await cli_sso_callback(
+                request=mock_request,
+                key="cli-session-4567890",
+                result=mock_sso_result,
+                prefill_user_code="WXYZ-2345",
+            )
+
+        assert result.status_code == 200
+        assert 'value="WXYZ-2345"' in result.body.decode()
+
+    @pytest.mark.asyncio
     async def test_cli_sso_complete_verifies_user_code(self):
         """Test CLI SSO complete marks a session as verified"""
         from litellm.proxy.management_endpoints.ui_sso import (
@@ -2454,6 +2612,46 @@ class TestCLIKeyRegenerationFlow:
             mock_cli_callback.assert_called_once_with(
                 request=mock_request,
                 key="cli-new-session-key-456",
+                prefill_user_code=None,
+                result=mock_result,
+                received_response=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_auth_callback_forwards_prefill_user_code_from_state(self):
+        """Test auth_callback recovers the user_code from the state and forwards it for prefill"""
+        from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
+        from litellm.proxy.management_endpoints.ui_sso import auth_callback
+
+        mock_request = MagicMock(spec=Request)
+        cli_state = (
+            f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-session-key-456:WXYZ-2345"
+        )
+        mock_result = {"user_id": "test-user", "email": "test@example.com"}
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.cli_sso_callback"
+            ) as mock_cli_callback,
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+            patch("litellm.proxy.proxy_server.jwt_handler", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "test-google-id"}, clear=True),
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.GoogleSSOHandler.get_google_callback_response",
+                return_value=mock_result,
+            ),
+        ):
+            mock_cli_callback.return_value = MagicMock()
+
+            await auth_callback(request=mock_request, state=cli_state)
+
+            mock_cli_callback.assert_called_once_with(
+                request=mock_request,
+                key="cli-new-session-key-456",
+                prefill_user_code="WXYZ-2345",
                 result=mock_result,
                 received_response=None,
             )
