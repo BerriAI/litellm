@@ -614,7 +614,9 @@ def cost_per_token(  # noqa: PLR0915
                 service_tier=service_tier,
             )
     elif custom_llm_provider == "anthropic":
-        return anthropic_cost_per_token(model=model, usage=usage_block)
+        return anthropic_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "bedrock":
         return bedrock_cost_per_token(
             model=model, usage=usage_block, service_tier=service_tier

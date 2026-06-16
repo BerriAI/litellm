@@ -56,19 +56,26 @@ def _compute_cache_only_cost(model_info: "ModelInfo", usage: "Usage") -> float:
     return cache_cost
 
 
-def cost_per_token(model: str, usage: "Usage") -> Tuple[float, float]:
+def cost_per_token(
+    model: str, usage: "Usage", service_tier: str | None = None
+) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
+        - service_tier: the service tier the request was served at (e.g. "priority"),
+          read from the Anthropic response usage and used to select tier-specific pricing
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     prompt_cost, completion_cost = generic_cost_per_token(
-        model=model, usage=usage, custom_llm_provider="anthropic"
+        model=model,
+        usage=usage,
+        custom_llm_provider="anthropic",
+        service_tier=service_tier,
     )
 
     # Apply provider_specific_entry multipliers for geo/speed routing
