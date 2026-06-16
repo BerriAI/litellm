@@ -157,7 +157,6 @@ _STREAMING_ERROR_BODY_READ_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     thread_name_prefix="litellm-streaming-error-body-read",
 )
 
-
 def _prepare_request_data_and_content(
     data: Optional[Union[dict, str, bytes]] = None,
     content: Any = None,
