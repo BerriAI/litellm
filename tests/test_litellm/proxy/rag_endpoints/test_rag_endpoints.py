@@ -8,7 +8,7 @@ Covers:
 import io
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -84,20 +84,13 @@ def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
     client_internal_user_viewer,
 ):
     """
-    internal_user_viewer with a vector_store_id that resolves to an existing
-    managed vector store passes the role check.
+    internal_user_viewer with a vector_store_id passes the role check.
     (Actual ingest may fail due to missing API keys, but we get past 403.)
     """
-    with (
-        patch(
-            "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
-            new=AsyncMock(return_value=MagicMock()),
-        ),
-        patch(
-            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
-            new_callable=AsyncMock,
-            return_value={"vector_store_id": "vs_existing", "file_id": "file_123"},
-        ),
+    with patch(
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+        new_callable=AsyncMock,
+        return_value={"vector_store_id": "vs_existing", "file_id": "file_123"},
     ):
         response = client_internal_user_viewer.post(
             "/v1/rag/ingest",
@@ -114,12 +107,15 @@ def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
     )
 
 
-def test_internal_user_viewer_rag_ingest_with_nonexistent_vector_store_id_rejected(
+def test_internal_user_viewer_provider_native_vector_store_id_allowed(
     client_internal_user_viewer,
 ):
     """
-    internal_user_viewer providing a vector_store_id that does not resolve to an
-    existing managed vector store is rejected - presence alone is not enough.
+    Regression: a view-only caller may still ingest into a provider-native
+    vector store id that is not in litellm's managed registry, as long as the
+    provider does not auto-create the store. Only auto-creating providers
+    (e.g. Milvus) require the id to resolve to a managed store, so an OpenAI id
+    must not be rejected just for being unregistered.
     """
     with (
         patch(
@@ -129,20 +125,20 @@ def test_internal_user_viewer_rag_ingest_with_nonexistent_vector_store_id_reject
         patch(
             "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
             new_callable=AsyncMock,
-            return_value={"vector_store_id": "vs_new", "file_id": "file_123"},
+            return_value={"vector_store_id": "vs_provider_native", "file_id": "f"},
         ),
     ):
         response = client_internal_user_viewer.post(
             "/v1/rag/ingest",
             files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
             data={
-                "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai","vector_store_id":"vs_does_not_exist"}}}'
+                "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai","vector_store_id":"vs_provider_native"}}}'
             },
         )
 
-    assert response.status_code == 403, (
-        f"internal_user_viewer with a non-existent vector_store_id must be denied. "
-        f"Response: {response.json()}"
+    assert response.status_code != 403, (
+        "view-only ingest into an unregistered provider-native (non-auto-create) "
+        f"vector store id must be allowed. Got: {response.status_code} {response.json()}"
     )
 
 
@@ -185,6 +181,46 @@ def test_internal_user_viewer_milvus_collection_name_auto_create_rejected(
         f"must be denied. Got: {response.status_code} {response.json()}"
     )
     mock_aingest.assert_not_called()
+
+
+def test_internal_user_viewer_milvus_auto_create_disabled_allowed(
+    client_internal_user_viewer,
+):
+    """
+    With auto_create_collection disabled, a Milvus ingest cannot create a new
+    collection, so a view-only caller is treated like any write into an existing
+    store: the managed-store requirement no longer applies and the role check
+    passes (the ingest itself still fails later if the collection is missing).
+    """
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new_callable=AsyncMock,
+            return_value={"vector_store_id": "existing_collection", "file_id": "f"},
+        ),
+    ):
+        response = client_internal_user_viewer.post(
+            "/v1/rag/ingest",
+            json={
+                "file_url": "https://example.com/doc.pdf",
+                "ingest_options": {
+                    "vector_store": {
+                        "custom_llm_provider": "milvus",
+                        "collection_name": "existing_collection",
+                        "auto_create_collection": False,
+                    }
+                },
+            },
+        )
+
+    assert response.status_code != 403, (
+        "view-only Milvus ingest with auto_create_collection disabled must pass "
+        f"the role check. Got: {response.status_code} {response.json()}"
+    )
 
 
 def test_internal_user_rag_ingest_without_vector_store_id_allowed(client_internal_user):
@@ -474,4 +510,65 @@ class TestMilvusCollectionNameAuthorization:
             "Pairing an authorized vector_store_id with an unauthorized "
             "collection_name must still be denied. Got: "
             f"{response.status_code} {response.json()}"
+        )
+
+
+class TestIngestionAutoCreateDetection:
+    """
+    The view-only guard only requires managed-store resolution for ingestions
+    that can create a store on write. That decision is owned per-provider via
+    `can_auto_create_vector_store` and dispatched by
+    `_ingestion_can_auto_create_vector_store`.
+    """
+
+    def test_milvus_auto_creates_by_default(self):
+        from litellm.proxy.rag_endpoints.endpoints import (
+            _ingestion_can_auto_create_vector_store,
+        )
+
+        assert (
+            _ingestion_can_auto_create_vector_store(
+                {"custom_llm_provider": "milvus", "collection_name": "c"}
+            )
+            is True
+        )
+
+    def test_milvus_auto_create_disabled(self):
+        from litellm.proxy.rag_endpoints.endpoints import (
+            _ingestion_can_auto_create_vector_store,
+        )
+
+        assert (
+            _ingestion_can_auto_create_vector_store(
+                {
+                    "custom_llm_provider": "milvus",
+                    "collection_name": "c",
+                    "auto_create_collection": False,
+                }
+            )
+            is False
+        )
+
+    def test_openai_never_auto_creates(self):
+        from litellm.proxy.rag_endpoints.endpoints import (
+            _ingestion_can_auto_create_vector_store,
+        )
+
+        assert (
+            _ingestion_can_auto_create_vector_store(
+                {"custom_llm_provider": "openai", "vector_store_id": "vs_x"}
+            )
+            is False
+        )
+
+    def test_unknown_provider_is_not_auto_create(self):
+        from litellm.proxy.rag_endpoints.endpoints import (
+            _ingestion_can_auto_create_vector_store,
+        )
+
+        assert (
+            _ingestion_can_auto_create_vector_store(
+                {"custom_llm_provider": "not_a_real_provider"}
+            )
+            is False
         )

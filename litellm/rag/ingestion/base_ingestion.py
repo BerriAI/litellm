@@ -102,7 +102,7 @@ class BaseRAGIngestion(ABC):
 
     @classmethod
     def normalize_authorized_vector_store_id(
-        cls, vector_store_opts: Dict[str, Any]
+        cls, vector_store_opts: dict[str, object]
     ) -> None:
         """
         Rewrite the vector_store config so `vector_store_id` matches the actual
@@ -114,6 +114,18 @@ class BaseRAGIngestion(ABC):
         that will actually be written to. Default: no-op.
         """
         return None
+
+    @classmethod
+    def can_auto_create_vector_store(cls, vector_store_opts: dict[str, object]) -> bool:
+        """
+        Whether ingesting can bring a brand-new vector store into existence.
+
+        Providers that only write to a pre-existing store return False. Providers
+        that create the store on demand (e.g. Milvus `auto_create_collection`)
+        must override this so the proxy can stop a view-only caller from creating
+        one. Default: False.
+        """
+        return False
 
     async def upload(
         self,

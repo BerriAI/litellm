@@ -355,3 +355,25 @@ async def test_collection_exists_false_on_error():
     ingestion.async_httpx_client = MagicMock()
     ingestion.async_httpx_client.post = post_mock
     assert await ingestion._collection_exists() is False
+
+
+def test_can_auto_create_vector_store_default_true():
+    assert (
+        MilvusRAGIngestion.can_auto_create_vector_store(
+            {"custom_llm_provider": "milvus", "collection_name": "c"}
+        )
+        is True
+    )
+
+
+def test_can_auto_create_vector_store_respects_disabled_flag():
+    assert (
+        MilvusRAGIngestion.can_auto_create_vector_store(
+            {
+                "custom_llm_provider": "milvus",
+                "collection_name": "c",
+                "auto_create_collection": False,
+            }
+        )
+        is False
+    )

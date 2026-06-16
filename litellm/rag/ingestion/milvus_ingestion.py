@@ -18,7 +18,7 @@ does not add a `pymilvus` dependency.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -117,7 +117,7 @@ class MilvusRAGIngestion(BaseRAGIngestion):
 
     @classmethod
     def normalize_authorized_vector_store_id(
-        cls, vector_store_opts: Dict[str, Any]
+        cls, vector_store_opts: dict[str, object]
     ) -> None:
         """
         Milvus resolves its write target from `collection_name` first (falling
@@ -130,18 +130,26 @@ class MilvusRAGIngestion(BaseRAGIngestion):
         if collection_name:
             vector_store_opts["vector_store_id"] = collection_name
 
-    def _headers(self) -> Dict[str, str]:
+    @classmethod
+    def can_auto_create_vector_store(cls, vector_store_opts: dict[str, object]) -> bool:
+        """
+        Milvus creates the target collection on ingest unless
+        `auto_create_collection` is disabled (default: enabled).
+        """
+        return bool(vector_store_opts.get("auto_create_collection", True))
+
+    def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _with_db(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    def _with_db(self, body: dict[str, object]) -> dict[str, object]:
         if self.db_name:
             body["dbName"] = self.db_name
         return body
 
-    async def _post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    async def _post(self, path: str, body: dict[str, object]) -> dict[str, object]:
         url = f"{self.api_base}{path}"
         response = await self.async_httpx_client.post(
             url, json=body, headers=self._headers()
@@ -163,7 +171,8 @@ class MilvusRAGIngestion(BaseRAGIngestion):
                 "/v2/vectordb/collections/has",
                 self._with_db({"collectionName": self.collection_name}),
             )
-            return bool((data.get("data") or {}).get("has"))
+            inner = data.get("data")
+            return bool(inner.get("has")) if isinstance(inner, dict) else False
         except Exception as e:
             verbose_logger.debug(f"Milvus collection 'has' check failed: {e}")
             return False
@@ -197,8 +206,8 @@ class MilvusRAGIngestion(BaseRAGIngestion):
         file_content: Optional[bytes],
         filename: Optional[str],
         content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
+        chunks: list[str],
+        embeddings: Optional[list[list[float]]],
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Insert chunks + embeddings into a Milvus collection.
@@ -223,9 +232,9 @@ class MilvusRAGIngestion(BaseRAGIngestion):
 
         await self._ensure_collection_exists(dimension=len(embeddings[0]))
 
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, object]] = []
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-            row: Dict[str, Any] = {
+            row: dict[str, object] = {
                 self.vector_field: embedding,
                 self.text_field: chunk,
                 "chunk_index": i,
