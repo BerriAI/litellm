@@ -6,7 +6,7 @@ Handles transformation between OpenAI-compatible format and ModelScope API forma
 API Reference: https://modelscope.cn/docs/model-service/API-Inference/intro
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Union  # noqa: TID251
+from typing import TYPE_CHECKING, Optional, Union
 
 import httpx
 
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LiteLLMLoggingObj = Any
+    LiteLLMLoggingObj = object
 
 
 class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
@@ -75,14 +75,10 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         optional_params.update(non_default_params)
         return optional_params
 
-    def get_complete_url(  # noqa: PLR0913
+    def get_complete_url(
         self,
         api_base: Optional[str],
-        api_key: Optional[str],
-        model: str,
-        optional_params: dict,
-        litellm_params: dict,
-        stream: Optional[bool] = None,
+        **kwargs: object,
     ) -> str:
         """
         Get the complete URL for the ModelScope image generation API request.
@@ -95,15 +91,11 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         # Return the images endpoint
         return f"{base_url}/images/generations"
 
-    def validate_environment(  # noqa: PLR0913
+    def validate_environment(
         self,
         headers: dict,
-        model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
         api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        **kwargs: object,
     ) -> dict:
         """
         Validate environment and set up headers for ModelScope.
@@ -151,18 +143,12 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
 
         return request_data
 
-    def transform_image_generation_response(  # noqa: PLR0913
+    def transform_image_generation_response(
         self,
         model: str,
         raw_response: httpx.Response,
         model_response: ImageResponse,
-        logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        **kwargs: object,
     ) -> ImageResponse:
         """
         Transform ModelScope response to OpenAI-compatible ImageResponse.
