@@ -528,6 +528,22 @@ def test_capture_span_content_resolves_modes():
         ).capture_span_content
         is False
     )
+    # V1 accepted UPPER_SNAKE_CASE; the env value is case-insensitive so an
+    # operator carrying ``SPAN_AND_EVENT`` forward still enables capture.
+    assert (
+        OpenTelemetryV2Config(
+            capture_message_content="SPAN_AND_EVENT"
+        ).capture_span_content
+        is True
+    )
+    assert (
+        OpenTelemetryV2Config(capture_message_content="SPAN_ONLY").capture_span_content
+        is True
+    )
+    assert (
+        OpenTelemetryV2Config(capture_message_content="NO_CONTENT").capture_span_content
+        is False
+    )
 
 
 def test_v2_flag_is_off_by_default(monkeypatch):
