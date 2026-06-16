@@ -2846,7 +2846,7 @@ async def make_call(
         sync_stream=False,
         logging_obj=logging_obj,
         response_headers=response.headers,
-        response=response,
+        response=response,  # any-ok: untyped stream
     )
     # LOGGING
     logging_obj.post_call(
@@ -2890,7 +2890,7 @@ def make_sync_call(
         sync_stream=True,
         logging_obj=logging_obj,
         response_headers=response.headers,
-        response=response,
+        response=response,  # any-ok: untyped stream
     )
 
     # LOGGING
@@ -3352,7 +3352,7 @@ class ModelResponseIterator:
         sync_stream: bool,
         logging_obj: LoggingClass,
         response_headers: Optional[Dict[str, str]] = None,
-        response: Optional[httpx.Response] = None,
+        response: httpx.Response | None = None,
     ):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
@@ -3663,35 +3663,45 @@ class ModelResponseIterator:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     async def aclose(self) -> None:
-        iterator = getattr(self, "async_response_iterator", self.streaming_response)
-        if iterator is not None and hasattr(iterator, "aclose"):
+        iterator = getattr(  # any-ok: untyped stream
+            self,
+            "async_response_iterator",
+            self.streaming_response,  # any-ok: untyped stream
+        )
+        if iterator is not None and hasattr(  # any-ok: untyped stream
+            iterator, "aclose"  # any-ok: untyped stream
+        ):
             try:
-                await iterator.aclose()
-            except Exception as e:
+                await iterator.aclose()  # any-ok: untyped stream
+            except Exception as e:  # noqa: BLE001
                 verbose_logger.debug(
                     "ModelResponseIterator.aclose: error closing iterator: %s", e
                 )
         if self.response is not None:
             try:
                 await self.response.aclose()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 verbose_logger.debug(
                     "ModelResponseIterator.aclose: error closing response: %s", e
                 )
 
     def close(self) -> None:
-        iterator = getattr(self, "response_iterator", self.streaming_response)
-        if iterator is not None and hasattr(iterator, "close"):
+        iterator = getattr(  # any-ok: untyped stream
+            self, "response_iterator", self.streaming_response  # any-ok: untyped stream
+        )
+        if iterator is not None and hasattr(  # any-ok: untyped stream
+            iterator, "close"  # any-ok: untyped stream
+        ):
             try:
-                iterator.close()
-            except Exception as e:
+                iterator.close()  # any-ok: untyped stream
+            except Exception as e:  # noqa: BLE001
                 verbose_logger.debug(
                     "ModelResponseIterator.close: error closing iterator: %s", e
                 )
         if self.response is not None:
             try:
                 self.response.close()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 verbose_logger.debug(
                     "ModelResponseIterator.close: error closing response: %s", e
                 )

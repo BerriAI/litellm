@@ -894,7 +894,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     if transaction_buffer_redis_cache is None:
         transaction_buffer_redis_cache = (
             ProxyStartupEvent._get_transaction_buffer_redis_cache(
-                general_settings=general_settings
+                general_settings=general_settings  # any-ok: untyped stream
             )
         )
 
@@ -7036,7 +7036,7 @@ _SSE_FRAME_DELIMITERS = ("\r\n\r\n", "\n\n", "\r\r")
 _MAX_RAW_SSE_BUFFER_CHARS = 8 * 1024 * 1024
 
 
-def _pop_complete_sse_frame(buffer: str) -> Tuple[Optional[str], str]:
+def _pop_complete_sse_frame(buffer: str) -> tuple[str | None, str]:
     delimiter_positions = [
         (position, delimiter)
         for delimiter in _SSE_FRAME_DELIMITERS
@@ -7054,7 +7054,7 @@ async def async_data_generator(  # noqa: PLR0915
     response,
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict,
-    request: Optional[Request] = None,
+    request: Request | None = None,
 ):
     verbose_proxy_logger.debug("inside generator")
     stream_completed = False
@@ -7080,7 +7080,9 @@ async def async_data_generator(  # noqa: PLR0915
         # happened to ship a streaming-iterator override (the default).
         needs_iterator_wrap = proxy_logging_obj.needs_iterator_wrap()
         needs_per_chunk_hook = proxy_logging_obj.needs_per_chunk_streaming_hook()
-        is_raw_sse_stream = bool(request_data.get("_litellm_raw_sse_stream"))
+        is_raw_sse_stream = bool(
+            request_data.get("_litellm_raw_sse_stream")  # any-ok: untyped stream
+        )
         raw_sse_buffer = ""
 
         if needs_iterator_wrap:
@@ -7119,26 +7121,26 @@ async def async_data_generator(  # noqa: PLR0915
                         frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
                         if frame is None:
                             break
-                        yield frame
+                        yield frame  # any-ok: untyped stream
                     if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
                         raise ValueError(
                             "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
                         )
                     continue
                 if chunk.startswith(("data:", "event:", ":")):
-                    yield (
+                    yield (  # any-ok: untyped stream
                         chunk
                         if chunk.endswith(_SSE_FRAME_DELIMITERS)
                         else chunk + "\n\n"
                     )
                     continue
-            elif isinstance(chunk, str) and is_raw_sse_stream:
+            elif isinstance(chunk, str) and is_raw_sse_stream:  # any-ok: untyped stream
                 raw_sse_buffer += chunk
                 while True:
                     frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
                     if frame is None:
                         break
-                    yield frame
+                    yield frame  # any-ok: untyped stream
                 if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
                     raise ValueError(
                         "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
@@ -7161,7 +7163,7 @@ async def async_data_generator(  # noqa: PLR0915
             ProxyLogging._fire_deferred_stream_logging(request_data)
 
         if raw_sse_buffer:
-            yield (
+            yield (  # any-ok: untyped stream
                 raw_sse_buffer
                 if raw_sse_buffer.endswith(_SSE_FRAME_DELIMITERS)
                 else raw_sse_buffer + "\n\n"
@@ -7227,8 +7229,8 @@ async def async_data_generator(  # noqa: PLR0915
 
         await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
             request=request,
-            request_data=request_data,
-            response=response,
+            request_data=request_data,  # any-ok: untyped stream
+            response=response,  # any-ok: untyped stream
             stream_completed=stream_completed,
             client_disconnected=client_disconnected,
         )
@@ -7238,7 +7240,7 @@ def select_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict,
-    request: Optional[Request] = None,
+    request: Request | None = None,
 ):
     return async_data_generator(
         response=response,
@@ -7337,7 +7339,7 @@ class ProxyStartupEvent:
     @staticmethod
     def _get_transaction_buffer_redis_cache(
         general_settings: dict,
-    ) -> Optional[RedisCache]:
+    ) -> RedisCache | None:
         """
         Builds a standalone Redis cache from REDIS_* environment variables so
         use_redis_transaction_buffer can run when the proxy cache backend is not
@@ -7349,8 +7351,10 @@ class ProxyStartupEvent:
         from litellm._redis import _redis_kwargs_from_environment
         from litellm.secret_managers.main import str_to_bool
 
-        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
-            general_settings.get("use_redis_transaction_buffer", False)
+        _use_redis_transaction_buffer: bool | str | None = (
+            general_settings.get(  # any-ok: untyped stream
+                "use_redis_transaction_buffer", False
+            )
         )
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
@@ -7358,11 +7362,14 @@ class ProxyStartupEvent:
         if not _use_redis_transaction_buffer:
             return None
 
-        redis_env_kwargs = _redis_kwargs_from_environment()
-        if "host" not in redis_env_kwargs and "url" not in redis_env_kwargs:
+        redis_env_kwargs = _redis_kwargs_from_environment()  # any-ok: untyped stream
+        if (
+            "host" not in redis_env_kwargs  # any-ok: untyped stream
+            and "url" not in redis_env_kwargs  # any-ok: untyped stream
+        ):
             return None
 
-        return RedisCache(**redis_env_kwargs)
+        return RedisCache(**redis_env_kwargs)  # any-ok: untyped stream
 
     @classmethod
     async def _initialize_semantic_tool_filter(

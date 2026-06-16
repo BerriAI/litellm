@@ -747,11 +747,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # to the model would carry anonymization tokens and the response would echo them.
         if (
             self.should_run_guardrail(
-                data=data, event_type=GuardrailEventHooks.pre_call
+                data=data,  # any-ok: untyped request
+                event_type=GuardrailEventHooks.pre_call,  # any-ok: untyped request
             )
             is not True
         ):
-            return data
+            return data  # any-ok: untyped request
 
         try:
             content_safety = data.get("content_safety", None)

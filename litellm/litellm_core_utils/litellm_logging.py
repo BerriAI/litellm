@@ -5449,24 +5449,27 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_error_information_for_logging_payload(
         metadata: dict,
-        original_exception: Optional[Exception],
-        error_str: Optional[str],
-    ) -> tuple[StandardLoggingPayloadErrorInformation, Optional[str]]:
+        original_exception: Exception | None,
+        error_str: str | None,
+    ) -> tuple[StandardLoggingPayloadErrorInformation, str | None]:
         error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,
         )
-        if not metadata.get("client_disconnected"):
+        if not metadata.get("client_disconnected"):  # any-ok: untyped metadata
             return error_information, error_str
 
-        client_disconnect_error = metadata.get("error_information")
-        if isinstance(client_disconnect_error, dict):
+        client_disconnect_error = metadata.get(  # any-ok: untyped metadata
+            "error_information"
+        )
+        if isinstance(client_disconnect_error, dict):  # any-ok: untyped metadata
             error_information = cast(
-                StandardLoggingPayloadErrorInformation, client_disconnect_error
+                StandardLoggingPayloadErrorInformation,
+                client_disconnect_error,  # any-ok: untyped metadata
             )
         else:
             error_information = cast(
                 StandardLoggingPayloadErrorInformation,
-                {
+                {  # any-ok: untyped metadata
                     "error_code": "499",
                     "error_message": "Client disconnected the request",
                     "error_class": "ClientDisconnected",
@@ -5805,7 +5808,7 @@ def get_standard_logging_object_payload(
 
         error_information, error_str = (
             StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
-                metadata=metadata,
+                metadata=metadata,  # any-ok: untyped metadata
                 original_exception=original_exception,
                 error_str=error_str,
             )

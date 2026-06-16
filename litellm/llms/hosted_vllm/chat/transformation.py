@@ -202,31 +202,44 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
                     text_parts = []
-                    tool_calls: List[ChatCompletionAssistantToolCall] = []
-                    content_blocks: List[Union[str, Dict[str, Any]]] = []
+                    tool_calls: list[ChatCompletionAssistantToolCall] = []
+                    content_blocks: list[object] = []
                     has_structured_content = False
-                    for c in existing_content:
-                        if isinstance(c, dict) and c.get("type") == "text":
-                            text_parts.append(c.get("text", ""))
-                            content_blocks.append(c)
-                        elif isinstance(c, dict) and c.get("type") == "tool_use":
-                            tool_input = c.get("input", {})
+                    for c in existing_content:  # any-ok: untyped content
+                        if (
+                            isinstance(c, dict)  # any-ok: untyped content
+                            and c.get("type") == "text"  # any-ok: untyped content
+                        ):
+                            text_parts.append(  # any-ok: untyped content
+                                c.get("text", "")  # any-ok: untyped content
+                            )
+                            content_blocks.append(c)  # any-ok: untyped content
+                        elif (
+                            isinstance(c, dict)  # any-ok: untyped content
+                            and c.get("type") == "tool_use"  # any-ok: untyped content
+                        ):
+                            tool_input = c.get("input", {})  # any-ok: untyped content
                             tool_calls.append(
                                 ChatCompletionAssistantToolCall(
-                                    id=c.get("id"),
+                                    id=c.get("id"),  # any-ok: untyped content
                                     type="function",
                                     function=ChatCompletionToolCallFunctionChunk(
-                                        name=c.get("name"),
+                                        name=c.get("name"),  # any-ok: untyped content
                                         arguments=(
                                             tool_input
-                                            if isinstance(tool_input, str)
-                                            else json.dumps(tool_input)
+                                            if isinstance(
+                                                tool_input,  # any-ok: untyped content
+                                                str,  # any-ok: untyped content
+                                            )
+                                            else json.dumps(
+                                                tool_input  # any-ok: untyped content
+                                            )
                                         ),
                                     ),
                                 )
                             )
                         else:
-                            content_blocks.append(c)
+                            content_blocks.append(c)  # any-ok: untyped content
                             has_structured_content = True
                     if tool_calls:
                         existing_tool_calls = message.get("tool_calls")
@@ -234,7 +247,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                             message["tool_calls"] = existing_tool_calls + tool_calls
                         else:
                             message["tool_calls"] = tool_calls
-                    content_str = "\n".join(text_parts)
+                    content_str = "\n".join(text_parts)  # any-ok: untyped content
                     new_content = (
                         content_blocks if has_structured_content else content_str
                     )

@@ -16,7 +16,7 @@ Requires:
 
 import json
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import httpx
 
@@ -29,6 +29,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import KeyManagementSystem
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.secret_managers.main import KeyManagementSettings
 
 from .base_secret_manager import BaseSecretManager
 
@@ -43,7 +44,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         aws_profile_name: Optional[str] = None,
         aws_web_identity_token: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
-        replica_regions: Optional[List[str]] = None,
+        replica_regions: list[str] | None = None,
         **kwargs,
     ):
         BaseSecretManager.__init__(self, **kwargs)
@@ -57,7 +58,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         self.aws_profile_name = aws_profile_name
         self.aws_web_identity_token = aws_web_identity_token
         self.aws_sts_endpoint = aws_sts_endpoint
-        self.replica_regions: List[str] = replica_regions or []
+        self.replica_regions: list[str] = replica_regions or []
 
     @classmethod
     def validate_environment(cls):
@@ -77,7 +78,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
     def load_aws_secret_manager(
         cls,
         use_aws_secret_manager: Optional[bool],
-        key_management_settings: Optional[Any] = None,
+        key_management_settings: KeyManagementSettings | None = None,
     ):
         """
         Initialize AWSSecretsManagerV2 with settings from key_management_settings
@@ -112,9 +113,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                     "aws_sts_endpoint": getattr(
                         key_management_settings, "aws_sts_endpoint", None
                     ),
-                    "replica_regions": getattr(
-                        key_management_settings, "replica_regions", None
-                    ),
+                    "replica_regions": key_management_settings.replica_regions,
                 }
                 # Remove None values
                 aws_kwargs = {k: v for k, v in aws_kwargs.items() if v is not None}
@@ -322,11 +321,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         )
 
         try:
-            response = await async_client.post(
-                url=endpoint_url, headers=headers, data=body.decode("utf-8")
+            response = await async_client.post(  # any-ok: untyped httpx
+                url=endpoint_url,
+                headers=headers,  # any-ok: untyped httpx
+                data=body.decode("utf-8"),  # any-ok: untyped httpx
             )
-            response.raise_for_status()
-            create_response = response.json()
+            response.raise_for_status()  # any-ok: untyped httpx
+            create_response = response.json()  # any-ok: untyped httpx
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -337,7 +338,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 await self.async_replicate_secret(
                     secret_name=secret_name,
                     replica_regions=self.replica_regions,
-                    optional_params=optional_params,
+                    optional_params=optional_params,  # any-ok: untyped httpx
                     timeout=timeout,
                 )
                 verbose_logger.debug(
@@ -345,7 +346,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                     secret_name,
                     self.replica_regions,
                 )
-            except Exception as replication_err:
+            except Exception as replication_err:  # noqa: BLE001
                 verbose_logger.warning(
                     "Failed to replicate secret '%s' to regions %s: %s — key was created successfully.",
                     secret_name,
@@ -353,15 +354,15 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                     str(replication_err),
                 )
 
-        return create_response
+        return create_response  # any-ok: untyped httpx
 
     async def async_replicate_secret(
         self,
         secret_name: str,
-        replica_regions: List[str],
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> dict:
+        replica_regions: list[str],
+        optional_params: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> dict[str, object]:
         """
         Replicate a secret to additional AWS regions using ReplicateSecretToRegions.
 
@@ -386,12 +387,12 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             replica_regions,
         )
 
-        data: Dict[str, Any] = {
+        data: dict[str, object] = {
             "SecretId": secret_name,
             "AddReplicaRegions": [{"Region": r} for r in replica_regions],
         }
 
-        endpoint_url, headers, body = self._prepare_request(
+        endpoint_url, headers, body = self._prepare_request(  # any-ok: untyped httpx
             action="ReplicateSecretToRegions",
             secret_name=secret_name,
             optional_params=optional_params,
@@ -400,7 +401,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
 
         async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
-            params={"timeout": timeout},
+            params={"timeout": timeout},  # any-ok: untyped httpx
         )
 
         try:
