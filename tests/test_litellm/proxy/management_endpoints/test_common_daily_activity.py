@@ -1,5 +1,6 @@
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,10 +11,13 @@ sys.path.insert(
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _is_user_agent_tag,
+    _record_to_spend_metrics,
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
+    update_metrics,
 )
+from litellm.types.proxy.management_endpoints.common_daily_activity import SpendMetrics
 
 
 @pytest.mark.asyncio
@@ -688,3 +692,45 @@ async def test_get_daily_activity_aggregated_empty_result_set():
     assert result.metadata.total_failed_requests == 0
     assert result.metadata.total_cache_read_input_tokens == 0
     assert result.metadata.total_cache_creation_input_tokens == 0
+
+
+def _no_spend_record():
+    """A rollup row for a key with no spend, where SUM() returns NULL (None)."""
+    return SimpleNamespace(
+        spend=None,
+        prompt_tokens=None,
+        completion_tokens=None,
+        cache_read_input_tokens=None,
+        cache_creation_input_tokens=None,
+        api_requests=None,
+        successful_requests=None,
+        failed_requests=None,
+    )
+
+
+def test_record_to_spend_metrics_handles_none_values():
+    """Keys with no spend produce NULL aggregates; treat them as zero, not a crash."""
+    metrics = _record_to_spend_metrics(_no_spend_record())
+    assert metrics.spend == 0
+    assert metrics.prompt_tokens == 0
+    assert metrics.completion_tokens == 0
+    assert metrics.total_tokens == 0
+    assert metrics.api_requests == 0
+    assert metrics.successful_requests == 0
+    assert metrics.failed_requests == 0
+    assert metrics.cache_read_input_tokens == 0
+    assert metrics.cache_creation_input_tokens == 0
+
+
+def test_update_metrics_handles_none_values():
+    """update_metrics should coalesce NULL aggregates instead of raising TypeError."""
+    metrics = update_metrics(SpendMetrics(), _no_spend_record())
+    assert metrics.spend == 0
+    assert metrics.prompt_tokens == 0
+    assert metrics.completion_tokens == 0
+    assert metrics.total_tokens == 0
+    assert metrics.api_requests == 0
+    assert metrics.successful_requests == 0
+    assert metrics.failed_requests == 0
+    assert metrics.cache_read_input_tokens == 0
+    assert metrics.cache_creation_input_tokens == 0
