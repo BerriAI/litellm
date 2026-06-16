@@ -1,11 +1,11 @@
 {
   "LIT001": {
     "baseline": 21452,
-    "slack": 2000
+    "slack": 10
   },
   "LIT002": {
     "baseline": 25022,
-    "slack": 2500
+    "slack": 10
   },
   "LIT003": {
     "baseline": 516,
@@ -21,7 +21,7 @@
   },
   "LIT006": {
     "baseline": 1013,
-    "slack": 100
+    "slack": 10
   },
   "LIT007": {
     "baseline": 0,
@@ -29,6 +29,6 @@
   },
   "LIT008": {
     "baseline": 914,
-    "slack": 100
+    "slack": 10
   }
 }
