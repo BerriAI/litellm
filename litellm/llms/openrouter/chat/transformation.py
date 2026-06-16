@@ -163,17 +163,19 @@ class OpenrouterConfig(OpenAIGPTConfig):
             messages = self._move_cache_control_to_content(messages)
 
         extra_body = optional_params.pop("extra_body", {})
-        response = super().transform_request(
+        request = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
-        response.update(extra_body)
+        request.update(extra_body)
 
-        # ALWAYS add usage parameter to get cost data from OpenRouter
-        # This ensures cost tracking works for all OpenRouter models
-        if "usage" not in response:
-            response["usage"] = {"include": True}
+        # Usage accounting is an OpenRouter-specific flag, not a valid top-level
+        # OpenAI chat param. Sending it at the top level makes OpenAI-compatible
+        # clients reject the request ("unexpected keyword argument 'usage'"), so
+        # it must travel inside `extra_body` instead.
+        extra_body = request.setdefault("extra_body", {})
+        extra_body.setdefault("usage", {"include": True})
 
-        return response
+        return request
 
     def transform_response(
         self,
