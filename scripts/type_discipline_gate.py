@@ -104,6 +104,18 @@ def base_counts(ref: str) -> dict:
         shutil.rmtree(parent, ignore_errors=True)
 
 
+def over_ceiling(head: dict, budget: dict) -> frozenset:
+    """Rules whose head count already exceeds baseline + slack.
+
+    A rule can only breach when it is over its ceiling, so when none are the base
+    comparison cannot change the verdict and the base worktree scan can be skipped.
+    """
+    return frozenset(
+        rule for rule, spec in budget.items()
+        if head.get(rule, 0) > spec["baseline"] + spec["slack"]
+    )
+
+
 def evaluate(head: dict, base: dict, budget: dict) -> list:
     breaches = []
     for rule, spec in budget.items():
@@ -134,8 +146,12 @@ def introduced(violations: list, changed: dict) -> list:
 def cmd_check(base: str) -> None:
     budget = json.loads(BUDGET_PATH.read_text())
     head = head_violations()
+    head_counts = count_by_rule(head)
+    if not over_ceiling(head_counts, budget):
+        print(f"OK: every LIT rule is within its codebase ceiling (base {base})")
+        return
     base_point = _run(["git", "merge-base", base, "HEAD"]).strip() or base
-    breaches = evaluate(count_by_rule(head), base_counts(base_point), budget)
+    breaches = evaluate(head_counts, base_counts(base_point), budget)
     if not breaches:
         print(f"OK: every LIT rule is within its codebase ceiling (base {base})")
         return
