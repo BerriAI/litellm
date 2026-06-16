@@ -50,8 +50,10 @@ class MilvusRAGIngestion(BaseRAGIngestion):
     Configuration (vector_store config):
     - collection_name / vector_store_id: target Milvus collection (required)
     - api_base: Milvus REST base URL (or MILVUS_API_BASE env)
-    - api_key: Milvus token/credential (or MILVUS_API_KEY env). Optional for a
-      self-hosted Milvus without auth.
+    - api_key: Milvus token/credential. The MILVUS_API_KEY env fallback applies
+      only when api_base also comes from the MILVUS_API_BASE env, so the server
+      token is never sent to a config/credential-supplied endpoint. Optional for
+      a self-hosted Milvus without auth.
     - vector_field: embedding field name (default: "vector")
     - text_field: chunk text field name (default: "text")
     - metric_type: distance metric for auto-created collection (default: "COSINE")
@@ -83,9 +85,8 @@ class MilvusRAGIngestion(BaseRAGIngestion):
                 "in the vector_store config."
             )
 
-        self.api_base = self.vector_store_config.get("api_base") or get_secret_str(
-            "MILVUS_API_BASE"
-        )
+        config_api_base = self.vector_store_config.get("api_base")
+        self.api_base = config_api_base or get_secret_str("MILVUS_API_BASE")
         if not self.api_base:
             raise ValueError(
                 "Milvus API base URL is required. Set the MILVUS_API_BASE environment "
@@ -93,8 +94,11 @@ class MilvusRAGIngestion(BaseRAGIngestion):
             )
         self.api_base = self.api_base.rstrip("/")
 
-        self.api_key = self.vector_store_config.get("api_key") or get_secret_str(
-            "MILVUS_API_KEY"
+        config_api_key = self.vector_store_config.get("api_key")
+        self.api_key = (
+            config_api_key
+            if config_api_base
+            else config_api_key or get_secret_str("MILVUS_API_KEY")
         )
         self.vector_field = self.vector_store_config.get(
             "vector_field", MILVUS_DEFAULT_VECTOR_FIELD

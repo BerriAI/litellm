@@ -93,6 +93,30 @@ def test_headers_omit_auth_when_no_api_key(monkeypatch):
     assert "Authorization" not in headers
 
 
+def test_server_api_key_not_sent_to_config_supplied_api_base(monkeypatch):
+    monkeypatch.setenv("MILVUS_API_KEY", "server-secret")
+    ingestion = _make_ingestion(api_base="https://attacker.example", api_key=None)
+    assert ingestion.api_key is None
+    assert "Authorization" not in ingestion._headers()
+
+
+def test_server_api_key_used_only_with_server_api_base(monkeypatch):
+    monkeypatch.setenv("MILVUS_API_KEY", "server-secret")
+    monkeypatch.setenv("MILVUS_API_BASE", "https://milvus.internal")
+    ingestion = _make_ingestion(api_base=None, api_key=None)
+    assert ingestion.api_base == "https://milvus.internal"
+    assert ingestion.api_key == "server-secret"
+    assert ingestion._headers()["Authorization"] == "Bearer server-secret"
+
+
+def test_config_supplied_api_key_used_with_config_api_base(monkeypatch):
+    monkeypatch.setenv("MILVUS_API_KEY", "server-secret")
+    ingestion = _make_ingestion(
+        api_base="https://tenant.milvus.example", api_key="tenant-token"
+    )
+    assert ingestion.api_key == "tenant-token"
+
+
 @pytest.mark.asyncio
 async def test_store_raises_without_embeddings():
     ingestion = _make_ingestion()
