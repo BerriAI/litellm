@@ -15,6 +15,7 @@ from typing import (
     overload,
 )
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
@@ -199,9 +200,19 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
                     text_parts = []
+                    dropped_types = []
                     for c in existing_content:
                         if isinstance(c, dict) and c.get("type") == "text":
                             text_parts.append(c.get("text", ""))
+                        elif isinstance(c, dict):
+                            dropped_types.append(c.get("type", "unknown"))
+                    if dropped_types:
+                        verbose_logger.debug(
+                            "HostedVLLMChatConfig: dropping non-text assistant content "
+                            "block types %s (vLLM is OpenAI-compatible; tool calls "
+                            "belong in tool_calls, not content)",
+                            dropped_types,
+                        )
                     content_str = "\n".join(text_parts)
                     message["content"] = content_str
             elif message["role"] == "user":
