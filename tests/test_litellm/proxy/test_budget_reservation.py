@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,11 +16,13 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.spend_tracking.budget_reservation import (
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
     release_budget_reservation,
+    release_budget_reservation_on_cancel,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -1696,3 +1699,143 @@ async def test_should_not_block_concurrent_team_request_when_first_request_lacks
         await release_budget_reservation(first_reservation)
     if second_reservation is not None:
         await release_budget_reservation(second_reservation)
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_gives_back_counter(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-cancel-give-back", spend=0.0, max_budget=10.0
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=3.0,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    assert reservation is not None
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-give-back"
+    ) == pytest.approx(3.0)
+
+    await release_budget_reservation_on_cancel(reservation)
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-give-back"
+    ) == pytest.approx(0.0)
+    assert reservation["finalized"] is True
+
+    # idempotent: a second cancel release must not double-subtract
+    await release_budget_reservation_on_cancel(reservation)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-give-back"
+    ) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_noop_when_finalized(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-cancel-finalized", spend=0.0, max_budget=10.0
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=3.0,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    assert reservation is not None
+    reservation["finalized"] = True
+
+    await release_budget_reservation_on_cancel(reservation)
+
+    # already reconciled by the success/failure path -> must stay untouched
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-finalized"
+    ) == pytest.approx(3.0)
+
+
+@pytest.mark.asyncio
+async def test_streaming_generator_releases_reservation_on_client_cancel(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-cancel-stream", spend=0.0, max_budget=10.0)
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=2.0,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    assert reservation is not None
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-stream"
+    ) == pytest.approx(2.0)
+    valid_token.budget_reservation = reservation
+
+    # Upstream stream yields one chunk, then the client disconnects mid-stream
+    # (surfaces as CancelledError inside the generator).
+    async def cancelling_iterator(user_api_key_dict, response, request_data):
+        yield "data: chunk\n\n"
+        raise asyncio.CancelledError()
+
+    streaming_logging_obj = MagicMock()
+    streaming_logging_obj.async_post_call_streaming_iterator_hook = cancelling_iterator
+
+    generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+        response=MagicMock(),
+        user_api_key_dict=valid_token,
+        request_data=_request_body(),
+        proxy_logging_obj=streaming_logging_obj,
+        serialize_chunk=lambda chunk: chunk,
+        serialize_error=lambda exc: str(exc),
+    )
+
+    received = []
+    with pytest.raises(asyncio.CancelledError):
+        async for chunk in generator:
+            received.append(chunk)
+
+    assert received == ["data: chunk\n\n"]
+    # reservation handed back despite the mid-stream cancellation
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-stream"
+    ) == pytest.approx(0.0)
+    assert reservation["finalized"] is True

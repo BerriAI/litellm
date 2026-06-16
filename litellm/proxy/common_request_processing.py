@@ -1402,6 +1402,15 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
                 response=response,  # type: ignore[arg-type]
             )
+        except asyncio.CancelledError:
+            from litellm.proxy.spend_tracking.budget_reservation import (
+                release_budget_reservation_on_cancel,
+            )
+
+            await release_budget_reservation_on_cancel(
+                getattr(user_api_key_dict, "budget_reservation", None)
+            )
+            raise
         except Exception:
             _exception_raised = True
             raise
@@ -2054,6 +2063,15 @@ class ProxyBaseLLMRequestProcessing:
                     )
                 )
                 yield serialize_chunk(chunk)
+        except (asyncio.CancelledError, GeneratorExit):
+            from litellm.proxy.spend_tracking.budget_reservation import (
+                release_budget_reservation_on_cancel,
+            )
+
+            await release_budget_reservation_on_cancel(
+                getattr(user_api_key_dict, "budget_reservation", None)
+            )
+            raise
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
