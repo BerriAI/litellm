@@ -3225,6 +3225,76 @@ async def delete_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+async def _query_model_spend_for_period(
+    api_key_hash: str,
+    model: str,
+    period_start: datetime,
+    period_end: datetime,
+    prisma_client: PrismaClient,
+) -> float:
+    model_without_prefix = model.split("/", 1)[-1] if "/" in model else model
+    try:
+        rows = await prisma_client.db.query_raw(
+            """
+            SELECT SUM(spend)::float AS total_spend
+            FROM "LiteLLM_SpendLogs"
+            WHERE api_key = $1
+              AND "startTime" >= ($2::timestamptz AT TIME ZONE 'UTC')
+              AND "startTime" <  ($3::timestamptz AT TIME ZONE 'UTC')
+              AND (
+                COALESCE(NULLIF(model_group, ''), model) = $4
+                OR COALESCE(NULLIF(model_group, ''), model) = $5
+              )
+            """,
+            api_key_hash,
+            period_start.isoformat(),
+            period_end.isoformat(),
+            model,
+            model_without_prefix,
+        )
+        if not rows:
+            return 0.0
+        return rows[0]["total_spend"] or 0.0
+    except Exception as e:
+        verbose_proxy_logger.warning("_query_model_spend_for_period failed: %s", str(e))
+        return 0.0
+
+
+async def _build_model_max_budget_usage(
+    api_key_hash: str,
+    model_max_budget: Dict[str, Dict],
+    prisma_client: Optional[PrismaClient],
+) -> Dict[str, Any]:
+    if prisma_client is None or not model_max_budget:
+        return {}
+
+    now = datetime.now(tz=timezone.utc)
+    result: Dict[str, Any] = {}
+    for model, budget_info in model_max_budget.items():
+        try:
+            budget_config = BudgetConfig(**budget_info)
+            if budget_config.budget_duration is None:
+                continue
+            period_start = now - timedelta(
+                seconds=duration_in_seconds(budget_config.budget_duration)
+            )
+        except Exception:
+            continue
+        spend = await _query_model_spend_for_period(
+            api_key_hash=api_key_hash,
+            model=model,
+            period_start=period_start,
+            period_end=now,
+            prisma_client=prisma_client,
+        )
+        result[model] = {
+            "current_spend": round(spend, 4),
+            "budget_limit": budget_config.max_budget,
+            "time_period": budget_config.budget_duration,
+        }
+    return result
+
+
 @router.post(
     "/v2/key/info",
     tags=["key management"],
@@ -3298,7 +3368,19 @@ async def info_key_fn_v2(
                 k_dict = k.model_dump()
             except Exception:
                 k_dict = k.dict()
-            k_dict.pop("token", None)
+            k_token_hash = k_dict.pop("token", None)
+
+            model_max_budget = k_dict.get("model_max_budget") or {}
+            budget_table = k_dict.get("litellm_budget_table") or {}
+            if not model_max_budget and isinstance(budget_table, dict):
+                model_max_budget = budget_table.get("model_max_budget") or {}
+            if model_max_budget and k_token_hash:
+                k_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
+                    api_key_hash=k_token_hash,
+                    model_max_budget=model_max_budget,
+                    prisma_client=prisma_client,
+                )
+
             filtered_key_info.append(k_dict)
         return {"key": data.keys, "info": filtered_key_info}
 
@@ -3381,7 +3463,18 @@ async def info_key_fn(
         except Exception:
             # if using pydantic v1
             key_info = key_info.dict()
-        key_info.pop("token")
+        key_token_hash = key_info.pop("token")
+
+        model_max_budget = key_info.get("model_max_budget") or {}
+        budget_table = key_info.get("litellm_budget_table") or {}
+        if not model_max_budget and isinstance(budget_table, dict):
+            model_max_budget = budget_table.get("model_max_budget") or {}
+        if model_max_budget and key_token_hash:
+            key_info["model_max_budget_usage"] = await _build_model_max_budget_usage(
+                api_key_hash=key_token_hash,
+                model_max_budget=model_max_budget,
+                prisma_client=prisma_client,
+            )
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
