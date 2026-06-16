@@ -32,9 +32,11 @@ AZURE_REDIS_SCOPE = "https://redis.azure.com/.default"
 
 
 def _get_redis_kwargs():
-    arg_spec = inspect.getfullargspec(redis.Redis)
+    init = redis.Redis.__init__
+    while hasattr(init, "__wrapped__"):
+        init = init.__wrapped__
+    arg_spec = inspect.getfullargspec(init)
 
-    # Only allow primitive arguments
     exclude_args = {
         "self",
         "connection_pool",
