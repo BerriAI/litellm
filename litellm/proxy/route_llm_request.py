@@ -642,18 +642,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
 
     # if no route found then it's a bad request
     route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
-    requested_model = data.get("model")
-    if not requested_model:
-        # No model was passed in the request at all - this is a malformed
-        # request, not an unknown-model lookup. Surface it as a litellm
-        # BadRequestError so the error clearly identifies the missing param
-        # (and stays consistent regardless of router wildcard state).
-        raise litellm.BadRequestError(
-            message=f"{route_name}: Missing model parameter. Pass a `model` in the request body. Call `/v1/models` to view available models for your key.",
-            model="",
-            llm_provider="",
-        )
     raise ProxyModelNotFoundError(
         route=route_name,
-        model_name=requested_model,
+        model_name=data.get("model", ""),
     )
