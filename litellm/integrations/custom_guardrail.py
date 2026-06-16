@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
 dc = DualCache()
 
 
+from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
@@ -50,7 +52,11 @@ from litellm.exceptions import (
     SensitiveDataRouteException,
 )
 
-PRE_CALL_EXECUTED_GUARDRAILS_KEY = "_pre_call_executed_guardrails"
+# Per-process secret tagging each recorded marker. The deployment hook only
+# honors markers carrying this token, so a caller cannot forge the metadata
+# field to suppress a guardrail on the direct-SDK path that never reaches the
+# proxy's metadata sanitizer.
+_PRE_CALL_EXECUTED_TOKEN = secrets.token_hex(16)
 
 
 def get_session_id_from_request_data(request_data: Dict[str, Any]) -> Optional[str]:
@@ -460,6 +466,12 @@ class CustomGuardrail(CustomLogger):
 
         return False
 
+    def _pre_call_marker(self) -> Optional[str]:
+        name = self.guardrail_name
+        if not name:
+            return None
+        return f"{_PRE_CALL_EXECUTED_TOKEN}:{name}"
+
     def mark_pre_call_hook_ran(self, data: Dict[str, Any]) -> None:
         """
         Record that this guardrail's ``async_pre_call_hook`` already ran for this
@@ -470,30 +482,30 @@ class CustomGuardrail(CustomLogger):
         top-level request kwargs, which would otherwise re-trigger the same hook
         from ``async_pre_call_deployment_hook``.
         """
-        name = self.guardrail_name
-        if not name:
+        marker = self._pre_call_marker()
+        if marker is None:
             return
         for meta_key in ("metadata", "litellm_metadata"):
             meta = data.get(meta_key)
             if isinstance(meta, dict):
                 executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
                 if isinstance(executed, list):
-                    if name not in executed:
-                        executed.append(name)
+                    if marker not in executed:
+                        executed.append(marker)
                 else:
-                    meta[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [name]
+                    meta[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [marker]
                 return
-        data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [name]}
+        data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
 
     def _pre_call_hook_already_ran(self, data: Dict[str, Any]) -> bool:
-        name = self.guardrail_name
-        if not name:
+        marker = self._pre_call_marker()
+        if marker is None:
             return False
         for meta_key in ("metadata", "litellm_metadata"):
             meta = data.get(meta_key)
             if isinstance(meta, dict):
                 executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
-                if isinstance(executed, list) and name in executed:
+                if isinstance(executed, list) and marker in executed:
                     return True
         return False
 
