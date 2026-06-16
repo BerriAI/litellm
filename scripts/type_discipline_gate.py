@@ -95,7 +95,12 @@ def base_counts(ref: str) -> dict:
         shutil.copy(CHECKER, checker)
         return count_by_rule(_check(worktree, checker))
     finally:
-        _run(["git", "worktree", "remove", "--force", str(worktree)])
+        # Best-effort teardown: cleanup must never raise, or it masks the real error when
+        # the body (or the `worktree add` itself) failed. rmtree is already best-effort.
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree)],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
         shutil.rmtree(parent, ignore_errors=True)
 
 
