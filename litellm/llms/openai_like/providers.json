@@ -143,6 +143,14 @@
       "force_store_false": true
     }
   },
+  "libertai": {
+    "base_url": "https://api.libertai.io/v1",
+    "api_key_env": "LIBERTAI_API_KEY",
+    "api_base_env": "LIBERTAI_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "empiriolabs": {
     "base_url": "https://api.empiriolabs.ai/v1",
     "api_key_env": "EMPIRIOLABS_API_KEY",

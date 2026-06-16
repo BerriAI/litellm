@@ -221,3 +221,38 @@ async def test_pydantic_basemodel_chunk_passes_through_async():
 
     assert len(chunks) == 1
     assert "response.created" in chunks[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_attached_http_response():
+    """Regression for BerriAI/litellm#30244: CustomStreamWrapper.aclose() can
+    only release the upstream provider connection if the iterator exposes
+    aclose() and it reaches the underlying HTTP response. Without this, a
+    client disconnect leaves backends like vLLM generating into a dead pipe."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    async def async_gen():
+        yield "data: {}"
+
+    iterator = BaseModelResponseIterator(
+        streaming_response=async_gen(), sync_stream=False
+    )
+    http_response = MagicMock()
+    http_response.aclose = AsyncMock()
+    iterator.http_response = http_response
+
+    await iterator.aclose()
+
+    http_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_aclose_is_noop_without_http_response():
+    async def async_gen():
+        yield "data: {}"
+
+    iterator = BaseModelResponseIterator(
+        streaming_response=async_gen(), sync_stream=False
+    )
+
+    await iterator.aclose()
