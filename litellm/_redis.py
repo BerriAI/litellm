@@ -488,6 +488,13 @@ def _get_redis_sentinel_connection_kwargs(redis_kwargs: dict) -> dict:
         if arg in args:
             connection_kwargs[arg] = redis_kwargs[arg]
 
+    # `db` (the Redis logical database / SELECT index) is not always reported by
+    # `inspect.getfullargspec(redis.Redis)` across redis-py versions (newer
+    # redis-py uses **kwargs), so it can be dropped by the loop above. Forward it
+    # explicitly so the master/replica connection honors the configured db index.
+    if "db" in redis_kwargs and redis_kwargs["db"] is not None:
+        connection_kwargs["db"] = redis_kwargs["db"]
+
     return connection_kwargs
 
 
@@ -498,6 +505,10 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     connection_kwargs = _get_redis_sentinel_connection_kwargs(redis_kwargs)
     connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
     sentinel_kwargs = dict(connection_kwargs)
+    # The `db` index applies to the master/replica connection only. Sentinel
+    # nodes don't support `SELECT`, so leaking `db` into the sentinel
+    # connections causes `unknown command 'SELECT'` when redis_db is non-zero.
+    sentinel_kwargs.pop("db", None)
     sentinel_kwargs["password"] = sentinel_password
 
     if not sentinel_nodes or not service_name:
@@ -525,6 +536,10 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     connection_kwargs = _get_redis_sentinel_connection_kwargs(redis_kwargs)
     connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
     sentinel_kwargs = dict(connection_kwargs)
+    # The `db` index applies to the master/replica connection only. Sentinel
+    # nodes don't support `SELECT`, so leaking `db` into the sentinel
+    # connections causes `unknown command 'SELECT'` when redis_db is non-zero.
+    sentinel_kwargs.pop("db", None)
     sentinel_kwargs["password"] = sentinel_password
 
     if not sentinel_nodes or not service_name:

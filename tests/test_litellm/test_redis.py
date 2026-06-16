@@ -546,6 +546,55 @@ def test_async_sentinel_uses_sentinel_password_and_master_password(
     )
 
 
+@patch("litellm._redis.redis.Sentinel")
+def test_sync_sentinel_does_not_pass_db_to_sentinel_connections(mock_sentinel_cls):
+    """
+    A non-zero `db` must NOT be forwarded to the Sentinel connections.
+
+    Sentinel nodes don't support `SELECT`, so passing `db` into
+    `sentinel_kwargs` produces `unknown command 'SELECT'` and breaks Sentinel
+    when a non-zero redis_db is configured (see GitHub issue #10276). The `db`
+    index belongs only on the master/replica connection via `master_for()`.
+    """
+    mock_sentinel = MagicMock()
+    mock_sentinel_cls.return_value = mock_sentinel
+
+    get_redis_client(
+        sentinel_nodes=[("sentinel-1", 26379)],
+        sentinel_password="sentinel-secret",
+        service_name="mymaster",
+        db=3,
+    )
+
+    mock_sentinel_cls.assert_called_once()
+    sentinel_call_kwargs = mock_sentinel_cls.call_args[1]
+    # db must be stripped from the sentinel connection kwargs
+    assert "db" not in sentinel_call_kwargs["sentinel_kwargs"]
+    # ...but it must still reach the master/replica connection
+    master_call_kwargs = mock_sentinel.master_for.call_args[1]
+    assert master_call_kwargs["db"] == 3
+
+
+@patch("litellm._redis.async_redis.Sentinel")
+def test_async_sentinel_does_not_pass_db_to_sentinel_connections(mock_sentinel_cls):
+    """Async sentinel must also strip `db` from the sentinel connections."""
+    mock_sentinel = MagicMock()
+    mock_sentinel_cls.return_value = mock_sentinel
+
+    get_redis_async_client(
+        sentinel_nodes=[("sentinel-1", 26379)],
+        sentinel_password="sentinel-secret",
+        service_name="mymaster",
+        db=3,
+    )
+
+    mock_sentinel_cls.assert_called_once()
+    sentinel_call_kwargs = mock_sentinel_cls.call_args[1]
+    assert "db" not in sentinel_call_kwargs["sentinel_kwargs"]
+    master_call_kwargs = mock_sentinel.master_for.call_args[1]
+    assert master_call_kwargs["db"] == 3
+
+
 @patch("litellm._redis.init_redis_cluster")
 def test_sync_client_preserves_password_for_cluster_when_url_also_set(
     mock_init_cluster, monkeypatch
