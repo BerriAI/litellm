@@ -43,6 +43,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     encode_file_id_with_model,
     extract_file_creation_params,
     get_credentials_for_model,
+    get_team_provider_credentials,
     handle_model_based_routing,
     prepare_data_with_credentials,
     validate_managed_files_requirement,
@@ -1351,14 +1352,20 @@ async def list_files(
                     status_code=400,
                     detail="target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
                 )
-            ## Use router to list fine-tuning jobs for that model
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
                     detail="LLM Router not initialized. Ensure models added to proxy.",
                 )
-            data["model"] = target_model_names_list[0]
-            response = await llm_router.afile_list(
+            credentials = get_credentials_for_model(
+                llm_router=llm_router,
+                model_id=target_model_names_list[0],
+                operation_context="file list",
+            )
+            prepare_data_with_credentials(data=data, credentials=credentials)
+            response = await litellm.afile_list(
+                custom_llm_provider=credentials["custom_llm_provider"],
+                purpose=purpose,
                 **data,
             )
         else:
@@ -1369,6 +1376,18 @@ async def list_files(
                 or await get_custom_llm_provider_from_request_body(request=request)
                 or "openai"
             )
+
+            # No model/target_model_names pinned: resolve upstream credentials from
+            # the team's deployment for this provider so the call is authenticated
+            # against the team's own account (e.g. the team's openai deployment).
+            team_credentials = get_team_provider_credentials(
+                llm_router=llm_router,
+                team_models=user_api_key_dict.team_models or [],
+                custom_llm_provider=custom_llm_provider,
+                team_id=user_api_key_dict.team_id,
+            )
+            if team_credentials is not None:
+                prepare_data_with_credentials(data=data, credentials=team_credentials)
 
             response = await litellm.afile_list(
                 custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore
