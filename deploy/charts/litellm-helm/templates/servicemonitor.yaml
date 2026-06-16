@@ -34,11 +34,11 @@ spec:
     {{- if and .authSecret.enabled .authSecret.name }}
     bearerTokenSecret:
       name: {{ .authSecret.name }}
-      key: {{ .authSecret.key | default "masterkey" }}
+      key: {{ .authSecret.key}}
     {{- else }}
     bearerTokenSecret:
       name: {{ include "litellm.fullname" $ }}-masterkey
-      key: masterkey
+      key: {{ $.Values.masterkeySecretKey | default "masterkey" }}
     {{- end }}
   {{- if .relabelings }}
     relabelings:
