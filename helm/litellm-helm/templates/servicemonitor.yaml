@@ -37,8 +37,8 @@ spec:
       key: {{ .authSecret.key}}
     {{- else }}
     bearerTokenSecret:
-      name: {{ include "litellm.fullname" $ }}-masterkey
-      key: {{ $.Values.masterkeySecretKey | default "masterkey" }}
+      name: {{ if $.Values.masterkeySecretName }}{{ $.Values.masterkeySecretName }}{{ else }}litellm-masterkey{{ end }}
+      key: {{ if $.Values.masterkeySecretKey }}{{ $.Values.masterkeySecretKey }}{{ else }}masterkey{{ end }}
     {{- end }}
   {{- if .relabelings }}
     relabelings:
