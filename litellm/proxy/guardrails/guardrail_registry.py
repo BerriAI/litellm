@@ -601,18 +601,31 @@ class InMemoryGuardrailHandler:
     def delete_in_memory_guardrail(self, guardrail_id: str) -> None:
         """
         Delete a guardrail in memory and remove from litellm callbacks.
+
+        The callback is purged from every callback list, not just
+        litellm.callbacks: request handling promotes guardrail callbacks into the
+        success/failure/async lists, so removing it from only litellm.callbacks
+        leaves the old instance stranded in those lists on every re-initialization.
         """
         # Remove from in-memory storage
         self.IN_MEMORY_GUARDRAILS.pop(guardrail_id, None)
         self._sources.pop(guardrail_id, None)
 
-        # Remove the callback from litellm.callbacks
         custom_guardrail_callback = self.guardrail_id_to_custom_guardrail.pop(
             guardrail_id, None
         )
-        if custom_guardrail_callback:
+        if custom_guardrail_callback is None:
+            return
+
+        for callback_list in (
+            litellm.callbacks,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        ):
             litellm.logging_callback_manager.remove_callback_from_list_by_object(
-                callback_list=litellm.callbacks,
+                callback_list=callback_list,
                 obj=custom_guardrail_callback,
                 require_self=False,
             )
@@ -657,6 +670,30 @@ class InMemoryGuardrailHandler:
             self.delete_in_memory_guardrail(guardrail_id)
         return stale_ids
 
+    @staticmethod
+    def _normalize_litellm_params_for_comparison(
+        params: Optional[Any],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Render litellm_params to a canonical dict so an in-memory LitellmParams and
+        the raw dict loaded from the DB compare equal when they describe the same
+        config. The in-memory side is a LitellmParams whose model_dump() carries
+        every field default and coerces enums, while the DB side is the raw stored
+        dict holding only the keys originally provided. Comparing those two shapes
+        directly never matches, so each DB poll would re-initialize the guardrail
+        forever; normalizing both through LitellmParams keeps the diff meaningful.
+        """
+        if params is None:
+            return None
+        if isinstance(params, LitellmParams):
+            return params.model_dump()
+        if isinstance(params, dict):
+            try:
+                return LitellmParams(**params).model_dump()
+            except Exception:
+                return params
+        return params
+
     def _has_guardrail_params_changed(
         self, guardrail_id: str, new_guardrail: Guardrail
     ) -> bool:
@@ -673,19 +710,11 @@ class InMemoryGuardrailHandler:
             return True
 
         # Compare litellm_params
-        existing_params = existing.get("litellm_params")
-        new_params = new_guardrail.get("litellm_params")
-
-        # Convert to dicts for comparison
-        existing_dict = (
-            existing_params.model_dump()
-            if isinstance(existing_params, LitellmParams)
-            else existing_params
+        existing_dict = self._normalize_litellm_params_for_comparison(
+            existing.get("litellm_params")
         )
-        new_dict = (
-            new_params.model_dump()
-            if isinstance(new_params, LitellmParams)
-            else new_params
+        new_dict = self._normalize_litellm_params_for_comparison(
+            new_guardrail.get("litellm_params")
         )
 
         # Compare and identify specific differences
