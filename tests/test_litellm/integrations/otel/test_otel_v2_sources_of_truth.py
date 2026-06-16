@@ -528,6 +528,35 @@ def test_capture_span_content_resolves_modes():
         ).capture_span_content
         is False
     )
+    # V1 accepted UPPER_SNAKE_CASE; the env value is case-insensitive so an
+    # operator carrying ``SPAN_AND_EVENT`` forward still enables capture.
+    assert (
+        OpenTelemetryV2Config(
+            capture_message_content="SPAN_AND_EVENT"
+        ).capture_span_content
+        is True
+    )
+    assert (
+        OpenTelemetryV2Config(capture_message_content="SPAN_ONLY").capture_span_content
+        is True
+    )
+    assert (
+        OpenTelemetryV2Config(capture_message_content="NO_CONTENT").capture_span_content
+        is False
+    )
+
+
+def test_capture_message_content_normalizer_only_touches_strings():
+    """The casing normalizer lower-cases strings and leaves anything else
+    untouched, so a non-string value still fails the field's ``str`` validation
+    instead of being silently coerced into a bogus capture mode."""
+    import pytest
+    from pydantic import ValidationError
+
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+
+    with pytest.raises(ValidationError):
+        OpenTelemetryV2Config(capture_message_content=123)
 
 
 def test_v2_flag_is_off_by_default(monkeypatch):
