@@ -145,12 +145,6 @@ lint-strict-budget: install-dev
 lint-strict-budget-update: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py --update
 
-# Fail when a *changed line* under litellm/ holds a value typed Any -- including
-# the X | Any unions that mypy --strict / basedpyright let through (e.g.
-# re.Match.group() -> str | Any, json.loads() -> Any). Compares against
-# origin/litellm_internal_staging by default; override with ANY_GATE_BASE.
-# First run cold-builds litellm's type cache (~2 min into .mypy_cache_any);
-# later runs are incremental.
 lint-any: install-dev
 	$(UV_RUN) python scripts/check_any_discipline.py --changed
 
