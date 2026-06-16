@@ -10068,6 +10068,8 @@
     },
     "claude-sonnet-4-5": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
@@ -10097,6 +10099,8 @@
     },
     "claude-sonnet-4-5-20250929": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
@@ -10127,6 +10131,7 @@
     },
     "claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "anthropic",
@@ -10155,6 +10160,8 @@
     },
     "claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
