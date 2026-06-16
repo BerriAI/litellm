@@ -50,6 +50,7 @@ from tokenizers import Tokenizer
 
 import litellm
 import litellm.litellm_core_utils
+from litellm.llms.domestic.domestic_utils import is_domestic_model_or_endpoint
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
@@ -4141,7 +4142,14 @@ def get_optional_params(  # noqa: PLR0915
     base_model: Optional[str] = None,
     **kwargs,
 ):
+    # Function-scoped to avoid a circular import: secret_managers.main pulls in
+    # `litellm`, which can be mid-loading utils at module-import time. By the
+    # time this function runs all modules are fully initialized.
+    from litellm.secret_managers.main import get_secret
+
     passed_params = locals().copy()
+    # Remove the function-scoped import from passed_params to prevent it being serialized
+    passed_params.pop("get_secret", None)
     special_params = passed_params.pop("kwargs")
     # Remove base_model from passed_params so it doesn't interfere with
     # non_default_params / _check_valid_arg — it's a routing hint, not an
@@ -8937,6 +8945,7 @@ class ProviderConfigManager:
     def get_provider_responses_api_config(
         provider: Union[LlmProviders, str],
         model: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Optional[BaseResponsesAPIConfig]:
         from litellm.llms.openai_like.dynamic_config import (
             create_responses_config_class,
@@ -8961,7 +8970,7 @@ class ProviderConfigManager:
 
         # Check Python classes first (custom overrides take priority)
         result = ProviderConfigManager._get_python_responses_api_config(
-            provider_enum, model
+            provider_enum, model, api_base
         )
         if result is not None:
             return result
@@ -8980,12 +8989,17 @@ class ProviderConfigManager:
     def _get_python_responses_api_config(
         provider: Optional[LlmProviders],
         model: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Optional[BaseResponsesAPIConfig]:
         """Check for Python-class-based responses API configs (custom overrides)."""
         if provider is None:
             return None
 
+        # For OpenAI provider, check if model or endpoint is domestic
+        # Domestic models don't support native Responses API, force Chat Completions conversion
         if litellm.LlmProviders.OPENAI == provider:
+            if is_domestic_model_or_endpoint(model, api_base):
+                return None  # Force Chat Completions conversion for domestic models
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
             # Check if it's an O-series model

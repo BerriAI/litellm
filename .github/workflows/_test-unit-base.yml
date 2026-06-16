@@ -150,5 +150,4 @@ jobs:
           use_oidc: true
           directory: coverage-reports
           root_dir: ${{ github.workspace }}
-          flags: ${{ inputs.artifact-name }}
           fail_ci_if_error: false

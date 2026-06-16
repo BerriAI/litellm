@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.domestic.domestic_utils import is_domestic_model_or_endpoint
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
@@ -836,6 +837,11 @@ def _responses_try_dispatch_emulated_file_search(
     _is_async: bool,
 ) -> Optional[Any]:
     """Return a response when emulated file_search handles the call; otherwise None."""
+    # 国内模型不支持 file_search，跳过 emulated handler（避免 IDOR 安全问题）
+    api_base = kwargs.get("api_base")
+    if is_domestic_model_or_endpoint(model, api_base):
+        return None
+
     if not _has_file_search_tool(tools) or not (
         responses_api_provider_config is None
         or use_chat_completions_api is True

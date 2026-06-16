@@ -337,6 +337,8 @@ from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+from litellm.proxy.hooks.cache_hit_logger import CacheHitLogger
+from litellm.proxy.hooks.cache_prefix_optimizer import CachePrefixOptimizer
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
@@ -2011,6 +2013,9 @@ def cost_tracking():
         litellm.logging_callback_manager.add_litellm_async_success_callback(
             _ProxyDBLogger()
         )
+
+    litellm.logging_callback_manager.add_litellm_callback(CacheHitLogger())
+    litellm.logging_callback_manager.add_litellm_callback(CachePrefixOptimizer())
 
 
 async def get_current_spend(counter_key: str, fallback_spend: float) -> float:

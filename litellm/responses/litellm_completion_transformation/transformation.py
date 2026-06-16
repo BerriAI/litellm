@@ -11,6 +11,7 @@ from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
 from litellm.caching import InMemoryCache
+from litellm.llms.domestic.domestic_utils import is_domestic_model_or_endpoint
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
@@ -32,7 +33,6 @@ from litellm.types.llms.openai import (
     OpenAIWebSearchOptions,
     OpenAIWebSearchUserLocation,
     OutputTokensDetails,
-    Reasoning,
     ResponseAPIUsage,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
@@ -79,6 +79,81 @@ class ChatCompletionSession(TypedDict, total=False):
 
 
 class LiteLLMCompletionResponsesConfig:
+    @staticmethod
+    def _clean_schema(obj: Any) -> Any:
+        """
+        递归清除 JSON Schema 中国内模型不支持的字段。
+
+        国内模型(豆包/GLM/MiniMax/MiMo/DeepSeek)不支持:
+        - strict: 严格模式
+        - additionalProperties: JSON Schema 扩展属性
+
+        借鉴 codex_deepseek_proxy 项目的设计
+        """
+        if not isinstance(obj, dict):
+            return obj
+        cleaned: Dict[str, Any] = {}
+        for k, v in obj.items():
+            if k in ("additionalProperties", "strict"):
+                continue  # 跳过这些字段
+            if isinstance(v, dict):
+                cleaned[k] = LiteLLMCompletionResponsesConfig._clean_schema(v)
+            elif isinstance(v, list):
+                cleaned[k] = [
+                    (
+                        LiteLLMCompletionResponsesConfig._clean_schema(i)
+                        if isinstance(i, dict)
+                        else i
+                    )
+                    for i in v
+                ]
+            else:
+                cleaned[k] = v
+        return cleaned
+
+    @staticmethod
+    def _ensure_valid_json_arguments(arguments: Any) -> str:
+        """
+        确保 arguments 是有效的 JSON 字符串格式。
+
+        国内模型（火山引擎、阿里等）要求 function.arguments 必须是严格的 JSON 格式。
+        如果 arguments 不是有效的 JSON，返回空对象 "{}"。
+
+        Args:
+            arguments: 原始 arguments 值（可能是字符串、dict、或其他类型）
+
+        Returns:
+            str: 有效的 JSON 字符串
+        """
+        import json
+
+        if arguments is None:
+            return "{}"
+
+        # 如果已经是 dict，直接转 JSON
+        if isinstance(arguments, dict):
+            return json.dumps(arguments)
+
+        # 如果是字符串，尝试解析验证
+        if isinstance(arguments, str):
+            if not arguments.strip():
+                return "{}"
+            try:
+                # 尝试解析验证是否是有效 JSON
+                json.loads(arguments)
+                return arguments
+            except (json.JSONDecodeError, ValueError):
+                # 不是有效 JSON，返回空对象
+                return "{}"
+
+        # 其他类型，尝试转字符串后解析
+        try:
+            str_val = str(arguments)
+            json.loads(str_val)
+            return str_val
+        except (json.JSONDecodeError, ValueError):
+            return "{}"
+
     @staticmethod
     def get_supported_openai_params(model: str) -> list:
         """
@@ -169,11 +244,26 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
+        # 获取 model 和 api_base 用于判断是否是国内模型
+        # MyPy fix: cast to Optional[str] since .get() returns object | Any
+        from typing import cast
+
+        model_name = cast(
+            Optional[str],
+            responses_api_request.get("model") or kwargs.get("model"),
+        )
+        api_base = cast(
+            Optional[str],
+            kwargs.get("api_base") or responses_api_request.get("api_base"),
+        )
+
         (
             tools,
             web_search_options,
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            responses_api_request.get("tools") or []  # type: ignore
+            responses_api_request.get("tools") or [],  # type: ignore
+            model_name=model_name,
+            api_base=api_base,
         )
 
         response_format = None
@@ -184,22 +274,31 @@ class LiteLLMCompletionResponsesConfig:
             )
 
         # Extract reasoning_effort from reasoning parameter
-        reasoning_effort: Optional[Union[Reasoning, str]] = None
+        # LiteLLM chat completion 只支持 reasoning_effort 为字符串，不支持 dict 格式
+        # 因此总是提取 effort 字段作为字符串，忽略 summary 等其他字段
+        reasoning_effort: Optional[str] = None
         reasoning_param = responses_api_request.get("reasoning")
         if reasoning_param:
             if isinstance(reasoning_param, dict):
-                # reasoning can be {"effort": "low|medium|high", "summary": "detailed"}
-                # Keep the full dict when summary is set so the responses API bridge can
-                # forward it; otherwise use the effort string for chat completion (e.g. Gemini).
-                if "summary" in reasoning_param:
-                    reasoning_effort = reasoning_param
-                elif "effort" in reasoning_param:
+                # reasoning dict 格式: {"effort": "low|medium|high", "summary": "detailed"}
+                # 只提取 effort 字段作为字符串，其他字段（如 summary）被丢弃
+                # 因为 LiteLLM chat completion 不支持 dict 格式
+                if "effort" in reasoning_param:
                     reasoning_effort = reasoning_param.get("effort")
-                else:
-                    reasoning_effort = reasoning_param
+                    # 确保 effort 是字符串
+                    if reasoning_effort is not None and not isinstance(
+                        reasoning_effort, str
+                    ):
+                        reasoning_effort = str(reasoning_effort)
+                # 如果只有 summary 没有 effort，丢弃整个参数
+                # summary 是 Responses API 特有参数，chat completion 不支持
             elif isinstance(reasoning_param, str):
-                # reasoning could be a string directly
+                # reasoning 直接是字符串
                 reasoning_effort = reasoning_param
+
+        # 国内模型不支持 reasoning_effort、parallel_tool_calls 等参数
+        # 在生成阶段就不添加，而不是在后面过滤
+        is_domestic = is_domestic_model_or_endpoint(model_name, api_base)
 
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
@@ -214,22 +313,28 @@ class LiteLLMCompletionResponsesConfig:
             "top_p": responses_api_request.get("top_p"),
             "user": responses_api_request.get("user"),
             "temperature": responses_api_request.get("temperature"),
-            "parallel_tool_calls": responses_api_request.get("parallel_tool_calls"),
             "max_tokens": responses_api_request.get("max_output_tokens"),
             "stream": stream,
             "metadata": kwargs.get("metadata"),
             "service_tier": kwargs.get("service_tier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
-            "reasoning_effort": reasoning_effort,
             "context_management": responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
         }
 
+        # 只对非国内模型添加 reasoning_effort 和 parallel_tool_calls
+        if not is_domestic:
+            litellm_completion_request["parallel_tool_calls"] = (
+                responses_api_request.get("parallel_tool_calls")
+            )
+            litellm_completion_request["reasoning_effort"] = reasoning_effort
+
         # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage
-        if stream is True:
+        # 国内模型不支持 stream_options，跳过
+        if stream is True and not is_domestic:
             stream_options = {
                 "include_usage": True,
             }
@@ -244,6 +349,12 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request = {
             k: v for k, v in litellm_completion_request.items() if v is not None
         }
+
+        # 国内模型不支持空 tools 数组，移除空的 tools 参数
+        if is_domestic_model_or_endpoint(model_name, api_base):
+            if not litellm_completion_request.get("tools"):
+                litellm_completion_request.pop("tools", None)
+
         return litellm_completion_request
 
     @staticmethod
@@ -314,8 +425,14 @@ class LiteLLMCompletionResponsesConfig:
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         tools = litellm_completion_request.get("tools") or []
+        # 获取 model 和 api_base 用于判断是否是国内模型
+        model_name = litellm_completion_request.get("model")
+        api_base = litellm_completion_request.get("api_base")
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=combined_messages, tools=tools
+            messages=combined_messages,
+            tools=tools,
+            model_name=model_name,
+            api_base=api_base,
         )
 
         # Safety check: Ensure we don't end up with empty messages
@@ -446,6 +563,30 @@ class LiteLLMCompletionResponsesConfig:
                     if not chat_completion_messages:
                         continue
 
+                    # Skip orphan tool outputs: tool output without corresponding tool call
+                    # This happens when previous_response_id chain loses tool call history
+                    # Models like Volcengine/Aliyun reject "No tool calls but found tool output"
+                    if len(chat_completion_messages) == 1:
+                        first_msg = chat_completion_messages[0]
+                        first_role = (
+                            first_msg.get("role")
+                            if isinstance(first_msg, dict)
+                            else getattr(first_msg, "role", None)
+                        )
+                        if first_role == "tool":
+                            first_tool_call_id = (
+                                first_msg.get("tool_call_id")
+                                if isinstance(first_msg, dict)
+                                else getattr(first_msg, "tool_call_id", None)
+                            )
+                            if (
+                                first_tool_call_id
+                                and str(first_tool_call_id)
+                                not in existing_tool_call_ids
+                            ):
+                                # Orphan tool output: no corresponding tool call in history
+                                continue
+
                     deduped_in_place: List[Any] = []
                     for m in chat_completion_messages:
                         role = ""
@@ -479,6 +620,21 @@ class LiteLLMCompletionResponsesConfig:
                                 continue
                             if call_id:
                                 existing_tool_call_ids.add(call_id)
+
+                        # Skip orphan tool outputs in multi-message batches
+                        # (single-message case handled above at line 547-566)
+                        if role == "tool":
+                            tool_call_id = (
+                                m.get("tool_call_id")
+                                if isinstance(m, dict)
+                                else getattr(m, "tool_call_id", None)
+                            )
+                            if (
+                                tool_call_id
+                                and str(tool_call_id) not in existing_tool_call_ids
+                            ):
+                                # Orphan tool output: no corresponding tool call in history
+                                continue
 
                         deduped_in_place.append(m)
 
@@ -693,9 +849,15 @@ class LiteLLMCompletionResponsesConfig:
                 function_raw, "arguments"
             )
         )
+        # 确保 arguments 是有效的 JSON 格式（国内模型要求严格）
+        function_arguments = (
+            LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                function_arguments_raw
+            )
+        )
         function: Dict[str, Any] = {
             "name": function_name_raw or "",
-            "arguments": function_arguments_raw or "{}",
+            "arguments": function_arguments,
         }
         tool_use_id_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
             tool_use_definition, "id"
@@ -714,7 +876,9 @@ class LiteLLMCompletionResponsesConfig:
             type=cast(Literal["function"], tool_use_type),
             function=ChatCompletionToolCallFunctionChunk(
                 name=str(function.get("name", "")),
-                arguments=str(function.get("arguments", "{}")),
+                arguments=LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                    function.get("arguments")
+                ),
             ),
             index=index,
         )
@@ -775,7 +939,9 @@ class LiteLLMCompletionResponsesConfig:
             if function_name_raw is not None or function_arguments_raw is not None:
                 normalized_definition["function"] = {
                     "name": function_name_raw,
-                    "arguments": function_arguments_raw,
+                    "arguments": LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                        function_arguments_raw
+                    ),
                 }
 
         normalized_definition["id"] = normalized_definition.get("id") or tool_call_id
@@ -812,6 +978,8 @@ class LiteLLMCompletionResponsesConfig:
             ]
         ],
         tools: Optional[List[Any]] = None,
+        model_name: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> List[
         Union[
             AllMessageValues,
@@ -827,15 +995,23 @@ class LiteLLMCompletionResponsesConfig:
         This is critical for Anthropic API which requires that each tool_result block has a
         corresponding tool_use block in the previous assistant message.
 
+        For domestic models (Volcengine, Aliyun, etc.), they reject requests with orphan tool outputs.
+        When we can't reconstruct the tool_call, we remove the orphan tool message entirely.
+
         Args:
             messages: List of messages that may include tool_result messages
             tools: Optional list of tools that can be used to reconstruct tool_calls if not in cache
+            model_name: Model name, used to determine if domestic model filtering should apply
+            api_base: API endpoint URL, fallback check when model_name is just a group name
 
         Returns:
             List of messages with tool_calls added to assistant messages when needed
         """
         if not messages:
             return list(messages)
+
+        # 判断是否是国内模型，需要更严格的 orphan 过滤
+        is_domestic_model = is_domestic_model_or_endpoint(model_name, api_base)
 
         # Create a deep copy to avoid modifying the original (use list() so we can mutate and return List)
         import copy
@@ -909,7 +1085,15 @@ class LiteLLMCompletionResponsesConfig:
             # Check if the previous assistant message has the corresponding tool_call
             # This needs to run for ALL tool messages with a valid tool_call_id,
             # not just those that had an empty tool_call_id initially
-            if prev_assistant_idx is not None and tool_call_id:
+            if prev_assistant_idx is None and tool_call_id:
+                # 没有找到前一个 assistant message
+                # 对于国内模型，这是 orphan tool output，应该删除
+                # 国内模型拒绝 "No tool calls but found tool output"
+                if is_domestic_model:
+                    if non_tool_messages_count > 0:
+                        messages_to_remove.append(i)
+                    continue
+            elif prev_assistant_idx is not None and tool_call_id:
                 prev_assistant = fixed_messages[prev_assistant_idx]
                 tool_calls = LiteLLMCompletionResponsesConfig._get_tool_calls_list(
                     prev_assistant
@@ -942,6 +1126,14 @@ class LiteLLMCompletionResponsesConfig:
                         LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
                             prev_assistant, tool_call_chunk
                         )
+                    else:
+                        # 无法重建 tool_call
+                        # 对于国内模型，直接删除这个 orphan tool message
+                        # 国内模型（火山引擎、阿里云）拒绝 "No tool calls but found tool output"
+                        if is_domestic_model:
+                            if non_tool_messages_count > 0:
+                                messages_to_remove.append(i)
+                            continue
 
         # Remove messages with empty tool_call_id that couldn't be fixed
         for idx in reversed(messages_to_remove):
@@ -1147,6 +1339,10 @@ class LiteLLMCompletionResponsesConfig:
 
             """
             function: dict = _tool_use_definition.get("function") or {}
+            # 确保 arguments 是有效的 JSON 格式（国内模型要求严格）
+            arguments = LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                function.get("arguments")
+            )
             tool_call_chunk = ChatCompletionToolCallChunk(
                 id=_tool_use_definition.get("id") or "",
                 type=cast(
@@ -1154,7 +1350,7 @@ class LiteLLMCompletionResponsesConfig:
                 ),
                 function=ChatCompletionToolCallFunctionChunk(
                     name=function.get("name") or "",
-                    arguments=str(function.get("arguments") or ""),
+                    arguments=arguments,
                 ),
                 index=0,
             )
@@ -1193,12 +1389,16 @@ class LiteLLMCompletionResponsesConfig:
         ```
         """
         # Create a tool call for the function call
+        # 确保 arguments 是有效的 JSON 格式（国内模型要求严格）
+        arguments = LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+            function_call.get("arguments")
+        )
         tool_call = ChatCompletionToolCallChunk(
             id=function_call.get("call_id") or function_call.get("id") or "",
             type="function",
             function=ChatCompletionToolCallFunctionChunk(
                 name=function_call.get("name") or "",
-                arguments=str(function_call.get("arguments") or ""),
+                arguments=arguments,
             ),
             index=0,
         )
@@ -1357,26 +1557,57 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
         tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
+        model_name: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Tuple[
         List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]],
         Optional[OpenAIWebSearchOptions],
     ]:
         """
         Transform a Responses API tools into a Chat Completion tools
+
+        Args:
+            tools: List of tools from Responses API request
+            model_name: Model name, used to determine if domestic model filtering should apply
+            api_base: API endpoint URL, fallback check when model_name is just a group name
         """
         if tools is None:
             return [], None
+
+        # 判断是否是国内模型，需要特殊处理（双重检查：model名 + endpoint）
+        is_domestic_model = is_domestic_model_or_endpoint(model_name, api_base)
+
         chat_completion_tools: List[
             Union[ChatCompletionToolParam, OpenAIMcpServerTool]
         ] = []
         web_search_options: Optional[OpenAIWebSearchOptions] = None
+
         for tool in tools:
+            # 只对国内模型 endpoint 过滤不支持的工具类型
+            # 国内模型只支持 type: "function"，不支持 Codex/OpenAI 特有的工具类型
+            if is_domestic_model:
+                unsupported_tool_types = [
+                    "local_shell",  # Codex CLI 内置 Shell 工具
+                    "namespace",  # Codex CLI 0.130.0 工具命名空间
+                    "code_interpreter",  # OpenAI Code Interpreter
+                    "file_search",  # OpenAI File Search
+                    "computer_use",  # Anthropic Computer Use
+                    "image_generation",  # OpenAI Image Generation
+                ]
+                if tool.get("type") in unsupported_tool_types:
+                    continue  # 跳过不支持的 tool 类型
+
+            # MCP 和 web_search 类型：国内模型不支持，需要过滤
             if tool.get("type") == "mcp":
+                if is_domestic_model:
+                    continue  # 国内模型不支持 MCP 协议
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
             elif (
                 tool.get("type") == "web_search_preview"
                 or tool.get("type") == "web_search"
             ):
+                if is_domestic_model:
+                    continue  # 国内模型不支持 web search
                 _search_context_size: Literal["low", "medium", "high"] = cast(
                     Literal["low", "medium", "high"], tool.get("search_context_size")
                 )
@@ -1394,30 +1625,55 @@ class LiteLLMCompletionResponsesConfig:
                 parameters = dict(typed_tool.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
-                chat_completion_tool: Dict[str, Any] = {
-                    "type": "function",
-                    "function": {
-                        "name": typed_tool.get("name") or "",
-                        "description": typed_tool.get("description") or "",
-                        "parameters": parameters,
-                        "strict": typed_tool.get("strict", False) or False,
-                    },
-                }
-                if tool.get("cache_control"):
-                    chat_completion_tool["cache_control"] = tool.get("cache_control")  # type: ignore
-                if tool.get("defer_loading"):
-                    chat_completion_tool["defer_loading"] = tool.get("defer_loading")  # type: ignore
-                if tool.get("allowed_callers"):
-                    chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")  # type: ignore
-                if tool.get("input_examples"):
-                    chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
+
+                # 只对国内模型 endpoint 清理 schema 中不支持的字段
+                # 国内模型不支持 strict 和 additionalProperties，OpenAI structured outputs 需要这些字段
+                chat_completion_tool: Dict[str, Any]
+                if is_domestic_model:
+                    parameters = LiteLLMCompletionResponsesConfig._clean_schema(
+                        parameters
+                    )
+                    # 国内模型不支持 strict 和额外字段，只传递基础信息
+                    chat_completion_tool = {
+                        "type": "function",
+                        "function": {
+                            "name": typed_tool.get("name") or "",
+                            "description": typed_tool.get("description") or "",
+                            "parameters": parameters,
+                        },
+                    }
+                else:
+                    # 国际模型支持完整参数
+                    chat_completion_tool = {
+                        "type": "function",
+                        "function": {
+                            "name": typed_tool.get("name") or "",
+                            "description": typed_tool.get("description") or "",
+                            "parameters": parameters,
+                            "strict": typed_tool.get("strict", False) or False,
+                        },
+                    }
+                    if tool.get("cache_control"):
+                        chat_completion_tool["cache_control"] = tool.get("cache_control")  # type: ignore
+                    if tool.get("defer_loading"):
+                        chat_completion_tool["defer_loading"] = tool.get("defer_loading")  # type: ignore
+                    if tool.get("allowed_callers"):
+                        chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")  # type: ignore
+                    if tool.get("input_examples"):
+                        chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
                 chat_completion_tools.append(
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
             else:
+                # 对于国内模型，只保留 function 和 mcp 类型，其他类型全部过滤
+                # 避免 unknown 类型被发送给国内模型导致错误
+                if is_domestic_model:
+                    # 国内模型只支持 function 和 mcp 类型
+                    continue  # 跳过不支持的工具类型
                 chat_completion_tools.append(
                     cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
                 )
+        # 国内模型不支持空 tools 数组，返回空列表由调用者判断处理
         return chat_completion_tools, web_search_options
 
     @staticmethod
@@ -1512,7 +1768,9 @@ class LiteLLMCompletionResponsesConfig:
 
                 output_tool_call: ResponseFunctionToolCall = ResponseFunctionToolCall(
                     name=function_definition.name or "",
-                    arguments=function_definition.get("arguments") or "",
+                    arguments=LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                        function_definition.get("arguments")
+                    ),
                     call_id=tool.id or "",
                     id=tool.id or "",
                     type="function_call",  # critical this is "function_call" to work with tools like openai codex
@@ -1594,7 +1852,9 @@ class LiteLLMCompletionResponsesConfig:
 
         function_dict: Dict[str, Any] = {
             "name": tool_call_item.name,
-            "arguments": tool_call_item.arguments,
+            "arguments": LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                tool_call_item.arguments
+            ),
         }
 
         if provider_specific_fields:
@@ -2021,7 +2281,9 @@ class LiteLLMCompletionResponsesConfig:
             type="function",
             function=Function(
                 name=tool_call.get("name") or "",
-                arguments=tool_call.get("arguments") or "",
+                arguments=LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                    tool_call.get("arguments")
+                ),
             ),
         )
 

@@ -2275,3 +2275,73 @@ class TestCacheControlPreservation:
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+
+class TestEnsureValidJsonArguments:
+    """Test _ensure_valid_json_arguments for domestic model compatibility."""
+
+    def test_ensure_valid_json_arguments_with_dict(self):
+        """Arguments as dict should be converted to JSON string."""
+        result = LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+            {"key": "value", "number": 123}
+        )
+        assert result == '{"key": "value", "number": 123}'
+        import json
+
+        json.loads(result)  # Verify it's valid JSON
+
+    def test_ensure_valid_json_arguments_with_valid_json_string(self):
+        """Valid JSON string should be returned unchanged."""
+        result = LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+            '{"command": ["echo", "hello"]}'
+        )
+        assert result == '{"command": ["echo", "hello"]}'
+
+    def test_ensure_valid_json_arguments_with_empty_string(self):
+        """Empty string should return empty object."""
+        result = LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments("")
+        assert result == "{}"
+
+    def test_ensure_valid_json_arguments_with_none(self):
+        """None should return empty object."""
+        result = LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(None)
+        assert result == "{}"
+
+    def test_ensure_valid_json_arguments_with_invalid_json_string(self):
+        """Invalid JSON string should return empty object."""
+        result = LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+            "not valid json"
+        )
+        assert result == "{}"
+
+    def test_ensure_valid_json_arguments_with_non_string_type(self):
+        """Non-string types should be converted or return empty object."""
+        # Integer that can be JSON parsed
+        result = LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(123)
+        assert result == "123"
+
+        # List that can be JSON parsed when stringified
+        result = LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+            ["a", "b"]
+        )
+        import json
+
+        json.loads(result)  # Should be valid JSON
+
+    def test_convert_response_tool_call_with_invalid_arguments(self):
+        """Test convert_response_function_tool_call_to_chat_completion_tool_call handles invalid arguments."""
+        from openai.types.responses.response_function_tool_call import (
+            ResponseFunctionToolCall,
+        )
+
+        tool_call = ResponseFunctionToolCall(
+            type="function_call",
+            name="test_function",
+            arguments="not valid json",
+            call_id="call_456",
+        )
+        result = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+            tool_call, 0
+        )
+        # Arguments should be sanitized to empty object
+        assert result["function"]["arguments"] == "{}"

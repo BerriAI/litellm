@@ -728,6 +728,14 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 if k not in _MODEL_RESPONSE_FIELDS:
                     setattr(model_response_object, k, v)
 
+            # Promote reasoning_content to content if content is empty
+            # 小米模型等推理模型可能在 content 为空时返回 reasoning_content
+            for choice in model_response_object.choices:
+                msg = choice.message
+                if hasattr(msg, "reasoning_content") and msg.reasoning_content:
+                    if msg.content is None or msg.content == "":
+                        msg.content = msg.reasoning_content
+
             return model_response_object
         elif response_type == "embedding" and (
             model_response_object is None
