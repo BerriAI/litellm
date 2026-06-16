@@ -19,7 +19,61 @@ _LITELLM_CLASS_PREFIX = re.compile(r"^\s*litellm\.\w+(?:Error|Exception):\s*")
 
 # Provider exception prefix, e.g. `AnthropicException - {json}` /
 # `VertexAIException - ...`. Appears once, right before the raw upstream body.
-_PROVIDER_EXCEPTION_PREFIX = re.compile(r"^\s*\w+Exception\s*-\s*")
+# Anchored to known provider names rather than `\w+Exception` so a generic
+# `TimeoutException - <real error>` / `ConnectionException - <real error>`
+# / `RequestException - <real error>` does NOT swallow the front of a
+# legitimate runtime error string. Maintained from `litellm/llms/**`
+# `<Name>Exception` classes plus common aliases LiteLLM emits.
+_PROVIDER_EXCEPTION_NAMES = (
+    "Anthropic",
+    "AzureOpenAI",
+    "Azure",
+    "AWSBedrock",
+    "Bedrock",
+    "Cerebras",
+    "ClarifAI",
+    "Cohere",
+    "CometAPI",
+    "Databricks",
+    "DeepInfra",
+    "Deepgram",
+    "DeepSeek",
+    "Deepseek",
+    "ElevenLabs",
+    "FireworksAI",
+    "Fireworks",
+    "Gemini",
+    "Groq",
+    "HuggingFace",
+    "Huggingface",
+    "Hyperbolic",
+    "Minimax",
+    "MistralAudioTranscription",
+    "Mistral",
+    "NLPCloud",
+    "NvidiaRiva",
+    "OllamaChat",
+    "Ollama",
+    "OpenAI",
+    "OpenRouter",
+    "OVHCloud",
+    "Perplexity",
+    "Predibase",
+    "Replicate",
+    "Sambanova",
+    "ScalewayAudioTranscription",
+    "Snowflake",
+    "TogetherAI",
+    "Together",
+    "Topaz",
+    "VercelAIGateway",
+    "VertexAI",
+    "Watsonx",
+    "XAI",
+)
+_PROVIDER_EXCEPTION_PREFIX = re.compile(
+    r"^\s*(?:" + "|".join(_PROVIDER_EXCEPTION_NAMES) + r")Exception\s*-\s*"
+)
 
 
 # HTTP status code -> Anthropic error type

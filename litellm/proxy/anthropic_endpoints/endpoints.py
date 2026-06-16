@@ -208,8 +208,21 @@ async def anthropic_response(
         # ProxyException envelope) so Anthropic SDK clients can switch on
         # error.error.type. Use JSONResponse directly: HTTPException(detail=...)
         # would wrap the dict in a spurious {"detail": ...} envelope.
-        status_code = int(getattr(e, "status_code", 500) or 500)
-        raw_message = getattr(e, "message", str(e))
+        # ProxyException stores its HTTP code on `.code` (string), litellm
+        # provider exceptions store it on `.status_code` (int). Read both,
+        # matching the `count_tokens` handler below.
+        proxy_code = getattr(e, "code", None)
+        if isinstance(proxy_code, str) and proxy_code.isdigit():
+            status_code = int(proxy_code)
+        else:
+            status_code = int(getattr(e, "status_code", 500) or 500)
+        # `getattr(e, "message", str(e))` returns None when .message is
+        # explicitly None (e.g. `litellm.BadRequestError(message=None)`).
+        # That None would crash `re.sub(..., None)` in
+        # `_strip_litellm_wrapper_prefixes`.
+        raw_message = getattr(e, "message", None)
+        if raw_message is None:
+            raw_message = str(e)
         anthropic_error = AnthropicExceptionMapping.transform_to_anthropic_error(
             status_code=status_code,
             raw_message=raw_message,

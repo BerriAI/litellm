@@ -146,3 +146,86 @@ def test_litellm_headers_present_on_error(setup_proxy, monkeypatch):
     # proves the custom-header block runs on the error path (regression guard:
     # JSONResponse must carry headers=..., unlike the old ProxyException path).
     assert "x-litellm-version" in header_keys
+
+
+def test_proxy_exception_code_attribute_is_honored(setup_proxy, monkeypatch):
+    """Regression for greptile P1 on #30385.
+
+    `ProxyException` stores the HTTP code on `.code` (string), not on
+    `.status_code`. Reading only `.status_code` silently maps every
+    ProxyException (auth, permission, etc.) to HTTP 500. The handler must
+    read both, preferring `.code` when it's a numeric string — matching the
+    `count_tokens` handler in the same module.
+    """
+    from litellm.proxy._types import ProxyException
+
+    exc = ProxyException(
+        message="Invalid proxy server token passed",
+        type="auth_error",
+        param=None,
+        code="401",
+    )
+    resp = _make_request(monkeypatch, exc)
+
+    assert resp.status_code == 401, (
+        "ProxyException.code='401' must map to HTTP 401, not the default 500. "
+        f"Got status_code={resp.status_code}, body={resp.json()}"
+    )
+    body = resp.json()
+    assert body["error"]["type"] == "authentication_error"
+    assert "Invalid proxy server token passed" in body["error"]["message"]
+
+
+def test_none_message_falls_back_to_str(setup_proxy, monkeypatch):
+    """Regression for greptile P2 on #30385.
+
+    `getattr(e, "message", str(e))` returns `None` when `.message` exists
+    but holds `None`. That `None` then crashes `re.sub` inside
+    `_strip_litellm_wrapper_prefixes`, producing an unhandled 500 with no
+    Anthropic-shaped body. The handler must coerce `None` -> `str(e)`.
+    """
+
+    class _ExceptionWithNoneMessage(Exception):
+        def __init__(self):
+            self.message = None
+            self.status_code = 502
+            super().__init__("fallback str repr")
+
+    resp = _make_request(monkeypatch, _ExceptionWithNoneMessage())
+
+    assert resp.status_code == 502
+    body = resp.json()
+    assert "detail" not in body
+    assert body["type"] == "error"
+    # The handler is expected to fall back to `str(e)` when .message is None;
+    # the precise text isn't asserted (could vary), but the body must be
+    # well-formed Anthropic shape, not a 500 from a TypeError in the
+    # strip-prefix regex.
+    assert isinstance(body["error"]["message"], str)
+    assert body["error"]["message"]  # non-empty
+
+
+def test_provider_exception_prefix_does_not_strip_generic_timeout(
+    setup_proxy, monkeypatch
+):
+    """Regression for greptile P2 on #30385.
+
+    `_PROVIDER_EXCEPTION_PREFIX` previously matched any `\\w+Exception - `,
+    including `TimeoutException - <real upstream body>`. Anchored now to a
+    known provider-name allowlist, so a generic Timeout-style prefix must
+    NOT be silently stripped.
+    """
+    exc = litellm.BadRequestError(
+        message="TimeoutException - upstream took too long",
+        llm_provider="anthropic",
+        model="claude-opus-4-6",
+    )
+    resp = _make_request(monkeypatch, exc)
+
+    body = resp.json()
+    # Must NOT strip "TimeoutException - " from the start (it's not a
+    # LiteLLM provider name).
+    assert "TimeoutException" in body["error"]["message"], (
+        "Generic TimeoutException - prefix must NOT be stripped by the "
+        f"provider-exception regex. Got message={body['error']['message']!r}"
+    )
