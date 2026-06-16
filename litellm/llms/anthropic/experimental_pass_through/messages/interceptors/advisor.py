@@ -269,6 +269,14 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         """Emit the advisor exchanges as Anthropic SSE as the loop runs. The
         server_tool_use block is flushed before the advisor sub-call is awaited,
         so the client renders the advisor as running until its result arrives."""
+        loop_iter = loop.__aiter__()
+        first_event = await loop_iter.__anext__()
+        first_kind, first_a, first_b = first_event
+
+        first_usage = (
+            first_a.get("usage") if isinstance(first_a, dict) else None
+        ) or {}
+
         index = 0
         yield _sse(
             "message_start",
@@ -282,12 +290,20 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                     "content": [],
                     "stop_reason": None,
                     "stop_sequence": None,
-                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "usage": {
+                        "input_tokens": first_usage.get("input_tokens", 0),
+                        "output_tokens": 0,
+                    },
                 },
             },
         )
 
-        async for kind, a, b in loop:
+        async def _all_events():
+            yield first_event
+            async for event in loop_iter:
+                yield event
+
+        async for kind, a, b in _all_events():
             if kind == "advisor_call":
                 for block in _executor_text_blocks(a):
                     for chunk in build_content_block_chunks(block, index):

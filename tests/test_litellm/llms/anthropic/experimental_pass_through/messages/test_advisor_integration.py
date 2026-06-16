@@ -963,3 +963,55 @@ async def test_advisor_model_access_skipped_without_router():
         )
 
     assert call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# 13. Streaming message_start carries real input_tokens
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_streaming_message_start_has_real_input_tokens():
+    """message_start must carry the executor's input_tokens, not a placeholder
+    zero. Clients that read usage from message_start (per the Anthropic SSE
+    protocol) would otherwise show incorrect billing data."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            resp = _advisor_call_resp()
+            resp["usage"] = {"input_tokens": 777, "output_tokens": 15}
+            return resp
+        if call_count == 2:
+            return _text_resp("Advice.", model="claude-opus-4-6")
+        return _text_resp("Final.")
+
+    message_start_usage = None
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=True,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+        async for raw in result:
+            text = raw.decode()
+            if "event: message_start" in text:
+                payload = json.loads(
+                    text.split("data: ", 1)[1].split("\n\n", 1)[0]
+                )
+                message_start_usage = payload["message"]["usage"]
+
+    assert message_start_usage is not None
+    assert message_start_usage["input_tokens"] == 777
