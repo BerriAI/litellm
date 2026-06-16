@@ -208,11 +208,13 @@ def _input_message(message: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _output_message(choice: Mapping[str, object]) -> Mapping[str, object]:
+    # Chat choices carry the completion under ``message``; legacy text-completion
+    # choices expose it as a top-level ``text`` string, so fall back to that.
     message = _as_mapping(choice.get("message"))
     return _prune(
         {
             "role": _as_str(message.get("role")) or "assistant",
-            "parts": _parts(message),
+            "parts": _parts(message) or _text_parts(choice.get("text")),
             "finish_reason": _as_str(choice.get("finish_reason")),
         }
     )

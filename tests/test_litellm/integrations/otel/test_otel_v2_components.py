@@ -434,6 +434,20 @@ def test_genai_mapper_output_choice_without_message_defaults_role():
     assert message == {"role": "assistant", "parts": [], "finish_reason": "stop"}
 
 
+def test_genai_mapper_text_completion_choice_uses_text_field():
+    # Legacy /completions choices expose the completion as a top-level ``text``
+    # string with no ``message``; it still becomes a text part.
+    data = _llm_call_with_content(
+        choices_out=({"finish_reason": "stop", "text": "a cold beer"},)
+    )
+    (message,) = json.loads(GenAIMapper().map(data)[GenAI.OUTPUT_MESSAGES])
+    assert message == {
+        "role": "assistant",
+        "parts": [{"type": "text", "content": "a cold beer"}],
+        "finish_reason": "stop",
+    }
+
+
 def test_genai_mapper_non_serializable_content_does_not_crash_span():
     # json_or_none guards the dump: a stray non-JSON value is stringified instead
     # of raising through ``collect`` and dropping the whole span.
