@@ -78,9 +78,7 @@ describe("resetCredentialFormOnProviderChange", () => {
 
     resetCredentialFormOnProviderChange(stub, Providers.Anthropic, vi.fn());
 
-    const credentialNameCalls = calls.setFieldValue.mock.calls.filter(
-      ([key]) => key === "credential_name",
-    );
+    const credentialNameCalls = calls.setFieldValue.mock.calls.filter(([key]) => key === "credential_name");
     expect(credentialNameCalls).toHaveLength(0);
   });
 });
