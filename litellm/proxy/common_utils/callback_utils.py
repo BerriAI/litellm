@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Literal, 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
@@ -482,6 +483,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS = frozenset(
         "guardrail_config",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
+        PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         "disable_global_guardrails",
         "disable_global_guardrail",
         "opted_out_global_guardrails",

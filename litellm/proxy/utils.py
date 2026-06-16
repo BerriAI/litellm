@@ -1126,6 +1126,8 @@ class ProxyLogging:
                     response=response, data=data, call_type=call_type
                 )
 
+            callback.mark_pre_call_hook_ran(data)
+
         except Exception as e:
             status = "error"
             error_type = type(e).__name__
