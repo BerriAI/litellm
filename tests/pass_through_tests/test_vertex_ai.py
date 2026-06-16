@@ -103,10 +103,82 @@ def _is_vertex_quota_error(exc: Exception) -> bool:
     )
 
 
+def _parse_spend_log_start_time(value):
+    import datetime
+
+    if not value:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed
+
+
+async def get_request_spend_log(
+    model_name: str,
+    after_time,
+    max_wait: int = 120,
+    poll_interval: int = 10,
+):
+    """Poll /spend/logs for the individual row produced by this request: one for
+    ``model_name``, started at/after ``after_time``, with spend > 0.
+
+    Asserting on this request's own row instead of a shared daily spend total is what
+    keeps the test deterministic. The total is mutated by every other passthrough test
+    on the same key and is bucketed by UTC day, so a strict "total went up" check races
+    both of those; a request that lands on the far side of midnight UTC or whose tiny
+    delta is masked by a concurrent write would flake. Spend logging is async and
+    batched, so the row still shows up a few seconds after the response returns; poll
+    until it does.
+    """
+    import datetime
+    import requests
+
+    after_date = after_time.date()
+    start_date = (after_date - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    end_date = (after_date + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    url = f"{LITE_LLM_ENDPOINT}/spend/logs"
+    params = {
+        "api_key": "best-api-key-ever",
+        "start_date": start_date,
+        "end_date": end_date,
+        "summarize": "false",
+    }
+    headers = {"Authorization": "Bearer sk-1234"}
+
+    elapsed = 0
+    while elapsed < max_wait:
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            print(f"/spend/logs returned {response.status_code}: {response.text}")
+            continue
+        for row in response.json():
+            if model_name not in (row.get("model") or ""):
+                continue
+            if float(row.get("spend") or 0.0) <= 0:
+                continue
+            row_start = _parse_spend_log_start_time(row.get("startTime"))
+            if row_start is None:
+                print(
+                    f"matching row has unparseable startTime {row.get('startTime')!r}",
+                    row,
+                )
+                continue
+            if row_start >= after_time:
+                print(f"found spend log (elapsed={elapsed}s)", row)
+                return row
+    return None
+
+
 @pytest.mark.asyncio()
 async def test_basic_vertex_ai_pass_through_with_spendlog():
+    import datetime
 
-    spend_before = await call_spend_logs_endpoint() or 0.0
     load_vertex_ai_credentials()
 
     vertexai.init(
@@ -117,6 +189,11 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
     )
 
     model = GenerativeModel(model_name="gemini-3.1-flash-lite")
+    # Capture the request time before the call (with a small buffer for clock skew) so
+    # we only match the spend log this request produces, not an earlier one.
+    request_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        seconds=5
+    )
     try:
         response = model.generate_content("hi")
     except Exception as exc:
@@ -126,23 +203,14 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
 
     print("response", response)
 
-    # Poll for spend update instead of fixed sleep - spend logging is async/batched
-    max_wait = 120  # total seconds to wait
-    poll_interval = 10  # seconds between checks
-    elapsed = 0
-    spend_after = spend_before
-    while elapsed < max_wait:
-        await asyncio.sleep(poll_interval)
-        elapsed += poll_interval
-        spend_after = await call_spend_logs_endpoint() or 0.0
-        print(f"spend_after (elapsed={elapsed}s)", spend_after)
-        if spend_after > spend_before:
-            break
+    spend_log = await get_request_spend_log(
+        model_name="gemini-3.1-flash-lite", after_time=request_time
+    )
 
-    assert (
-        spend_after > spend_before
-    ), "Spend should be greater than before after {}s. spend_before: {}, spend_after: {}".format(
-        elapsed, spend_before, spend_after
+    assert spend_log is not None, (
+        "No spend log with spend > 0 was recorded for the vertex passthrough request "
+        "within 120s. The request itself succeeded, so its cost-tracking write was lost "
+        "or its cost was computed as zero."
     )
 
 
