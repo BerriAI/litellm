@@ -35,8 +35,8 @@ a persisted incremental cache (.mypy_cache_any).
 Rules
 -----
 Codes share the `LIT***` namespace with `scripts/check_type_discipline.py` (PR
-#30500), which owns LIT001/003/004/006/007/008. This gate claims the rest:
-LIT002  A value expression's inferred type is, or contains, `Any`.
+#30500), which owns LIT001/002/003/004/006/007/008. This gate claims the rest:
+LIT009  A value expression's inferred type is, or contains, `Any`.
         Suppress with `# any-ok: <reason>` on the offending line.
 LIT005  An `# any-ok` suppression without a reason (the shared
         suppression-needs-a-reason code, same as `# cast-ok` / `# guard-ok`).
@@ -363,7 +363,7 @@ def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
         for line, col, typ in find_any_in_tree(tree, idmap):
             if line in ok_lines:
                 continue
-            out.append(Violation(report_path, line, col, "LIT002", f"value type contains Any -> {typ}"))
+            out.append(Violation(report_path, line, col, "LIT009", f"value type contains Any -> {typ}"))
     return tuple(out)
 
 
