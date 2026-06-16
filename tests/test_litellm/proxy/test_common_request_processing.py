@@ -1,6 +1,7 @@
+import asyncio
 import copy
 import datetime
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -15,12 +16,15 @@ from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
+    _await_llm_call_cancelling_on_disconnect,
+    _cancel_llm_call_on_client_disconnect,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     _has_attribute_error_in_chain,
     _is_azure_model_router_request,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    _UpstreamClosingStreamingResponse,
     create_response,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
@@ -2412,6 +2416,257 @@ class TestHandleLLMApiExceptionDictDetail:
         assert proxy_exc.code == "500"
 
 
+class TestStreamCloseOnDisconnect:
+    """
+    Coverage for closing the upstream LLM stream when the client disconnects
+    mid-stream. Starlette abandons the response body iterator without calling
+    aclose(), so without these hooks the proxy->backend connection stays open
+    and the backend (e.g. vLLM) keeps generating into a dead pipe.
+    """
+
+    async def test_response_closes_body_iterator_when_task_cancelled(self):
+        """Cancellation landing in send() leaves the generator suspended at a
+        yield; only the response-level finally can close it."""
+        closed = asyncio.Event()
+
+        async def body():
+            try:
+                while True:
+                    yield "data: x\n\n"
+            finally:
+                closed.set()
+
+        response = _UpstreamClosingStreamingResponse(
+            body(), media_type="text/event-stream"
+        )
+
+        async def receive():
+            await asyncio.Event().wait()
+
+        async def send(message):
+            if message["type"] == "http.response.body":
+                await asyncio.Event().wait()
+
+        task = asyncio.create_task(response({"type": "http"}, receive, send))
+        await asyncio.sleep(0.05)
+        assert not closed.is_set()
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert closed.is_set()
+
+    async def test_response_closes_body_iterator_on_http_disconnect(self):
+        closed = asyncio.Event()
+        disconnected = asyncio.Event()
+        body_sends = 0
+
+        async def body():
+            try:
+                for i in range(1000):
+                    yield f"data: {i}\n\n"
+            finally:
+                closed.set()
+
+        response = _UpstreamClosingStreamingResponse(
+            body(), media_type="text/event-stream"
+        )
+
+        async def receive():
+            await disconnected.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            nonlocal body_sends
+            if message["type"] == "http.response.body":
+                body_sends += 1
+                if body_sends == 3:
+                    disconnected.set()
+                await asyncio.sleep(0.05)
+
+        await response({"type": "http"}, receive, send)
+
+        assert closed.is_set()
+        assert body_sends < 1000
+
+    async def test_upstream_closed_even_if_body_iterator_aclose_raises(self):
+        """A BaseException from body_iterator.aclose() (e.g. CancelledError)
+        must not prevent the upstream generator from being closed."""
+        upstream_closed = asyncio.Event()
+
+        class ExplodingIterator:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            async def aclose(self):
+                raise asyncio.CancelledError()
+
+        async def upstream():
+            try:
+                yield "data: a\n\n"
+            finally:
+                upstream_closed.set()
+
+        upstream_gen = upstream()
+        await upstream_gen.__anext__()
+        response = _UpstreamClosingStreamingResponse(
+            ExplodingIterator(),
+            media_type="text/event-stream",
+            upstream_generator=upstream_gen,
+        )
+
+        async def receive():
+            await asyncio.Event().wait()
+
+        async def send(message):
+            pass
+
+        await response({"type": "http"}, receive, send)
+
+        assert upstream_closed.is_set()
+
+    async def test_create_response_closes_wrapped_generator_on_cancellation(self):
+        """End to end through create_response: the upstream-facing generator
+        must be closed even when the body iterator was never started (client
+        gone before the first chunk could be sent)."""
+        inner_closed = asyncio.Event()
+
+        async def wrapped():
+            try:
+                while True:
+                    yield "data: a\n\n"
+            finally:
+                inner_closed.set()
+
+        response = await create_response(
+            generator=wrapped(), media_type="text/event-stream", headers={}
+        )
+
+        async def receive():
+            await asyncio.Event().wait()
+
+        async def send(message):
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(response({"type": "http"}, receive, send))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert inner_closed.is_set()
+
+    async def test_async_streaming_data_generator_closes_upstream_on_early_close(
+        self,
+    ):
+        class FakeUpstream:
+            def __init__(self):
+                self.aclosed = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                return {"type": "chunk"}
+
+            async def aclose(self):
+                self.aclosed = True
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        upstream = FakeUpstream()
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=upstream,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            request_data={"model": "mock-model"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+            serialize_chunk=lambda c: "data: x\n\n",
+            serialize_error=lambda e: "data: error\n\n",
+        )
+
+        await gen.__anext__()
+        await gen.__anext__()
+        assert not upstream.aclosed
+
+        await gen.aclose()
+
+        assert upstream.aclosed
+
+
+class TestHandleLLMApiExceptionRetryAfter:
+    """RouterRateLimitError cooldown_time must surface as a retry-after header."""
+
+    async def _invoke(self, exc: Exception, callback_headers: Optional[dict] = None):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value=callback_headers or {}
+        )
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException as raised:
+            return raised
+        raise AssertionError("ProxyException was not raised")
+
+    async def test_handle_llm_api_exception_sets_retry_after_from_cooldown_time(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=42.3,
+            enable_pre_call_checks=False,
+            cooldown_list=[],
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.headers["retry-after"] == "43"
+        assert proxy_exc.code == "429"
+
+    async def test_handle_llm_api_exception_skips_retry_after_when_cooldown_is_zero(
+        self,
+    ):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=0,
+            enable_pre_call_checks=False,
+            cooldown_list=[],
+        )
+        proxy_exc = await self._invoke(exc)
+        assert "retry-after" not in proxy_exc.headers
+
+    async def test_handle_llm_api_exception_no_retry_after_for_plain_exception(self):
+        proxy_exc = await self._invoke(ValueError("some other failure"))
+        assert "retry-after" not in proxy_exc.headers
+
+    async def test_handle_llm_api_exception_retry_after_survives_callback_headers(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=42.3,
+            enable_pre_call_checks=False,
+            cooldown_list=[],
+        )
+        proxy_exc = await self._invoke(
+            exc, callback_headers={"retry-after": "", "x-custom": "1"}
+        )
+        assert proxy_exc.headers["retry-after"] == "43"
+        assert proxy_exc.headers["x-custom"] == "1"
+
+
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""
 
@@ -2480,6 +2735,197 @@ class TestAsyncStreamingDataGeneratorFastPath:
         hook_spy.assert_awaited_once()
 
         ProxyLogging._callback_capabilities_cache.clear()
+
+
+class TestCancelOnDisconnect:
+    """
+    Coverage for the opt-in `general_settings.cancel_on_disconnect` flag:
+    cancelling the in-flight upstream LLM call when the HTTP client disconnects
+    (issue #13774), without changing the default code path and without skipping
+    failure accounting (post_call_failure_hook) on the resulting 499.
+    """
+
+    def _request(self, messages: list) -> Request:
+        async def receive():
+            if messages:
+                return messages.pop(0)
+            await asyncio.Event().wait()
+
+        return Request(scope={"type": "http", "headers": []}, receive=receive)
+
+    async def test_monitor_cancels_llm_call_and_sets_event_on_disconnect(self):
+        request = self._request(
+            [
+                {"type": "http.request", "body": b"", "more_body": False},
+                {"type": "http.disconnect"},
+            ]
+        )
+        llm_call = asyncio.get_running_loop().create_future()
+        disconnect_event = asyncio.Event()
+
+        await _cancel_llm_call_on_client_disconnect(
+            request, llm_call, disconnect_event
+        )
+
+        assert llm_call.cancelled()
+        assert disconnect_event.is_set()
+
+    async def test_monitor_is_noop_while_client_stays_connected(self):
+        request = self._request(
+            [{"type": "http.request", "body": b"", "more_body": False}]
+        )
+        llm_call = asyncio.get_running_loop().create_future()
+        disconnect_event = asyncio.Event()
+
+        monitor = asyncio.create_task(
+            _cancel_llm_call_on_client_disconnect(request, llm_call, disconnect_event)
+        )
+        await asyncio.sleep(0.01)
+
+        assert not monitor.done()
+        assert not llm_call.cancelled()
+        assert not disconnect_event.is_set()
+        monitor.cancel()
+
+    async def test_monitor_survives_receive_failure_without_cancelling(self):
+        """If request.receive() fails (e.g. transport reset) the watcher must
+        degrade to a no-op instead of crashing or cancelling the LLM call."""
+
+        async def receive():
+            raise RuntimeError("transport reset")
+
+        request = Request(scope={"type": "http", "headers": []}, receive=receive)
+        llm_call = asyncio.get_running_loop().create_future()
+        disconnect_event = asyncio.Event()
+
+        await _cancel_llm_call_on_client_disconnect(
+            request, llm_call, disconnect_event
+        )
+
+        assert not llm_call.cancelled()
+        assert not disconnect_event.is_set()
+
+    async def test_cancellation_without_disconnect_reraises_cancelled_error(self):
+        """A CancelledError that is NOT client-initiated (e.g. server shutdown)
+        must propagate as-is instead of being masked as a 499."""
+        request = self._request([])
+        llm_call = asyncio.get_running_loop().create_future()
+        llm_call.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await _await_llm_call_cancelling_on_disconnect(request, llm_call)
+
+    async def _drive_base_process_llm_request(
+        self, monkeypatch, general_settings: dict, llm_call, request: Request
+    ):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "test-cancel-on-disconnect"
+        logging_obj._defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "fake-model", "litellm_logging_obj": logging_obj}
+        )
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(
+            side_effect=lambda data, user_api_key_dict, response: response
+        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value=None
+        )
+
+        async def fake_route_request(**kwargs):
+            return llm_call()
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "route_request",
+            fake_route_request,
+        )
+
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            skip_pre_call_logic=True,
+        )
+
+    async def test_disconnect_ignored_when_flag_disabled(self, monkeypatch):
+        upstream_cancelled = asyncio.Event()
+        model_response = litellm.ModelResponse()
+
+        async def llm_call():
+            try:
+                await asyncio.sleep(0.05)
+                return model_response
+            except asyncio.CancelledError:
+                upstream_cancelled.set()
+                raise
+
+        result = await self._drive_base_process_llm_request(
+            monkeypatch,
+            general_settings={},
+            llm_call=llm_call,
+            request=self._request([{"type": "http.disconnect"}]),
+        )
+
+        assert result is model_response
+        assert not upstream_cancelled.is_set()
+
+    async def test_disconnect_cancels_upstream_when_flag_enabled(self, monkeypatch):
+        upstream_cancelled = asyncio.Event()
+
+        async def llm_call():
+            try:
+                await asyncio.sleep(5)
+                return litellm.ModelResponse()
+            except asyncio.CancelledError:
+                upstream_cancelled.set()
+                raise
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._drive_base_process_llm_request(
+                monkeypatch,
+                general_settings={"cancel_on_disconnect": True},
+                llm_call=llm_call,
+                request=self._request([{"type": "http.disconnect"}]),
+            )
+
+        assert exc_info.value.status_code == 499
+        assert upstream_cancelled.is_set()
+
+    async def test_499_still_fires_post_call_failure_hook(self):
+        """Regression guard: the 499 path must NOT bypass post_call_failure_hook,
+        which releases max_parallel_requests slots and fires spend/alerting
+        callbacks (cf. #14457; P1 review finding on #25776/#27146)."""
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        with pytest.raises(ProxyException) as exc_info:
+            await processor._handle_llm_api_exception(
+                e=HTTPException(
+                    status_code=499, detail="Client disconnected the request"
+                ),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        assert exc_info.value.code == "499"
+        proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
 
 
 class TestAllmPassthroughRoutePostCallGuardrails:

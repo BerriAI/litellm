@@ -972,6 +972,23 @@
         "search": true
       }
     },
+    "fastcrw": {
+      "display_name": "fastCRW (`fastcrw`)",
+      "url": "https://docs.litellm.ai/docs/search/fastcrw",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
+      }
+    },
     "linkup": {
       "display_name": "Linkup (`linkup`)",
       "url": "https://docs.litellm.ai/docs/search/linkup",
@@ -1359,6 +1376,23 @@
         "interactions": true
       }
     },
+    "libertai": {
+      "display_name": "LibertAI (`libertai`)",
+      "url": "https://docs.litellm.ai/docs/providers/libertai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "litellm_proxy": {
       "display_name": "LiteLLM Proxy (`litellm_proxy`)",
       "url": "https://docs.litellm.ai/docs/providers/litellm_proxy",
@@ -1466,6 +1500,24 @@
         "ocr": true,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "modelscope": {
+      "display_name": "ModelScope (`modelscope`)",
+      "url": "https://docs.litellm.ai/docs/providers/modelscope",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "moonshot": {
@@ -2086,7 +2138,7 @@
         "chat_completions": true,
         "messages": true,
         "responses": true,
-        "embeddings": false,
+        "embeddings": true,
         "image_generations": false,
         "audio_transcriptions": true,
         "audio_speech": false,
@@ -2153,7 +2205,7 @@
       "endpoints": {
         "chat_completions": true,
         "messages": true,
-        "responses": false,
+        "responses": true,
         "embeddings": false,
         "image_generations": false,
         "audio_transcriptions": false,
@@ -2751,6 +2803,23 @@
         "moderations": false,
         "batches": false,
         "rerank": false
+      }
+    },
+    "empiriolabs": {
+      "display_name": "EmpirioLabs (`empiriolabs`)",
+      "url": "https://docs.litellm.ai/docs/providers/empiriolabs",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
       }
     }
   },
