@@ -259,6 +259,7 @@ azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
 bytez_key: Optional[str] = None
+consus_key: Optional[str] = None
 cohere_key: Optional[str] = None
 infinity_key: Optional[str] = None
 clarifai_key: Optional[str] = None
@@ -614,6 +615,7 @@ gemini_models: Set = set()
 xai_models: Set = set()
 zai_models: Set = set()
 deepseek_models: Set = set()
+consus_models: Set = set()
 runwayml_models: Set = set()
 azure_ai_models: Set = set()
 jina_ai_models: Set = set()
@@ -830,6 +832,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.add(key)
+        elif value.get("litellm_provider") == "consus":
+            consus_models.add(key)
         elif value.get("litellm_provider") == "runwayml":
             runwayml_models.add(key)
         elif value.get("litellm_provider") == "meta_llama":
@@ -1019,6 +1023,7 @@ model_list = list(
     | zai_models
     | fal_ai_models
     | deepseek_models
+    | consus_models
     | azure_ai_models
     | voyage_models
     | infinity_models
@@ -1116,6 +1121,7 @@ models_by_provider: dict = {
     "zai": zai_models,
     "fal_ai": fal_ai_models,
     "deepseek": deepseek_models,
+    "consus": consus_models,
     "runwayml": runwayml_models,
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,
@@ -1909,6 +1915,9 @@ if TYPE_CHECKING:
         JinaAIEmbeddingConfig as JinaAIEmbeddingConfig,
     )
     from .llms.xai.chat.transformation import XAIChatConfig as XAIChatConfig
+    from .llms.consus.chat.transformation import (
+        ConsusChatConfig as ConsusChatConfig,
+    )
     from .llms.zai.chat.transformation import ZAIChatConfig as ZAIChatConfig
     from .llms.aiml.chat.transformation import AIMLChatConfig as AIMLChatConfig
     from .llms.volcengine.chat.transformation import (

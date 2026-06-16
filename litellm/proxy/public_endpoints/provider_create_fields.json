@@ -767,6 +767,24 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Consus",
+    "provider_display_name": "Consus",
+    "litellm_provider": "consus",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": "Your Consus Gateway API key (sent as the x-api-key header).",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "claude-sonnet-4-5:il2"
+  },
+  {
     "provider": "CUSTOM",
     "provider_display_name": "Custom",
     "litellm_provider": "custom",
