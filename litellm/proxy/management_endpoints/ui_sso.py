@@ -114,7 +114,7 @@ from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
-from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403, F401
+from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
@@ -829,7 +829,7 @@ async def google_login(
     key: Optional[str] = None,
     existing_key: Optional[str] = None,
     return_to: Optional[str] = None,
-):  # noqa: PLR0915
+):
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
@@ -1833,7 +1833,7 @@ async def check_and_update_if_proxy_admin_id(
 
 
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
-async def auth_callback(request: Request, state: Optional[str] = None):  # noqa: PLR0915
+async def auth_callback(request: Request, state: Optional[str] = None):
     """Verify login"""
     verbose_proxy_logger.info(f"Starting SSO callback with state: {state}")
 

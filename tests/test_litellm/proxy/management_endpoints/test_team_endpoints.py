@@ -1609,7 +1609,8 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
         patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
         patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
+            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object",
+            new_callable=AsyncMock,
         ) as mock_cache_team,
     ):
         mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
@@ -1618,7 +1619,7 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
         mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
             return_value=updated_team
         )
-        mock_cache_team.return_value = None
+        mock_prisma_client.db.execute_raw = AsyncMock(return_value=None)
 
         if endpoint_name == "team_model_add":
             await team_model_add(
@@ -3061,6 +3062,106 @@ async def test_list_team_v2_org_admin_sees_org_teams():
         # Verify org-scoped where clause
         where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
         assert where["organization_id"] == {"in": ["org_A"]}
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_org_admin_own_user_id_sees_all_org_teams():
+    """
+    Test that an org admin whose own user_id is sent (as the UI does for
+    non-Admin roles) still sees all teams in their organization, not just
+    teams they are a direct member of.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/30215
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationMembershipTable,
+        LiteLLM_UserTable,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org_admin_user",
+    )
+
+    mock_user = LiteLLM_UserTable(
+        user_id="org_admin_user",
+        teams=["team_1"],  # direct member of only 1 team
+        organization_memberships=[
+            LiteLLM_OrganizationMembershipTable(
+                user_id="org_admin_user",
+                organization_id="org_A",
+                user_role="org_admin",
+                spend=0.0,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
+        ],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+            new_callable=AsyncMock,
+            return_value=mock_user,
+        ),
+    ):
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+
+        mock_team_1 = Mock()
+        mock_team_1.model_dump.return_value = {
+            "team_id": "team_1",
+            "team_alias": "Team One",
+            "organization_id": "org_A",
+            "members_with_roles": [{"user_id": "org_admin_user", "role": "admin"}],
+        }
+        mock_team_2 = Mock()
+        mock_team_2.model_dump.return_value = {
+            "team_id": "team_2",
+            "team_alias": "Team Two",
+            "organization_id": "org_A",
+            "members_with_roles": [{"user_id": "other_user", "role": "user"}],
+        }
+        mock_db.litellm_teamtable.find_many = AsyncMock(
+            return_value=[mock_team_1, mock_team_2]
+        )
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
+        mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
+
+        # UI sends the caller's own user_id for non-Admin roles
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id="org_admin_user",  # same as caller — UI sends this
+            organization_id=None,
+            team_id=None,
+            team_alias=None,
+            user_api_key_dict=mock_user_api_key_dict,
+            page=1,
+            page_size=10,
+            sort_by=None,
+            sort_order="asc",
+            status=None,
+        )
+
+        assert result["total"] == 2
+        assert len(result["teams"]) == 2
+
+        # Verify the where clause scopes by org only — no team_id filter
+        where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
+        assert where["organization_id"] == {"in": ["org_A"]}
+        assert "team_id" not in where
 
 
 @pytest.mark.asyncio

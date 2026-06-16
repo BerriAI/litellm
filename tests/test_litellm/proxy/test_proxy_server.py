@@ -1928,23 +1928,6 @@ async def test_delete_deployment_type_mismatch():
     # Create mock ProxyConfig instance
     pc = ProxyConfig()
 
-    pc.get_config = MagicMock(
-        return_value={
-            "model_list": [
-                {
-                    "model_name": "openai-gpt-4o",
-                    "litellm_params": {"model": "gpt-4o"},
-                    "model_info": {"id": 12345678},
-                },
-                {
-                    "model_name": "openai-gpt-4o",
-                    "litellm_params": {"model": "gpt-4o"},
-                    "model_info": {"id": 12345679},
-                },
-            ]
-        }
-    )
-
     # Mock llm_router with string IDs (this is the source of the type mismatch)
     mock_llm_router = MagicMock()
     mock_llm_router.get_model_ids.return_value = [
@@ -1963,11 +1946,23 @@ async def test_delete_deployment_type_mismatch():
 
     mock_llm_router.delete_deployment = MagicMock(side_effect=mock_delete_deployment)
 
-    # Mock get_config to return empty config (no config models)
     async def mock_get_config(config_file_path):
-        return {}
+        return {
+            "model_list": [
+                {
+                    "model_name": "openai-gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": 12345678},
+                },
+                {
+                    "model_name": "openai-gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": 12345679},
+                },
+            ]
+        }
 
-    pc.get_config = MagicMock(side_effect=mock_get_config)
+    pc.get_config = AsyncMock(side_effect=mock_get_config)
 
     # Patch the global llm_router
     with (
@@ -1977,20 +1972,29 @@ async def test_delete_deployment_type_mismatch():
         # Call the function under test
         deleted_count = await pc._delete_deployment(db_models=[])
 
-        # Assertions: Models 12345678 and 12345679 should NOT be deleted
-        # because they exist in combined_id_list (as integers) even though
-        # router has them as strings
+    # The two SHA-hash models have no corresponding entry in combined_id_list
+    # and must be evicted.
+    assert (
+        deleted_count == 2
+    ), f"Expected 2 deletions (SHA-hash models), got {deleted_count}"
+    assert (
+        "a96e12e76b36a57cfae57a41288eb41567629cac89b4828c6f7074afc3534695"
+        in deleted_ids
+    )
+    assert (
+        "a40186dd0fdb9b7282380277d7f57044d29de95bfbfcd7f4322b3493702d5cd3"
+        in deleted_ids
+    )
 
-        # The function should delete the other 2 models that are not in combined_id_list
-        assert deleted_count == 0, f"Expected 0 deletions, got {deleted_count}"
-
-        # Verify that 12345678 and 12345679 were NOT deleted
-        assert (
-            "12345678" not in deleted_ids
-        ), f"Model 12345678 should NOT be deleted. Deleted IDs: {deleted_ids}"
-        assert (
-            "12345679" not in deleted_ids
-        ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
+    # Models 12345678 and 12345679 exist in the config (as integers); str()
+    # conversion in _delete_deployment makes them match the router's string IDs,
+    # so they must NOT be evicted.
+    assert (
+        "12345678" not in deleted_ids
+    ), f"Model 12345678 should NOT be deleted. Deleted IDs: {deleted_ids}"
+    assert (
+        "12345679" not in deleted_ids
+    ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
 
 
 @pytest.mark.asyncio
@@ -7937,3 +7941,106 @@ class TestSortModelsByDisplayName:
             all_models=models, sort_by="model_name", sort_order="asc"
         )
         assert [m["model_name"] for m in sorted_models] == ["alpha", "beta"]
+
+
+class TestDeleteDeploymentSync:
+    @pytest.mark.asyncio
+    async def test_delete_deployment_evicts_model_when_all_db_models_deleted(self):
+        """
+        Regression test for #28443.
+        When all DB models are deleted, _delete_deployment must evict them from
+        the router. The old code returned 0 early when db_models was empty.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_router = MagicMock()
+        mock_router.get_model_ids.return_value = ["model-id-to-evict"]
+        mock_router.delete_deployment.return_value = MagicMock()
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            with patch.object(
+                proxy_config, "get_config", AsyncMock(return_value={"model_list": []})
+            ):
+                count = await proxy_config._delete_deployment(db_models=[])
+
+        mock_router.delete_deployment.assert_called_once_with(id="model-id-to-evict")
+        assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_update_llm_router_skips_update_on_db_fetch_failure(self):
+        """
+        When _get_models_from_db returns None (transient DB failure), _update_llm_router
+        must return early without touching the router.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_router = MagicMock()
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            with patch.object(proxy_config, "get_config", AsyncMock(return_value={})):
+                await proxy_config._update_llm_router(
+                    new_models=None, proxy_logging_obj=MagicMock()
+                )
+
+        mock_router.delete_deployment.assert_not_called()
+        mock_router.upsert_deployment.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_models_from_db_returns_none_on_exception(self):
+        """
+        _get_models_from_db must return None (not []) when the DB raises an exception,
+        so callers can distinguish a transient failure from a genuinely empty DB.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            side_effect=Exception("DB connection lost")
+        )
+
+        result = await proxy_config._get_models_from_db(prisma_client=mock_prisma)
+
+        assert (
+            result is None
+        ), f"Expected None on DB failure to signal fetch error, got {result!r}"
+
+
+def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
+    """Follow-up to #30223: the flag must be discoverable via /config/list,
+    which requires both the ConfigGeneralSettings field and the allowed_args
+    entry in get_config_list; missing either silently hides it from the UI."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert "cancel_on_disconnect" in fields
+        assert fields["cancel_on_disconnect"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()

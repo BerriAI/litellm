@@ -7374,6 +7374,11 @@ export interface paths {
          *
          *         - When litellm_model_id is passed, it will return the info for that specific model
          *         - When litellm_model_id is not passed, it will return the info for all models
+         *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
+         *         - teamId: Filter to models accessible by the given team.
+         *
+         *     Each model in the list response includes `model_info.access_via_team_ids` and
+         *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
          *         Returns a dictionary containing information about each model.
@@ -16601,6 +16606,11 @@ export interface paths {
          *
          *         - When litellm_model_id is passed, it will return the info for that specific model
          *         - When litellm_model_id is not passed, it will return the info for all models
+         *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
+         *         - teamId: Filter to models accessible by the given team.
+         *
+         *     Each model in the list response includes `model_info.access_via_team_ids` and
+         *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
          *         Returns a dictionary containing information about each model.
@@ -22089,6 +22099,11 @@ export interface components {
              */
             background_health_checks?: boolean | null;
             /**
+             * Cancel On Disconnect
+             * @description cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure
+             */
+            cancel_on_disconnect?: boolean | null;
+            /**
              * Completion Model
              * @description proxy level default model for all chat completion calls
              */
@@ -25014,6 +25029,8 @@ export interface components {
             aws_region_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Azure Ad Token */
+            azure_ad_token?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -32653,6 +32670,8 @@ export interface components {
             aws_region_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Azure Ad Token */
+            azure_ad_token?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -42631,6 +42650,10 @@ export interface operations {
         parameters: {
             query?: {
                 litellm_model_id?: string | null;
+                /** @description When true, filter to deployments the caller can use via direct access or team membership. */
+                include_team_models?: boolean | null;
+                /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
+                teamId?: string | null;
             };
             header?: never;
             path?: never;
@@ -53896,6 +53919,10 @@ export interface operations {
         parameters: {
             query?: {
                 litellm_model_id?: string | null;
+                /** @description When true, filter to deployments the caller can use via direct access or team membership. */
+                include_team_models?: boolean | null;
+                /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
+                teamId?: string | null;
             };
             header?: never;
             path?: never;

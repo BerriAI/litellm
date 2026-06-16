@@ -9,7 +9,6 @@ Pins covered:
 - ``initialize``
 - ``load_from_azure_key_vault``
 - ``cost_tracking``
-- ``check_request_disconnection``
 - ``_resolve_typed_dict_type``
 - ``_resolve_pydantic_type``
 - ``get_litellm_model_info``
@@ -26,7 +25,7 @@ from typing import List, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
@@ -35,7 +34,6 @@ from litellm.proxy.proxy_server import (
     _initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
-    check_request_disconnection,
     cleanup_router_config_variables,
     cost_tracking,
     get_litellm_model_info,
@@ -322,62 +320,6 @@ def test_cost_tracking_no_op_when_prisma_missing(monkeypatch):
 
     assert litellm.callbacks == []
     assert litellm._async_success_callback == []
-
-
-# ---------------------------------------------------------------------------
-# check_request_disconnection
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_check_request_disconnection_cancels_task_and_raises_499(monkeypatch):
-    monkeypatch.setattr(ps.asyncio, "sleep", AsyncMock(return_value=None))
-
-    request = MagicMock()
-    request.is_disconnected = AsyncMock(return_value=True)
-    task = MagicMock()
-
-    raised_status = None
-    try:
-        await check_request_disconnection(request=request, llm_api_call_task=task)
-    except HTTPException as exc:
-        raised_status = exc.status_code
-
-    observed = {
-        "raised_status": raised_status,
-        "cancel_called": task.cancel.called,
-        "is_async": inspect.iscoroutinefunction(check_request_disconnection),
-    }
-    assert normalize(observed) == {
-        "raised_status": 499,
-        "cancel_called": True,
-        "is_async": True,
-    }
-
-
-@pytest.mark.asyncio
-async def test_check_request_disconnection_invalid_when_connected_times_out(monkeypatch):
-    """With a connected request the function loops for up to 10 minutes —
-    wrap in wait_for and assert it times out. Patch ``asyncio.sleep`` so the
-    loop spins without real wall-clock waits."""
-    import litellm.proxy.proxy_server as ps
-
-    request = MagicMock()
-    request.is_disconnected = AsyncMock(return_value=False)
-    task = MagicMock()
-
-    _real_sleep = asyncio.sleep
-
-    async def _instant_sleep(_seconds):
-        await _real_sleep(0)
-
-    monkeypatch.setattr(ps.asyncio, "sleep", _instant_sleep)
-
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(
-            check_request_disconnection(request=request, llm_api_call_task=task),
-            timeout=0.05,
-        )
 
 
 # ---------------------------------------------------------------------------

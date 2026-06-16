@@ -28,7 +28,7 @@ router = APIRouter()
     tags=["[beta] Anthropic `/v1/messages`"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def anthropic_response(  # noqa: PLR0915
+async def anthropic_response(
     fastapi_response: Response,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

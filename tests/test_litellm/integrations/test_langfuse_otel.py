@@ -114,6 +114,9 @@ class TestLangfuseOtelIntegration:
             mock_set_attributes.assert_called_once_with(
                 mock_span, mock_kwargs, mock_response, LangfuseLLMObsOTELAttributes
             )
+            mock_span.set_attribute.assert_any_call(
+                "langfuse.observation.type", "generation"
+            )
 
     def test_set_langfuse_environment_attribute(self):
         """Test that Langfuse environment is set correctly when environment variable is present."""

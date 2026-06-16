@@ -215,6 +215,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
+        anthropic_request.pop("stream_chunk_size", None)
         output_format = anthropic_request.pop("output_format", None)
         output_config_format = pop_bedrock_invoke_output_config_format(
             anthropic_request

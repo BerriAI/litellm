@@ -66,11 +66,9 @@ describe("ViewUserDashboard", () => {
   const defaultProps = {
     accessToken: "test-token",
     token: "test-token",
-    keys: null,
     userRole: "Admin",
     userID: "admin-user-id",
     teams: [],
-    setKeys: vi.fn(),
   };
 
   beforeEach(() => {

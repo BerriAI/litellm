@@ -223,6 +223,7 @@ LLM_CONFIG_NAMES = (
     "GenAIHubOrchestrationConfig",
     "VoyageEmbeddingConfig",
     "VoyageContextualEmbeddingConfig",
+    "VoyageMultimodalEmbeddingConfig",
     "InfinityEmbeddingConfig",
     "PerplexityEmbeddingConfig",
     "AzureAIStudioConfig",
@@ -305,6 +306,7 @@ LLM_CONFIG_NAMES = (
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
     "DashScopeChatConfig",
+    "ModelScopeChatConfig",
     "MoonshotChatConfig",
     "DockerModelRunnerChatConfig",
     "V0ChatConfig",
@@ -903,6 +905,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.voyage.embedding.transformation_contextual",
         "VoyageContextualEmbeddingConfig",
     ),
+    "VoyageMultimodalEmbeddingConfig": (
+        ".llms.voyage.embedding.transformation_multimodal",
+        "VoyageMultimodalEmbeddingConfig",
+    ),
     "InfinityEmbeddingConfig": (
         ".llms.infinity.embedding.transformation",
         "InfinityEmbeddingConfig",
@@ -1155,6 +1161,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "DashScopeChatConfig": (
         ".llms.dashscope.chat.transformation",
         "DashScopeChatConfig",
+    ),
+    "ModelScopeChatConfig": (
+        ".llms.modelscope.chat.transformation",
+        "ModelScopeChatConfig",
     ),
     "MoonshotChatConfig": (".llms.moonshot.chat.transformation", "MoonshotChatConfig"),
     "DockerModelRunnerChatConfig": (

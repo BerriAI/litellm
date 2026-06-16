@@ -14,6 +14,7 @@ SEARCH_PROVIDERS = [
     "exa_ai",
     "brave",
     "firecrawl",
+    "fastcrw",
     "searxng",
     "linkup",
     "duckduckgo",

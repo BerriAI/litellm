@@ -488,7 +488,7 @@ def print_verbose(
         elif log_level == "ERROR":
             verbose_logger.error(print_statement)
         if litellm.set_verbose is True and logger_only is False:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
     except Exception:
         pass
 
@@ -3015,6 +3015,21 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         # custom pricing on subsequent cost lookups.
         if existing_model.get("litellm_provider") is None:
             existing_model.pop("litellm_provider", None)
+        # Same pattern for cost fields (#30198): ``_get_model_info_helper``
+        # synthesizes ``input_cost_per_token`` / ``output_cost_per_token``
+        # = 0 when they are absent from the raw entry. Writing those zeros
+        # back flips a sparse entry from "no cost keys" (priced via name)
+        # to "cost keys = 0" (free), which makes
+        # ``_is_cost_explicitly_configured`` return True and silently
+        # disables budget enforcement on the next re-registration.
+        _raw_entry = litellm.model_cost.get(model_cost_key)
+        if _raw_entry is None:
+            _raw_entry = litellm.model_cost.get(key)
+        if _raw_entry is None:
+            _raw_entry = {}
+        for _cost_field in ("input_cost_per_token", "output_cost_per_token"):
+            if _cost_field not in _raw_entry and _cost_field not in value:
+                existing_model.pop(_cost_field, None)
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
@@ -3577,6 +3592,15 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         if litellm.VoyageContextualEmbeddingConfig.is_contextualized_embeddings(model):
             optional_params = (
                 litellm.VoyageContextualEmbeddingConfig().map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params={},
+                    model=model,
+                    drop_params=drop_params if drop_params is not None else False,
+                )
+            )
+        elif litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(model):
+            optional_params = (
+                litellm.VoyageMultimodalEmbeddingConfig().map_openai_params(
                     non_default_params=non_default_params,
                     optional_params={},
                     model=model,
@@ -6824,6 +6848,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("DASHSCOPE_API_KEY")
+        elif custom_llm_provider == "modelscope":
+            if "MODELSCOPE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("MODELSCOPE_API_KEY")
         elif custom_llm_provider == "moonshot":
             if "MOONSHOT_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8495,6 +8524,7 @@ class ProviderConfigManager:
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
+            LlmProviders.MODELSCOPE: (lambda: litellm.ModelScopeChatConfig(), False),
             LlmProviders.MOONSHOT: (lambda: litellm.MoonshotChatConfig(), False),
             LlmProviders.DOCKER_MODEL_RUNNER: (
                 lambda: litellm.DockerModelRunnerChatConfig(),
@@ -8600,7 +8630,7 @@ class ProviderConfigManager:
         return LangFlowConfig()
 
     @staticmethod
-    def get_provider_chat_config(  # noqa: PLR0915
+    def get_provider_chat_config(
         model: str,
         provider: LlmProviders,
         base_model: Optional[str] = None,
@@ -8666,6 +8696,11 @@ class ProviderConfigManager:
             )
         ):
             return litellm.VoyageContextualEmbeddingConfig()
+        elif (
+            litellm.LlmProviders.VOYAGE == provider
+            and litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(model)
+        ):
+            return litellm.VoyageMultimodalEmbeddingConfig()
         elif litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
         elif litellm.LlmProviders.TRITON == provider:
@@ -9434,6 +9469,12 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_image_generation_config(model)
+        elif LlmProviders.MODELSCOPE == provider:
+            from litellm.llms.modelscope.image_generation import (
+                get_modelscope_image_generation_config,
+            )
+
+            return get_modelscope_image_generation_config(model)
         return None
 
     @staticmethod
@@ -9639,6 +9680,7 @@ class ProviderConfigManager:
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+        from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.linkup.search.transformation import LinkupSearchConfig
@@ -9661,6 +9703,7 @@ class ProviderConfigManager:
             SearchProviders.GOOGLE_PSE: GooglePSESearchConfig,
             SearchProviders.DATAFORSEO: DataForSEOSearchConfig,
             SearchProviders.FIRECRAWL: FirecrawlSearchConfig,
+            SearchProviders.FASTCRW: FastCRWSearchConfig,
             SearchProviders.SEARXNG: SearXNGSearchConfig,
             SearchProviders.LINKUP: LinkupSearchConfig,
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,

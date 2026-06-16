@@ -409,3 +409,101 @@ async def test_get_customer_daily_activity_with_end_user_aliases(monkeypatch):
         "end-user-1": {"alias": "Customer One"},
         "end-user-2": {"alias": "Customer Two"},
     }
+
+
+@pytest.mark.asyncio
+async def test_get_customer_daily_activity_non_admin_is_rejected(monkeypatch):
+    """
+    Security regression: any non-admin caller must receive 401 from
+    /customer/daily/activity and /end_user/daily/activity.
+
+    Before this fix, the endpoint performed no role check. A caller with
+    user_role=INTERNAL_USER could omit end_user_ids, causing entity_id=None
+    to flow into get_daily_activity where the SQL builder treats it as no
+    filter — returning every tenant's spend across the full
+    LiteLLM_DailyEndUserSpend table.
+
+    LiteLLM_EndUserTable has no per-tenant ownership column, so non-admin
+    scoping is not possible. The correct fix is admin-only, matching the
+    existing /customer/list gate.
+    """
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        get_customer_daily_activity,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    get_daily_activity_mock = AsyncMock()
+    monkeypatch.setattr(
+        customer_endpoints, "get_daily_activity", get_daily_activity_mock
+    )
+
+    non_admin_key = UserAPIKeyAuth(
+        user_id="regular-user-abc",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_customer_daily_activity(
+            end_user_ids=None,
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_end_user_ids=None,
+            user_api_key_dict=non_admin_key,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert "Admin-only endpoint" in str(exc_info.value.detail)
+    get_daily_activity_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_customer_daily_activity_service_account_key_is_rejected(monkeypatch):
+    """
+    Security regression: service-account keys (user_id=None, role=INTERNAL_USER)
+    must be rejected at the admin gate before reaching get_daily_activity.
+
+    A service-account key with end_user_ids omitted is the worst-case caller:
+    entity_id=None and no user identity to scope by — the SQL builder would
+    return the full LiteLLM_DailyEndUserSpend table with no WHERE clause.
+    """
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        get_customer_daily_activity,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    get_daily_activity_mock = AsyncMock()
+    monkeypatch.setattr(
+        customer_endpoints, "get_daily_activity", get_daily_activity_mock
+    )
+
+    service_account_key = UserAPIKeyAuth(
+        user_id=None,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_customer_daily_activity(
+            end_user_ids=None,
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_end_user_ids=None,
+            user_api_key_dict=service_account_key,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert "Admin-only endpoint" in str(exc_info.value.detail)
+    get_daily_activity_mock.assert_not_called()

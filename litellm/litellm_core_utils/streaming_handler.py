@@ -92,7 +92,7 @@ def is_async_iterable(obj: Any) -> bool:
 def print_verbose(print_statement):
     try:
         if litellm.set_verbose:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
     except Exception:
         pass
 
@@ -293,6 +293,12 @@ class CustomStreamWrapper:
         Raises - InternalServerError, if LLM enters infinite loop while streaming
         """
         if len(self.chunks) < 2:
+            return
+
+        # Providers like Vertex Gemini (Flash / Flash Lite with web search) emit
+        # metadata-only / usage-only chunks with no choices. These get stored in
+        # self.chunks but carry no comparable content, so skip repetition detection.
+        if not self.chunks[-1].choices or not self.chunks[-2].choices:
             return
 
         last_content = self.chunks[-1].choices[0].delta.content
@@ -961,7 +967,7 @@ class CustomStreamWrapper:
                     delta, model_response.choices[0].delta, attribute
                 )
 
-    def return_processed_chunk_logic(  # noqa
+    def return_processed_chunk_logic(  # noqa: PLR0915, C901
         self,
         completion_obj: Dict[str, Any],
         model_response: ModelResponseStream,

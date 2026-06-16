@@ -34,11 +34,9 @@ const { Text, Title } = Typography;
 interface ViewUserDashboardProps {
   accessToken: string | null;
   token: string | null;
-  keys: any[] | null;
   userRole: string | null;
   userID: string | null;
   teams: any[] | null;
-  setKeys: React.Dispatch<React.SetStateAction<object[] | null>>;
   orgAdminOrgIds?: Array<{ organization_id: string; organization_alias: string }> | null;
 }
 

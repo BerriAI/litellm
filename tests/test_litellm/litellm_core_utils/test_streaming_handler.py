@@ -1509,6 +1509,44 @@ def test_raise_on_model_repetition(
             wrapper.raise_on_model_repetition()
 
 
+@pytest.mark.parametrize(
+    "empty_chunk_index",
+    [-1, -2],
+    ids=["last_chunk_empty", "second_to_last_chunk_empty"],
+)
+def test_raise_on_model_repetition_tolerates_empty_choices(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    empty_chunk_index: int,
+):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/28884
+
+    Vertex Gemini Flash / Flash Lite with web search streaming emits
+    metadata-only and usage-only chunks that carry no choices. These are
+    appended to self.chunks, and raise_on_model_repetition() previously
+    accessed choices[0] unconditionally, raising IndexError mid-stream
+    (surfaced to users as MidStreamFallbackError -> APIConnectionError).
+    """
+    wrapper = initialized_custom_stream_wrapper
+
+    chunks = [
+        _make_chunk("hello world"),
+        ModelResponseStream(
+            id="usage-only",
+            created=1741037890,
+            model="vertex_ai/gemini-3.1-flash-lite",
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
+        ),
+    ]
+    if empty_chunk_index == -2:
+        chunks.append(_make_chunk("hello world again"))
+
+    for chunk in chunks:
+        wrapper.chunks.append(chunk)
+        wrapper.raise_on_model_repetition()
+
+
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk

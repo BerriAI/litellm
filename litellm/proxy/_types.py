@@ -373,6 +373,8 @@ class LiteLLMRoutes(enum.Enum):
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
+        "/vector_stores/{vector_store_id}",
+        "/v1/vector_stores/{vector_store_id}",
         "/vector_stores/{vector_store_id}/search",
         "/v1/vector_stores/{vector_store_id}/search",
         "/vector_stores/{vector_store_id}/files",
@@ -2226,6 +2228,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_response_size_mb: Optional[int] = Field(
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
+    )
+    cancel_on_disconnect: Optional[bool] = Field(
+        None,
+        description="cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure",
     )
     infer_model_from_keys: Optional[bool] = Field(
         None,

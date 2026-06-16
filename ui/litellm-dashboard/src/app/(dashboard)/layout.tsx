@@ -45,8 +45,12 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
 function LayoutContent({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
-  const { accessToken } = useAuth();
+  const { accessToken, authLoading } = useAuth();
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
+
+  if (authLoading) {
+    return <LoadingScreen />;
+  }
 
   return (
     <ThemeProvider accessToken={accessToken}>

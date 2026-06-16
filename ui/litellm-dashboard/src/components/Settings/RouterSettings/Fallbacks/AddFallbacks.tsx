@@ -18,13 +18,12 @@ export type FallbackEntry = { [modelName: string]: string[] };
 export type Fallbacks = FallbackEntry[];
 
 interface AddFallbacksProps {
-  models?: string[];
   accessToken: string;
   value?: Fallbacks; // Current fallbacks value from form
   onChange?: (fallbacks: Fallbacks) => Promise<void>; // Callback to update form value
 }
 
-export default function AddFallbacks({ models, accessToken, value = [], onChange }: AddFallbacksProps) {
+export default function AddFallbacks({ accessToken, value = [], onChange }: AddFallbacksProps) {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [modalKey, setModalKey] = useState(0); // Key to force remount of form when modal opens

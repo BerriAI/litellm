@@ -141,6 +141,12 @@ ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         required_env=_ANTHROPIC_REQ,
         caps=_CAPS_XHIGH_MAX,
+        fail_reason=(
+            "claude-fable-5 is not yet released on the Anthropic API for the CI "
+            "account; Anthropic returns not_found_error until the model is "
+            "available, so this cell stays loud in CI. Remove this fail_reason "
+            "once the model is available."
+        ),
     ),
     ModelEntry(
         alias="claude-opus-4-8",

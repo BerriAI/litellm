@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import time
 import traceback
 from datetime import datetime
@@ -16,10 +17,12 @@ from typing import (
     Union,
 )
 
+import anyio
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 import litellm
 from litellm._logging import _redact_string, verbose_proxy_logger
@@ -49,6 +52,7 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import ServerToolUse
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
@@ -238,6 +242,64 @@ def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
     return default_error
 
 
+async def _aclose_upstream_response(response: Any) -> None:
+    """Release the upstream HTTP connection when a stream ends for any
+    reason, including client disconnect. Mirrors the finally block of
+    async_data_generator in proxy_server.py."""
+    with anyio.CancelScope(shield=True):
+        if hasattr(response, "aclose"):
+            try:
+                await response.aclose()
+            except BaseException as e:
+                verbose_proxy_logger.debug(
+                    "error closing upstream response stream: %s", e
+                )
+
+
+class _UpstreamClosingStreamingResponse(StreamingResponse):
+    """StreamingResponse that always closes its body iterator and the wrapped
+    upstream generator.
+
+    When the client disconnects mid-stream, Starlette abandons the body
+    iterator without calling aclose(), leaving the upstream LLM connection
+    open until garbage collection; the backend (e.g. vLLM) keeps generating
+    into a dead pipe. The upstream generator is closed directly (not via the
+    body iterator) because aclose() on a never-started generator skips its
+    body, so a cascade through it would be a no-op if the client disconnects
+    before the first chunk is sent.
+    """
+
+    def __init__(
+        self,
+        content: AsyncGenerator[str, None],
+        *,
+        media_type: Optional[str] = None,
+        headers: Optional[dict] = None,
+        status_code: int = status.HTTP_200_OK,
+        upstream_generator: Optional[AsyncGenerator[str, None]] = None,
+    ) -> None:
+        super().__init__(
+            content, status_code=status_code, headers=headers, media_type=media_type
+        )
+        self._upstream_generator = upstream_generator
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                for target in (self.body_iterator, self._upstream_generator):
+                    aclose = getattr(target, "aclose", None)
+                    if aclose is None:
+                        continue
+                    try:
+                        await aclose()
+                    except BaseException as e:
+                        verbose_proxy_logger.debug(
+                            "error closing streaming generator: %s", e
+                        )
+
+
 async def create_response(  # noqa: PLR0915
     generator: AsyncGenerator[str, None],
     media_type: str,
@@ -364,11 +426,12 @@ async def create_response(  # noqa: PLR0915
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
-    return StreamingResponse(
+    return _UpstreamClosingStreamingResponse(
         combined_generator(),
         media_type=media_type,
         headers=streaming_headers,
         status_code=final_status_code,
+        upstream_generator=generator,
     )
 
 
@@ -554,6 +617,64 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
                 stack.append(inner)
         depth += 1
     return False
+
+
+_CLIENT_DISCONNECT_DETAIL = "Client disconnected the request"
+
+
+def _log_llm_api_exception(e: Exception) -> None:
+    if (
+        getattr(e, "status_code", None) == 499
+        and getattr(e, "detail", None) == _CLIENT_DISCONNECT_DETAIL
+    ):
+        verbose_proxy_logger.info(
+            "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, upstream LLM request cancelled"
+        )
+        return
+    verbose_proxy_logger.exception(
+        f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
+    )
+
+
+async def _cancel_llm_call_on_client_disconnect(
+    request: Request,
+    llm_api_call: "asyncio.Future[Any]",
+    disconnect_event: asyncio.Event,
+) -> None:
+    try:
+        while True:
+            message = await request.receive()
+            if message["type"] == "http.disconnect":
+                disconnect_event.set()
+                llm_api_call.cancel()
+                return
+    except Exception as exc:
+        verbose_proxy_logger.warning(
+            "cancel_on_disconnect: request.receive() raised %s; "
+            "upstream LLM call will not be cancelled on disconnect",
+            exc,
+        )
+
+
+async def _await_llm_call_cancelling_on_disconnect(
+    request: Request,
+    llm_api_call: "asyncio.Future[Any]",
+) -> Any:
+    disconnect_event = asyncio.Event()
+    monitor = asyncio.create_task(
+        _cancel_llm_call_on_client_disconnect(request, llm_api_call, disconnect_event)
+    )
+    try:
+        return await llm_api_call
+    except asyncio.CancelledError:
+        if disconnect_event.is_set():
+            raise HTTPException(
+                status_code=499,
+                detail=_CLIENT_DISCONNECT_DETAIL,
+            )
+        raise
+    finally:
+        monitor.cancel()
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -1244,7 +1365,12 @@ class ProxyBaseLLMRequestProcessing:
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        responses = await llm_responses
+        if general_settings.get("cancel_on_disconnect", False):
+            responses = await _await_llm_call_cancelling_on_disconnect(
+                request, llm_responses
+            )
+        else:
+            responses = await llm_responses
 
         response = responses[1]
 
@@ -1665,6 +1791,23 @@ class ProxyBaseLLMRequestProcessing:
                     await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
                         response=completed_obj,
                         user_api_key_dict=user_api_key_dict,
+                    )
+                else:
+                    # Silent skip caused #30210: the proxy's Router wrapper
+                    # of the responses streaming iterator wasn't propagating
+                    # ``completed_response``, so this hook recorded nothing
+                    # and follow-up /v1/containers/<id>/files calls 403'd
+                    # for non-admin keys with no proxy-side hint. Log a
+                    # warning so future regressions of the same shape
+                    # surface in operator logs.
+                    verbose_proxy_logger.warning(
+                        "Container ownership recording skipped on streaming "
+                        "/v1/responses: no completed_response on stream "
+                        "iterator %s. If this stream created any tool "
+                        "container (e.g. code_interpreter), follow-up "
+                        "/v1/containers/<id>/files calls will 403 for "
+                        "non-admin keys.",
+                        type(original_stream_response).__name__,
                     )
             except Exception as e:
                 verbose_proxy_logger.exception(
@@ -2096,6 +2239,10 @@ class ProxyBaseLLMRequestProcessing:
                     e,
                 )
 
+    def _apply_router_cooldown_retry_after(self, headers: dict, e: Exception) -> None:
+        if isinstance(e, RouterRateLimitError) and e.cooldown_time > 0:
+            headers["retry-after"] = str(math.ceil(e.cooldown_time))
+
     async def _handle_llm_api_exception(
         self,
         e: Exception,
@@ -2104,9 +2251,7 @@ class ProxyBaseLLMRequestProcessing:
         version: Optional[str] = None,
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
-        verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
-        )
+        _log_llm_api_exception(e)
         # Allow callbacks to transform the error response
         transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -2176,6 +2321,8 @@ class ProxyBaseLLMRequestProcessing:
                 headers.update(callback_headers)
         except Exception:
             pass
+
+        self._apply_router_cooldown_retry_after(headers, e)
 
         if isinstance(e, HTTPException):
             raw_detail = getattr(e, "detail", str(e))
@@ -2384,6 +2531,8 @@ class ProxyBaseLLMRequestProcessing:
                 code=getattr(e, "status_code", 500),
             )
             yield serialize_error(proxy_exception)
+        finally:
+            await _aclose_upstream_response(response)
 
     @staticmethod
     def async_sse_data_generator(

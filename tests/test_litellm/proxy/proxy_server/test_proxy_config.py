@@ -980,7 +980,7 @@ async def test_ProxyConfig__update_llm_router_bad_proxy_logging_raises(monkeypat
     # Passing None for proxy_logging_obj triggers AttributeError in _add_general_settings_from_db_config
     # when it calls proxy_logging_obj.update_values.
     with pytest.raises(AttributeError):
-        await pc._update_llm_router(new_models=None, proxy_logging_obj=None)  # type: ignore[arg-type]
+        await pc._update_llm_router(new_models=[], proxy_logging_obj=None)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

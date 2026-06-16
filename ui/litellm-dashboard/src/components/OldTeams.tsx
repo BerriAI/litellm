@@ -54,13 +54,9 @@ import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "./SearchTools/SearchToolSelector";
 
 interface TeamProps {
-  teams: Team[] | null;
-  searchParams: any;
   accessToken: string | null;
-  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   userID: string | null;
   userRole: string | null;
-  organizations: Organization[] | null;
   premiumUser?: boolean;
 }
 
@@ -165,18 +161,10 @@ const getOrganizationAlias = (
 };
 
 // @deprecated
-const Teams: React.FC<TeamProps> = ({
-  teams,
-  searchParams,
-  accessToken,
-  setTeams,
-  userID,
-  userRole,
-  organizations,
-  premiumUser = false,
-}) => {
-  console.log(`organizations: ${JSON.stringify(organizations)}`);
+const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
   const { data: organizationsData } = useOrganizations();
+  const organizations = organizationsData ?? null;
+  const [teams, setTeams] = useState<Team[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -721,7 +709,7 @@ const Teams: React.FC<TeamProps> = ({
         width: 160,
         ellipsis: true,
         render: (_: unknown, record: Team) => {
-          const orgAlias = getOrganizationAlias(record.organization_id, organizationsData || organizations);
+          const orgAlias = getOrganizationAlias(record.organization_id, organizations);
           return record.organization_id ? (
             <Text ellipsis style={{ fontSize: 14 }}>
               {orgAlias}
@@ -860,7 +848,7 @@ const Teams: React.FC<TeamProps> = ({
         ),
       },
     ],
-    [userRole, perTeamInfo, organizationsData, organizations],
+    [userRole, perTeamInfo, organizations],
   );
 
   const displayTeams = useMemo(() => teams ?? [], [teams]);

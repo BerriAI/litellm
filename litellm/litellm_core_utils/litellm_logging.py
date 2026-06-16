@@ -381,13 +381,14 @@ class Logging(LiteLLMLoggingBaseClass):
             List[Union[str, Callable, CustomLogger]]
         ] = dynamic_async_failure_callbacks
 
-        # Process dynamic callbacks
-        self.process_dynamic_callbacks()
-
         ## DYNAMIC LANGFUSE / GCS / logging callback KEYS ##
         self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
             self.initialize_standard_callback_dynamic_params(kwargs)
         )
+
+        # Process dynamic callbacks (after standard_callback_dynamic_params is initialized,
+        # so team-scoped credentials are available for callback initialization)
+        self.process_dynamic_callbacks()
         self.standard_built_in_tools_params: StandardBuiltInToolsParams = (
             self.initialize_standard_built_in_tools_params(kwargs)
         )
@@ -482,8 +483,21 @@ class Logging(LiteLLMLoggingBaseClass):
                 isinstance(callback, str)
                 and callback in litellm._known_custom_logger_compatible_callbacks
             ):
+                # For callbacks that support team-scoped credentials (e.g. datadog),
+                # pass only the relevant dynamic params as custom_logger_init_args.
+                _custom_logger_init_args: Optional[dict] = None
+                if callback == "datadog":
+                    _custom_logger_init_args = {
+                        k: v
+                        for k, v in self.standard_callback_dynamic_params.items()
+                        if k.startswith("dd_")
+                    }
+
                 callback_class = _init_custom_logger_compatible_class(
-                    callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                    callback,  # type: ignore[arg-type]
+                    internal_usage_cache=None,
+                    llm_router=None,  # type: ignore
+                    custom_logger_init_args=_custom_logger_init_args,
                 )
                 if callback_class is not None:
                     processed_list.append(callback_class)
@@ -3946,6 +3960,24 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_prometheus_logger)
             return _prometheus_logger  # type: ignore
         elif logging_integration == "datadog":
+            # Check if team-scoped credentials are provided
+            _dd_api_key = custom_logger_init_args.get("dd_api_key")
+            _dd_site = custom_logger_init_args.get("dd_site")
+            _dd_agent_host = custom_logger_init_args.get("dd_agent_host")
+            _dd_agent_port = custom_logger_init_args.get("dd_agent_port")
+
+            if _dd_api_key or _dd_site or _dd_agent_host:
+                # Team-scoped credentials: use DynamicLoggingCache for per-credential isolation
+                from litellm.integrations.datadog.datadog_team_handler import (
+                    DataDogHandler,
+                )
+
+                return DataDogHandler.get_datadog_logger_for_request(
+                    standard_callback_dynamic_params=custom_logger_init_args,  # type: ignore
+                    in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+                )
+
+            # Global (env-var based): reuse cached instance
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLogger):
                     return callback  # type: ignore
@@ -5867,7 +5899,7 @@ def get_standard_logging_object_payload(
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
         try:
-            print(json.dumps(payload, indent=4, default=str))  # noqa
+            print(json.dumps(payload, indent=4, default=str))  # noqa: T201
         except Exception as e:
             verbose_logger.exception(
                 "Error serializing standard logging payload for debug output: {}".format(

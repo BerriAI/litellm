@@ -53,11 +53,19 @@ _supported_callback_params = [
     "braintrust_host",
     "slack_webhook_url",
     "lunary_public_key",
+    "dd_api_key",
+    "dd_site",
+    "dd_agent_host",
+    "dd_agent_port",
 ]
 
 _request_blocked_callback_params = {
     "gcs_bucket_name",
     "gcs_path_service_account",
+    "dd_api_key",
+    "dd_site",
+    "dd_agent_host",
+    "dd_agent_port",
 }
 
 
