@@ -6,7 +6,7 @@
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
 	lint-mypy lint-mypy-budget-update lint-basedpyright lint-basedpyright-budget-update \
-	lint-strict-budget lint-strict-budget-update \
+	lint-strict-budget lint-strict-budget-update lint-any \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
@@ -31,6 +31,7 @@ help:
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
 	@echo "  make lint-strict-budget - Gate the codebase total of each strict ruff rule against its ceiling"
 	@echo "  make lint-strict-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
+	@echo "  make lint-any           - Fail if changed lines under litellm/ hold an Any-typed value (incl. X | Any unions)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -144,6 +145,15 @@ lint-strict-budget: install-dev
 lint-strict-budget-update: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py --update
 
+# Fail when a *changed line* under litellm/ holds a value typed Any -- including
+# the X | Any unions that mypy --strict / basedpyright let through (e.g.
+# re.Match.group() -> str | Any, json.loads() -> Any). Compares against
+# origin/litellm_internal_staging by default; override with ANY_GATE_BASE.
+# First run cold-builds litellm's type cache (~2 min into .mypy_cache_any);
+# later runs are incremental.
+lint-any: install-dev
+	$(UV_RUN) python scripts/check_any_discipline.py --changed
+
 check-circular-imports: install-dev
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
 
@@ -151,10 +161,10 @@ check-import-safety: install-dev
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
 # Combined linting (matches test-linting.yml workflow)
-lint: format-check lint-ruff lint-mypy lint-basedpyright check-circular-imports check-import-safety lint-strict-budget
+lint: format-check lint-ruff lint-mypy lint-basedpyright check-circular-imports check-import-safety lint-strict-budget lint-any
 
 # Faster linting for local development (only checks changed code)
-lint-dev: lint-format-changed lint-mypy check-circular-imports check-import-safety
+lint-dev: lint-format-changed lint-mypy lint-any check-circular-imports check-import-safety
 
 # Testing targets
 test: install-test-deps

@@ -155,9 +155,12 @@ Individual linting commands:
 make format-check       # Check Black formatting
 make lint-ruff          # Run Ruff linting
 make lint-mypy          # Run MyPy type checking
+make lint-any           # Fail on Any-typed values (incl. X | Any) on changed lines
 make check-circular-imports    # Check for circular imports
 make check-import-safety       # Check import safety
 ```
+
+`make lint-any` catches what `mypy`/`basedpyright` let slip: a value whose inferred type *contains* `Any`, most importantly the `X | Any` unions from the standard library and untyped code (`re.Match.group()` is `str | Any`, `json.loads()` is `Any`, a bare `dict` is `dict[Any, Any]`). It only looks at lines your branch adds or edits versus `origin/litellm_internal_staging`, so a new file is checked in full while editing a legacy file just needs your own lines clean. Give the value a concrete type at its source (validate untyped input in the caller, then pass the typed value in); only at a real typed/untyped boundary, annotate the offending line `# any-ok: <reason>`. The first run cold-builds litellm's type cache (about two minutes into `.mypy_cache_any`); later runs are incremental.
 
 Apply formatting (auto-fixes issues):
 ```bash

@@ -38,6 +38,8 @@ Run tests, format your code, and lint your code before each commit
 
 When you fix strict-rule violations gated by `ruff-strict-budget.json`, run `make lint-strict-budget-update` and commit the lowered baselines so the ceilings ratchet down instead of leaving stale headroom
 
+The Any-discipline gate (`make lint-any`, also a CI job) fails when a line you changed under `litellm/` holds a value typed `Any`, including the `X | Any` unions that `mypy`/`basedpyright` quietly accept (e.g. `re.Match.group() -> str | Any`, `json.loads() -> Any`, bare `dict` -> `dict[Any, Any]`). It enforces the "no `Any`" convention above, but only on changed lines, so editing a legacy file never forces you to clean its existing debt. Fix the type at its source per the caller-validation rule below; reach for an inline `# any-ok: <reason>` only at a genuine typed/untyped boundary
+
 Ask to commit and push your work when you're done (or if you're confident that your code is good and works, just do it)
 
 When you must use real LLM models to, for example, write e2e tests, write a QA runbook, etc., make sure to use the latest models (doesn't have to be smartest, can also be a modern small, fast one. No strong preference for smart vs fast here, just use something modern) as of the year and month of the current date. Do a web search as necessary to figure that out
