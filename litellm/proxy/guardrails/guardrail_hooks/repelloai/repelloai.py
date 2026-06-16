@@ -615,7 +615,13 @@ class RepelloAIGuardrail(CustomGuardrail):
         for output_item in output:
             if not isinstance(output_item, dict):
                 continue
-            if output_item.get("type") != "message":
+            item_type = output_item.get("type")
+            if item_type == "function_call":
+                arguments = output_item.get("arguments")
+                if isinstance(arguments, str) and arguments:
+                    texts.append(arguments)
+                continue
+            if item_type != "message":
                 continue
             content = output_item.get("content")
             if not isinstance(content, list):

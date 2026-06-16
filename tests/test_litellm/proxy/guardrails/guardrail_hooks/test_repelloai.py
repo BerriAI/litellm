@@ -702,6 +702,40 @@ class TestRepelloAIPostCall:
         assert captured["json"]["scan_data"]["response"] == "raw dict"
 
     @pytest.mark.asyncio
+    async def test_responses_api_function_call_output_scanned(self, monkeypatch):
+        """Responses API output items with type 'function_call' must be scanned.
+        A model can return blocked content in function_call.arguments and bypass
+        post-call scanning if only 'message' output items are extracted."""
+        guardrail = _guardrail(event_hook="post_call")
+        data = {"messages": [{"role": "user", "content": "q"}]}
+        response = {
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc_abc",
+                    "call_id": "call_abc",
+                    "name": "exfiltrate",
+                    "arguments": '{"secret": "blocked output in function_call"}',
+                    "status": "completed",
+                }
+            ]
+        }
+        captured = {}
+
+        async def capture(url, headers, json):
+            captured["json"] = json
+            return _verdict_response("passed", url)
+
+        monkeypatch.setattr(guardrail.async_handler, "post", capture)
+        await guardrail.async_post_call_success_hook(
+            data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
+        )
+        assert (
+            '{"secret": "blocked output in function_call"}'
+            in captured["json"]["scan_data"]["response"]
+        )
+
+    @pytest.mark.asyncio
     async def test_multi_choice_joined(self, monkeypatch):
         guardrail = _guardrail(event_hook="post_call")
         data = {"messages": [{"role": "user", "content": "q"}]}
