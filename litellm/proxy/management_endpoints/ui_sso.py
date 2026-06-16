@@ -191,6 +191,39 @@ def _is_valid_cli_sso_user_code(user_code: str | None) -> bool:
     )
 
 
+def _cli_sso_verification_uri_complete_enabled() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return bool(
+        general_settings.get(  # any-ok: operator opt-in read from the untyped general_settings dict
+            "allow_cli_sso_verification_uri_complete", False
+        )
+    )
+
+
+def _cli_sso_start_response_body(
+    *,
+    login_id: str,
+    poll_secret: str,
+    user_code: str,
+    verification_uri_complete: str | None,
+) -> dict[str, str | int]:
+    if verification_uri_complete is None:
+        return {
+            "login_id": login_id,
+            "poll_secret": poll_secret,
+            "user_code": user_code,
+            "expires_in": CLI_SSO_SESSION_TTL_SECONDS,
+        }
+    return {
+        "login_id": login_id,
+        "poll_secret": poll_secret,
+        "user_code": user_code,
+        "verification_uri_complete": verification_uri_complete,
+        "expires_in": CLI_SSO_SESSION_TTL_SECONDS,
+    }
+
+
 def _get_cli_sso_start_rate_limit_cache_key(
     request: Request, use_x_forwarded_for: Optional[bool] = False
 ) -> str:
@@ -592,25 +625,29 @@ async def cli_sso_start(request: Request):
     }
     _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
 
-    verification_uri_complete = (
-        get_custom_url(request_base_url=str(request.base_url), route="sso/key/generate")
-        + "?"
-        + urlencode(
-            {
-                "source": LITELLM_CLI_SOURCE_IDENTIFIER,
-                "key": login_id,
-                "user_code": user_code,
-            }
+    verification_uri_complete: str | None = (
+        (
+            get_custom_url(
+                request_base_url=str(request.base_url), route="sso/key/generate"
+            )
+            + "?"
+            + urlencode(
+                {
+                    "source": LITELLM_CLI_SOURCE_IDENTIFIER,
+                    "key": login_id,
+                    "user_code": user_code,
+                }
+            )
         )
+        if _cli_sso_verification_uri_complete_enabled()
+        else None
     )
-
-    return {
-        "login_id": login_id,
-        "poll_secret": poll_secret,
-        "user_code": user_code,
-        "verification_uri_complete": verification_uri_complete,
-        "expires_in": CLI_SSO_SESSION_TTL_SECONDS,
-    }
+    return _cli_sso_start_response_body(
+        login_id=login_id,
+        poll_secret=poll_secret,
+        user_code=user_code,
+        verification_uri_complete=verification_uri_complete,
+    )
 
 
 @router.post(
@@ -930,7 +967,7 @@ async def google_login(
     cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
         source=source,
         key=key,
-        user_code=user_code,
+        user_code=(user_code if _cli_sso_verification_uri_complete_enabled() else None),
     )
 
     # check if user defined a custom auth sso sign in handler, if yes, use it

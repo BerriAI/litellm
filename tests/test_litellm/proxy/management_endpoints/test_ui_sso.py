@@ -2121,8 +2121,8 @@ class TestCLIKeyRegenerationFlow:
         mock_cache.set_cache.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_cli_sso_start_returns_verification_uri_complete(self):
-        """Test CLI SSO start returns a verification_uri_complete that round-trips the user_code through the browser SSO start route"""
+    async def test_cli_sso_start_returns_verification_uri_complete_when_enabled(self):
+        """Test CLI SSO start returns a verification_uri_complete that round-trips the user_code only when the operator opts in"""
         from urllib.parse import parse_qs, urlparse
 
         from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
@@ -2141,6 +2141,10 @@ class TestCLIKeyRegenerationFlow:
                 {"PROXY_BASE_URL": "https://proxy.example.com", "SERVER_ROOT_PATH": ""},
             ),
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {"allow_cli_sso_verification_uri_complete": True},
+            ),
         ):
             result = await cli_sso_start(request=mock_request)
 
@@ -2152,6 +2156,93 @@ class TestCLIKeyRegenerationFlow:
         assert query["source"] == [LITELLM_CLI_SOURCE_IDENTIFIER]
         assert query["key"] == [result["login_id"]]
         assert query["user_code"] == [result["user_code"]]
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_start_omits_verification_uri_complete_by_default(self):
+        """Test CLI SSO start does NOT advertise verification_uri_complete unless the operator enables it (default off)"""
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_start
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.headers = {}
+        mock_request.base_url = "https://proxy.example.com/"
+        mock_cache = MagicMock()
+        mock_cache.increment_cache.return_value = 1
+
+        with (
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+        ):
+            result = await cli_sso_start(request=mock_request)
+
+        assert "verification_uri_complete" not in result
+        assert result["user_code"]
+        assert result["login_id"].startswith("cli-")
+
+    def test_cli_sso_verification_uri_complete_enabled_reads_general_settings(self):
+        """Test the operator opt-in flag is read from general_settings and defaults off"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _cli_sso_verification_uri_complete_enabled,
+        )
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            assert _cli_sso_verification_uri_complete_enabled() is False
+        with patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_cli_sso_verification_uri_complete": True},
+        ):
+            assert _cli_sso_verification_uri_complete_enabled() is True
+
+    @pytest.mark.asyncio
+    async def test_google_login_only_threads_user_code_when_enabled(self):
+        """Test google_login forwards user_code into the OAuth state only when the operator opt-in is on, dropping it otherwise"""
+        from litellm.proxy.management_endpoints.ui_sso import google_login
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.base_url = "https://proxy.example.com/"
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {"poll_secret_hash": "h"}
+
+        async def drive(enabled: bool):
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("litellm.proxy.proxy_server.premium_user", True),
+                patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+                patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+                patch(
+                    "litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler",
+                    None,
+                ),
+                patch(
+                    "litellm.proxy.proxy_server.general_settings",
+                    {"allow_cli_sso_verification_uri_complete": enabled},
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env",
+                    return_value=None,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_redirect_url_for_sso",
+                    return_value="https://proxy.example.com/sso/callback",
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler._get_cli_state",
+                    return_value=None,
+                ) as mock_get_cli_state,
+            ):
+                try:
+                    await google_login(
+                        request=mock_request,
+                        source="litellm-cli",
+                        key="cli-validsessionkey123456",
+                        user_code="WXYZ-2345",
+                    )
+                except Exception:
+                    pass
+            return mock_get_cli_state.call_args.kwargs["user_code"]
+
+        assert await drive(enabled=True) == "WXYZ-2345"
+        assert await drive(enabled=False) is None
 
     def test_get_cli_state_appends_user_code_for_prefill(self):
         """Test the OAuth state carries the user_code only for the opt-in prefill flow"""

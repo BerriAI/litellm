@@ -22053,6 +22053,11 @@ export interface components {
              */
             alerting_threshold?: number | null;
             /**
+             * Allow Cli Sso Verification Uri Complete
+             * @description opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine
+             */
+            allow_cli_sso_verification_uri_complete?: boolean | null;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */
