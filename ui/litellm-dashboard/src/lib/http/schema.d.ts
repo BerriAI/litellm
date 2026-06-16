@@ -48141,6 +48141,7 @@ export interface operations {
                 key?: string | null;
                 existing_key?: string | null;
                 return_to?: string | null;
+                user_code?: string | null;
             };
             header?: never;
             path?: never;

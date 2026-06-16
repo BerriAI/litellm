@@ -185,7 +185,7 @@ def _is_valid_cli_sso_login_id(login_id: Optional[str]) -> bool:
     return isinstance(login_id, str) and bool(_CLI_SSO_LOGIN_ID_RE.fullmatch(login_id))
 
 
-def _is_valid_cli_sso_user_code(user_code: Optional[str]) -> bool:
+def _is_valid_cli_sso_user_code(user_code: str | None) -> bool:
     return isinstance(user_code, str) and bool(
         _CLI_SSO_USER_CODE_RE.fullmatch(user_code)
     )
@@ -489,7 +489,7 @@ def _cli_poll_attribution_metadata_from_session(
 def _render_cli_sso_verification_page(
     verify_url: str,
     browser_complete_token: str,
-    prefill_user_code: Optional[str] = None,
+    prefill_user_code: str | None = None,
 ) -> str:
     escaped_verify_url = escape(verify_url, quote=True)
     escaped_browser_complete_token = escape(browser_complete_token, quote=True)
@@ -861,7 +861,7 @@ async def google_login(
     key: Optional[str] = None,
     existing_key: Optional[str] = None,
     return_to: Optional[str] = None,
-    user_code: Optional[str] = None,
+    user_code: str | None = None,
 ):
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
@@ -2044,7 +2044,7 @@ async def _complete_cli_sso_callback_session(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
-    prefill_user_code: Optional[str] = None,
+    prefill_user_code: str | None = None,
 ):
     from fastapi.responses import HTMLResponse
 
@@ -2119,7 +2119,7 @@ async def cli_sso_callback(
     key: Optional[str] = None,
     result: Optional[Union[OpenID, dict]] = None,
     received_response: Optional[dict] = None,
-    prefill_user_code: Optional[str] = None,
+    prefill_user_code: str | None = None,
 ):
     """CLI SSO callback - stores session info for JWT generation on polling"""
     verbose_proxy_logger.info("CLI SSO callback")
@@ -3093,10 +3093,10 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def _get_cli_state(
-        source: Optional[str],
-        key: Optional[str],
-        existing_key: Optional[str] = None,
-        user_code: Optional[str] = None,
+        source: str | None,
+        key: str | None,
+        existing_key: str | None = None,
+        user_code: str | None = None,
     ) -> Optional[str]:
         """
         Checks the request 'source' if a cli state token was passed in
