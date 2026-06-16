@@ -37,8 +37,14 @@ def _backup_path() -> str:
 
 
 def _main_path() -> str:
+    # This test lives at ``tests/test_litellm/``; the primary price map sits at
+    # the repo root, two directories up. Resolve it relative to this file so the
+    # test works regardless of where ``litellm`` itself is installed (e.g. a pip
+    # install into site-packages).
     return os.path.join(
-        os.path.dirname(os.path.dirname(litellm.__file__)),
+        os.path.dirname(__file__),
+        "..",
+        "..",
         "model_prices_and_context_window.json",
     )
 
