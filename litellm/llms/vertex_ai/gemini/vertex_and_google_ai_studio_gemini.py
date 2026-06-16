@@ -2846,6 +2846,7 @@ async def make_call(
         sync_stream=False,
         logging_obj=logging_obj,
         response_headers=response.headers,
+        response=response,
     )
     # LOGGING
     logging_obj.post_call(
@@ -2889,6 +2890,7 @@ def make_sync_call(
         sync_stream=True,
         logging_obj=logging_obj,
         response_headers=response.headers,
+        response=response,
     )
 
     # LOGGING
@@ -3350,12 +3352,14 @@ class ModelResponseIterator:
         sync_stream: bool,
         logging_obj: LoggingClass,
         response_headers: Optional[Dict[str, str]] = None,
+        response: Optional[httpx.Response] = None,
     ):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
         )
 
         self.streaming_response = streaming_response
+        self.response = response
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
         self.accumulated_json = ""
         self.sent_first_chunk = False
@@ -3657,3 +3661,37 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+
+    async def aclose(self) -> None:
+        iterator = getattr(self, "async_response_iterator", self.streaming_response)
+        if iterator is not None and hasattr(iterator, "aclose"):
+            try:
+                await iterator.aclose()
+            except Exception as e:
+                verbose_logger.debug(
+                    "ModelResponseIterator.aclose: error closing iterator: %s", e
+                )
+        if self.response is not None:
+            try:
+                await self.response.aclose()
+            except Exception as e:
+                verbose_logger.debug(
+                    "ModelResponseIterator.aclose: error closing response: %s", e
+                )
+
+    def close(self) -> None:
+        iterator = getattr(self, "response_iterator", self.streaming_response)
+        if iterator is not None and hasattr(iterator, "close"):
+            try:
+                iterator.close()
+            except Exception as e:
+                verbose_logger.debug(
+                    "ModelResponseIterator.close: error closing iterator: %s", e
+                )
+        if self.response is not None:
+            try:
+                self.response.close()
+            except Exception as e:
+                verbose_logger.debug(
+                    "ModelResponseIterator.close: error closing response: %s", e
+                )

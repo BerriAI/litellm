@@ -7021,7 +7021,10 @@ def _format_streaming_sse_chunk(chunk: Union[str, bytes]) -> Union[str, bytes]:
 
 
 async def async_data_generator(  # noqa: PLR0915
-    response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
+    response,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict,
+    request: Optional[Request] = None,
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
@@ -7149,28 +7152,28 @@ async def async_data_generator(  # noqa: PLR0915
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
     finally:
-        # Close the response stream to release the underlying HTTP connection
-        # back to the connection pool. This prevents pool exhaustion when
-        # clients disconnect mid-stream.
-        # Shield from cancellation so the close awaits can complete.
-        with anyio.CancelScope(shield=True):
-            if hasattr(response, "aclose"):
-                try:
-                    await response.aclose()
-                except BaseException as e:
-                    verbose_proxy_logger.debug(
-                        "async_data_generator: error closing response stream: %s",
-                        e,
-                    )
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=request,
+            request_data=request_data,
+            response=response,
+        )
 
 
 def select_data_generator(
-    response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
+    response,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict,
+    request: Optional[Request] = None,
 ):
     return async_data_generator(
         response=response,
         user_api_key_dict=user_api_key_dict,
         request_data=request_data,
+        request=request,
     )
 
 
