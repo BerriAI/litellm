@@ -1016,15 +1016,13 @@ if MCP_AVAILABLE:
         if is_restricted_virtual_key:
             return _sanitize_mcp_server_list_for_virtual_key(redacted_mcp_servers)
 
-        # Non-admin authenticated users may see the server inventory but
-        # not credential-bearing fields like `url` (often contains bearer
-        # tokens) or headers/env (often contain Authorization).
-        if not _user_has_admin_view(user_api_key_dict):
-            return _sanitize_mcp_server_list_for_non_admin(redacted_mcp_servers)
-
+        # SEC: Issue 5 (Veria #5) — only a FULL PROXY_ADMIN may see credential-bearing
+        # fields. PROXY_ADMIN_VIEW_ONLY (covered by _user_has_admin_view) previously
+        # skipped this sanitizer and only had global env var values blanked, leaking
+        # secrets embedded in url/headers/env. Gate on _user_is_full_admin so view-only
+        # admins get the same redacted inventory as any other non-managing caller.
         if not _user_is_full_admin(user_api_key_dict):
-            for server in redacted_mcp_servers:
-                _redact_global_env_var_values(server)
+            return _sanitize_mcp_server_list_for_non_admin(redacted_mcp_servers)
 
         return redacted_mcp_servers
 
@@ -1415,10 +1413,12 @@ if MCP_AVAILABLE:
         redacted = _redact_mcp_credentials(mcp_server)
         if is_restricted_virtual_key:
             return _sanitize_mcp_server_for_virtual_key(redacted)
-        if not _user_has_admin_view(user_api_key_dict):
-            return _sanitize_mcp_server_for_non_admin(redacted)
+        # SEC: Issue 5 (Veria #5) — gate credential exposure on FULL PROXY_ADMIN, not
+        # _user_has_admin_view (which also grants PROXY_ADMIN_VIEW_ONLY). A view-only
+        # admin must go through the non-admin sanitizer so secrets embedded in
+        # url/headers/env are stripped, not merely have global env values blanked.
         if not _user_is_full_admin(user_api_key_dict):
-            _redact_global_env_var_values(redacted)
+            return _sanitize_mcp_server_for_non_admin(redacted)
         return redacted
 
     @router.post(

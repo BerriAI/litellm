@@ -14644,6 +14644,20 @@ async def update_config_general_settings(
     return response
 
 
+# SEC: Issue 5 (Veria #5) — general_settings fields whose value must never reach a
+# non-full-admin. The masker catches *_key/*_password/*token/etc. by segment; these
+# are the secret-bearing names it does not segment-match (database_url embeds the DB
+# password but splits into "database"/"url").
+_EXTRA_SECRET_GENERAL_SETTINGS_FIELDS = frozenset({"database_url"})
+
+
+def _is_secret_general_setting_field(field_name: str) -> bool:
+    return (
+        field_name in _EXTRA_SECRET_GENERAL_SETTINGS_FIELDS
+        or SENSITIVE_DATA_MASKER.is_sensitive_key(field_name)
+    )
+
+
 @router.get(
     "/config/field/info",
     tags=["config.yaml"],
@@ -14696,9 +14710,17 @@ async def get_config_general_settings(
         general_settings = dict(db_general_settings.param_value)
 
         if field_name in general_settings:
-            return ConfigFieldInfo(
-                field_name=field_name, field_value=general_settings[field_name]
-            )
+            # SEC: Issue 5 (Veria #5) — _user_has_admin_view also grants
+            # PROXY_ADMIN_VIEW_ONLY. Returning the raw value let a view-only admin
+            # read secrets like master_key/database_url (== full admin). Only a FULL
+            # PROXY_ADMIN sees raw secret-bearing fields; others get them redacted.
+            field_value = general_settings[field_name]
+            if (
+                user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+                and _is_secret_general_setting_field(field_name)
+            ):
+                field_value = "REDACTED"
+            return ConfigFieldInfo(field_name=field_name, field_value=field_value)
         else:
             raise HTTPException(
                 status_code=400,

@@ -256,7 +256,9 @@ class BaseAWSLLM:
             "aws_session_token=[set=%s]\n"
             "aws_region_name=%s\n"
             "aws_session_name=%s\n"
-            "aws_profile_name=%s\n"
+            # SEC: Issue 4 (Veria #4) — aws_profile_name may resolve from an
+            # os.environ/ secret; log only whether it is set, never the value.
+            "aws_profile_name=[set=%s]\n"
             "aws_role_name=%s\n"
             "aws_web_identity_token=[set=%s]\n"
             "aws_sts_endpoint=%s\n"
@@ -266,7 +268,7 @@ class BaseAWSLLM:
             aws_session_token is not None,
             aws_region_name,
             aws_session_name,
-            aws_profile_name,
+            aws_profile_name is not None,
             aws_role_name,
             aws_web_identity_token is not None,
             aws_sts_endpoint,
@@ -1234,9 +1236,19 @@ class BaseAWSLLM:
         import boto3
 
         # uses auth values from AWS profile usually stored in ~/.aws/credentials
-        with tracer.trace("boto3.Session(profile_name=aws_profile_name)"):
-            client = boto3.Session(profile_name=aws_profile_name)
-            return client.get_credentials(), None
+        # SEC: Issue 4 (Veria #4) — boto3 raises ProfileNotFound carrying the resolved
+        # profile name (which may be an os.environ/ secret) in its message; an unhandled
+        # raise leaks it into the server traceback. Map to a generic error that never
+        # reflects the user-supplied/resolved value.
+        try:
+            with tracer.trace("boto3.Session(profile_name=aws_profile_name)"):
+                client = boto3.Session(profile_name=aws_profile_name)
+                return client.get_credentials(), None
+        except Exception:
+            raise AwsAuthError(
+                message="The specified AWS profile could not be found.",
+                status_code=400,
+            )
 
     @tracer.wrap()
     def _auth_with_aws_session_token(

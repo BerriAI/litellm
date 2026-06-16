@@ -163,6 +163,28 @@ def test_aws_profile_path_not_cached_in_iam_cache():
         assert mock_profile.call_count == 2
 
 
+def test_aws_profile_not_found_raises_generic_error_without_leaking_value():
+    """SEC Veria #4: boto3 ProfileNotFound carries the resolved profile name (which may
+    be an os.environ/ secret). _auth_with_aws_profile must map it to a generic error that
+    never reflects the user-supplied/resolved value into logs or tracebacks."""
+    from botocore.exceptions import ProfileNotFound
+
+    secret_profile_value = "super-secret-resolved-profile-name"
+
+    fake_boto3 = MagicMock()
+    fake_boto3.Session.side_effect = ProfileNotFound(profile=secret_profile_value)
+
+    base = BaseAWSLLM()
+    with patch.dict("sys.modules", {"boto3": fake_boto3}):
+        with pytest.raises(AwsAuthError) as exc_info:
+            base._auth_with_aws_profile(secret_profile_value)
+
+    err = exc_info.value
+    assert secret_profile_value not in err.message
+    assert secret_profile_value not in str(err)
+    assert err.message == "The specified AWS profile could not be found."
+
+
 def test_web_identity_path_not_cached_in_iam_cache():
     base = BaseAWSLLM()
     with patch.object(
