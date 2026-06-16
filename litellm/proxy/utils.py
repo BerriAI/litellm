@@ -2088,7 +2088,7 @@ class ProxyLogging:
             litellm_call_id=request_data.get("litellm_call_id", ""), status="fail"
         )
         if AlertType.llm_exceptions in self.alert_types and not isinstance(
-            original_exception, HTTPException
+            original_exception, (HTTPException, ProxyException)
         ):
             """
             Just alert on LLM API exceptions. Do not alert on user errors

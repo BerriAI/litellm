@@ -21,7 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
@@ -136,7 +136,13 @@ class AimGuardrail(CustomGuardrail):
                 policies=list(analysis_result["policy_drill_down"].keys()),
             ),
         )
-        raise HTTPException(status_code=400, detail=detection_message)
+        raise ProxyException(
+            message=detection_message,
+            type="invalid_request_error",
+            param=None,
+            code=400,
+            openai_code="content_policy_violation",
+        )
 
     def _anonymize_request(self, res: Any, data: dict) -> dict:
         verbose_proxy_logger.info("Aim: anonymize action")

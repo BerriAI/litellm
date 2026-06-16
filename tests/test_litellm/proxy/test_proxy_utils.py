@@ -427,6 +427,59 @@ class TestPostCallFailureHookLiftsFirstApiCallStartTime:
         assert "litellm_logging_obj" not in request_data
 
 
+class TestPostCallFailureHookLLMExceptionAlerting:
+    """The llm_exceptions alert is for infra / LLM-API failures, not user
+    errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized
+    client errors must be excluded so a guardrail content-policy block never
+    pages on-call. ProxyException is such an error; before LIT-3751 only
+    HTTPException was excluded, so AIM blocks paged as if the LLM API failed."""
+
+    async def _alerted(self, exc) -> bool:
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from litellm.proxy._types import AlertType, UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = [AlertType.llm_exceptions]
+        alerting_handler = AsyncMock()
+        with (
+            patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()),
+            patch.object(proxy_logging_obj, "alerting_handler", new=alerting_handler),
+        ):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data={},
+                original_exception=exc,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        await asyncio.sleep(0)  # let the fire-and-forget alert task run
+        return alerting_handler.called
+
+    @pytest.mark.asyncio
+    async def test_proxy_exception_does_not_alert(self):
+        from litellm.proxy._types import ProxyException
+
+        exc = ProxyException(
+            message="content blocked",
+            type="invalid_request_error",
+            param=None,
+            code=400,
+            openai_code="content_policy_violation",
+        )
+        assert await self._alerted(exc) is False
+
+    @pytest.mark.asyncio
+    async def test_http_exception_does_not_alert(self):
+        assert (
+            await self._alerted(HTTPException(status_code=400, detail="blocked"))
+            is False
+        )
+
+    @pytest.mark.asyncio
+    async def test_genuine_llm_api_error_still_alerts(self):
+        assert await self._alerted(Exception("upstream 503")) is True
+
+
 class TestShouldUseSmtpSsl:
     def test_port_465_uses_ssl(self, monkeypatch):
         from litellm.proxy.utils import _should_use_smtp_ssl

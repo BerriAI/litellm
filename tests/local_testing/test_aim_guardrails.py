@@ -10,6 +10,7 @@ from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
 from litellm import DualCache
+from litellm.proxy._types import ProxyException
 from litellm.proxy.guardrails.guardrail_hooks.aim.aim import (
     AimGuardrail,
     AimGuardrailMissingSecrets,
@@ -101,7 +102,7 @@ async def test_block_callback(mode: str):
         ],
     }
 
-    with pytest.raises(HTTPException, match="Jailbreak detected"):
+    with pytest.raises(ProxyException, match="Jailbreak detected") as exc_info:
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             return_value=Response(
@@ -134,6 +135,12 @@ async def test_block_callback(mode: str):
                     user_api_key_dict=UserAPIKeyAuth(),
                     call_type="completion",
                 )
+
+    exc = exc_info.value
+    assert exc.code == "400"
+    assert exc.type == "invalid_request_error"
+    assert exc.param is None
+    assert exc.openai_code == "content_policy_violation"
 
 
 @pytest.mark.asyncio
