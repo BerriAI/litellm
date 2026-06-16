@@ -244,9 +244,15 @@ def _check_non_standard_fallback_format(fallbacks: Optional[List[Any]]) -> bool:
     if all(isinstance(item, str) for item in fallbacks):
         return True
     elif all(isinstance(item, dict) for item in fallbacks):
-        for key in LiteLLMParamsTypedDict.__annotations__.keys():
-            if key in fallbacks[0].keys():
-                return True
+        first_item = fallbacks[0]
+        for key in first_item.keys():
+            if key in LiteLLMParamsTypedDict.__annotations__:
+                # When the value is a list, this is the standard
+                # {model_group: [fallback_list]} format where the key
+                # happens to collide with a LiteLLM param name (e.g. "model").
+                # Only treat as non-standard if the value is NOT a list.
+                if not isinstance(first_item[key], list):
+                    return True
 
     return False
 
