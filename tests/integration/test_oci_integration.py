@@ -388,6 +388,59 @@ async def test_async_tool_use(m: _M, oci_params):
 
 
 # ---------------------------------------------------------------------------
+# Cohere tool-schema regression
+#
+# MLflow {{trace}} judge tools have params typed as JSON-schema arrays. The
+# array type used to map to a bare ``List``, which OCI's Cohere backend rejected
+# with HTTP 500.
+# ---------------------------------------------------------------------------
+
+# A tool whose parameter is a JSON-schema array — the shape that 500'd on Cohere.
+_TRACE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_span",
+        "description": "Fetch a span and selected attributes.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "attributes_to_fetch": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Attribute names to fetch.",
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
+
+@pytest.mark.parametrize("model", ["cohere.command-latest", "cohere.command-a-03-2025"])
+def test_cohere_tool_with_array_param(model, oci_params):
+    """A Cohere tool whose parameter is a JSON-schema array (e.g. MLflow's
+    {{trace}} judge tools). The array type used to map to a bare ``List``, which
+    OCI's Cohere backend rejected with HTTP 500."""
+    import litellm
+
+    resp = litellm.completion(
+        model=f"oci/{model}",
+        messages=[
+            {
+                "role": "user",
+                "content": "Use get_span to fetch the 'inputs' attribute.",
+            }
+        ],
+        tools=[_TRACE_TOOL],
+        max_tokens=150,
+        **oci_params,
+    )
+    # The model may call the tool or answer directly; either proves OCI accepted
+    # the request (no 400/500).
+    assert resp.choices[0].finish_reason is not None
+
+
+# ---------------------------------------------------------------------------
 # Reasoning-effort tests (reasoning models only)
 # ---------------------------------------------------------------------------
 
