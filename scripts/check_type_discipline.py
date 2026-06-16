@@ -7,13 +7,14 @@ LIT001  Coarse builtin annotation (dict/list/set, bare or parameterized) at an
         interface: function parameters, return types, or class-body attributes.
         Locals are intentionally not checked.
         Suppress with `# coarse-ok: <reason>` on the offending line.
-LIT002  *args/**kwargs without an annotation. (Defense-in-depth over ANN002/003;
-        Unpack[...], P.args/P.kwargs, or a concrete type all pass.)
+LIT002  Retired: annotation *presence* on *args/**kwargs is ruff's job (ANN002/ANN003).
+        The code is left unused (not reused) so older messages stay unambiguous.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  type/pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
-LIT005  A `# coarse-ok` / `# cast-ok` / `# guard-ok` suppression without a reason.
+LIT005  A `# coarse-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` suppression
+        without a reason.
 LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equivalent
         of TypeScript's `as`); it lies to the type checker with zero runtime guarantee.
         Validate into a concrete frozen type at the boundary instead.
@@ -21,6 +22,10 @@ LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equiv
 LIT007  `TypeGuard[...]` / `TypeIs[...]` annotation. The narrowing predicate's body is
         never verified by the checker, so a wrong guard silently corrupts types.
         Prefer parsing into a concrete type. Suppress with `# guard-ok: <reason>`.
+LIT008  `**kwargs` parameter. The keyword contract is erased and everything it carries
+        is effectively Any. ruff can force it to be typed (ANN003) but can't ban the
+        syntax. Declare explicit keyword params, or accept one frozen payload. `*args`,
+        by contrast, is fine when typed (it's just a tuple). Suppress: `# kwargs-ok: <reason>`.
  
 Usage
 -----
@@ -57,12 +62,14 @@ IGNORE_RE = re.compile(
 COARSE_OK_RE = re.compile(r"#\s*coarse-ok(?::\s*(?P<reason>.*))?")
 CAST_OK_RE = re.compile(r"#\s*cast-ok(?::\s*(?P<reason>.*))?")
 GUARD_OK_RE = re.compile(r"#\s*guard-ok(?::\s*(?P<reason>.*))?")
+KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
 
 # Suppression tokens that must each carry a reason (LIT005).
 OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("coarse-ok", COARSE_OK_RE),
     ("cast-ok", CAST_OK_RE),
     ("guard-ok", GUARD_OK_RE),
+    ("kwargs-ok", KWARGS_OK_RE),
 ) # coarse-ok: <reason>
  
  
@@ -85,6 +92,7 @@ class Comments:
     coarse_ok_lines: frozenset[int]
     cast_ok_lines: frozenset[int]
     guard_ok_lines: frozenset[int]
+    kwargs_ok_lines: frozenset[int]
  
  
 # --------------------------------------------------------------------------- #
@@ -132,7 +140,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
         tokens = tokenize.generate_tokens(iter(source.splitlines(keepends=True)).__next__)
         comment_toks = tuple((t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT)
     except tokenize.TokenError:
-        return Comments({}, frozenset(), frozenset(), frozenset()), ()
+        return Comments({}, frozenset(), frozenset(), frozenset(), frozenset()), ()
 
     def _lines_with(regex: re.Pattern[str]) -> frozenset[int]:
         return frozenset(line for line, text in comment_toks if _valid_ok(regex, text))
@@ -143,6 +151,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
             coarse_ok_lines=_lines_with(COARSE_OK_RE),
             cast_ok_lines=_lines_with(CAST_OK_RE),
             guard_ok_lines=_lines_with(GUARD_OK_RE),
+            kwargs_ok_lines=_lines_with(KWARGS_OK_RE),
         ),
         tuple(v for line, text in comment_toks for v in _comment_violations(path, line, text)),
     )
@@ -186,32 +195,37 @@ def _annotation_violations(
  
  
 def _function_violations(
-    path: Path, node: ast.FunctionDef | ast.AsyncFunctionDef, ok_lines: frozenset[int]
+    path: Path, node: ast.FunctionDef | ast.AsyncFunctionDef, comments: Comments
 ) -> Iterator[Violation]:
+    coarse_ok = comments.coarse_ok_lines
     args = node.args
     for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
         yield from _annotation_violations(
-            path, arg.annotation, arg.lineno, f"parameter `{arg.arg}` of `{node.name}`", ok_lines
+            path, arg.annotation, arg.lineno, f"parameter `{arg.arg}` of `{node.name}`", coarse_ok
         )
- 
-    for star, label in ((args.vararg, "*args"), (args.kwarg, "**kwargs")):
-        if star is None:
-            continue
-        if star.annotation is None:
-            if star.lineno not in ok_lines:
-                yield Violation(
-                    path, star.lineno, "LIT002",
-                    f"unannotated `{label}` in `{node.name}`; annotate with "
-                    f"Unpack[SomeTypedDict], P.args/P.kwargs, or a concrete type",
-                )
-        else:
-            yield from _annotation_violations(
-                path, star.annotation, star.lineno, f"`{label}` of `{node.name}`", ok_lines
-            )
- 
+
+    # *args is allowed when typed (it's just a tuple); ruff ANN002 forces the
+    # annotation, so here we only add the LIT001 coarse check on the element type.
+    if args.vararg is not None:
+        yield from _annotation_violations(
+            path, args.vararg.annotation, args.vararg.lineno, f"`*args` of `{node.name}`", coarse_ok
+        )
+
+    # **kwargs is banned outright (LIT008): it erases the keyword contract and forces
+    # Any-typing on everything it carries. ruff can require it be typed (ANN003) but
+    # cannot ban the syntax, so this rule does.
+    if args.kwarg is not None and args.kwarg.lineno not in comments.kwargs_ok_lines:
+        yield Violation(
+            path, args.kwarg.lineno, "LIT008",
+            f"`**{args.kwarg.arg}` is banned: it erases the keyword contract and forces "
+            f"Any-typing; declare explicit keyword parameters, or accept one frozen payload "
+            f"(frozen dataclass / NamedTuple / ReadOnly TypedDict) "
+            f"(suppress: `# kwargs-ok: <reason>`)",
+        )
+
     if node.returns is not None:
         yield from _annotation_violations(
-            path, node.returns, node.returns.lineno, f"return type of `{node.name}`", ok_lines
+            path, node.returns, node.returns.lineno, f"return type of `{node.name}`", coarse_ok
         )
  
  
@@ -226,12 +240,11 @@ def _class_violations(path: Path, node: ast.ClassDef, ok_lines: frozenset[int]) 
  
  
 def iter_interface_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
-    ok = comments.coarse_ok_lines
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            yield from _function_violations(path, node, ok)
+            yield from _function_violations(path, node, comments)
         elif isinstance(node, ast.ClassDef):
-            yield from _class_violations(path, node, ok)
+            yield from _class_violations(path, node, comments.coarse_ok_lines)
 
 
 # --------------------------------------------------------------------------- #

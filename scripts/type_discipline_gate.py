@@ -7,9 +7,12 @@ each rule across the whole `litellm` tree and fails when a rule is both over its
 ceiling and higher than the base it merges into, so a change is blamed for the
 violations it adds, never for drift that already exists in the base.
 
-Rules not present in the budget are ignored, so the checker can emit LIT001-005
-without gating them here; today only LIT006 (cast) and LIT007 (TypeGuard/TypeIs)
-are budgeted. Re-baseline with `--update` to ratchet a ceiling down.
+Rules not present in the budget are ignored. LIT001 (coarse builtins) is emitted
+but deliberately left unbudgeted; everything else is gated: LIT003/LIT004 (noqa /
+ignore without codes or reason) and LIT005 (`*-ok` suppression without a reason)
+are frozen at slack 0 so any net-new unexplained suppression trips the gate, while
+LIT006 (cast), LIT007 (TypeGuard/TypeIs) and LIT008 (`**kwargs`) carry their own
+ceilings. Re-baseline with `--update` to ratchet a ceiling down.
 """
 
 import argparse
@@ -143,9 +146,10 @@ def cmd_check(base: str) -> None:
         for violation in sorted(v for v in new if v.code == breach.rule):
             print(f"    {violation.file}:{violation.line}")
     print(
-        "Remove the new violations, justify each with `# cast-ok: <reason>` / "
-        "`# guard-ok: <reason>`, or remove an equal number elsewhere; the ceiling is "
-        "baseline + slack in type-discipline-budget.json."
+        "Remove the new violations, give each a reason (`# noqa: XXX  # <reason>`, "
+        "`# pyright: ignore[rule]  # <reason>`, `# cast-ok: <reason>`, "
+        "`# guard-ok: <reason>`, `# kwargs-ok: <reason>`), or remove an equal number "
+        "elsewhere; the ceiling is baseline + slack in type-discipline-budget.json."
     )
     raise SystemExit(1)
 
