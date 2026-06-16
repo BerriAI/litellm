@@ -35,6 +35,7 @@ sys.path.insert(
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     PromptTokensDetailsResult,
     _calculate_input_cost,
+    _get_token_base_cost,
     calculate_cache_writing_cost,
     generic_cost_per_token,
 )
@@ -1642,3 +1643,42 @@ def test_priority_service_tier_above_threshold_falls_back_to_standard_for_cache_
     expected_completion = 1_000 * 2.25e-5
     assert prompt_cost == pytest.approx(expected_prompt, rel=1e-9)
     assert completion_cost == pytest.approx(expected_completion, rel=1e-9)
+def test_tiered_pricing_sorts_by_numeric_threshold_not_lexicographic():
+    """
+    Regression test for #30345: _get_token_base_cost sorted threshold keys
+    lexicographically on the raw key string. When thresholds had different
+    digit lengths (e.g. 90000 vs 128000), string sort diverged from numeric
+    sort: "9" > "1" so "90000" sorted after "128000" in reverse, causing a
+    150k-token request to be billed at the 90k tier instead of 128k.
+    """
+    model_info: ModelInfo = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_90000_tokens": 5e-7,
+        "output_cost_per_token_above_90000_tokens": 1e-6,
+        "input_cost_per_token_above_128000_tokens": 2.5e-7,
+        "output_cost_per_token_above_128000_tokens": 5e-7,
+    }
+
+    usage = Usage(
+        prompt_tokens=150000,
+        completion_tokens=1000,
+        total_tokens=151000,
+    )
+
+    (
+        prompt_base_cost,
+        completion_base_cost,
+        _cache_creation,
+        _cache_creation_1hr,
+        _cache_read,
+    ) = _get_token_base_cost(model_info=model_info, usage=usage)
+
+    assert prompt_base_cost == 2.5e-7, (
+        f"Expected 128k tier input rate (2.5e-7), got {prompt_base_cost}. "
+        "Threshold sort may be lexicographic instead of numeric."
+    )
+    assert completion_base_cost == 5e-7, (
+        f"Expected 128k tier output rate (5e-7), got {completion_base_cost}. "
+        "Threshold sort may be lexicographic instead of numeric."
+    )

@@ -255,8 +255,15 @@ def _get_token_base_cost(
         )
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
+    # Sort by parsed numeric threshold, not lexicographic string order,
+    # so that e.g. 128000 sorts above 90000 (string "9" > "1" would be wrong).
     threshold: Optional[float] = None
-    for key in sorted(threshold_keys, reverse=True):
+
+    def _threshold_sort_key(k: str) -> float:
+        raw = k.split("_above_")[1].split("_tokens")[0]
+        return float(raw.replace("k", "")) * (1000 if "k" in raw else 1)
+
+    for key in sorted(threshold_keys, key=_threshold_sort_key, reverse=True):
         value = model_info.get(key)
         if value is not None:
             try:
