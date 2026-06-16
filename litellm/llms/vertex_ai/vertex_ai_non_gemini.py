@@ -650,7 +650,7 @@ async def async_completion(  # noqa: PLR0915
         raise VertexAIError(status_code=500, message=str(e))
 
 
-async def async_streaming(  # noqa: PLR0915
+async def async_streaming(
     llm_model,
     mode: str,
     prompt: str,
