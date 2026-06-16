@@ -19,7 +19,7 @@ How it works:
 
 import json
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Union, cast
 
 import litellm.constants as _c
 from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
@@ -28,6 +28,7 @@ from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_itera
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
+    AnthropicUsage,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
 
@@ -248,7 +249,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 return {
                     **a,
                     "content": output_content + list(a.get("content") or []),
-                    "usage": {**(a.get("usage") or {}), "iterations": b},
+                    "usage": cast(AnthropicUsage, {**(a.get("usage") or {}), "iterations": b}),
                 }
         raise AdvisorMaxIterationsError("Advisor loop ended without a final response")
 
