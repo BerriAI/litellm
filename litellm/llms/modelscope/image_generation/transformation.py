@@ -15,7 +15,10 @@ from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    OpenAIImageGenerationOptionalParams,
+)
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
@@ -75,7 +78,11 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
-        **kwargs: object,
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         Get the complete URL for the ModelScope image generation API request.
@@ -91,8 +98,12 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
     def validate_environment(
         self,
         headers: dict,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
-        **kwargs: object,
+        api_base: Optional[str] = None,
     ) -> dict:
         """
         Validate environment and set up headers for ModelScope.
@@ -145,7 +156,13 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ImageResponse,
-        **kwargs: object,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: object,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ImageResponse:
         """
         Transform ModelScope response to OpenAI-compatible ImageResponse.

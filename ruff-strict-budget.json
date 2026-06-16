@@ -5,7 +5,7 @@
   "ANN401": { "baseline": 1885, "slack": 10 },
   "B006": { "baseline": 180, "slack": 3 },
   "C901": { "baseline": 301, "slack": 3 },
-  "PLR0913": { "baseline": 1813, "slack": 3 },
+  "PLR0913": { "baseline": 1817, "slack": 3 },
   "PLW0603": { "baseline": 183, "slack": 3 },
   "RUF012": { "baseline": 158, "slack": 3 },
   "TID251": { "baseline": 2404, "slack": 10 }

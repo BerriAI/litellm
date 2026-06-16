@@ -2,15 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` to ModelScope's `/v1/chat/completions`
 """
 
-from collections.abc import Awaitable
-from typing import (
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-    overload,
-)
+from typing import Any, Coroutine, Literal, Optional, Tuple, Union, cast, overload
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -32,7 +24,7 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Awaitable[list[AllMessageValues]]: ...
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -44,7 +36,7 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[list[AllMessageValues], Awaitable[list[AllMessageValues]]]:
+    ) -> Union[list[AllMessageValues], Coroutine[Any, Any, list[AllMessageValues]]]:
         """
         Flatten text-only content lists to strings for ModelScope.
 
@@ -80,7 +72,11 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
-        **kwargs: object,
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
     ) -> str:
         """
         If api_base is not provided, use the default ModelScope /chat/completions endpoint.
