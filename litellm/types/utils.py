@@ -1572,7 +1572,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
-    def __init__(  # noqa: PLR0915
+    def __init__(
         self,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
@@ -1908,7 +1908,7 @@ class ModelResponse(ModelResponseBase):
     choices: List[Choices]
     """The list of completion choices the model generated for the input prompt."""
 
-    def __init__(  # noqa: PLR0915
+    def __init__(
         self,
         id=None,
         choices=None,
