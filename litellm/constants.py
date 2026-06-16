@@ -203,16 +203,33 @@ AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
 AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 500))
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
-# TCP keep-alive (SO_KEEPALIVE) — opt-in. Required when running behind NAT/LBs
-# whose idle timeout is shorter than provider response timeouts (e.g. AWS NAT
-# Gateway: 350s vs OpenAI/Azure: 600s). Without this, the kernel sends nothing
-# during a long provider call and the NAT reaps the flow before the response
-# arrives. Enabling SO_KEEPALIVE makes the kernel emit TCP probes that reset
-# the NAT idle timer.
-AIOHTTP_SO_KEEPALIVE = os.getenv("AIOHTTP_SO_KEEPALIVE", "False").lower() == "true"
-AIOHTTP_TCP_KEEPIDLE = int(os.getenv("AIOHTTP_TCP_KEEPIDLE", 60))
-AIOHTTP_TCP_KEEPINTVL = int(os.getenv("AIOHTTP_TCP_KEEPINTVL", 30))
-AIOHTTP_TCP_KEEPCNT = int(os.getenv("AIOHTTP_TCP_KEEPCNT", 5))
+# TCP keepalive probes on the aiohttp connector sockets.
+# keepalive_timeout above only governs *idle pooled* connections. A connection
+# actively waiting on a response (long prefill / high TTFT) is not idle, so a
+# NAT/gateway between the proxy and the backend can silently drop the flow
+# mid-request -> the backend's response is blackholed and the request hangs until
+# the read timeout (e.g. 540s). SO_KEEPALIVE probes keep the NAT mapping warm and
+# tear a genuinely-dead socket down in ~IDLE + INTVL*CNT seconds instead.
+AIOHTTP_TCP_KEEPALIVE = os.getenv(
+    "AIOHTTP_TCP_KEEPALIVE", os.getenv("AIOHTTP_SO_KEEPALIVE", "True")
+).lower() in (
+    "true",
+    "1",
+)
+AIOHTTP_TCP_KEEPALIVE_IDLE = int(
+    os.getenv("AIOHTTP_TCP_KEEPALIVE_IDLE", os.getenv("AIOHTTP_TCP_KEEPIDLE", 30))
+)
+AIOHTTP_TCP_KEEPALIVE_INTVL = int(
+    os.getenv("AIOHTTP_TCP_KEEPALIVE_INTVL", os.getenv("AIOHTTP_TCP_KEEPINTVL", 10))
+)
+AIOHTTP_TCP_KEEPALIVE_CNT = int(
+    os.getenv("AIOHTTP_TCP_KEEPALIVE_CNT", os.getenv("AIOHTTP_TCP_KEEPCNT", 3))
+)
+# Backward-compatible aliases for the v1.92.0 upstream env names.
+AIOHTTP_SO_KEEPALIVE = AIOHTTP_TCP_KEEPALIVE
+AIOHTTP_TCP_KEEPIDLE = AIOHTTP_TCP_KEEPALIVE_IDLE
+AIOHTTP_TCP_KEEPINTVL = AIOHTTP_TCP_KEEPALIVE_INTVL
+AIOHTTP_TCP_KEEPCNT = AIOHTTP_TCP_KEEPALIVE_CNT
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
 # Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)
 # Reference: https://github.com/aio-libs/aiohttp/blob/master/aiohttp/connector.py#L74-L78
