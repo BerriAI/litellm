@@ -104,6 +104,25 @@ response = completion(model="openai/gpt-4o", messages=[{"role": "user", "content
 response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"role": "user", "content": "Hello!"}])
 ```
 
+#### OpenAI-compatible routers
+
+LiteLLM can call OpenAI-compatible routers by passing `api_base`. For example,
+[TrustedRouter](https://trustedrouter.com) provides an open-source and verifiable
+attested router with zero prompt and output logging by default, which can be
+useful for private code, project context, or customer data.
+
+```python
+from litellm import completion
+import os
+
+response = completion(
+    model="openai/trustedrouter/auto",
+    api_base="https://api.trustedrouter.com/v1",
+    api_key=os.environ["TRUSTEDROUTER_API_KEY"],
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+```
+
 ### AI Gateway (Proxy Server)
 
 [**Getting Started - E2E Tutorial**](https://docs.litellm.ai/docs/proxy/docker_quick_start) - Setup virtual keys, make your first request
