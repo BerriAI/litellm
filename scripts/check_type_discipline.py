@@ -3,18 +3,26 @@
  
 Rules
 -----
-LIT001  Coarse builtin annotation (dict/list/set, bare or parameterized) at an
-        interface: function parameters, return types, or class-body attributes.
-        Locals are intentionally not checked.
-        Suppress with `# coarse-ok: <reason>` on the offending line.
+LIT001  Mutable collection in a type annotation, anywhere it appears: function
+        parameters, return types, class attributes, locals, and module globals.
+        Covers the builtins (dict/list/set, bare or parameterized), their typing
+        aliases (Dict/List/...), the collections concretes (deque/defaultdict/...),
+        and the mutable ABCs (MutableMapping/MutableSequence/MutableSet). A mutable
+        collection lets whoever holds it grow or rewrite it after the fact; annotate
+        a read-only view instead (Mapping/Sequence/AbstractSet/tuple[X, ...]/
+        frozenset[X], or a frozen dataclass / NamedTuple / ReadOnly TypedDict) and
+        build it functionally (comprehension / map, not append-in-a-loop).
+        Suppress with `# mutable-ok: <reason>` on the offending line.
 LIT002  Retired: annotation *presence* on *args/**kwargs is ruff's job (ANN002/ANN003).
         The code is left unused (not reused) so older messages stay unambiguous.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  type/pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
-LIT005  A `# coarse-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` suppression
-        without a reason.
+LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` / `# any-ok`
+        suppression without a reason. (`any-ok` belongs to check_any_discipline.py;
+        it is enumerated here so the reason requirement holds even when only this
+        stdlib checker runs.)
 LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equivalent
         of TypeScript's `as`); it lies to the type checker with zero runtime guarantee.
         Validate into a concrete frozen type at the boundary instead.
@@ -26,6 +34,14 @@ LIT008  `**kwargs` parameter. The keyword contract is erased and everything it c
         is effectively Any. ruff can force it to be typed (ANN003) but can't ban the
         syntax. Declare explicit keyword params, or accept one frozen payload. `*args`,
         by contrast, is fine when typed (it's just a tuple). Suppress: `# kwargs-ok: <reason>`.
+LIT009  Mutable-collection *construction*: a list/dict/set literal or comprehension, or
+        a call to a mutable constructor (list/dict/set/deque/defaultdict/Counter/...).
+        Catches the unannotated seed-then-mutate pattern LIT001 cannot see (`acc = []`).
+        Build the value in one shot and freeze it: a `tuple`/`frozenset` wrapping a
+        generator (`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass /
+        NamedTuple / ReadOnly TypedDict. Generator expressions and `tuple`/`frozenset`
+        calls are not construction and pass. Annotation-internal lists (`Callable[[int],
+        str]`) are exempt. Suppress with `# mutable-ok: <reason>`.
  
 Usage
 -----
@@ -46,8 +62,27 @@ from pathlib import Path
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import NamedTuple
  
-BANNED_BUILTINS = frozenset({"dict", "list", "set"})
-UNSAFE_GUARDS = frozenset({"TypeGuard", "TypeIs"})
+# Mutable collection types, banned in *every* annotation. Name-based, so `dict`,
+# `typing.Dict`, `collections.deque`, and `collections.abc.MutableMapping` all match
+# however they were imported. The read-only interfaces (Mapping, Sequence, the
+# immutable AbstractSet / `abc.Set`, Collection) and the immutable concretes (tuple,
+# frozenset) are the escape hatch and are deliberately absent -- as is the bare name
+# `Set`, which collides with the read-only `collections.abc.Set`.
+MUTABLE_COLLECTIONS = frozenset((
+    "dict", "list", "set",
+    "Dict", "List", "DefaultDict", "OrderedDict", "Counter", "Deque", "ChainMap",
+    "deque", "defaultdict",
+    "MutableMapping", "MutableSequence", "MutableSet",
+))
+
+# Callables whose result is a fresh *mutable* collection (LIT009). `tuple` and
+# `frozenset` are deliberately absent -- they are the wrappers you reach for, and
+# a generator expression fed to them is the blessed one-shot build.
+MUTABLE_CONSTRUCTORS = frozenset((
+    "dict", "list", "set",
+    "deque", "defaultdict", "OrderedDict", "Counter", "ChainMap",
+))
+UNSAFE_GUARDS = frozenset(("TypeGuard", "TypeIs"))
 MIN_REASON_LEN = 3
  
 NOQA_RE = re.compile(
@@ -59,18 +94,22 @@ NOQA_RE = re.compile(
 IGNORE_RE = re.compile(
     r"#\s*(?:type|pyright|mypy):\s*ignore(?P<codes>\[[^\]]*\])?(?P<rest>.*)"
 )
-COARSE_OK_RE = re.compile(r"#\s*coarse-ok(?::\s*(?P<reason>.*))?")
+MUTABLE_OK_RE = re.compile(r"#\s*mutable-ok(?::\s*(?P<reason>.*))?")
 CAST_OK_RE = re.compile(r"#\s*cast-ok(?::\s*(?P<reason>.*))?")
 GUARD_OK_RE = re.compile(r"#\s*guard-ok(?::\s*(?P<reason>.*))?")
 KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
+ANY_OK_RE = re.compile(r"#\s*any-ok(?::\s*(?P<reason>.*))?")
 
-# Suppression tokens that must each carry a reason (LIT005).
+# Suppression tokens that must each carry a reason (LIT005). `any-ok` is owned by
+# check_any_discipline.py but listed here so the reason requirement is enforced even
+# when only this stdlib checker runs.
 OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("coarse-ok", COARSE_OK_RE),
+    ("mutable-ok", MUTABLE_OK_RE),
     ("cast-ok", CAST_OK_RE),
     ("guard-ok", GUARD_OK_RE),
     ("kwargs-ok", KWARGS_OK_RE),
-) # coarse-ok: <reason>
+    ("any-ok", ANY_OK_RE),
+)
  
  
 class Violation(NamedTuple):
@@ -89,7 +128,7 @@ class Comments:
 
     # Mapping, not dict: keys are line numbers, genuinely dynamic. Read-only downstream.
     by_line: Mapping[int, str]
-    coarse_ok_lines: frozenset[int]
+    mutable_ok_lines: frozenset[int]
     cast_ok_lines: frozenset[int]
     guard_ok_lines: frozenset[int]
     kwargs_ok_lines: frozenset[int]
@@ -140,15 +179,15 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
         tokens = tokenize.generate_tokens(iter(source.splitlines(keepends=True)).__next__)
         comment_toks = tuple((t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT)
     except tokenize.TokenError:
-        return Comments({}, frozenset(), frozenset(), frozenset(), frozenset()), ()
+        return Comments({}, frozenset(), frozenset(), frozenset(), frozenset()), ()  # mutable-ok: read-only by_line placeholder, never mutated
 
     def _lines_with(regex: re.Pattern[str]) -> frozenset[int]:
         return frozenset(line for line, text in comment_toks if _valid_ok(regex, text))
 
     return (
         Comments(
-            by_line={line: text for line, text in comment_toks},
-            coarse_ok_lines=_lines_with(COARSE_OK_RE),
+            by_line={line: text for line, text in comment_toks},  # mutable-ok: read-only Mapping, built once and never mutated
+            mutable_ok_lines=_lines_with(MUTABLE_OK_RE),
             cast_ok_lines=_lines_with(CAST_OK_RE),
             guard_ok_lines=_lines_with(GUARD_OK_RE),
             kwargs_ok_lines=_lines_with(KWARGS_OK_RE),
@@ -160,55 +199,62 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
 # --------------------------------------------------------------------------- #
  
  
-def banned_names_in(annotation: ast.expr) -> Iterator[str]:
-    """Yield banned builtin names anywhere inside an annotation expression.
- 
-    Handles nesting (Optional[dict[str, str]], tuple[list[int], ...]) and
-    string forward references.
+def mutable_names_in(annotation: ast.expr) -> Iterator[str]:
+    """Yield mutable-collection names anywhere inside an annotation expression.
+
+    Matches bare names (`dict`, `MutableMapping`) and dotted access (`typing.Dict`,
+    `collections.deque`, `collections.abc.MutableMapping`), descends through nesting
+    (`Mapping[str, list[int]]`, `tuple[set[int], ...]`) and string forward references.
     """
     for node in ast.walk(annotation):
-        if isinstance(node, ast.Name) and node.id in BANNED_BUILTINS:
+        if isinstance(node, ast.Name) and node.id in MUTABLE_COLLECTIONS:
             yield node.id
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            try:
-                inner = ast.parse(node.value, mode="eval").body
-            except SyntaxError:
-                continue
-            yield from banned_names_in(inner)
+        elif isinstance(node, ast.Attribute) and node.attr in MUTABLE_COLLECTIONS:
+            yield node.attr
+        elif isinstance(node, ast.Constant):
+            value: object = node.value  # forward references arrive as string constants
+            if isinstance(value, str):
+                try:
+                    inner = ast.parse(value, mode="eval").body
+                except SyntaxError:
+                    continue
+                yield from mutable_names_in(inner)
  
  
-def _coarse(path: Path, line: int, name: str, where: str) -> Violation:
+def _mutable_ann(path: Path, line: int, name: str, where: str) -> Violation:
     return Violation(
         path, line, "LIT001",
-        f"coarse `{name}` annotation in {where}; use a frozen dataclass, "
-        f"NamedTuple, ReadOnly TypedDict, tuple[X, ...], frozenset[X], or Sequence[X] "
-        f"(suppress: `# coarse-ok: <reason>`)",
+        f"mutable `{name}` in {where}: a mutable collection can be grown or rewritten "
+        f"by whoever holds it. Annotate a read-only view -- Mapping[...], Sequence[...], "
+        f"AbstractSet[...], tuple[X, ...], frozenset[X], or a frozen dataclass / "
+        f"NamedTuple / ReadOnly TypedDict -- and build it functionally, not by "
+        f"append-in-a-loop (suppress: `# mutable-ok: <reason>`)",
     )
- 
- 
+
+
 def _annotation_violations(
     path: Path, annotation: ast.expr | None, line: int, where: str, ok_lines: frozenset[int]
 ) -> Iterator[Violation]:
     if annotation is None or line in ok_lines:
         return
-    yield from (_coarse(path, line, name, where) for name in banned_names_in(annotation))
+    yield from (_mutable_ann(path, line, name, where) for name in mutable_names_in(annotation))
  
  
 def _function_violations(
     path: Path, node: ast.FunctionDef | ast.AsyncFunctionDef, comments: Comments
 ) -> Iterator[Violation]:
-    coarse_ok = comments.coarse_ok_lines
+    mutable_ok = comments.mutable_ok_lines
     args = node.args
     for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
         yield from _annotation_violations(
-            path, arg.annotation, arg.lineno, f"parameter `{arg.arg}` of `{node.name}`", coarse_ok
+            path, arg.annotation, arg.lineno, f"parameter `{arg.arg}` of `{node.name}`", mutable_ok
         )
 
     # *args is allowed when typed (it's just a tuple); ruff ANN002 forces the
-    # annotation, so here we only add the LIT001 coarse check on the element type.
+    # annotation, so here we only add the LIT001 mutable-collection check on the element type.
     if args.vararg is not None:
         yield from _annotation_violations(
-            path, args.vararg.annotation, args.vararg.lineno, f"`*args` of `{node.name}`", coarse_ok
+            path, args.vararg.annotation, args.vararg.lineno, f"`*args` of `{node.name}`", mutable_ok
         )
 
     # **kwargs is banned outright (LIT008): it erases the keyword contract and forces
@@ -225,26 +271,24 @@ def _function_violations(
 
     if node.returns is not None:
         yield from _annotation_violations(
-            path, node.returns, node.returns.lineno, f"return type of `{node.name}`", coarse_ok
+            path, node.returns, node.returns.lineno, f"return type of `{node.name}`", mutable_ok
         )
  
  
-def _class_violations(path: Path, node: ast.ClassDef, ok_lines: frozenset[int]) -> Iterator[Violation]:
-    for stmt in node.body:
-        if isinstance(stmt, ast.AnnAssign):
-            target = stmt.target.id if isinstance(stmt.target, ast.Name) else "<attr>"
-            yield from _annotation_violations(
-                path, stmt.annotation, stmt.lineno,
-                f"attribute `{target}` of class `{node.name}`", ok_lines,
-            )
- 
- 
-def iter_interface_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+def iter_annotation_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+    # Every annotation is in scope: signatures (params / *args / return) plus every
+    # `x: T` -- class attribute, local, or module global. The latter three are all
+    # ast.AnnAssign, so one walk covers them; only the signature annotations (which
+    # are not AnnAssign) need the dedicated helper.
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             yield from _function_violations(path, node, comments)
-        elif isinstance(node, ast.ClassDef):
-            yield from _class_violations(path, node, comments.coarse_ok_lines)
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target.id if isinstance(node.target, ast.Name) else "<target>"
+            yield from _annotation_violations(
+                path, node.annotation, node.lineno,
+                f"the type of `{target}`", comments.mutable_ok_lines,
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -255,7 +299,7 @@ def iter_interface_violations(path: Path, tree: ast.AST, comments: Comments) -> 
 def _is_cast_call(node: ast.Call) -> bool:
     """`cast(...)` or `typing.cast(...)`, however the name was imported/aliased.
 
-    Name-based like BANNED_BUILTINS: a stray method called `.cast()` is a rare
+    Name-based like MUTABLE_COLLECTIONS: a stray method called `.cast()` is a rare
     false positive, suppressible with `# cast-ok: <reason>`.
     """
     func = node.func
@@ -292,6 +336,80 @@ def iter_guard_violations(path: Path, tree: ast.AST, comments: Comments) -> Iter
  
  
 # --------------------------------------------------------------------------- #
+# Mutable-collection construction (LIT009)
+# --------------------------------------------------------------------------- #
+
+
+def _annotations_of(node: ast.AST) -> tuple[ast.expr | None, ...]:
+    """The annotation expressions a node carries (signatures and `x: T`)."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        a = node.args
+        params = (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg)
+        return (*(p.annotation for p in params if p is not None), node.returns)
+    if isinstance(node, ast.AnnAssign):
+        return (node.annotation,)
+    return ()
+
+
+def _annotation_node_ids(tree: ast.AST) -> frozenset[int]:
+    """ids() of every node living inside an annotation.
+
+    A list display inside an annotation (`Callable[[int], str]`) is type syntax,
+    not construction, so the LIT009 walk must skip those subtrees.
+    """
+    return frozenset(
+        id(sub)
+        for node in ast.walk(tree)
+        for ann in _annotations_of(node)
+        if ann is not None
+        for sub in ast.walk(ann)
+    )
+
+
+def _construction_kind(node: ast.expr) -> str | None:
+    """Human label if `node` builds a mutable collection, else None."""
+    if isinstance(node, ast.List):
+        return "list literal"
+    if isinstance(node, ast.ListComp):
+        return "list comprehension"
+    if isinstance(node, ast.Set):
+        return "set literal"
+    if isinstance(node, ast.SetComp):
+        return "set comprehension"
+    if isinstance(node, ast.Dict):
+        return "dict literal"
+    if isinstance(node, ast.DictComp):
+        return "dict comprehension"
+    if isinstance(node, ast.Call):
+        func = node.func
+        name = (
+            func.id if isinstance(func, ast.Name)
+            else func.attr if isinstance(func, ast.Attribute)
+            else None
+        )
+        if name in MUTABLE_CONSTRUCTORS:
+            return f"`{name}()` constructor"
+    return None
+
+
+def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+    in_annotation = _annotation_node_ids(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.expr) or id(node) in in_annotation:
+            continue
+        kind = _construction_kind(node)
+        if kind is None or node.lineno in comments.mutable_ok_lines:
+            continue
+        yield Violation(
+            path, node.lineno, "LIT009",
+            f"mutable {kind}: this builds a collection that can be grown or rewritten. "
+            f"Build it in one shot and freeze it -- a tuple/frozenset wrapping a generator "
+            f"(`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass / NamedTuple "
+            f"/ ReadOnly TypedDict (suppress: `# mutable-ok: <reason>`)",
+        )
+ 
+ 
+# --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
  
@@ -311,9 +429,10 @@ def check_file(path: Path) -> tuple[Violation, ...]:
  
     return (
         *violations,
-        *iter_interface_violations(path, tree, comments),
+        *iter_annotation_violations(path, tree, comments),
         *iter_cast_violations(path, tree, comments),
         *iter_guard_violations(path, tree, comments),
+        *iter_construction_violations(path, tree, comments),
     )
  
  
@@ -327,7 +446,7 @@ def collect_paths(raw: Iterable[str]) -> Iterator[Path]:
  
  
 def main(argv: Sequence[str]) -> int:
-    paths = [a for a in argv if not a.startswith("-")]
+    paths = tuple(a for a in argv if not a.startswith("-"))
     if not paths:
         print("usage: check_type_discipline.py <files-or-dirs>...", file=sys.stderr)
         return 2

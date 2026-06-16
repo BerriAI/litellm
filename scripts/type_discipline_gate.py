@@ -7,12 +7,14 @@ each rule across the whole `litellm` tree and fails when a rule is both over its
 ceiling and higher than the base it merges into, so a change is blamed for the
 violations it adds, never for drift that already exists in the base.
 
-Rules not present in the budget are ignored. LIT001 (coarse builtins) is emitted
-but deliberately left unbudgeted; everything else is gated: LIT003/LIT004 (noqa /
-ignore without codes or reason) and LIT005 (`*-ok` suppression without a reason)
-are frozen at slack 0 so any net-new unexplained suppression trips the gate, while
-LIT006 (cast), LIT007 (TypeGuard/TypeIs) and LIT008 (`**kwargs`) carry their own
-ceilings. Re-baseline with `--update` to ratchet a ceiling down.
+Rules not present in the budget are ignored, but today every rule the checker
+emits is gated: LIT001 (mutable collection in any annotation), LIT006 (cast),
+LIT008 (`**kwargs`), and LIT009 (mutable-collection construction) carry
+slack-buffered ceilings to ratchet down; LIT003/LIT004 (noqa / ignore without
+codes or reason) and LIT005 (`*-ok` suppression without a reason) are frozen at
+slack 0 so any net-new unexplained suppression trips the gate; and LIT007
+(TypeGuard/TypeIs) is a hard zero. Re-baseline with `--update` to ratchet a
+ceiling down.
 """
 
 import argparse
@@ -147,9 +149,10 @@ def cmd_check(base: str) -> None:
             print(f"    {violation.file}:{violation.line}")
     print(
         "Remove the new violations, give each a reason (`# noqa: XXX  # <reason>`, "
-        "`# pyright: ignore[rule]  # <reason>`, `# cast-ok: <reason>`, "
-        "`# guard-ok: <reason>`, `# kwargs-ok: <reason>`), or remove an equal number "
-        "elsewhere; the ceiling is baseline + slack in type-discipline-budget.json."
+        "`# pyright: ignore[rule]  # <reason>`, `# mutable-ok: <reason>`, "
+        "`# cast-ok: <reason>`, `# guard-ok: <reason>`, `# kwargs-ok: <reason>`), or "
+        "remove an equal number elsewhere; the ceiling is baseline + slack in "
+        "type-discipline-budget.json."
     )
     raise SystemExit(1)
 

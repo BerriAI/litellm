@@ -73,7 +73,7 @@ jobs:
         run: |
           uv run --no-sync python scripts/ruff_strict_gate.py --base "$BASE_SHA"
 
-      - name: Check type-discipline budget (casts / type guards / kwargs / unexplained suppressions, delta vs base)
+      - name: Check type-discipline budget (mutable collections / casts / type guards / kwargs / unexplained suppressions, delta vs base)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
