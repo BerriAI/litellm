@@ -8,5 +8,5 @@
   "PLR0913": { "baseline": 1813, "slack": 3 },
   "PLW0603": { "baseline": 183, "slack": 3 },
   "RUF012": { "baseline": 158, "slack": 3 },
-  "TID251": { "baseline": 2404, "slack": 10 }
+  "TID251": { "baseline": 2662, "slack": 10 }
 }

@@ -1,0 +1,10 @@
+{
+  "LIT006": {
+    "baseline": 1013,
+    "slack": 10
+  },
+  "LIT007": {
+    "baseline": 0,
+    "slack": 0
+  }
+}
