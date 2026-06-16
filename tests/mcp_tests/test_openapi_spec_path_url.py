@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict
 
 import httpx
@@ -98,3 +99,55 @@ def test_load_openapi_spec_supports_local_file_path(
 
     spec = gen.load_openapi_spec(str(p))
     assert spec == expected
+
+
+@pytest.mark.parametrize(
+    "auth_type, auth_value, expected",
+    [
+        ("bearer_token", "tok", {"Authorization": "Bearer tok"}),
+        ("api_key", "tok", {"Authorization": "ApiKey tok"}),
+        ("basic", "tok", {"Authorization": "Basic tok"}),
+        ("token", "tok", {"Authorization": "token tok"}),
+        ("oauth2", "tok", {}),
+        ("bearer_token", None, {}),
+        (None, "tok", {}),
+    ],
+)
+def test_build_openapi_auth_headers(auth_type, auth_value, expected) -> None:
+    assert gen.build_openapi_auth_headers(auth_type, auth_value) == expected
+
+
+def test_load_openapi_spec_forwards_auth_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a spec hosted behind the same Bearer credential as its
+    endpoints must be fetched WITH the Authorization header, otherwise the
+    upstream returns 401 before the server can be added."""
+    url = "http://example.local/openapi.json"
+    expected: Dict[str, Any] = {
+        "openapi": "3.0.0",
+        "info": {"title": "Protected API", "version": "1.0.0"},
+        "paths": {},
+    }
+    req = httpx.Request("GET", url)
+    resp = httpx.Response(status_code=200, json=expected, request=req)
+
+    monkeypatch.setattr(
+        gen,
+        "get_async_httpx_client",
+        lambda *a, **k: _FakeAsyncHTTPHandler(resp, expected_url=url),
+    )
+
+    seen: Dict[str, Any] = {}
+
+    async def fake_async_safe_get(client, request_url, **kw):
+        seen["headers"] = kw.get("headers")
+        return await client.get(request_url)
+
+    monkeypatch.setattr(gen, "async_safe_get", fake_async_safe_get)
+
+    auth_headers = gen.build_openapi_auth_headers("bearer_token", "secret-token")
+    spec = asyncio.run(gen.load_openapi_spec_async(url, headers=auth_headers))
+
+    assert spec == expected
+    assert seen["headers"] == {"Authorization": "Bearer secret-token"}

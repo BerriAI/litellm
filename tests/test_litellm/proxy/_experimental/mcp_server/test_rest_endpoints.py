@@ -1610,7 +1610,7 @@ class TestPreviewOpenAPITools:
     async def test_preview_sanitizes_slash_in_operation_id(self, monkeypatch):
         import re
 
-        async def fake_load_spec(spec_path):  # noqa: ANN001
+        async def fake_load_spec(spec_path, headers=None):  # noqa: ANN001
             return {
                 "paths": {
                     "/repos/{owner}/{repo}/actions/jobs/{job_id}/logs": {
@@ -1691,7 +1691,7 @@ class TestPreviewOpenAPITools:
             }
         }
 
-        async def fake_load_spec(spec_path):  # noqa: ANN001
+        async def fake_load_spec(spec_path, headers=None):  # noqa: ANN001
             return spec
 
         monkeypatch.setattr(
@@ -1755,6 +1755,48 @@ class TestPreviewOpenAPITools:
             "order is out of sync, so collision suffixes (_2, _3, ...) "
             "land on different operations"
         )
+
+    async def test_preview_sends_bearer_token_to_protected_spec(self, monkeypatch):
+        """Regression: when the operator configures a Bearer token, the preview
+        must fetch the OpenAPI spec WITH that Authorization header. A spec
+        hosted behind the same credential as its endpoints otherwise returns
+        401 and the user can never add the server."""
+        seen: dict = {}
+
+        async def fake_load_spec(spec_path, headers=None):  # noqa: ANN001
+            seen["headers"] = headers
+            return {"paths": {}}
+
+        from litellm.proxy._experimental.mcp_server import (
+            openapi_to_mcp_generator,
+        )
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator,
+            "load_openapi_spec_async",
+            fake_load_spec,
+            raising=False,
+        )
+
+        payload = NewMCPServerRequest(
+            server_name="protected_openapi_mcp",
+            spec_path="https://example.invalid/openapi.json",
+            transport="http",
+            auth_type="bearer_token",
+            credentials={"auth_value": "secret-token"},
+        )
+        request = _build_request()
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result.get("error") is None, result
+        assert seen["headers"] == {"Authorization": "Bearer secret-token"}
 
 
 class TestConnectionErrorMessage:

@@ -1045,7 +1045,9 @@ if MCP_AVAILABLE:
                 "message": _connection_error_message(e),
             }
 
-    async def _preview_openapi_tools(spec_path: str) -> dict:
+    async def _preview_openapi_tools(
+        spec_path: str, headers: Optional[Dict[str, str]] = None
+    ) -> dict:
         """Generate tool previews from an OpenAPI spec without creating a server."""
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             _OPENAPI_TOOL_NAME_MAX_LEN,
@@ -1056,7 +1058,9 @@ if MCP_AVAILABLE:
         )
 
         try:
-            spec = await load_openapi_spec_async(spec_path)
+            spec = await load_openapi_spec_async(  # any-ok: OpenAPI spec is arbitrary external JSON
+                spec_path, headers=headers
+            )
             paths = spec.get("paths", {})
             components = spec.get("components", {})
             tools: List[dict] = []
@@ -1164,9 +1168,25 @@ if MCP_AVAILABLE:
             new_mcp_server_request
         )
 
-        # For OpenAPI spec servers, generate tools from the spec directly
+        # For OpenAPI spec servers, generate tools from the spec directly.
+        # Send the configured credential so a spec hosted behind the same auth
+        # as its endpoints can be fetched instead of returning 401.
         if new_mcp_server_request.spec_path:
-            return await _preview_openapi_tools(new_mcp_server_request.spec_path)
+            from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+                build_openapi_auth_headers,
+            )
+
+            credentials = new_mcp_server_request.credentials or {}
+            spec_headers = {
+                **build_openapi_auth_headers(
+                    new_mcp_server_request.auth_type,
+                    credentials.get("auth_value"),
+                ),
+                **(new_mcp_server_request.static_headers or {}),
+            }
+            return await _preview_openapi_tools(  # any-ok: preview returns a loose tool-list payload
+                new_mcp_server_request.spec_path, headers=spec_headers
+            )
 
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
