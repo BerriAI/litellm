@@ -33,6 +33,9 @@ from litellm.integrations.otel.plumbing.metrics import (  # noqa: E402
     GenAIMetricRecorder,
     create_genai_metrics,
 )
+from litellm.integrations.otel.plumbing.providers import (  # noqa: E402
+    resolve_meter_provider,
+)
 
 OPERATION_DURATION = "gen_ai.client.operation.duration"
 TOKEN_USAGE = "gen_ai.client.token.usage"
@@ -250,41 +253,17 @@ def test_no_filter_keeps_high_cardinality_keys():
             assert expected.issubset(set(dp.attributes.keys()))
 
 
-@pytest.fixture
-def operator_global_meter_provider():
-    """Install an operator-configured global ``MeterProvider`` (the way an app
-    wires its own metric exporter) and restore the previous global afterwards.
-
-    The operator owns the meter provider here -- the logger is given no provider
-    of its own -- so the GenAI histograms have to be recorded through the global
-    for the operator's reader to see them. Writes the global slot directly (the
-    same one ``metrics.set_meter_provider``/``get_meter_provider`` use) because
-    the public setter is set-once and can't be undone between tests."""
-    from opentelemetry import metrics
-    from opentelemetry.metrics import _internal as metrics_internal
-
-    reader = InMemoryMetricReader()
-    provider = MeterProvider(metric_readers=[reader])
-    saved_provider = metrics_internal._METER_PROVIDER
-    saved_once = metrics_internal._METER_PROVIDER_SET_ONCE
-    metrics_internal._METER_PROVIDER = provider
-    assert metrics.get_meter_provider() is provider
-    try:
-        yield reader
-    finally:
-        metrics_internal._METER_PROVIDER = saved_provider
-        metrics_internal._METER_PROVIDER_SET_ONCE = saved_once
-        provider.shutdown()
-
-
-def test_metrics_reach_operator_configured_global_provider(
-    operator_global_meter_provider,
-):
+def test_metrics_reach_operator_configured_global_provider(monkeypatch):
     """Regression: with no meter provider injected, the six gen_ai.client.*
     histograms must record through the operator's globally configured
     MeterProvider so its readers/exporters receive them. Before the fix the logger
     built an isolated provider and the operator's reader saw nothing."""
-    reader = operator_global_meter_provider
+    from opentelemetry import metrics
+
+    reader = InMemoryMetricReader()
+    operator_provider = MeterProvider(metric_readers=[reader])
+    monkeypatch.setattr(metrics, "get_meter_provider", lambda: operator_provider)
+
     logger = OpenTelemetryV2(
         config=OpenTelemetryV2Config(exporter="in_memory", enable_metrics=True),
     )
@@ -292,6 +271,30 @@ def test_metrics_reach_operator_configured_global_provider(
     asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
 
     assert set(_metrics_by_name(reader).keys()) == set(ALL_METRICS)
+    operator_provider.shutdown()
+
+
+def test_resolve_meter_provider_prefers_injected():
+    """An injected provider is used verbatim, never replaced by the global."""
+    injected = MeterProvider(metric_readers=[InMemoryMetricReader()])
+    resolved = resolve_meter_provider(
+        OpenTelemetryV2Config(exporter="in_memory"), injected
+    )
+    assert resolved is injected
+    injected.shutdown()
+
+
+def test_resolve_meter_provider_honors_operator_noop(monkeypatch):
+    """An operator that disabled metrics with a NoOpMeterProvider is not silently
+    overridden by a freshly built provider."""
+    from opentelemetry import metrics
+    from opentelemetry.metrics import NoOpMeterProvider
+
+    noop = NoOpMeterProvider()
+    monkeypatch.setattr(metrics, "get_meter_provider", lambda: noop)
+
+    resolved = resolve_meter_provider(OpenTelemetryV2Config(exporter="in_memory"))
+    assert resolved is noop
 
 
 def _recorder(monkeypatch, attributes):
