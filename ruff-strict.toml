@@ -19,3 +19,15 @@ max-args = 5
 "typing.Set".msg = "frozenset[X] or AbstractSet[X]."
 "typing.MutableSequence".msg = "Sequence[X]."
 "typing.MutableMapping".msg = "See typing.Dict."
+# Unchecked casts: cast() lies to the type checker with no runtime guarantee.
+# Validate into a concrete frozen type at the boundary (pydantic) instead.
+# Per-call-site coverage lives in check_type_discipline.py (LIT006); this freezes
+# new cast imports. Suppress (with a reason) via `# noqa: TID251  # <reason>`.
+"typing.cast".msg = "No unchecked casts: validate into a frozen dataclass/NamedTuple/ReadOnly TypedDict at the boundary (pydantic)."
+"typing_extensions.cast".msg = "Same as typing.cast."
+# Unverified narrowing predicates: the checker never validates the guard body, so a
+# wrong guard silently corrupts types. Banned outright (there are none today).
+"typing.TypeGuard".msg = "Unverified narrowing. Parse into a concrete type, or use isinstance for a runtime-checked narrowing."
+"typing_extensions.TypeGuard".msg = "Same as typing.TypeGuard."
+"typing.TypeIs".msg = "Unverified narrowing (the body is trusted). Parse into a concrete type instead."
+"typing_extensions.TypeIs".msg = "Same as typing.TypeIs."
