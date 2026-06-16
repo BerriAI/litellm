@@ -7943,11 +7943,28 @@ class Router:
         zero-cost-fields path.
 
         User-supplied values always win. Only known models are eligible
-        (those that have a static model_cost entry). Mutates
+        (those that have a static model_cost entry); custom in-house
+        models with no static entry pass through unchanged. Mutates
         ``model_info_dict`` in place.
+
+        Backfill is also skipped when the deployment opted out of custom
+        pricing entirely; i.e. neither input_cost_per_token nor
+        output_cost_per_token is set on the UUID entry. The cost
+        calculator's per-request custom-pricing path expects those
+        deployments to fall back to the model-name pricing slot rather
+        than carrying synthesized rates that mask `register_model` overrides.
         """
         model_param = litellm_params.get("model")
         if not model_param:
+            return
+        # Skip when no base pricing is configured: this deployment is not
+        # opted into custom pricing, so synthesizing cache rates from the
+        # canonical entry would mask the per-request `register_model` path
+        # the cost calculator falls back to.
+        if (
+            model_info_dict.get("input_cost_per_token") is None
+            and model_info_dict.get("output_cost_per_token") is None
+        ):
             return
         # litellm.model_cost keys are mostly bare (e.g. "claude-3-opus-20240229")
         # while `litellm_params.model` carries the user-facing

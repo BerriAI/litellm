@@ -208,6 +208,48 @@ def test_backfill_cost_fields_from_canonical_direct_call():
             ), f"{field} should have been backfilled from canonical entry"
 
 
+def test_skips_backfill_when_deployment_has_no_custom_pricing():
+    """Regression for the test_cost_calculator regression my prefix-strip
+    fix introduced (#30383). When `litellm_params` does NOT set custom
+    input/output pricing, the deployment has opted OUT of custom pricing
+    entirely — backfilling cache rates from the canonical entry would
+    mask the `register_model` per-request override path the cost
+    calculator falls back to.
+
+    With the gate in place: a router with no custom pricing on a known
+    model leaves the UUID entry with `input_cost_per_token=None`, and
+    no synthesized cache rates leak in.
+    """
+    deployment_uuid = "no-custom-pricing-uuid"
+    litellm.model_cost.pop(deployment_uuid, None)
+
+    # Build a deployment that opts out of custom pricing (matches the
+    # production shape used by completion() per-request `register_model`).
+    Router(
+        model_list=[
+            {
+                "model_name": "alias-for-test",
+                "litellm_params": {
+                    "model": f"anthropic/{KNOWN_MODEL}",
+                    "custom_llm_provider": "anthropic",
+                    # NOTE: no input/output_cost_per_token here
+                },
+                "model_info": {"id": deployment_uuid},
+            }
+        ]
+    )
+
+    entry = litellm.model_cost.get(deployment_uuid, {})
+    assert entry.get("input_cost_per_token") is None
+    assert entry.get("output_cost_per_token") is None
+    assert entry.get("cache_read_input_token_cost") is None, (
+        "backfill must skip deployments with no custom pricing — otherwise "
+        "the cost calculator's per-request `register_model` fallback path "
+        "is masked by synthesized cache rates"
+    )
+    assert entry.get("cache_creation_input_token_cost") is None
+
+
 def test_provider_prefixed_model_resolves_to_canonical():
     """Regression for greptile P1 on #30383: dashboard /model/new stores
     the user-facing model as `anthropic/claude-haiku-4-5-20251001` in
