@@ -415,7 +415,6 @@ def _advisor_result_block(advisor_use_block: Dict, advisor_text: str) -> Dict:
     }
 
 
-
 _USAGE_TOKEN_KEYS = (
     "input_tokens",
     "output_tokens",
