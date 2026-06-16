@@ -1,6 +1,7 @@
 ---
 slug: stability
-title: "Stability"
+title: "June Stability Update:We're Making Stability a First-Class Citizen at
+LiteLLM"
 date: 2026-06-15T10:00:00
 authors:
   - ishaan-alt
@@ -25,15 +26,15 @@ Over this sprint we're driving down 3 classes of bugs:
 - **Gateway Authentication:** Team IDs are not reliably on every request trace. As a result, some requests and budgets are not accurately tracked to a team.
 - **UI Forms:** Today when users hit save on a form, it can accidentally wipe out other fields on the form, across keys, teams, and users.
 
-## MCP: auth that works the same way every time
+## MCP Authentication: Consistent behavior across all MCP Authentication Methods
 
 Solution: We've identified that the root cause of bugs across MCPs is that we maintain 5 different code paths, one per authentication method. To fix this and restore connection reliability, we're refactoring this into one code path that resolves MCP credentials across all supported authentication methods. The result: tools list and call reliably, no matter which auth method you use.
 
-## AI Gateway auth: spend always lands on the right team
+## AI Gateway Authentication: Spend is always attributed to the right team
 
 Solution: We identified that the authentication layer makes 5+ DB lookups to resolve the exact key, user, team, and team member making a request. To fix this, we're resolving caller identity once, into a single record that every check and log reads from. This cuts identity lookups roughly in half, and means spend is always attributed to the team that made the request.
 
-## UI: edits change only what you touched
+## UI: Edits change only what you touched
 
 Solution: One of the root causes of UI bugs on form save is that our data shapes across the frontend and backend are not consistent. To fix this, we're refactoring so frontend and backend types are 100% in sync and read from the same source of truth. The result: a save changes only the field you edited, nothing else.
 
