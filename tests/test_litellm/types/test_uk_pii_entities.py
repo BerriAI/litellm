@@ -38,11 +38,6 @@ class TestUKPiiEntities:
         assert PiiEntityType.UK_POSTCODE in uk_entities
         assert PiiEntityType.UK_VEHICLE_REGISTRATION in uk_entities
 
-    def test_uk_category_entity_count(self):
-        """Test UK category has exactly 5 entity types"""
-        uk_entities = PII_ENTITY_CATEGORIES_MAP[PiiEntityCategory.UK]
-        assert len(uk_entities) == 5
-
     def test_uk_entities_match_presidio_recognizers(self):
         """Test UK entity type names match Presidio recognizer names"""
         expected_entities = {
@@ -54,6 +49,6 @@ class TestUKPiiEntities:
         }
 
         uk_entities = PII_ENTITY_CATEGORIES_MAP[PiiEntityCategory.UK]
-        actual_entities = {entity for entity in uk_entities}
+        actual_entities = set(uk_entities)
 
         assert actual_entities == expected_entities
