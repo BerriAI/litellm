@@ -64,8 +64,16 @@ def _load_head(rel: str) -> dict | None:
     return json.loads(path.read_text())
 
 
+def _ref_is_commit(ref: str) -> bool:
+    return _run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]).returncode == 0
+
+
 def _load_base(rel: str, ref: str) -> dict | None:
-    """Budget content at `ref`, or None when the file did not exist there."""
+    """Budget content at `ref`, or None when the file did not exist there.
+
+    `ref` is verified as a real commit by the caller, so a non-zero `git show` here means
+    the path was absent at that commit, not that the ref itself is unresolvable.
+    """
     proc = _run(["git", "show", f"{ref}:{rel}"])
     if proc.returncode != 0:
         return None
@@ -106,6 +114,14 @@ def main() -> int:
     budgets = args.budgets or list(DEFAULT_BUDGETS)
 
     ref = _merge_base(args.base)
+    if not _ref_is_commit(ref):
+        print(
+            f"FAIL: base ref {ref!r} does not resolve to a commit, so the ratchet has nothing "
+            f"to compare against; refusing to pass vacuously (check the --base / BASE_SHA value)",
+            file=sys.stderr,
+        )
+        return 1
+
     regressions: list[Regression] = []
     checked: list[str] = []
     for rel in budgets:

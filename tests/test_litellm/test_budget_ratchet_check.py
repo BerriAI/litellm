@@ -6,6 +6,8 @@ rule, or a brand-new budget file is fine. Each branch is pinned here.
 """
 
 import importlib.util
+import subprocess
+import sys
 from pathlib import Path
 
 _MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "budget_ratchet_check.py"
@@ -57,3 +59,30 @@ def test_deleted_budget_file_is_a_regression():
 
 def test_new_budget_file_has_nothing_to_ratchet():
     assert ratchet.regressions_for("b.json", None, {"LIT006": _spec_of(1, 0)}) == []
+
+
+# --------------------------------------------------------------------------- #
+# Base-ref resolution: a bad ref must fail loudly, never pass vacuously
+# --------------------------------------------------------------------------- #
+
+
+def test_ref_is_commit_distinguishes_real_from_bogus():
+    assert ratchet._ref_is_commit("HEAD") is True
+    assert ratchet._ref_is_commit("definitely-not-a-real-ref-zzz") is False
+
+
+def test_load_base_reads_a_present_file_and_none_for_an_absent_one():
+    # A real budget file exists at HEAD; a made-up path is absent at the same (valid) ref.
+    assert ratchet._load_base("type-discipline-budget.json", "HEAD") is not None
+    assert ratchet._load_base("scripts/no-such-budget-xyz.json", "HEAD") is None
+
+
+def test_unresolvable_base_ref_exits_nonzero_instead_of_skipping():
+    proc = subprocess.run(
+        [sys.executable, str(_MODULE_PATH), "--base", "definitely-not-a-real-ref-zzz"],
+        cwd=_MODULE_PATH.parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1
+    assert "does not resolve to a commit" in proc.stderr

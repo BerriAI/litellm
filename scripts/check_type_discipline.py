@@ -48,8 +48,7 @@ by that checker, not this one.
 Usage
 -----
     python check_type_discipline.py litellm/ tests/
-    python check_type_discipline.py --changed-only file1.py file2.py
- 
+
 Exit code 1 if any violation is found. Stdlib only.
 """
  
@@ -62,7 +61,7 @@ import sys
 import tokenize
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from typing import NamedTuple
  
 # Mutable collection types, banned in *every* annotation. Name-based, so `dict`,
@@ -127,10 +126,8 @@ class Violation(NamedTuple):
  
 @dataclass(frozen=True, slots=True)
 class Comments:
-    """Per-line comment text, plus the lines carrying each valid `*-ok` suppression."""
+    """The lines carrying each valid `*-ok` suppression."""
 
-    # Mapping, not dict: keys are line numbers, genuinely dynamic. Read-only downstream.
-    by_line: Mapping[int, str]
     mutable_ok_lines: frozenset[int]
     cast_ok_lines: frozenset[int]
     guard_ok_lines: frozenset[int]
@@ -182,14 +179,13 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
         tokens = tokenize.generate_tokens(io.StringIO(source).readline)
         comment_toks = tuple((t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT)
     except tokenize.TokenError:
-        return Comments({}, frozenset(), frozenset(), frozenset(), frozenset()), ()  # mutable-ok: read-only by_line placeholder, never mutated
+        return Comments(frozenset(), frozenset(), frozenset(), frozenset()), ()
 
     def _lines_with(regex: re.Pattern[str]) -> frozenset[int]:
         return frozenset(line for line, text in comment_toks if _valid_ok(regex, text))
 
     return (
         Comments(
-            by_line={line: text for line, text in comment_toks},  # mutable-ok: read-only Mapping, built once and never mutated
             mutable_ok_lines=_lines_with(MUTABLE_OK_RE),
             cast_ok_lines=_lines_with(CAST_OK_RE),
             guard_ok_lines=_lines_with(GUARD_OK_RE),
