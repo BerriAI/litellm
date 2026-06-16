@@ -15,7 +15,7 @@ model_list:
   - model_name: "vertex_ai/*"
     litellm_params:
       model: "vertex_ai/*"
-      vertex_project: vertex-check-481318
+      vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
 
   # ---------- Azure AI Foundry ----------

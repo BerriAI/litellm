@@ -24,7 +24,7 @@ model_list:
     litellm_params:
       model: anthropic/claude-opus-4-7
       api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: claude-opus-4-8
+  - model_name: anthropic-opus-4-8
     litellm_params:
       model: anthropic/claude-opus-4-8
       api_key: os.environ/ANTHROPIC_API_KEY
@@ -93,44 +93,44 @@ model_list:
   - model_name: vertex-haiku-4-5
     litellm_params:
       model: vertex_ai/claude-haiku-4-5@20251001
-      vertex_project: vertex-check-481318
+      vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
   - model_name: vertex-sonnet-4-5
     litellm_params:
       model: vertex_ai/claude-sonnet-4-5@20250929
-      vertex_project: vertex-check-481318
+      vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
   - model_name: vertex-opus-4-5
     litellm_params:
       model: vertex_ai/claude-opus-4-5@20251101
-      vertex_project: vertex-check-481318
+      vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
   - model_name: vertex-sonnet-4-6
     litellm_params:
       model: vertex_ai/claude-sonnet-4-6
-      vertex_project: vertex-check-481318
+      vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
   - model_name: vertex-opus-4-6
     litellm_params:
       model: vertex_ai/claude-opus-4-6
-      vertex_project: vertex-check-481318
+      vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
   - model_name: vertex-opus-4-7
     litellm_params:
       model: vertex_ai/claude-opus-4-7
-      vertex_project: vertex-check-481318
+      vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
   - model_name: vertex-opus-4-8
     litellm_params:
       model: vertex_ai/claude-opus-4-8
-      vertex_project: vertex-check-481318
+      vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
 
   # ---------- Gemini Enterprise Agent Platform ----------
   - model_name: gemini-claude-code
     litellm_params:
       model: vertex_ai/gemini-2.5-pro
-      vertex_project: vertex-check-481318
+      vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
       vertex_credentials: os.environ/GEMINI_CLAUDE_CODE_VERTEX_CREDENTIALS
       extra_body:
