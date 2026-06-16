@@ -8343,10 +8343,9 @@ async def model_list(
         if hidden_names:
             all_models = [m for m in all_models if m not in hidden_names]
 
-        # Opt-in (default off): surface the public name for team-scoped rows.
-        # Off by default so /v1/models model ids stay backward-compatible for
-        # callers that scripted against the internal routing name.
-        if general_settings.get("use_team_public_model_name", False):
+        # Surface the public name for team-scoped rows by default. Operators
+        # that need legacy internal routing keys can explicitly disable this.
+        if general_settings.get("use_team_public_model_name", True):
             all_models = _translate_model_names_for_listing(all_models, llm_router)
 
         # Build response data with all proxy models
@@ -8386,10 +8385,9 @@ async def model_list(
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
 
-    # Opt-in (default off): surface the public name for team-scoped rows.
-    # Off by default so /v1/models model ids stay backward-compatible for
-    # callers that scripted against the internal routing name.
-    if general_settings.get("use_team_public_model_name", False):
+    # Surface the public name for team-scoped rows by default. Operators that
+    # need legacy internal routing keys can explicitly disable this.
+    if general_settings.get("use_team_public_model_name", True):
         all_models = _translate_model_names_for_listing(all_models, llm_router)
 
     # Build response data
