@@ -661,7 +661,7 @@ def _convert_openai_response_to_mcp_result(
     )
 
 
-async def _check_model_access(  # noqa: PLR0915
+async def _check_model_access(
     model: str, user_api_key_auth: Any
 ) -> Optional["ErrorData"]:
     """Enforce model-permission checks for MCP sampling requests.

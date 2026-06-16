@@ -1317,7 +1317,7 @@ class LiteLLMProxyRequestSetup:
         )
 
 
-async def add_litellm_data_to_request(  # noqa: PLR0915
+async def add_litellm_data_to_request(
     data: dict,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
