@@ -3132,6 +3132,7 @@ all_litellm_params = (
     [
         "metadata",
         "litellm_metadata",
+        "keepalive_seconds",
         "litellm_trace_id",
         "litellm_request_debug",
         "guardrails",
