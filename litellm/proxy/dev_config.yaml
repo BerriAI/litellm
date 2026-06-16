@@ -132,7 +132,7 @@ model_list:
       model: vertex_ai/gemini-2.5-pro
       vertex_project: vertex-check-481318
       vertex_location: global
-      vertex_credentials: /Users/mateo/.config/gcloud/litellm-claude-code-gemini.json
+      vertex_credentials: os.environ/GEMINI_CLAUDE_CODE_VERTEX_CREDENTIALS
       extra_body:
         labels:
           workload: claude-code
