@@ -235,9 +235,10 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                         else:
                             message["tool_calls"] = tool_calls
                     content_str = "\n".join(text_parts)
-                    message["content"] = (
+                    new_content = (
                         content_blocks if has_structured_content else content_str
                     )
+                    message["content"] = new_content  # type: ignore[typeddict-item]
             elif message["role"] == "user":
                 message_content = message.get("content")
                 if message_content and isinstance(message_content, list):
