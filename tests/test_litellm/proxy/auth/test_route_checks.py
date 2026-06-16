@@ -1400,6 +1400,65 @@ def test_rag_routes_accessible_to_internal_user_viewer():
         )
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/vector_stores/vs_123",
+        "/v1/vector_stores/vs_123",
+        "/vector_stores/vs_123/search",
+        "/v1/vector_stores/vs_123/search",
+        "/vector_stores/vs_123/files",
+        "/v1/vector_stores/vs_123/files",
+    ],
+)
+def test_vector_store_routes_are_llm_api_routes(route):
+    """Retrieve/update/delete on a single vector store must classify as LLM API routes.
+
+    Regression for the missing bare `/v1/vector_stores/{vector_store_id}` entry in
+    `openai_routes` that left retrieve/update/delete blocked for internal roles
+    while `/search` and `/files` sub-routes worked.
+    """
+
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+@pytest.mark.parametrize(
+    "method, route",
+    [
+        ("GET", "/v1/vector_stores/vs_123"),
+        ("POST", "/v1/vector_stores/vs_123"),
+        ("DELETE", "/v1/vector_stores/vs_123"),
+    ],
+)
+def test_vector_store_crud_accessible_to_internal_roles(user_role, method, route):
+    """Internal user and internal viewer must reach vector store retrieve/update/delete.
+
+    Object-level access is still gated by `assert_user_can_access_vector_store`;
+    this only verifies the route gate no longer 403s these roles.
+    """
+
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.method = method
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_role=user_role),
+        _user_role=user_role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 def test_videos_route_accessible_to_internal_users():
     """
     Test that internal users can access the videos routes.

@@ -171,6 +171,10 @@ class PipelineExecutor:
                     data=data,
                     call_type=call_type,  # type: ignore
                 )
+                if isinstance(callback, CustomGuardrail):
+                    callback.mark_pre_call_hook_ran(data)
+                    if isinstance(response, dict):
+                        callback.mark_pre_call_hook_ran(response)
             elif mode == "post_call":
                 response = await target.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict,
