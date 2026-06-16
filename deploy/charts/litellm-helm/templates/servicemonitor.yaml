@@ -31,6 +31,15 @@ spec:
     interval: {{ .interval }}
     scrapeTimeout: {{ .scrapeTimeout }}
     scheme: http
+    {{- if and .authSecret.enabled .authSecret.name }}
+    bearerTokenSecret:
+      name: {{ .authSecret.name }}
+      key: {{ .authSecret.key | default "masterkey" }}
+    {{- else }}
+    bearerTokenSecret:
+      name: {{ include "litellm.fullname" $ }}-masterkey
+      key: masterkey
+    {{- end }}
   {{- if .relabelings }}
     relabelings:
 {{- toYaml .relabelings | nindent 4 }}
