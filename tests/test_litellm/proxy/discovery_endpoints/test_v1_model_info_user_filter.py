@@ -261,10 +261,13 @@ def _deployment_id(router, model_name):
     raise AssertionError(f"model {model_name!r} not in router")
 
 
-def test_v1_model_info_by_id_denied_when_model_not_in_user_models(
+def test_v1_model_info_by_id_filtered_when_model_not_in_user_models(
     client, configure_router, monkeypatch
 ):
-    """Regression: by-id lookup must respect user.models (veria-ai #29748)."""
+    """Regression: by-id lookup must respect user.models. Returns 200 + empty
+    data (not 403) so existence isn't leaked via 403-vs-404 enumeration —
+    matches the route_checks.py:189 spec '/model/info just shows models
+    user has access to' and the /v2/model/info pattern. See #26420 / #29748."""
     _override_auth(user_id="u-test")
     _patch_user(monkeypatch, models=["gpt-4"])
     disallowed_id = _deployment_id(configure_router, "claude-3-opus")
@@ -273,8 +276,8 @@ def test_v1_model_info_by_id_denied_when_model_not_in_user_models(
         f"/v1/model/info?litellm_model_id={disallowed_id}",
         headers={"Authorization": "Bearer sk-test"},
     )
-    assert resp.status_code == 403
-    assert "not authorized" in resp.text.lower()
+    assert resp.status_code == 200
+    assert resp.json() == {"data": []}
 
 
 def test_v1_model_info_by_id_allowed_when_model_in_user_models(

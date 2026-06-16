@@ -13453,37 +13453,6 @@ async def model_info_v1(
                     "error": f"Model id = {litellm_model_id} not found on litellm proxy"
                 },
             )
-        # Authorize against key/team/user models — by-id was previously
-        # short-circuiting before the listing-path filter, letting a
-        # restricted virtual key (including service accounts with no
-        # user_id but with key.models or team_models constraints) pull
-        # metadata for any deployment via /v1/model/info?litellm_model_id=.
-        # Reuse `get_available_models_for_user` so by-id authorization
-        # tracks the listing-path filter exactly: key.models, team_models,
-        # and user.models all narrow the allowlist; `_apply_user_models_filter`
-        # bypasses the user.models step when user_id is absent.
-        from litellm.proxy.utils import get_available_models_for_user
-
-        authorized_models = await get_available_models_for_user(
-            user_api_key_dict=user_api_key_dict,
-            llm_router=llm_router,
-            general_settings=general_settings,
-            user_model=user_model,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            team_id=None,
-            include_model_access_groups=False,
-            only_model_access_groups=False,
-            return_wildcard_routes=False,
-            user_api_key_cache=user_api_key_cache,
-        )
-        if deployment_info.model_name not in authorized_models:
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": f"Model id = {litellm_model_id} not authorized for this key/user"
-                },
-            )
         _deployment_info_dict = _get_proxy_model_info(
             model=deployment_info.model_dump(exclude_none=True)
         )
@@ -13505,6 +13474,26 @@ async def model_info_v1(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
+        # Bound by LiteLLM_UserTable.models (Personal Models) using the
+        # same deployment-level filter as the listing branch. by-id used
+        # to short-circuit before this filter, letting a restricted user
+        # pull any deployment's litellm_params via /v1/model/info?litellm_model_id=
+        # — same leak BerriAI/litellm#26420 fixed for /v1/models.
+        #
+        # Filter (drop unauthorized deployments → empty list) instead of
+        # 403: matches the route_checks.py:189 spec comment "/model/info
+        # just shows models user has access to" and avoids leaking model
+        # existence via 403-vs-404 enumeration.
+        from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+        single_model_list = await apply_user_models_filter_to_deployments(
+            deployments=single_model_list,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_cache=user_api_key_cache,
+        )
         return {"data": single_model_list}
 
     # Return router deployments (same source as /v2/model/info), not wildcard-
