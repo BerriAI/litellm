@@ -26,6 +26,7 @@ from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 from litellm.integrations.otel.model.utils import parse_headers as parse_headers
 
 if TYPE_CHECKING:
+    from opentelemetry.metrics import Meter
     from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import MetricReader
 
@@ -244,6 +245,38 @@ def build_meter_provider(
 
     reader = metric_reader if metric_reader is not None else build_metric_reader(config)
     return MeterProvider(metric_readers=[reader], resource=build_resource(config))
+
+
+def resolve_meter_provider(
+    config: OpenTelemetryV2Config,
+    meter_provider: "MeterProvider | None" = None,
+) -> "MeterProvider":
+    """Resolve the :class:`MeterProvider` GenAI metrics record through.
+
+    An injected provider wins (DI/tests). Otherwise reuse the operator's globally
+    configured ``MeterProvider`` when one is set, so its readers/exporters receive
+    the GenAI histograms alongside the server metrics. When none is set, build one
+    from the config and publish it as the OTel global so V2 owns metrics export
+    (mirroring how V2 owns trace export) and the server-metric instrumentation
+    shares it.
+    """
+    from opentelemetry import metrics
+    from opentelemetry.sdk.metrics import MeterProvider
+
+    if meter_provider is not None:
+        return meter_provider
+
+    existing = metrics.get_meter_provider()
+    if isinstance(existing, MeterProvider):
+        return existing
+
+    provider = build_meter_provider(config)
+    metrics.set_meter_provider(provider)
+    return provider
+
+
+def get_meter(provider: "MeterProvider", name: str = "litellm") -> "Meter":
+    return provider.get_meter(name, litellm_version)
 
 
 def build_resource(config: OpenTelemetryV2Config) -> Resource:
