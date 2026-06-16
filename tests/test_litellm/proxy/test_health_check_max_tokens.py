@@ -353,6 +353,65 @@ def test_explicit_override_false_suppresses_injection_inside_allowlist():
     assert "max_tokens" not in updated
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/amazon.titan-embed-text-v2:0",
+        "text-embedding-3-small",
+    ],
+)
+def test_embedding_model_without_mode_skips_max_tokens(model):
+    """
+    Regression: an embedding deployment with no `mode` set must not get
+    `max_tokens` injected into its health-check probe. The probe resolves the
+    embedding mode from model_cost (same as ahealth_check) and routes to the
+    embeddings endpoint, which 400s on `max_tokens`
+    ("extraneous key [max_tokens] is not permitted").
+    """
+    updated = _update_litellm_params_for_health_check({}, {"model": model})
+
+    assert "max_tokens" not in updated
+
+
+def test_chat_model_without_mode_still_injects_max_tokens():
+    """A chat model with no explicit mode keeps the chat-style probe."""
+    updated = _update_litellm_params_for_health_check({}, {"model": "gpt-4"})
+
+    assert updated["max_tokens"] == 5
+
+
+def test_unknown_model_without_mode_defaults_to_chat():
+    """A model absent from model_cost falls back to a chat-style probe."""
+    updated = _update_litellm_params_for_health_check(
+        {}, {"model": "openai/some-unlisted-model"}
+    )
+
+    assert updated["max_tokens"] == 5
+
+
+def test_unresolvable_provider_without_mode_falls_back_to_chat():
+    """
+    If get_llm_provider can't resolve the provider (no prefix, not a known
+    model), mode resolution must not raise; the probe falls back to chat and
+    still injects max_tokens.
+    """
+    updated = _update_litellm_params_for_health_check(
+        {}, {"model": "random-unknown-model-xyz"}
+    )
+
+    assert updated["max_tokens"] == 5
+
+
+def test_explicit_override_injects_for_unmoded_embedding_model():
+    """health_check_supports_max_tokens wins over the resolved embedding mode."""
+    updated = _update_litellm_params_for_health_check(
+        {"health_check_supports_max_tokens": True},
+        {"model": "bedrock/amazon.titan-embed-text-v2:0"},
+    )
+
+    assert updated["max_tokens"] == 5
+
+
 def test_update_litellm_params_health_check_reasoning_effort():
     """model_info.health_check_reasoning_effort sets reasoning_effort for chat-style health checks."""
     model_info = {"health_check_reasoning_effort": "low"}

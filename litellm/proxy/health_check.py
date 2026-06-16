@@ -45,19 +45,55 @@ MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
 _MAX_TOKEN_SUPPORT_MODES: frozenset = frozenset({"chat", "completion", "responses"})
 
 
-def _should_inject_health_check_max_tokens(model_info: dict) -> bool:
+def _resolve_health_check_mode(model_info: dict, litellm_params: dict) -> Optional[str]:
+    """
+    Mode used to shape the health-check probe (e.g. whether to send `max_tokens`).
+
+    Mirrors the resolution `ahealth_check` does, so the probe matches the call it
+    actually makes: an explicit `model_info.mode` wins, otherwise the mode is read
+    from `litellm.model_cost` (looked up by the raw model string and the
+    provider-stripped form, e.g. `bedrock/amazon.titan-embed-text-v2:0` ->
+    `amazon.titan-embed-text-v2:0`). Returns None when nothing matches.
+    """
+    explicit_mode = model_info.get("mode")
+    if explicit_mode is not None:
+        return explicit_mode
+
+    model = litellm_params.get("model") or ""
+    if not model or "*" in model:
+        return None
+
+    candidate_models = [model]
+    try:
+        stripped_model, _, _, _ = litellm.get_llm_provider(model=model)
+        candidate_models.append(stripped_model)
+    except Exception:
+        pass
+
+    for candidate in candidate_models:
+        cost_entry = litellm.model_cost.get(candidate)
+        if cost_entry and cost_entry.get("mode") is not None:
+            return cost_entry["mode"]
+
+    return None
+
+
+def _should_inject_health_check_max_tokens(
+    model_info: dict, litellm_params: dict
+) -> bool:
     """
     Whether the health-check probe should include `max_tokens`.
 
     Order:
       1. `model_info.health_check_supports_max_tokens` (operator override).
-      2. `_MAX_TOKEN_SUPPORT_MODES`. Missing `mode` is treated as `chat`
-         for backward compatibility.
+      2. Effective mode (explicit `model_info.mode`, else resolved from
+         `litellm.model_cost`) against `_MAX_TOKEN_SUPPORT_MODES`. A mode that
+         cannot be resolved is treated as `chat` for backward compatibility.
     """
     explicit = model_info.get("health_check_supports_max_tokens")
     if explicit is not None:
         return bool(explicit)
-    mode = model_info.get("mode") or "chat"
+    mode = _resolve_health_check_mode(model_info, litellm_params) or "chat"
     return mode in _MAX_TOKEN_SUPPORT_MODES
 
 
@@ -424,7 +460,7 @@ def _update_litellm_params_for_health_check(
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID
     """
     litellm_params["messages"] = _get_random_llm_message()
-    if _should_inject_health_check_max_tokens(model_info):
+    if _should_inject_health_check_max_tokens(model_info, litellm_params):
         _resolved_max_tokens = _resolve_health_check_max_tokens(
             model_info, litellm_params
         )
