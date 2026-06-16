@@ -14,7 +14,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../../../../..")
+)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -61,13 +63,19 @@ def test_internal_user_viewer_rag_ingest_without_vector_store_id_rejected(
     response = client_internal_user_viewer.post(
         "/v1/rag/ingest",
         files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-        data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
+        data={
+            "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
+        },
     )
 
     assert response.status_code == 403
     detail = response.json()
     assert "detail" in detail
-    error_msg = detail["detail"]["error"] if isinstance(detail["detail"], dict) else str(detail["detail"])
+    error_msg = (
+        detail["detail"]["error"]
+        if isinstance(detail["detail"], dict)
+        else str(detail["detail"])
+    )
     assert "internal_user_viewer" in error_msg
     assert "vector_store_id" in error_msg
 
@@ -93,9 +101,9 @@ def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
         )
 
     # Should not be 403 (role check passed)
-    assert response.status_code != 403, (
-        f"internal_user_viewer with vector_store_id should pass role check. Response: {response.json()}"
-    )
+    assert (
+        response.status_code != 403
+    ), f"internal_user_viewer with vector_store_id should pass role check. Response: {response.json()}"
 
 
 def test_internal_user_viewer_provider_native_vector_store_id_allowed(
@@ -269,13 +277,15 @@ def test_internal_user_rag_ingest_without_vector_store_id_allowed(client_interna
         response = client_internal_user.post(
             "/v1/rag/ingest",
             files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-            data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
+            data={
+                "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
+            },
         )
 
     # Should not be 403
-    assert response.status_code != 403, (
-        f"internal_user should be allowed to create new vector stores. Response: {response.json()}"
-    )
+    assert (
+        response.status_code != 403
+    ), f"internal_user should be allowed to create new vector stores. Response: {response.json()}"
 
 
 @pytest.mark.parametrize(
@@ -322,11 +332,13 @@ def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_
             },
         },
     )
-    assert response.status_code == 400, (
-        f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
-    )
+    assert (
+        response.status_code == 400
+    ), f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
     body = response.json()
-    assert blocked_field in str(body), f"Response should mention '{blocked_field}': {body}"
+    assert blocked_field in str(
+        body
+    ), f"Response should mention '{blocked_field}': {body}"
 
 
 class TestRagIngestSSRFBlocked:
@@ -345,7 +357,9 @@ class TestRagIngestSSRFBlocked:
             ("aws_bedrock_runtime_endpoint", "https://attacker.example/bedrock"),
         ],
     )
-    def test_ssrf_field_in_vector_store_config_rejected(self, field, value, client_internal_user):
+    def test_ssrf_field_in_vector_store_config_rejected(
+        self, field, value, client_internal_user
+    ):
         payload = {
             "file_url": "https://example.com/doc.pdf",
             "ingest_options": {
@@ -365,8 +379,12 @@ class TestRagIngestSSRFBlocked:
         )
         body = response.json()
         detail = body.get("detail", {})
-        error_text = detail.get("error", "") if isinstance(detail, dict) else str(detail)
-        assert field in error_text, f"Error should name the offending field: {error_text}"
+        error_text = (
+            detail.get("error", "") if isinstance(detail, dict) else str(detail)
+        )
+        assert (
+            field in error_text
+        ), f"Error should name the offending field: {error_text}"
 
     def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user):
         with patch(
@@ -378,10 +396,14 @@ class TestRagIngestSSRFBlocked:
                 "/v1/rag/ingest",
                 json={
                     "file_url": "https://example.com/doc.pdf",
-                    "ingest_options": {"vector_store": {"custom_llm_provider": "bedrock"}},
+                    "ingest_options": {
+                        "vector_store": {"custom_llm_provider": "bedrock"}
+                    },
                 },
             )
-        assert response.status_code != 400, f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
+        assert (
+            response.status_code != 400
+        ), f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
 
 
 class TestMilvusCollectionNameAuthorization:
@@ -406,7 +428,9 @@ class TestMilvusCollectionNameAuthorization:
             }
         }
         _normalize_collection_name_as_vector_store_id(ingest_options)
-        assert ingest_options["vector_store"]["vector_store_id"] == "other_team_collection"
+        assert (
+            ingest_options["vector_store"]["vector_store_id"] == "other_team_collection"
+        )
 
     def test_normalize_overrides_vector_store_id_with_collection_name(self):
         """
@@ -427,7 +451,9 @@ class TestMilvusCollectionNameAuthorization:
             }
         }
         _normalize_collection_name_as_vector_store_id(ingest_options)
-        assert ingest_options["vector_store"]["vector_store_id"] == "other_team_collection"
+        assert (
+            ingest_options["vector_store"]["vector_store_id"] == "other_team_collection"
+        )
 
     def test_normalize_ignores_non_milvus_providers(self):
         from litellm.proxy.rag_endpoints.endpoints import (
@@ -483,7 +509,9 @@ class TestMilvusCollectionNameAuthorization:
             f"must be authorized and denied. Got: {response.status_code} {response.json()}"
         )
 
-    def test_milvus_collection_name_bypass_with_both_fields_is_denied(self, client_internal_user):
+    def test_milvus_collection_name_bypass_with_both_fields_is_denied(
+        self, client_internal_user
+    ):
         async def fake_assert(vector_store_id, user_api_key_dict, **kwargs):
             if vector_store_id == "other_team_collection":
                 raise HTTPException(
@@ -540,7 +568,10 @@ class TestIngestionAutoCreateDetection:
         )
 
         assert (
-            _ingestion_can_auto_create_vector_store({"custom_llm_provider": "milvus", "collection_name": "c"}) is True
+            _ingestion_can_auto_create_vector_store(
+                {"custom_llm_provider": "milvus", "collection_name": "c"}
+            )
+            is True
         )
 
     def test_milvus_auto_create_flag_is_not_request_trusted(self):
@@ -565,7 +596,9 @@ class TestIngestionAutoCreateDetection:
         )
 
         assert (
-            _ingestion_can_auto_create_vector_store({"custom_llm_provider": "openai", "vector_store_id": "vs_x"})
+            _ingestion_can_auto_create_vector_store(
+                {"custom_llm_provider": "openai", "vector_store_id": "vs_x"}
+            )
             is False
         )
 
@@ -574,4 +607,9 @@ class TestIngestionAutoCreateDetection:
             _ingestion_can_auto_create_vector_store,
         )
 
-        assert _ingestion_can_auto_create_vector_store({"custom_llm_provider": "not_a_real_provider"}) is False
+        assert (
+            _ingestion_can_auto_create_vector_store(
+                {"custom_llm_provider": "not_a_real_provider"}
+            )
+            is False
+        )
