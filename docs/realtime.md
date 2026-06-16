@@ -54,7 +54,7 @@ model_list:
 model_list:
   - model_name: grok-voice-agent
     litellm_params:
-      model: xai/grok-4-1-fast-non-reasoning
+      model: xai/grok-voice-latest
       api_key: os.environ/XAI_API_KEY
     model_info:
       mode: realtime

@@ -7,126 +7,24 @@ xAI's Grok Voice Agent provides real-time voice conversation capabilities throug
 
 | Feature | Description | Comments |
 | --- | --- | --- |
-| LiteLLM AI Gateway | ✅ |  |
-| LiteLLM Python SDK | ✅ | Full support via `litellm.realtime()` |
+| LiteLLM AI Gateway | ✅ | Connect a WebSocket client to the proxy `/v1/realtime` endpoint |
+| LiteLLM Python SDK | ❌ | Realtime is served through the gateway, not a direct SDK call |
 
 ## Quick Start
 
-### Supported Model
+### Supported Models
 
-| Model | Context | Features |
-|-------|---------|----------|
-| `xai/grok-4-1-fast-non-reasoning` | 2M tokens | Voice conversation, Function calling, Vision, Audio, Web search, Caching |
+| Model | Status | Description |
+|-------|--------|-------------|
+| `xai/grok-voice-think-fast-1.0` | Recommended | Flagship speech-to-speech voice model |
+| `xai/grok-voice-fast-1.0` | Deprecated | Legacy voice model |
+| `xai/grok-voice-latest` | Alias | Always points to the newest voice model (currently `grok-voice-think-fast-1.0`) |
 
-**Note:** xAI Realtime API uses the non-reasoning variant for optimal real-time performance.
+These are dedicated full-duplex models built for real-time speech-to-speech conversation. They support function calling, web search, X search, collections search, remote MCP tools, and 20+ languages with automatic language detection. The examples below use `grok-voice-latest`, which always tracks the newest release; pin to a versioned name such as `grok-voice-think-fast-1.0` when you need stable behavior across releases.
 
-## Python SDK Usage
+## How LiteLLM Connects
 
-### Basic Realtime Connection
-
-```python
-import asyncio
-from litellm import realtime
-
-async def test_xai_realtime():
-    """
-    Test xAI Grok Voice Agent via LiteLLM SDK
-    """
-    # Initialize realtime connection
-    ws = await realtime(
-        model="xai/grok-4-1-fast-non-reasoning",
-        api_key="your-xai-api-key",  # or set XAI_API_KEY env var
-    )
-    
-    # Connection established, xAI sends "conversation.created" event
-    print("Connected to xAI Grok Voice Agent")
-    
-    # Send a message
-    await ws.send_text(json.dumps({
-        "type": "conversation.item.create",
-        "item": {
-            "type": "message",
-            "role": "user",
-            "content": [{
-                "type": "input_text",
-                "text": "Hello! How are you?"
-            }]
-        }
-    }))
-    
-    # Request a response
-    await ws.send_text(json.dumps({
-        "type": "response.create"
-    }))
-    
-    # Listen for responses
-    async for message in ws:
-        data = json.loads(message)
-        print(f"Received: {data['type']}")
-        
-        if data['type'] == 'response.done':
-            break
-    
-    await ws.close()
-
-# Run the async function
-asyncio.run(test_xai_realtime())
-```
-
-### With Audio Input/Output
-
-```python
-import asyncio
-import json
-from litellm import realtime
-
-async def xai_voice_conversation():
-    """
-    Voice conversation with xAI Grok Voice Agent
-    """
-    ws = await realtime(
-        model="xai/grok-4-1-fast-non-reasoning",
-        api_key="your-xai-api-key",
-    )
-    
-    # Send audio data (base64 encoded PCM16 24kHz)
-    await ws.send_text(json.dumps({
-        "type": "conversation.item.create",
-        "item": {
-            "type": "message",
-            "role": "user",
-            "content": [{
-                "type": "input_audio",
-                "audio": "base64_encoded_audio_data_here"
-            }]
-        }
-    }))
-    
-    # Request response with audio
-    await ws.send_text(json.dumps({
-        "type": "response.create",
-        "response": {
-            "modalities": ["text", "audio"],
-            "instructions": "Please respond in a friendly tone."
-        }
-    }))
-    
-    # Process streaming audio response
-    async for message in ws:
-        data = json.loads(message)
-        
-        if data['type'] == 'response.audio.delta':
-            # Handle audio chunks
-            audio_chunk = data['delta']
-            # Process audio_chunk (play it, save it, etc.)
-            
-        elif data['type'] == 'response.done':
-            break
-    
-    await ws.close()
-
-asyncio.run(xai_voice_conversation())
-```
+LiteLLM serves xAI's Voice Agent through the AI Gateway, so realtime traffic goes over the proxy's OpenAI-compatible `/v1/realtime` WebSocket endpoint rather than a direct Python SDK call. You point any standard WebSocket client (Python `websockets`, Node `ws`, or the OpenAI SDK) at the gateway, and it forwards the session to `wss://api.x.ai/v1/realtime` with the correct model and authentication headers. The proxy setup and a runnable client are below.
 
 ## LiteLLM Proxy (AI Gateway) Usage
 
@@ -138,7 +36,7 @@ Load balance across multiple xAI deployments or combine with other providers.
 model_list:
   - model_name: grok-voice-agent
     litellm_params:
-      model: xai/grok-4-1-fast-non-reasoning
+      model: xai/grok-voice-latest
       api_key: os.environ/XAI_API_KEY
     model_info:
       mode: realtime
@@ -179,7 +77,7 @@ async def test_proxy():
             "OpenAI-Beta": "realtime=v1"
         }
     ) as ws:
-        # Wait for conversation.created event from xAI
+        # First event from the server is session.created
         message = await ws.recv()
         print(f"Connected: {message}")
         
@@ -273,27 +171,11 @@ xAI's Grok Voice Agent has some differences from OpenAI's Realtime API:
 
 | Feature | xAI | OpenAI | LiteLLM Handling |
 |---------|-----|--------|------------------|
-| Initial Event | `conversation.created` | `session.created` | ⚠️ Passed through as-is |
 | WebSocket URL | `wss://api.x.ai/v1/realtime` | `wss://api.openai.com/v1/realtime` | ✅ Auto-configured |
-| Model | `grok-4-1-fast-non-reasoning` | `gpt-4o-realtime-preview` | ✅ Via model prefix |
-| Audio Format | PCM16 24kHz mono | PCM16 24kHz mono | ✅ Compatible |
-| Context Window | 2M tokens | 128K tokens | N/A |
+| Model | `grok-voice-latest` | `gpt-4o-realtime-preview` | ✅ Via model prefix |
+| Audio Format | PCM (8-48kHz), μ-law, A-law | PCM16 24kHz mono | ✅ Compatible |
 
-**What LiteLLM Handles:**
-- ✅ Automatic URL routing to correct provider
-- ✅ Authentication headers (no `OpenAI-Beta` header for xAI)
-- ✅ WebSocket connection management
-- ✅ All other event types are compatible
-
-**What You Need to Handle:**
-- ⚠️ Initial event type difference (`conversation.created` vs `session.created`)
-
-**Tip:** Make your client compatible with both event types:
-```python
-# Handle both providers
-if event['type'] in ['session.created', 'conversation.created']:
-    print("Connection established")
-```
+LiteLLM auto-configures the xAI endpoint, sets the authentication headers (it does not send the `OpenAI-Beta` header to xAI), and manages the WebSocket connection. Beyond that there is nothing xAI-specific to handle: the Voice Agent API is OpenAI-compatible and emits `session.created` on connect, just like OpenAI. Audio responses stream as `response.output_audio.delta`, with the matching transcript on `response.output_audio_transcript.delta`.
 
 ## Related Documentation
 
