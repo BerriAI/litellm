@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from opentelemetry import baggage, metrics
 from opentelemetry.context import Context
-from opentelemetry.metrics import NoOpMeterProvider
-from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.metrics import MeterProvider, NoOpMeterProvider
+from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -235,7 +235,7 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
 def build_meter_provider(
     config: OpenTelemetryV2Config,
     metric_reader: "MetricReader | None" = None,
-) -> MeterProvider:
+) -> SDKMeterProvider:
     """Build the :class:`MeterProvider` for GenAI metrics.
 
     ``metric_reader`` is an explicit override (tests inject an
@@ -243,7 +243,7 @@ def build_meter_provider(
     exporter kind via :func:`build_metric_reader`.
     """
     reader = metric_reader if metric_reader is not None else build_metric_reader(config)
-    return MeterProvider(metric_readers=[reader], resource=build_resource(config))
+    return SDKMeterProvider(metric_readers=[reader], resource=build_resource(config))
 
 
 def resolve_meter_provider(
@@ -265,7 +265,7 @@ def resolve_meter_provider(
         return meter_provider
 
     existing = metrics.get_meter_provider()
-    if isinstance(existing, (MeterProvider, NoOpMeterProvider)):
+    if isinstance(existing, (SDKMeterProvider, NoOpMeterProvider)):
         return existing
 
     provider = build_meter_provider(config)
