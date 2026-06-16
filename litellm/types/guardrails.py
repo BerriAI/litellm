@@ -50,6 +50,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
 from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
     CiscoAIDefenseGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
+    SingulrGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -98,6 +101,7 @@ class SupportedGuardrailIntegrations(Enum):
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
     MCP_SECURITY = "mcp_security"
     ONYX = "onyx"
+    SINGULR = "singulr"
     PROMPTGUARD = "promptguard"
     XECGUARD = "xecguard"
     PROMPT_SECURITY = "prompt_security"
@@ -867,6 +871,7 @@ class LitellmParams(
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
+    SingulrGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
