@@ -2905,6 +2905,38 @@ class TestStreamingClientDisconnectLogging:
         assert request_data["metadata"]["error_information"]["error_code"] == "499"
 
     @pytest.mark.asyncio
+    async def test_finalize_streaming_generator_cleanup_skips_disconnect_after_completion(
+        self, monkeypatch
+    ):
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        fire_spy = MagicMock()
+        monkeypatch.setattr(
+            "litellm.proxy.utils.ProxyLogging._fire_deferred_stream_logging",
+            fire_spy,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+        request_data = {"metadata": {}, "litellm_params": {"metadata": {}}}
+
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=mock_request,
+            request_data=request_data,
+            response=mock_response,
+            stream_completed=True,
+        )
+
+        fire_spy.assert_not_called()
+        mock_request.is_disconnected.assert_not_awaited()
+        mock_response.aclose.assert_awaited_once()
+        assert "client_disconnected" not in request_data["metadata"]
+
+    @pytest.mark.asyncio
     async def test_async_streaming_data_generator_records_499_on_early_aclose(
         self, monkeypatch
     ):

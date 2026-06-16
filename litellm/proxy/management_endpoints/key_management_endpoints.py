@@ -59,6 +59,9 @@ from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_k
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -3225,67 +3228,56 @@ async def delete_key_fn(
         raise handle_exception_on_proxy(e)
 
 
-async def _query_model_spend_for_period(
+async def _get_model_max_budget_current_spend(
     api_key_hash: str,
     model: str,
-    period_start: datetime,
-    period_end: datetime,
-    prisma_client: PrismaClient,
+    budget_config: BudgetConfig,
+    user_api_key_cache: UserApiKeyCache,
 ) -> float:
-    model_without_prefix = model.split("/", 1)[-1] if "/" in model else model
-    try:
-        rows = await prisma_client.db.query_raw(
-            """
-            SELECT SUM(spend)::float AS total_spend
-            FROM "LiteLLM_SpendLogs"
-            WHERE api_key = $1
-              AND "startTime" >= ($2::timestamptz AT TIME ZONE 'UTC')
-              AND "startTime" <  ($3::timestamptz AT TIME ZONE 'UTC')
-              AND (
-                COALESCE(NULLIF(model_group, ''), model) = $4
-                OR COALESCE(NULLIF(model_group, ''), model) = $5
-              )
-            """,
-            api_key_hash,
-            period_start.isoformat(),
-            period_end.isoformat(),
-            model,
-            model_without_prefix,
+    virtual_key_model_spend_cache_key = (
+        f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:"
+        f"{api_key_hash}:{model}:{budget_config.budget_duration}"
+    )
+    current_spend = await user_api_key_cache.async_get_cache(
+        key=virtual_key_model_spend_cache_key,
+    )
+    if current_spend is None:
+        model_without_prefix = model.split("/")[-1] if "/" in model else model
+        virtual_key_model_spend_cache_key = (
+            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:"
+            f"{api_key_hash}:{model_without_prefix}:{budget_config.budget_duration}"
         )
-        if not rows:
-            return 0.0
-        return rows[0]["total_spend"] or 0.0
-    except Exception as e:
-        verbose_proxy_logger.warning("_query_model_spend_for_period failed: %s", str(e))
+        current_spend = await user_api_key_cache.async_get_cache(
+            key=virtual_key_model_spend_cache_key,
+        )
+    try:
+        return float(current_spend or 0.0)
+    except (TypeError, ValueError):
         return 0.0
 
 
 async def _build_model_max_budget_usage(
     api_key_hash: str,
     model_max_budget: Dict[str, Dict],
-    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: Optional[UserApiKeyCache],
 ) -> Dict[str, Any]:
-    if prisma_client is None or not model_max_budget:
+    if user_api_key_cache is None or not model_max_budget:
         return {}
 
-    now = datetime.now(tz=timezone.utc)
     result: Dict[str, Any] = {}
     for model, budget_info in model_max_budget.items():
         try:
             budget_config = BudgetConfig(**budget_info)
             if budget_config.budget_duration is None:
                 continue
-            period_start = now - timedelta(
-                seconds=duration_in_seconds(budget_config.budget_duration)
-            )
+            duration_in_seconds(budget_config.budget_duration)
         except Exception:
             continue
-        spend = await _query_model_spend_for_period(
+        spend = await _get_model_max_budget_current_spend(
             api_key_hash=api_key_hash,
             model=model,
-            period_start=period_start,
-            period_end=now,
-            prisma_client=prisma_client,
+            budget_config=budget_config,
+            user_api_key_cache=user_api_key_cache,
         )
         result[model] = {
             "current_spend": round(spend, 4),
@@ -3322,7 +3314,7 @@ async def info_key_fn_v2(
     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     try:
         if prisma_client is None:
@@ -3378,7 +3370,7 @@ async def info_key_fn_v2(
                 k_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
                     api_key_hash=k_token_hash,
                     model_max_budget=model_max_budget,
-                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
                 )
 
             filtered_key_info.append(k_dict)
@@ -3418,7 +3410,7 @@ async def info_key_fn(
 -H "Authorization: Bearer sk-test-example-key-123"
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     try:
         if prisma_client is None:
@@ -3473,7 +3465,7 @@ async def info_key_fn(
             key_info["model_max_budget_usage"] = await _build_model_max_budget_usage(
                 api_key_hash=key_token_hash,
                 model_max_budget=model_max_budget,
-                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
             )
 
         # Attach object_permission if object_permission_id is set

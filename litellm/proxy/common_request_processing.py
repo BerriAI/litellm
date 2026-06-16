@@ -97,15 +97,17 @@ def _apply_client_disconnect_metadata(target_metadata: dict) -> None:
 async def _record_streaming_client_disconnect_if_needed(
     request: Optional[Request],
     request_data: dict,
+    client_disconnected: bool = False,
 ) -> bool:
-    if request is None:
-        return False
-    try:
-        disconnected = await request.is_disconnected()
-    except Exception:
-        return False
-    if not disconnected:
-        return False
+    if not client_disconnected:
+        if request is None:
+            return False
+        try:
+            disconnected = await request.is_disconnected()
+        except Exception:
+            return False
+        if not disconnected:
+            return False
 
     logging_obj = request_data.get("litellm_logging_obj")
     if logging_obj is not None:
@@ -2377,12 +2379,21 @@ class ProxyBaseLLMRequestProcessing:
         request: Optional[Request],
         request_data: dict,
         response: Any,
+        stream_completed: bool = False,
+        client_disconnected: bool = False,
     ) -> None:
         with anyio.CancelScope(shield=True):
-            client_disconnected = await _record_streaming_client_disconnect_if_needed(
-                request, request_data
+            should_record_client_disconnect = client_disconnected or (
+                not stream_completed
             )
-            if client_disconnected:
+            recorded_client_disconnect = False
+            if should_record_client_disconnect:
+                recorded_client_disconnect = (
+                    await _record_streaming_client_disconnect_if_needed(
+                        request, request_data, client_disconnected
+                    )
+                )
+            if recorded_client_disconnect:
                 ProxyLogging._fire_deferred_stream_logging(request_data)
 
             if hasattr(response, "aclose"):
@@ -2395,7 +2406,7 @@ class ProxyBaseLLMRequestProcessing:
                     )
 
     @staticmethod
-    async def async_streaming_data_generator(
+    async def async_streaming_data_generator(  # noqa: PLR0915
         response: Any,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
@@ -2428,6 +2439,8 @@ class ProxyBaseLLMRequestProcessing:
             and not cost_injection_enabled
         )
         debug_enabled = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
+        stream_completed = False
+        client_disconnected = False
         try:
             str_so_far = ""
             async for (
@@ -2475,6 +2488,7 @@ class ProxyBaseLLMRequestProcessing:
                     )
                 )
                 yield serialize_chunk(chunk)
+            stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
             # Client disconnected mid-stream. CancelledError / GeneratorExit
             # are BaseException and bypass the success/failure logging
@@ -2482,9 +2496,11 @@ class ProxyBaseLLMRequestProcessing:
             # release it here. This is the outermost generator Starlette closes
             # on disconnect, so the nested iterator hook (which only sees
             # GeneratorExit on GC) cannot own the refund.
-            proxy_logging_obj._release_max_parallel_requests_on_disconnect(
-                user_api_key_dict
-            )
+            if not stream_completed:
+                proxy_logging_obj._release_max_parallel_requests_on_disconnect(
+                    user_api_key_dict
+                )
+                client_disconnected = True
             raise
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -2513,12 +2529,15 @@ class ProxyBaseLLMRequestProcessing:
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
+            stream_completed = True
             yield serialize_error(proxy_exception)
         finally:
             await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
                 request=request,
                 request_data=request_data,
                 response=response,
+                stream_completed=stream_completed,
+                client_disconnected=client_disconnected,
             )
 
     @staticmethod

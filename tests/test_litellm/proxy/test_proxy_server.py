@@ -5372,7 +5372,7 @@ async def test_async_data_generator_buffers_split_google_native_sse_json_frame()
 
 
 @pytest.mark.asyncio
-async def test_async_data_generator_errors_when_raw_sse_stream_ends_mid_frame():
+async def test_async_data_generator_flushes_raw_sse_stream_without_trailing_delimiter():
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import async_data_generator
     from litellm.proxy.utils import ProxyLogging
@@ -5419,9 +5419,9 @@ async def test_async_data_generator_errors_when_raw_sse_stream_ends_mid_frame():
         for chunk in yielded_data
     ]
     assert len(yielded_text) == 1
-    assert "ended before a complete frame delimiter" in yielded_text[0]
+    assert yielded_text[0] == 'data: {"candidates": [{"content": "unterminated"}]\n\n'
     assert "[DONE]" not in yielded_text[0]
-    mock_proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+    mock_proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -5535,9 +5535,9 @@ async def test_async_data_generator_checks_raw_sse_buffer_limit_after_complete_f
         for chunk in yielded_data
     ]
     assert yielded_text[0] == complete_frame
-    assert "ended before a complete frame delimiter" in yielded_text[1]
+    assert yielded_text[1] == partial_frame + "\n\n"
     assert "[DONE]" not in "".join(yielded_text)
-    mock_proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+    mock_proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -5592,6 +5592,53 @@ async def test_async_data_generator_google_genai_stream_omits_openai_done():
     ]
     assert yielded_text == [gemini_event.decode("utf-8")]
     assert "[DONE]" not in "".join(yielded_text)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_does_not_mark_completed_stream_as_disconnect():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {"model": "gpt-4o", "metadata": {}}
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield {"choices": [{"delta": {"content": "done"}}]}
+
+        async def aclose(self):
+            pass
+
+    mock_request = MagicMock()
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response,
+                mock_user_api_key_dict,
+                mock_request_data,
+                request=mock_request,
+            ):
+                yielded_data.append(data)
+
+    assert yielded_data[-1] == "data: [DONE]\n\n"
+    mock_request.is_disconnected.assert_not_awaited()
+    assert "client_disconnected" not in mock_request_data["metadata"]
 
 
 @pytest.mark.asyncio

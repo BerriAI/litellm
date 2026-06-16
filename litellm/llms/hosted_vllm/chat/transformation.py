@@ -2,6 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
+import json
 from typing import (
     Any,
     Coroutine,
@@ -200,12 +201,35 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
                     text_parts = []
+                    tool_calls: List[Dict[str, Any]] = []
                     dropped_types = []
                     for c in existing_content:
                         if isinstance(c, dict) and c.get("type") == "text":
                             text_parts.append(c.get("text", ""))
+                        elif isinstance(c, dict) and c.get("type") == "tool_use":
+                            tool_input = c.get("input", {})
+                            tool_calls.append(
+                                {
+                                    "id": c.get("id"),
+                                    "type": "function",
+                                    "function": {
+                                        "name": c.get("name"),
+                                        "arguments": (
+                                            tool_input
+                                            if isinstance(tool_input, str)
+                                            else json.dumps(tool_input)
+                                        ),
+                                    },
+                                }
+                            )
                         elif isinstance(c, dict):
                             dropped_types.append(c.get("type", "unknown"))
+                    if tool_calls:
+                        existing_tool_calls = message.get("tool_calls")
+                        if isinstance(existing_tool_calls, list):
+                            message["tool_calls"] = existing_tool_calls + tool_calls
+                        else:
+                            message["tool_calls"] = tool_calls
                     if dropped_types:
                         verbose_logger.debug(
                             "HostedVLLMChatConfig: dropping non-text assistant content "

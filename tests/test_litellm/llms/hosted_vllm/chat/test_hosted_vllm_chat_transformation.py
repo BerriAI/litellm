@@ -245,6 +245,44 @@ def test_hosted_vllm_thinking_blocks_with_list_content():
     assert "thinking_blocks" not in assistant_msg
 
 
+def test_hosted_vllm_assistant_tool_use_content_becomes_tool_calls():
+    config = HostedVLLMChatConfig()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "get_weather",
+                    "input": {"city": "Boston"},
+                }
+            ],
+        },
+    ]
+
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assistant_msg = transformed["messages"][0]
+    assert assistant_msg["content"] == ""
+    assert assistant_msg["tool_calls"] == [
+        {
+            "id": "toolu_1",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": json.dumps({"city": "Boston"}),
+            },
+        }
+    ]
+
+
 def test_hosted_vllm_custom_tools_are_converted_to_function_tools():
     config = HostedVLLMChatConfig()
     optional_params = config.map_openai_params(

@@ -7055,6 +7055,8 @@ async def async_data_generator(  # noqa: PLR0915
     request: Optional[Request] = None,
 ):
     verbose_proxy_logger.debug("inside generator")
+    stream_completed = False
+    client_disconnected = False
     try:
         error_message: Optional[str] = None
         requested_model_from_client = _get_client_requested_model_for_streaming(
@@ -7149,16 +7151,19 @@ async def async_data_generator(  # noqa: PLR0915
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 
-        if raw_sse_buffer:
-            raise ValueError(
-                "Raw SSE stream ended before a complete frame delimiter was received"
-            )
-
+        stream_completed = True
         if not needs_iterator_wrap:
             # The iterator-wrap path fires deferred logging itself; fire it
             # here for the no-wrap fast path so non-callback deployments
             # still flush their post-stream logging.
             ProxyLogging._fire_deferred_stream_logging(request_data)
+
+        if raw_sse_buffer:
+            yield (
+                raw_sse_buffer
+                if raw_sse_buffer.endswith(_SSE_FRAME_DELIMITERS)
+                else raw_sse_buffer + "\n\n"
+            )
 
         if error_message is not None:
             yield error_message
@@ -7173,9 +7178,11 @@ async def async_data_generator(  # noqa: PLR0915
         # it here. This is the outermost generator Starlette closes on
         # disconnect, so it fires reliably regardless of needs_iterator_wrap
         # (a nested iterator hook would only see GeneratorExit on GC).
-        proxy_logging_obj._release_max_parallel_requests_on_disconnect(
-            user_api_key_dict
-        )
+        if not stream_completed:
+            proxy_logging_obj._release_max_parallel_requests_on_disconnect(
+                user_api_key_dict
+            )
+            client_disconnected = True
         raise
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -7209,6 +7216,7 @@ async def async_data_generator(  # noqa: PLR0915
             code=getattr(e, "status_code", 500),
         )
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
+        stream_completed = True
         yield f"data: {error_returned}\n\n"
     finally:
         from litellm.proxy.common_request_processing import (
@@ -7219,6 +7227,8 @@ async def async_data_generator(  # noqa: PLR0915
             request=request,
             request_data=request_data,
             response=response,
+            stream_completed=stream_completed,
+            client_disconnected=client_disconnected,
         )
 
 
