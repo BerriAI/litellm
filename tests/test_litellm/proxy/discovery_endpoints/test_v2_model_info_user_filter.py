@@ -207,6 +207,121 @@ def test_v2_model_info_default_branch_user_wildcard(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Key.models / team_models filter on default branch (veria-ai finding 1)
+# ---------------------------------------------------------------------------
+
+
+def _override_auth_with(models=None, team_models=None, team_id=None, user_id=None):
+    def _auth():
+        return UserAPIKeyAuth(
+            api_key="test-key",
+            user_id=user_id,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=models or [],
+            team_id=team_id,
+            team_models=team_models or [],
+        )
+
+    app.dependency_overrides[ps.user_api_key_auth] = _auth
+
+
+def test_v2_model_info_default_branch_filters_by_key_models(
+    client, configure_router, monkeypatch
+):
+    """key.models=['claude-3-opus'] must narrow even when user.models is empty.
+
+    Before veria-ai finding 1's fix, a virtual key restricted to claude-3-opus
+    could still pull metadata for every deployment on a bare GET /v2/model/info.
+    """
+    _override_auth_with(models=["claude-3-opus"], user_id="u-test")
+    _patch_user(monkeypatch, models=[])
+
+    resp = client.get("/v2/model/info", headers={"Authorization": "Bearer sk-test"})
+    assert resp.status_code == 200
+    assert _model_names(resp.json()) == ["claude-3-opus"]
+
+
+def test_v2_model_info_default_branch_filters_by_team_models(
+    client, configure_router, monkeypatch
+):
+    """team_models=['claude-3-haiku'] narrows when key.models is empty."""
+    _override_auth_with(
+        models=[], team_models=["claude-3-haiku"], team_id="t-1", user_id="u-test"
+    )
+    _patch_user(monkeypatch, models=[])
+
+    resp = client.get("/v2/model/info", headers={"Authorization": "Bearer sk-test"})
+    assert resp.status_code == 200
+    assert _model_names(resp.json()) == ["claude-3-haiku"]
+
+
+def test_v2_model_info_default_branch_key_models_take_precedence_over_team_models(
+    client, configure_router, monkeypatch
+):
+    """get_complete_model_list defers to team_models only when key_models is empty.
+
+    key.models=['gpt-4'] AND team_models=['claude-3-opus'] -> key wins -> gpt-4.
+    """
+    _override_auth_with(
+        models=["gpt-4"],
+        team_models=["claude-3-opus"],
+        team_id="t-1",
+        user_id="u-test",
+    )
+    _patch_user(monkeypatch, models=[])
+
+    resp = client.get("/v2/model/info", headers={"Authorization": "Bearer sk-test"})
+    assert resp.status_code == 200
+    assert _model_names(resp.json()) == ["gpt-4"]
+
+
+def test_v2_model_info_default_branch_key_models_multi_value(
+    client, configure_router, monkeypatch
+):
+    """key.models=['gpt-4', 'claude-3-haiku'] -> exactly those two deployments.
+
+    Wildcard semantics on key.models go through `get_complete_model_list` ->
+    `_get_wildcard_models`, which expands to provider-known model names, not
+    router deployment aliases. That quirk is shared with the listing path
+    and is out of scope here — test only the unambiguous multi-value case.
+    """
+    _override_auth_with(models=["gpt-4", "claude-3-haiku"], user_id="u-test")
+    _patch_user(monkeypatch, models=[])
+
+    resp = client.get("/v2/model/info", headers={"Authorization": "Bearer sk-test"})
+    assert resp.status_code == 200
+    assert _model_names(resp.json()) == ["claude-3-haiku", "gpt-4"]
+
+
+def test_v2_model_info_default_branch_key_all_proxy_models_no_narrow(
+    client, configure_router, monkeypatch
+):
+    """key.models=['all-proxy-models'] -> no narrowing from the key/team step."""
+    _override_auth_with(models=["all-proxy-models"], user_id="u-test")
+    _patch_user(monkeypatch, models=[])
+
+    resp = client.get("/v2/model/info", headers={"Authorization": "Bearer sk-test"})
+    assert resp.status_code == 200
+    assert _model_names(resp.json()) == sorted({m["model_name"] for m in _PROXY_MODELS})
+
+
+def test_v2_model_info_default_branch_key_and_user_models_intersect_to_empty(
+    client, configure_router, monkeypatch
+):
+    """key.models=['gpt-4'] AND user.models=['claude-3-opus'] -> empty intersection.
+
+    The key/team step narrows to ['gpt-4']; the user.models step then
+    intersects against ['claude-3-opus']. No overlap -> empty list.
+    """
+    _override_auth_with(models=["gpt-4"], user_id="u-test")
+    _patch_user(monkeypatch, models=["claude-3-opus"])
+
+    resp = client.get("/v2/model/info", headers={"Authorization": "Bearer sk-test"})
+    assert resp.status_code == 200
+    assert resp.json()["data"] == []
+
+
 def test_v2_model_info_user_models_takes_precedence_over_permissive_key(
     client, configure_router, monkeypatch
 ):

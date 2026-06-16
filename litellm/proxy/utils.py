@@ -6603,6 +6603,78 @@ async def apply_user_models_filter_to_deployments(
     return [d for d in deployments if d.get("model_name") in allowed_set]
 
 
+async def apply_key_team_models_filter_to_deployments(
+    deployments: List[Dict[str, Any]],
+    user_api_key_dict: "UserAPIKeyAuth",
+    llm_router: Optional["Router"],
+) -> List[Dict[str, Any]]:
+    """
+    Bound deployments by the calling key's `models` and the key's
+    team's `team_models`. Mirrors the listing-path filter that
+    `get_available_models_for_user` runs (`get_key_models` +
+    `get_team_models` + `get_complete_model_list`), so /v2/model/info's
+    default branch stays consistent with /v1/models on key/team
+    restrictions — not just on user.models (BerriAI/litellm#26420).
+
+    Unrestricted keys (key.models == [] AND team_models == [])
+    short-circuit to the full deployment list — same fallback as
+    `get_complete_model_list` ("if key list is empty -> defer to team
+    list; if team list is empty -> defer to proxy model list").
+
+    Order of `deployments` is preserved.
+    """
+    from litellm.proxy.auth.model_checks import (
+        get_complete_model_list,
+        get_key_models,
+        get_team_models,
+    )
+
+    if not deployments:
+        return deployments
+
+    if llm_router is None:
+        proxy_model_list: List[str] = []
+        model_access_groups: Dict[str, List[str]] = {}
+    else:
+        proxy_model_list = llm_router.get_model_names()
+        model_access_groups = llm_router.get_model_access_groups()
+
+    key_models = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=False,
+    )
+    team_models_resolved = get_team_models(
+        team_models=user_api_key_dict.team_models or [],
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=False,
+    )
+
+    # Both empty -> key is unrestricted at the key/team level
+    # (proxy admin / master key / unconstrained virtual key).
+    if not key_models and not team_models_resolved:
+        return deployments
+
+    allowed_model_names = get_complete_model_list(
+        key_models=key_models,
+        team_models=team_models_resolved,
+        proxy_model_list=proxy_model_list,
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=False,
+        llm_router=llm_router,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=False,
+        only_model_access_groups=False,
+        team_id=user_api_key_dict.team_id,
+    )
+
+    allowed_set = set(allowed_model_names)
+    return [d for d in deployments if d.get("model_name") in allowed_set]
+
+
 def create_model_info_response(
     model_id: str,
     provider: str,

@@ -12679,16 +12679,24 @@ async def model_info_v2(
             llm_router=llm_router,
         )
 
-    # Defense-in-depth: bound the result by LiteLLM_UserTable.models
-    # (Personal Models) so this endpoint stays consistent with
-    # /v1/models and inference-time can_user_call_model regardless of
-    # which flag combination the caller passed. Without this, a bare
-    # `GET /v2/model/info` (neither user_models_only nor
-    # include_team_models set) returns the full router model_list
-    # — leaking every deployment's litellm_params to anyone
-    # holding a virtual key. See BerriAI/litellm#26420.
-    from litellm.proxy.utils import apply_user_models_filter_to_deployments
+    # Defense-in-depth: bound the result by key.models / team_models
+    # (the listing-path filter) and then by LiteLLM_UserTable.models
+    # (Personal Models). Without these, a bare `GET /v2/model/info`
+    # (neither user_models_only nor include_team_models set) returns
+    # the full router model_list — leaking every deployment's
+    # litellm_params to any virtual key, even restricted ones.
+    # Matches /v1/models and inference-time `can_user_call_model`
+    # semantics. See BerriAI/litellm#26420.
+    from litellm.proxy.utils import (
+        apply_key_team_models_filter_to_deployments,
+        apply_user_models_filter_to_deployments,
+    )
 
+    all_models = await apply_key_team_models_filter_to_deployments(
+        deployments=all_models,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+    )
     all_models = await apply_user_models_filter_to_deployments(
         deployments=all_models,
         user_api_key_dict=user_api_key_dict,
