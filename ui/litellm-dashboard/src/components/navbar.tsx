@@ -16,6 +16,7 @@ import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/
 import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
 import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
 interface NavbarProps {
@@ -134,6 +135,11 @@ const Navbar: React.FC<NavbarProps> = ({
               </a>
               <BlogDropdown />
             </nav>
+
+            {/* Language switcher */}
+            <div className="flex shrink-0 items-center">
+              <LanguageSwitcher />
+            </div>
 
             {!hideCommunityLinks && (
               <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
