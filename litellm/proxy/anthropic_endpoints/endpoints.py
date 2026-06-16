@@ -5,6 +5,7 @@ Unified /v1/messages endpoint - (Anthropic Spec)
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions import AnthropicExceptionMapping
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -33,12 +34,26 @@ def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
     The streaming SSE path (message_delta.usage) already does not include
     total_tokens; this brings the non-streaming path into the same shape.
 
-    Only mutates dict-shaped responses. Streaming (StreamingResponse,
-    AsyncIterator, etc.) is left untouched.
+    Handles both shapes returned by `base_process_llm_request`:
+    - plain `dict` (most common — `AnthropicMessagesResponse` is a TypedDict
+      and is `dict` at runtime)
+    - Pydantic model whose `usage` attribute is dict-shaped (e.g. a
+      BaseModel that holds raw Anthropic usage as a `dict[str, int]`)
+
+    Streaming results (StreamingResponse, AsyncIterator, etc.) and Pydantic
+    models with strongly-typed Usage sub-models are left untouched —
+    those paths either have separate serialization handling or impose
+    type constraints the helper does not try to subvert.
     """
-    if not isinstance(response, dict):
+    if response is None:
         return
-    usage = response.get("usage")
+    if isinstance(response, dict):
+        usage = response.get("usage")
+        if isinstance(usage, dict) and "total_tokens" in usage:
+            usage.pop("total_tokens", None)
+        return
+    # Pydantic-model fallback: only mutate if `usage` is a dict.
+    usage = getattr(response, "usage", None)
     if isinstance(usage, dict) and "total_tokens" in usage:
         usage.pop("total_tokens", None)
 
@@ -92,18 +107,18 @@ async def anthropic_response(
             user_api_base=user_api_base,
             version=version,
         )
-        # Strip the non-Anthropic `usage.total_tokens` field LiteLLM adds
-        # internally. Anthropic's official /v1/messages spec only defines
-        # input_tokens / output_tokens / cache_*_input_tokens; total_tokens
-        # is an OpenAI convention. Keeping it here causes:
-        #   - Inconsistency with the streaming SSE path (message_delta.usage
-        #     never carries total_tokens)
-        #   - Inconsistency with direct gateway / Anthropic API responses
-        #   - Numerical misuse: total = input + output undercounts when
-        #     cache_read/creation tokens are present
-        # spend_logs / Prometheus still compute total internally — this only
-        # strips it from the wire response to clients.
-        _strip_total_tokens_from_anthropic_response(result)
+        # Optionally strip the non-Anthropic `usage.total_tokens` field
+        # LiteLLM adds internally. Anthropic's official /v1/messages spec
+        # only defines input_tokens / output_tokens / cache_*_input_tokens;
+        # total_tokens is an OpenAI convention. Default off
+        # (`litellm.strip_anthropic_total_tokens = False`) to preserve
+        # backward compatibility for clients that currently read it; set
+        # to True to align the wire response with the spec (and with the
+        # streaming SSE path, which already omits total_tokens).
+        # spend_logs / Prometheus still compute total internally — this
+        # only affects the wire response.
+        if litellm.strip_anthropic_total_tokens:
+            _strip_total_tokens_from_anthropic_response(result)
         return result
     except ModifyResponseException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
