@@ -249,7 +249,10 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 return {
                     **a,
                     "content": output_content + list(a.get("content") or []),
-                    "usage": cast(AnthropicUsage, {**(a.get("usage") or {}), "iterations": b}),
+                    "usage": cast(
+                        AnthropicUsage,
+                        {**(a.get("usage") or {}), "iterations": b},
+                    ),
                 }
         raise AdvisorMaxIterationsError("Advisor loop ended without a final response")
 
