@@ -2,8 +2,10 @@
 
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
-from opentelemetry import baggage
+from opentelemetry import baggage, metrics
 from opentelemetry.context import Context
+from opentelemetry.metrics import MeterProvider, NoOpMeterProvider
+from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -26,7 +28,7 @@ from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 from litellm.integrations.otel.model.utils import parse_headers as parse_headers
 
 if TYPE_CHECKING:
-    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.metrics import Meter
     from opentelemetry.sdk.metrics.export import MetricReader
 
 _SPAN_KIND_BY_ROLE_KIND: dict[LiteLLMSpanKind, SpanKind] = {
@@ -233,17 +235,46 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
 def build_meter_provider(
     config: OpenTelemetryV2Config,
     metric_reader: "MetricReader | None" = None,
-) -> "MeterProvider":
+) -> SDKMeterProvider:
     """Build the :class:`MeterProvider` for GenAI metrics.
 
     ``metric_reader`` is an explicit override (tests inject an
     ``InMemoryMetricReader``); otherwise the reader is selected from the config's
     exporter kind via :func:`build_metric_reader`.
     """
-    from opentelemetry.sdk.metrics import MeterProvider
-
     reader = metric_reader if metric_reader is not None else build_metric_reader(config)
-    return MeterProvider(metric_readers=[reader], resource=build_resource(config))
+    return SDKMeterProvider(metric_readers=[reader], resource=build_resource(config))
+
+
+def resolve_meter_provider(
+    config: OpenTelemetryV2Config,
+    meter_provider: MeterProvider | None = None,
+) -> MeterProvider:
+    """Resolve the :class:`MeterProvider` GenAI metrics record through.
+
+    An injected provider wins (DI/tests). Otherwise reuse whatever the operator has
+    configured as the global, whether a real SDK provider or an explicit
+    ``NoOpMeterProvider``, so the GenAI histograms ride the operator's
+    readers/exporters and an explicit opt-out is honored. Only when the global is
+    still the default proxy placeholder does V2 build one from the config and
+    publish it as the global, mirroring how V2 owns trace export. The built
+    provider is the one returned, so its reader thread is always live, never
+    orphaned.
+    """
+    if meter_provider is not None:
+        return meter_provider
+
+    existing = metrics.get_meter_provider()
+    if isinstance(existing, (SDKMeterProvider, NoOpMeterProvider)):
+        return existing
+
+    provider = build_meter_provider(config)
+    metrics.set_meter_provider(provider)
+    return provider
+
+
+def get_meter(provider: MeterProvider, name: str = "litellm") -> "Meter":
+    return provider.get_meter(name, litellm_version)
 
 
 def build_resource(config: OpenTelemetryV2Config) -> Resource:
