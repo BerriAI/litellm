@@ -56,6 +56,7 @@ Exit code 1 if any violation is found. Stdlib only.
 from __future__ import annotations
  
 import ast
+import io
 import re
 import sys
 import tokenize
@@ -178,7 +179,7 @@ def _comment_violations(path: Path, line_no: int, text: str) -> Iterator[Violati
  
 def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, ...]]:
     try:
-        tokens = tokenize.generate_tokens(iter(source.splitlines(keepends=True)).__next__)
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
         comment_toks = tuple((t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT)
     except tokenize.TokenError:
         return Comments({}, frozenset(), frozenset(), frozenset(), frozenset()), ()  # mutable-ok: read-only by_line placeholder, never mutated
@@ -322,19 +323,25 @@ def iter_cast_violations(path: Path, tree: ast.AST, comments: Comments) -> Itera
 
 
 def iter_guard_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
-    # The `from typing import TypeGuard` line is an ast.alias, not a Name/Attribute,
-    # so only *uses* (e.g. `-> TypeGuard[int]`) are flagged here; ruff bans the import.
+    # TypeGuard/TypeIs are legal only as a function's return annotation (`-> TypeGuard[int]`),
+    # so the walk is confined to `node.returns`; a runtime name that merely happens to read
+    # `TypeGuard` is not a narrowing predicate. ruff bans the import; this flags the use.
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Name, ast.Attribute)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.returns is None:
             continue
-        name = node.id if isinstance(node, ast.Name) else node.attr
-        if name in UNSAFE_GUARDS and node.lineno not in comments.guard_ok_lines:
-            yield Violation(
-                path, node.lineno, "LIT007",
-                f"`{name}` narrowing predicate: the checker never verifies the body, so a "
-                f"wrong guard silently corrupts types; parse into a concrete type instead "
-                f"(suppress: `# guard-ok: <reason>`)",
+        for sub in ast.walk(node.returns):
+            name = (
+                sub.id if isinstance(sub, ast.Name)
+                else sub.attr if isinstance(sub, ast.Attribute)
+                else None
             )
+            if name in UNSAFE_GUARDS and sub.lineno not in comments.guard_ok_lines:
+                yield Violation(
+                    path, sub.lineno, "LIT007",
+                    f"`{name}` narrowing predicate: the checker never verifies the body, so a "
+                    f"wrong guard silently corrupts types; parse into a concrete type instead "
+                    f"(suppress: `# guard-ok: <reason>`)",
+                )
  
  
 # --------------------------------------------------------------------------- #
