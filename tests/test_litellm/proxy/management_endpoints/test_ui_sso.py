@@ -2181,6 +2181,40 @@ class TestCLIKeyRegenerationFlow:
             is None
         )
 
+    def test_get_cli_state_drops_malformed_user_code(self):
+        """Test a user_code that is not a server-issued code is dropped before reaching the size-limited OAuth state"""
+        from litellm.constants import (
+            LITELLM_CLI_SESSION_TOKEN_PREFIX,
+            LITELLM_CLI_SOURCE_IDENTIFIER,
+        )
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        manual_only = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-abc123"
+        for bad_user_code in ("A" * 4096, "not-a-code", "WXYZ2345", "WXYZ-234", ""):
+            assert (
+                SSOAuthenticationHandler._get_cli_state(
+                    source=LITELLM_CLI_SOURCE_IDENTIFIER,
+                    key="cli-abc123",
+                    user_code=bad_user_code,
+                )
+                == manual_only
+            )
+
+    def test_is_valid_cli_sso_user_code_matches_generated_format(self):
+        """Test the user_code validator accepts a freshly generated code and rejects malformed input"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _generate_cli_sso_user_code,
+            _is_valid_cli_sso_user_code,
+        )
+
+        assert _is_valid_cli_sso_user_code(_generate_cli_sso_user_code())
+        assert _is_valid_cli_sso_user_code("WXYZ-2345")
+        assert not _is_valid_cli_sso_user_code("WXYZ-2340")  # 0 is not in the alphabet
+        assert not _is_valid_cli_sso_user_code("wxyz-2345")
+        assert not _is_valid_cli_sso_user_code("WXYZ2345")
+        assert not _is_valid_cli_sso_user_code("A" * 64)
+        assert not _is_valid_cli_sso_user_code(None)
+
     def test_cli_state_round_trips_user_code_to_callback_parser(self):
         """Test the callback's state parser recovers login_id and user_code from the state _get_cli_state builds"""
         from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
@@ -2214,6 +2248,8 @@ class TestCLIKeyRegenerationFlow:
         assert 'name="user_code"' in html
         assert "WXYZ-2345&quot;&gt;&lt;script&gt;" in html
         assert '"><script>' not in html
+        assert "Confirm the verification code below" in html
+        assert "shown in your terminal" not in html
 
     def test_render_cli_sso_verification_page_omits_value_without_prefill(self):
         """Test the verify page renders the empty manual input when no prefill is provided (backward compatible)"""
@@ -2230,6 +2266,7 @@ class TestCLIKeyRegenerationFlow:
             line for line in html.splitlines() if 'name="user_code"' in line
         )
         assert "value=" not in input_line
+        assert "shown in your terminal" in html
 
     @pytest.mark.asyncio
     async def test_cli_sso_callback_prefills_user_code_on_verify_page(self):

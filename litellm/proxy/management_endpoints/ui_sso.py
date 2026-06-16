@@ -145,6 +145,9 @@ _CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS = 60
 _CLI_SSO_START_RATE_LIMIT_MAX_ATTEMPTS = 30
 _CLI_SSO_USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _CLI_SSO_LOGIN_ID_RE = re.compile(r"^cli-[A-Za-z0-9_-]{12,124}$")
+_CLI_SSO_USER_CODE_RE = re.compile(
+    rf"^[{_CLI_SSO_USER_CODE_ALPHABET}]{{4}}-[{_CLI_SSO_USER_CODE_ALPHABET}]{{4}}$"
+)
 _CLI_SSO_SCALAR_TYPES = (str, int, float, bool)
 _CLI_SSO_DEST_KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _CLI_SSO_SECRET_KEY_FRAGMENTS = frozenset(
@@ -180,6 +183,12 @@ def _get_cli_sso_flow_cache_key(login_id: str) -> str:
 
 def _is_valid_cli_sso_login_id(login_id: Optional[str]) -> bool:
     return isinstance(login_id, str) and bool(_CLI_SSO_LOGIN_ID_RE.fullmatch(login_id))
+
+
+def _is_valid_cli_sso_user_code(user_code: Optional[str]) -> bool:
+    return isinstance(user_code, str) and bool(
+        _CLI_SSO_USER_CODE_RE.fullmatch(user_code)
+    )
 
 
 def _get_cli_sso_start_rate_limit_cache_key(
@@ -487,6 +496,11 @@ def _render_cli_sso_verification_page(
     user_code_value_attr = (
         f' value="{escape(prefill_user_code, quote=True)}"' if prefill_user_code else ""
     )
+    instructions = (
+        "Confirm the verification code below to finish this login."
+        if prefill_user_code
+        else "Enter the verification code shown in your terminal to finish this login."
+    )
     return f"""
     <!doctype html>
     <html>
@@ -540,7 +554,7 @@ def _render_cli_sso_verification_page(
       <body>
         <main>
           <h1>Complete CLI Login</h1>
-          <p>Enter the verification code shown in your terminal to finish this login.</p>
+          <p>{instructions}</p>
           <form method="post" action="{escaped_verify_url}">
             <input type="hidden" name="browser_complete_token" value="{escaped_browser_complete_token}" />
             <label for="user_code">Verification code</label>
@@ -3098,7 +3112,7 @@ class SSOAuthenticationHandler:
         )
 
         if source == LITELLM_CLI_SOURCE_IDENTIFIER and key:
-            if user_code:
+            if _is_valid_cli_sso_user_code(user_code):
                 return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}:{user_code}"
             return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
         else:
