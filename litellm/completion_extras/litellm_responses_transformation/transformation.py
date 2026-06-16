@@ -693,7 +693,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         original_response = model_call_details.get("original_response")
         return cls._recover_output_items_from_raw_sse(original_response)
 
-    def transform_response(  # noqa: PLR0915
+    def transform_response(
         self,
         model: str,
         raw_response: "BaseModel",

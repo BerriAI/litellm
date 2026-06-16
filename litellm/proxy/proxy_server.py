@@ -180,26 +180,26 @@ def generate_feedback_box():
     # Select a random message
     message = random.choice(list_of_messages)
 
-    print()  # noqa
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "# {:^59} #\033[0m".format(message))  # noqa
-    print(  # noqa
+    print()  # noqa: T201
+    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa: T201
+    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa: T201
+    print("\033[1;37m" + "# {:^59} #\033[0m".format(message))  # noqa: T201
+    print(  # noqa: T201
         "\033[1;37m"
         + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new")
-    )  # noqa
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-    print()  # noqa
-    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
-    print()  # noqa
-    print()  # noqa
-    print()  # noqa
-    print(  # noqa
+    )
+    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa: T201
+    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa: T201
+    print()  # noqa: T201
+    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa: T201
+    print()  # noqa: T201
+    print()  # noqa: T201
+    print()  # noqa: T201
+    print(  # noqa: T201
         "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-    )  # noqa
-    print()  # noqa
-    print()  # noqa
+    )
+    print()  # noqa: T201
+    print()  # noqa: T201
 
 
 import contextlib
@@ -3805,9 +3805,9 @@ class ProxyConfig:
 
         search_tools_parsed: List[SearchToolTypedDict] = []
 
-        print(  # noqa
+        print(  # noqa: T201
             "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m"
-        )  # noqa
+        )
 
         for search_tool in search_tools_raw:
             # Display loaded search tool
@@ -3815,7 +3815,9 @@ class ProxyConfig:
             search_provider = search_tool.get("litellm_params", {}).get(
                 "search_provider", ""
             )
-            print(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")  # noqa
+            print(  # noqa: T201
+                f"\033[32m    {search_tool_name} ({search_provider})\033[0m"
+            )
 
             # Handle os.environ/ variables in litellm_params
             litellm_params = search_tool.get("litellm_params", {})
@@ -3925,7 +3927,7 @@ class ProxyConfig:
             reset_color_code = "\033[0m"
             for key, value in litellm_settings.items():
                 if key == "cache" and value is True:
-                    print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa
+                    print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa: T201
                     from litellm.caching.caching import Cache
 
                     cache_params = {}
@@ -4120,9 +4122,9 @@ class ProxyConfig:
                                         "mounting metrics endpoint"
                                     )
                                     PrometheusLogger._mount_metrics_endpoint()
-                    print(  # noqa
+                    print(  # noqa: T201
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
-                    )  # noqa
+                    )
                 elif key == "failure_callback":
                     litellm.failure_callback = []
 
@@ -4141,9 +4143,9 @@ class ProxyConfig:
                             litellm.logging_callback_manager.add_litellm_failure_callback(
                                 callback
                             )
-                    print(  # noqa
+                    print(  # noqa: T201
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
-                    )  # noqa
+                    )
                 elif key == "audit_log_callbacks":
                     from litellm.proxy.management_helpers.audit_logs import (
                         reset_audit_log_callback_cache,
@@ -4167,9 +4169,9 @@ class ProxyConfig:
                         "store_audit_logs", litellm.store_audit_logs
                     )
                     if _store_audit_logs:
-                        print(  # noqa
+                        print(  # noqa: T201
                             f"{blue_color_code} Initialized Audit Log Callbacks - {litellm.audit_log_callbacks} {reset_color_code}"
-                        )  # noqa
+                        )
                     else:
                         verbose_proxy_logger.warning(
                             "'audit_log_callbacks' is configured but 'store_audit_logs' is not enabled. "
@@ -4516,15 +4518,15 @@ class ProxyConfig:
         model_list = config.get("model_list", None)
         if model_list:
             router_params["model_list"] = model_list
-            print(  # noqa
+            print(  # noqa: T201
                 "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
-            )  # noqa
+            )
             for model in model_list:
                 ### LOAD FROM os.environ/ ###
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = get_secret(v)
-                print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa
+                print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa: T201
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
                 if "ollama" in litellm_model_name and litellm_model_api_base is None:
@@ -7996,7 +7998,7 @@ class ProxyStartupEvent:
             and proxy_logging_obj.slack_alerting_instance.alerting is not None
             and prisma_client is not None
         ):
-            print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa
+            print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa: T201
             spend_report_frequency: str = (
                 general_settings.get("spend_report_frequency", "7d") or "7d"
             )
@@ -8490,7 +8492,7 @@ async def model_info(
     tags=["chat/completions"],
     responses={200: {"description": "Successful response"}, **ERROR_RESPONSES},
 )  # azure compatible endpoint
-async def chat_completion(  # noqa: PLR0915
+async def chat_completion(
     request: Request,
     fastapi_response: Response,
     model: Optional[str] = None,
@@ -8894,7 +8896,7 @@ async def completion(  # noqa: PLR0915
     response_class=ORJSONResponse,
     tags=["embeddings"],
 )  # azure compatible endpoint
-async def embeddings(  # noqa: PLR0915
+async def embeddings(
     request: Request,
     fastapi_response: Response,
     model: Optional[str] = None,
@@ -12640,7 +12642,7 @@ def _get_proxy_model_info(model: dict) -> dict:
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def model_info_v1(  # noqa: PLR0915
+async def model_info_v1(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_model_id: Optional[str] = None,
     include_team_models: Optional[bool] = fastapi.Query(
@@ -13370,7 +13372,7 @@ async def fallback_login(request: Request):
 @router.post(
     "/login", include_in_schema=False
 )  # hidden since this is a helper for UI sso login
-async def login(request: Request):  # noqa: PLR0915
+async def login(request: Request):
     global premium_user, general_settings, master_key
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
     from litellm.proxy.utils import get_custom_url
@@ -13420,7 +13422,7 @@ async def login(request: Request):  # noqa: PLR0915
 @router.post(
     "/v2/login", include_in_schema=False
 )  # hidden helper for UI logins via API
-async def login_v2(request: Request):  # noqa: PLR0915
+async def login_v2(request: Request):
     global premium_user, general_settings, master_key
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
     from litellm.proxy.utils import get_custom_url
@@ -13495,7 +13497,7 @@ async def login_v2(request: Request):  # noqa: PLR0915
 @router.post(
     "/v3/login", include_in_schema=False
 )  # control-plane login — always returns token in body for cross-origin use
-async def login_v3(request: Request):  # noqa: PLR0915
+async def login_v3(request: Request):
     global premium_user, general_settings, master_key
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
     from litellm.proxy.utils import get_custom_url

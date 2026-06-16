@@ -50,7 +50,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
-                print(print_statement)  # noqa
+                print(print_statement)  # noqa: T201
         except Exception:
             pass
 
@@ -769,7 +769,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 litellm_parent_otel_span=litellm_parent_otel_span,
             )
         except Exception as e:
-            self.print_verbose(e)  # noqa
+            self.print_verbose(e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:

@@ -27,7 +27,7 @@ from litellm.types.utils import EmbeddingResponse, all_litellm_params
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
-from .dual_cache import DualCache  # noqa
+from .dual_cache import DualCache  # noqa: F401
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
@@ -41,7 +41,7 @@ def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
     except Exception:
         pass
 

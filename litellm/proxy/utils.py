@@ -191,7 +191,7 @@ def print_verbose(print_statement):
 
     verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
-        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa
+        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa: T201
 
 
 def _get_email_logger_class():
@@ -3347,7 +3347,7 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     @log_db_metrics
-    async def get_data(  # noqa: PLR0915
+    async def get_data(
         self,
         token: Optional[Union[str, list]] = None,
         user_id: Optional[str] = None,
@@ -3790,7 +3790,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def insert_data(  # noqa: PLR0915
+    async def insert_data(
         self,
         data: dict,
         table_name: Literal[
@@ -3940,7 +3940,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def update_data(  # noqa: PLR0915
+    async def update_data(
         self,
         token: Optional[str] = None,
         data: dict = {},
@@ -5516,7 +5516,7 @@ class ProxyUpdateSpend:
         return False
 
 
-async def update_spend(  # noqa: PLR0915
+async def update_spend(
     prisma_client: PrismaClient,
     db_writer_client: Optional[AsyncHTTPHandler],
     proxy_logging_obj: ProxyLogging,

@@ -28,7 +28,7 @@ from typing import (
 
 import aiohttp
 
-import litellm  # noqa: E401
+import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -1432,7 +1432,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
-                print(print_statement)  # noqa
+                print(print_statement)  # noqa: T201
         except Exception:
             pass
 
