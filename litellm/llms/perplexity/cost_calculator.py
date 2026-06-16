@@ -82,7 +82,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         completion_cost: float = non_reasoning_completion_tokens * output_cost_per_token
         completion_cost += reasoning_tokens * _safe_float_cast(reasoning_cost_value)
     else:
-        completion_cost: float = (usage.completion_tokens or 0) * output_cost_per_token
+        completion_cost = (usage.completion_tokens or 0) * output_cost_per_token
 
     ## ADD SEARCH QUERIES COST (if present)
     num_search_queries = 0
