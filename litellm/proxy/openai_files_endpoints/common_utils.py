@@ -3,7 +3,7 @@ import mimetypes
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
@@ -307,7 +307,7 @@ def get_team_provider_credentials(
     team_models: List[str],
     custom_llm_provider: str,
     team_id: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[dict]:
     """
     Resolve upstream credentials for a provider-scoped file operation
     (e.g. GET /v1/files), which doesn't pin a model.
@@ -316,16 +316,18 @@ def get_team_provider_credentials(
     1. The team's own (BYOK) deployment for this provider — a deployment whose
        ``model_info.team_id`` matches ``team_id``. This keeps team-scoped listings
        on the team's own provider account/key instead of a shared global one.
-    2. Fallback: any deployment the team can access for this provider (covers
-       all-proxy-models teams that share global deployments).
+    2. Fallback: any deployment the team is granted access to for this provider,
+       expanding wildcard routes and the all-proxy-models sentinel.
 
-    Returns None when the router is unavailable or no deployment matches, so the
-    caller can fall back to default credential resolution.
+    Credential lookup is always scoped to the team's allowlist, so a team can
+    never resolve a provider key for a deployment it isn't authorized to use.
+    Returns None when the router is unavailable or no authorized deployment
+    matches, so the caller can fall back to default credential resolution.
     """
     if llm_router is None:
         return None
 
-    def _provider_credentials(model_id: str) -> Optional[Dict[str, Any]]:
+    def _provider_credentials(model_id: str) -> Optional[dict]:
         credentials = llm_router.get_deployment_credentials_with_provider(
             model_id=model_id
         )
@@ -349,9 +351,16 @@ def get_team_provider_credentials(
             if credentials is not None:
                 return credentials
 
-    # 2. Fall back to any team-accessible (shared/global) deployment for this
-    #    provider, expanding all-proxy-models and wildcard routes.
+    # 2. Fall back to deployments the team is allowed to access. The
+    #    all-proxy-models sentinel isn't expanded by get_complete_model_list, so
+    #    normalize it to an empty allowlist, which defers to the team-scoped
+    #    proxy model list. A team with a restricted allowlist (e.g. anthropic
+    #    only) therefore never resolves another provider's key.
+    from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    grants_all_models = SpecialModelNames.all_proxy_models.value in team_models
+    effective_team_models = [] if grants_all_models else team_models
 
     proxy_model_list = llm_router.get_model_names(team_id=team_id)
     model_access_groups = llm_router.get_model_access_groups()
@@ -359,7 +368,7 @@ def get_team_provider_credentials(
         dict.fromkeys(
             get_complete_model_list(
                 key_models=[],
-                team_models=team_models,
+                team_models=effective_team_models,
                 proxy_model_list=proxy_model_list,
                 user_model=None,
                 infer_model_from_keys=False,
@@ -372,16 +381,6 @@ def get_team_provider_credentials(
         )
     )
     for model_name in models_to_try:
-        credentials = _provider_credentials(model_name)
-        if credentials is not None:
-            return credentials
-
-    # Last resort: scan every deployment by model_name (covers all-proxy-models /
-    # wildcard teams whose allowlist doesn't expand to a concrete model name).
-    for deployment in llm_router.model_list or []:
-        model_name = deployment.get("model_name", "")
-        if not model_name:
-            continue
         credentials = _provider_credentials(model_name)
         if credentials is not None:
             return credentials

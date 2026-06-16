@@ -2311,6 +2311,72 @@ def test_list_files_without_target_model_names_uses_team_openai_deployment(
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
+def test_list_files_restricted_team_does_not_leak_global_openai_credentials(
+    mocker: MockerFixture, monkeypatch
+):
+    """
+    A team whose allowlist only grants anthropic must NOT resolve a global
+    openai deployment's api_key for plain GET /v1/files. Regression for the
+    last-resort scan that ignored team access control.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "global-openai-key",
+                },
+            },
+            {
+                "model_name": "claude-opus-4-6",
+                "litellm_params": {
+                    "model": "anthropic/claude-opus-4-6",
+                    "api_key": "anthropic-key",
+                },
+            },
+        ]
+    )
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=[])
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_afile_list(**kwargs):
+        captured_kwargs.update(kwargs)
+        return []
+
+    monkeypatch.setattr(litellm, "afile_list", _mock_afile_list)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        team_id="anthropic-only-team",
+        team_models=["claude-opus-4-6"],
+    )
+
+    try:
+        response = client.get(
+            "/v1/files",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs.get("api_key") != "global-openai-key"
+
+
 def test_list_files_prefers_team_byok_over_global_openai_deployment(
     mocker: MockerFixture, monkeypatch
 ):
