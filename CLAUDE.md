@@ -36,7 +36,11 @@ Don't hesitate to use values in .env to get needed API keys and other secrets, a
 
 Run tests, format your code, and lint your code before each commit
 
-When you fix strict-rule violations gated by `ruff-strict-budget.json`, run `make lint-strict-budget-update` and commit the lowered baselines so the ceilings ratchet down instead of leaving stale headroom
+When you fix violations gated by `ruff-strict-budget.json`, `mypy-code-budget.json`, or `basedpyright-code-budget.json`, run `make lint-budget-update` and commit the lowered baselines so the ceilings ratchet down instead of leaving stale headroom
+
+If you're trying to create a new function that relies on untyped stuff, instead of adding more Any's and bringing it closer to the max, just validate it in the caller with Pydantic (a model or `TypeAdapter` that returns the typed thing or raises will do) and then pass the now typed variable in
+
+The Any-discipline gate (`make lint-any`, also a CI job) fails when a line you changed under `litellm/` holds a value typed `Any`, including the `X | Any`. Ideally `# any-ok: <reason>` is never used; treat it as a last resort for a genuine typed/untyped boundary that Pydantic truly can't model
 
 Ask to commit and push your work when you're done (or if you're confident that your code is good and works, just do it)
 
@@ -66,8 +70,6 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 - No monster files or god objects
 - No file sprawl: deliberate file and folder structure
 - Standard over hand-rolled: use the official SDK or a library where one exists; where none does, follow industry standards instead of inventing local conventions
-
-if you're trying to create a new function that relies on untyped stuff, instead of adding more Any's and bringing it closer to the max, just validate it in the caller (a simple function that returns the typed thing or raises will do) and then pass the now typed variable in
 
 Follow conventional commits for commit names and PR titles
 
