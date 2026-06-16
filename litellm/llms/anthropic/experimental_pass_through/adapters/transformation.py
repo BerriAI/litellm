@@ -332,7 +332,14 @@ class LiteLLMAnthropicMessagesAdapter:
             if isinstance(source, dict)
             else getattr(source, "cache_control", None)
         )
-        if cache_control and model and self.is_anthropic_claude_model(model):
+        if (
+            cache_control
+            and model
+            and (
+                self.is_anthropic_claude_model(model)
+                or self.is_bedrock_arn_model(model)
+            )
+        ):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -751,6 +758,20 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         model_lower = model.lower()
         return "anthropic" in model_lower or "claude" in model_lower
+
+    @staticmethod
+    def is_bedrock_arn_model(model: str) -> bool:
+        """
+        Check if the model string is a Bedrock ARN, such as an Application
+        Inference Profile (e.g. arn:aws:bedrock:us-east-1:123:application-inference-profile/id).
+
+        These ARNs contain neither "anthropic" nor "claude", so is_anthropic_claude_model
+        cannot identify them even though, on the /v1/messages endpoint, they point at Claude.
+        Match ":bedrock:" in the ARN service field so another service's ARN that merely names
+        bedrock in a resource (arn:aws:sagemaker:.../my-bedrock-endpoint) is not matched.
+        """
+        model_lower = model.lower()
+        return "arn:" in model_lower and ":bedrock:" in model_lower
 
     @staticmethod
     def translate_thinking_for_model(
