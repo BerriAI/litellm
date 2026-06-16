@@ -745,7 +745,7 @@ async def _initialize_shared_aiohttp_session():
 
 
 @asynccontextmanager
-async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
+async def proxy_startup_event(app: FastAPI):
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
     import json
 
@@ -2506,7 +2506,7 @@ async def _invalidate_spend_counter(counter_key: str):
             )
 
 
-async def update_cache(  # noqa: PLR0915
+async def update_cache(
     token: Optional[str],
     user_id: Optional[str],
     end_user_id: Optional[str],
@@ -3910,7 +3910,7 @@ class ProxyConfig:
                 premium_user = _license_check.is_premium()
         return
 
-    async def load_config(  # noqa: PLR0915
+    async def load_config(
         self, router: Optional[litellm.Router], config_file_path: str
     ):
         """
@@ -6641,7 +6641,7 @@ def save_worker_config(**data):
     os.environ["WORKER_CONFIG"] = json.dumps(data)
 
 
-async def initialize(  # noqa: PLR0915
+async def initialize(
     model=None,
     alias=None,
     api_base=None,
@@ -7050,7 +7050,7 @@ def _pop_complete_sse_frame(buffer: str) -> tuple[str | None, str]:
     return buffer[:frame_end], buffer[frame_end:]
 
 
-async def async_data_generator(  # noqa: PLR0915
+async def async_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict,
@@ -7582,7 +7582,7 @@ class ProxyStartupEvent:
             )
 
     @classmethod
-    async def initialize_scheduled_background_jobs(  # noqa: PLR0915
+    async def initialize_scheduled_background_jobs(
         cls,
         general_settings: dict,
         prisma_client: PrismaClient,
@@ -8795,7 +8795,7 @@ async def chat_completion(
     dependencies=[Depends(user_api_key_auth)],
     tags=["completions"],
 )
-async def completion(  # noqa: PLR0915
+async def completion(
     request: Request,
     fastapi_response: Response,
     model: Optional[str] = None,
@@ -14528,7 +14528,7 @@ async def invitation_delete(
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def update_config(  # noqa: PLR0915
+async def update_config(
     config_info: ConfigYAML,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -15145,7 +15145,7 @@ async def delete_callback(
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_config():  # noqa: PLR0915
+async def get_config():
     """
     For Admin UI - allows admin to view config via UI
     # return the callbacks and the env variables for the callback

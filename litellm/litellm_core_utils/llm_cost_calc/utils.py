@@ -697,7 +697,7 @@ def _get_regional_uplift_multiplier(
         return 1.0
 
 
-def generic_cost_per_token(  # noqa: PLR0915
+def generic_cost_per_token(
     model: str,
     usage: Usage,
     custom_llm_provider: str,

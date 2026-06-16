@@ -679,7 +679,7 @@ def _enforce_upperbound_key_params(
                         )
 
 
-async def _common_key_generation_helper(  # noqa: PLR0915
+async def _common_key_generation_helper(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str],
@@ -3529,7 +3529,7 @@ def _check_model_access_group(
     return True
 
 
-async def generate_key_helper_fn(  # noqa: PLR0915
+async def generate_key_helper_fn(
     request_type: Literal[
         "user", "key"
     ],  # identifies if this request is from /user/new or /key/generate
@@ -4180,7 +4180,7 @@ async def delete_key_aliases(
     )
 
 
-async def _rotate_master_key(  # noqa: PLR0915
+async def _rotate_master_key(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,

@@ -986,7 +986,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self._get_masked_api_base(additional_args.get("api_base", ""))
         )
 
-    def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
+    def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
@@ -2119,7 +2119,7 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.async_success_handler(result=complete_streaming_response)
         return
 
-    def success_handler(  # noqa: PLR0915
+    def success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         verbose_logger.debug(
@@ -2584,7 +2584,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
             )
 
-    async def async_success_handler(  # noqa: PLR0915
+    async def async_success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         """
@@ -3036,7 +3036,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     kwargs=self.model_call_details,
                 )  # type: ignore
 
-    def failure_handler(  # noqa: PLR0915
+    def failure_handler(
         self, exception, traceback_exception, start_time=None, end_time=None
     ):
         verbose_logger.debug(
@@ -3753,7 +3753,7 @@ def _get_masked_values(
     }
 
 
-def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
+def set_callbacks(callback_list, function_id=None):
     """
     Globally sets the callback client
     """
@@ -3854,7 +3854,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     return None
 
 
-def _init_custom_logger_compatible_class(  # noqa: PLR0915
+def _init_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: Optional[DualCache],
     llm_router: Optional[
@@ -4611,7 +4611,7 @@ def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list) -> None:
         )
 
 
-def get_custom_logger_compatible_class(  # noqa: PLR0915
+def get_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
     try:

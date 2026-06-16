@@ -979,7 +979,7 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
     request.state.parent_otel_span = parent_otel_span
 
 
-async def _user_api_key_auth_builder(  # noqa: PLR0915
+async def _user_api_key_auth_builder(
     request: Request,
     api_key: str,
     azure_api_key_header: str,
@@ -2126,7 +2126,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
 
 
 @tracer.wrap()
-async def _run_centralized_common_checks(  # noqa: PLR0915
+async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
     request_data: dict,
