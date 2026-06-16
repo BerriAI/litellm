@@ -84,6 +84,11 @@ MUTABLE_CONSTRUCTORS = frozenset((
     "dict", "list", "set",
     "deque", "defaultdict", "OrderedDict", "Counter", "ChainMap",
 ))
+# A *qualified* call (`x.deque()`) counts as construction only for names that are rarely
+# method names; `dict`/`list`/`set` are dropped here because `.dict()` / `.set()` / `.list()`
+# are common methods (e.g. pydantic's `model.dict()`), not collection construction. A
+# qualified `collections.deque(...)` still counts.
+QUALIFIED_CONSTRUCTORS = MUTABLE_CONSTRUCTORS - frozenset(("dict", "list", "set"))
 UNSAFE_GUARDS = frozenset(("TypeGuard", "TypeIs"))
 MIN_REASON_LEN = 3
  
@@ -390,13 +395,10 @@ def _construction_kind(node: ast.expr) -> str | None:
         return "dict comprehension"
     if isinstance(node, ast.Call):
         func = node.func
-        name = (
-            func.id if isinstance(func, ast.Name)
-            else func.attr if isinstance(func, ast.Attribute)
-            else None
-        )
-        if name in MUTABLE_CONSTRUCTORS:
-            return f"`{name}()` constructor"
+        if isinstance(func, ast.Name) and func.id in MUTABLE_CONSTRUCTORS:
+            return f"`{func.id}()` constructor"
+        if isinstance(func, ast.Attribute) and func.attr in QUALIFIED_CONSTRUCTORS:
+            return f"`{func.attr}()` constructor"
     return None
 
 

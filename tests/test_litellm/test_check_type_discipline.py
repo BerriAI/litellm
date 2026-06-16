@@ -112,6 +112,20 @@ def test_generator_and_tuple_are_not_construction(tmp_path):
     assert "LIT002" not in _codes(tmp_path, "t = (1, 2, 3)\n")
 
 
+def test_dict_list_set_method_calls_are_not_construction(tmp_path):
+    # `.dict()` / `.list()` / `.set()` are common method names (e.g. pydantic model.dict()),
+    # not collection construction; only the unqualified builtins count.
+    assert "LIT002" not in _codes(tmp_path, "d = model.dict()\n")
+    assert "LIT002" not in _codes(tmp_path, "s = obj.set()\n")
+    assert "LIT002" in _codes(tmp_path, "d = dict(a=1)\n")  # unqualified still counts
+
+
+def test_qualified_collections_constructors_still_count(tmp_path):
+    # collections concretes are rarely method names, so a qualified call still flags.
+    assert "LIT002" in _codes(tmp_path, "import collections\nq = collections.deque()\n")
+    assert "LIT002" in _codes(tmp_path, "import collections\nm = collections.defaultdict(list)\n")
+
+
 def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
     codes = _codes(tmp_path, "x: dict[str, int] = {}  # mutable-ok: in-place buffer mutated hot path\n")
     assert "LIT001" not in codes
