@@ -1734,7 +1734,7 @@ async def calculate_spend(request: SpendCalculateRequest):
         200: {"model": List[LiteLLM_SpendLogs]},
     },
 )
-async def ui_view_spend_logs(  # noqa: PLR0915
+async def ui_view_spend_logs(
     request: Request,
     api_key: Optional[str] = fastapi.Query(
         default=None,
@@ -2273,7 +2273,7 @@ async def ui_view_request_response_for_request_id(
         200: {"model": List[LiteLLM_SpendLogs]},
     },
 )
-async def view_spend_logs(  # noqa: PLR0915
+async def view_spend_logs(
     api_key: Optional[str] = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",

@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 
-def initialize_callbacks_on_proxy(  # noqa: PLR0915
+def initialize_callbacks_on_proxy(
     value: Any,
     premium_user: bool,
     config_file_path: str,

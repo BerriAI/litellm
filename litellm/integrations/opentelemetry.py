@@ -2198,9 +2198,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return kv_pairs
 
-    def set_attributes(  # noqa: PLR0915
-        self, span: Span, kwargs, response_obj: Optional[Any]
-    ):
+    def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
         try:
             if self.callback_name == "langtrace":
                 from litellm.integrations.langtrace import LangtraceAttributes

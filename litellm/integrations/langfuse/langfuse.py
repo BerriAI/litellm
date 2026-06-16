@@ -549,7 +549,7 @@ class LangFuseLogger:
             )
         )
 
-    def _log_langfuse_v2(  # noqa: PLR0915
+    def _log_langfuse_v2(
         self,
         user_id: Optional[str],
         metadata: dict,
