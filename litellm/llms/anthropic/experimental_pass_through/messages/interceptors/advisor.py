@@ -84,8 +84,19 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         )
         # Optional routing overrides for the advisor sub-call (e.g. proxy routing).
         # If not set in the tool definition, litellm resolves from env vars.
-        advisor_api_key: Optional[str] = advisor_tool.get("api_key")
-        advisor_api_base: Optional[str] = advisor_tool.get("api_base")
+        #
+        # SEC: the advisor tool is fully caller-controlled. Honoring a
+        # client-supplied api_base/api_key here would let a request redirect
+        # the advisor sub-call to an attacker endpoint (and, with api_key
+        # omitted, fall back to the server's ANTHROPIC_API_KEY and ship it
+        # there). Only trust these when the proxy admin has explicitly enabled
+        # clientside credentials; otherwise drop them and let litellm resolve
+        # from server config / env based on the advisor model name (Veria #7).
+        advisor_api_key: Optional[str] = None
+        advisor_api_base: Optional[str] = None
+        if _allow_client_side_advisor_credentials():
+            advisor_api_key = advisor_tool.get("api_key")
+            advisor_api_base = advisor_tool.get("api_base")
 
         # Build the synthetic tool definition the provider will receive.
         synthetic_advisor_tool = _make_synthetic_advisor_tool()
@@ -179,6 +190,20 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _allow_client_side_advisor_credentials() -> bool:
+    """Whether a caller-supplied advisor api_base/api_key may be honored.
+
+    Gated on the proxy's ``allow_client_side_credentials`` opt-in. When the
+    interceptor runs outside the proxy (SDK use), there is no admin boundary
+    to protect, so client-supplied routing is allowed.
+    """
+    try:
+        from litellm.proxy.proxy_server import general_settings
+    except Exception:
+        return True
+    return general_settings.get("allow_client_side_credentials") is True
 
 
 def _make_synthetic_advisor_tool() -> Dict:

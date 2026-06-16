@@ -96,7 +96,13 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
     # admin's value in ``litellm_params`` and have it forwarded to the
     # redirected upstream.
     if "api_base" in request_kwargs or "base_url" in request_kwargs:
-        for field in _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE:
+        # SEC: ``api_key`` must be dropped alongside the other admin config
+        # fields. It lives in ``clientside_credential_keys`` (so it isn't in
+        # the cleared-fields list), which left the deployment key in
+        # ``litellm_params`` whenever the caller redirected api_base without
+        # resupplying a key — leaking the proxy's own credential to the
+        # attacker-controlled upstream (Veria #6c).
+        for field in (*_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE, "api_key"):
             litellm_params.pop(field, None)
             if field in request_kwargs:
                 litellm_params[field] = request_kwargs[field]

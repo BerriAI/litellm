@@ -101,9 +101,7 @@ async def test_anthropic_native_interceptor_skipped():
     )
 
     h = AdvisorOrchestrationHandler()
-    assert not h.can_handle(
-        [ADVISOR_TOOL], "anthropic"
-    ), "Interceptor must NOT trigger for anthropic provider"
+    assert not h.can_handle([ADVISOR_TOOL], "anthropic"), "Interceptor must NOT trigger for anthropic provider"
 
 
 # ---------------------------------------------------------------------------
@@ -204,9 +202,7 @@ async def test_loop_one_advisor_call():
     assert "is_prime" in texts[0]["text"]
 
     # No advisor tool_use blocks in final response
-    advisor_uses = [
-        b for b in content if b.get("type") == "tool_use" and b.get("name") == "advisor"
-    ]
+    advisor_uses = [b for b in content if b.get("type") == "tool_use" and b.get("name") == "advisor"]
     assert len(advisor_uses) == 0
 
 
@@ -366,9 +362,7 @@ async def test_prior_advisor_blocks_replaced_in_history():
 
     # Text block with advisor feedback must be present
     text_blocks = [b for b in content if b.get("type") == "text"]
-    feedback_blocks = [
-        b for b in text_blocks if "advisor_feedback" in b.get("text", "")
-    ]
+    feedback_blocks = [b for b in text_blocks if "advisor_feedback" in b.get("text", "")]
     assert len(feedback_blocks) >= 1
     assert "trial division" in feedback_blocks[0]["text"]
 
@@ -516,3 +510,84 @@ async def test_max_uses_none_falls_back_to_default():
             )
 
     assert str(_c.ADVISOR_MAX_USES) in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# 12. Defense-in-depth: client-supplied advisor api_base/api_key are dropped
+#     unless the proxy admin opted into clientside credentials (Veria #7)
+# ---------------------------------------------------------------------------
+
+
+ADVISOR_TOOL_WITH_CREDS = {
+    "type": "advisor_20260301",
+    "name": "advisor",
+    "model": "claude-opus-4-6",
+    "api_base": "https://attacker.example",
+    "api_key": "sk-attacker",
+}
+
+
+async def _run_advisor_and_capture_subcall_kwargs():
+    """Run one advisor turn and return the kwargs of the advisor sub-call."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    advisor_tool_use_resp = _make_advisor_tool_use_response(tool_id="toolu_01")
+    advisor_advice_resp = _make_text_response("advice", model="claude-opus-4-6")
+    final_resp = _make_text_response("final answer")
+
+    captured = {}
+    call_count = 0
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return advisor_tool_use_resp
+        if call_count == 2:
+            # The advisor sub-call — capture its routing kwargs.
+            captured["api_key"] = kwargs.get("api_key")
+            captured["api_base"] = kwargs.get("api_base")
+            return advisor_advice_resp
+        return final_resp
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_call,
+    ):
+        h = AdvisorOrchestrationHandler()
+        await h.handle(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL_WITH_CREDS],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_advisor_creds_dropped_when_proxy_opt_in_disabled():
+    """On the proxy without opt-in, the caller's advisor api_base/api_key must
+    NOT reach the sub-call (would redirect it / leak the server key)."""
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._allow_client_side_advisor_credentials",
+        return_value=False,
+    ):
+        captured = await _run_advisor_and_capture_subcall_kwargs()
+    assert captured["api_key"] is None
+    assert captured["api_base"] is None
+
+
+@pytest.mark.asyncio
+async def test_advisor_creds_honored_when_proxy_opt_in_enabled():
+    """With the admin opt-in, the documented clientside routing still works."""
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._allow_client_side_advisor_credentials",
+        return_value=True,
+    ):
+        captured = await _run_advisor_and_capture_subcall_kwargs()
+    assert captured["api_key"] == "sk-attacker"
+    assert captured["api_base"] == "https://attacker.example"

@@ -258,6 +258,34 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "aws_web_identity_token",
     "aws_role_name",
     "vertex_credentials",
+    # SEC: alias the Vertex provider also accepts for the same credential
+    # blob (litellm/main.py pops ``vertex_ai_credentials`` out of
+    # optional_params), so banning only ``vertex_credentials`` left this
+    # synonym as an open exfil path (Veria #6a).
+    "vertex_ai_credentials",
+    # SEC: project/region targeting + remaining Bedrock/OCI credential
+    # fields. ``vertex_project`` re-routes the request to any GCP project
+    # reachable with the deployment's service account; the ``aws_*`` keys
+    # are raw AWS credentials; the ``oci_*`` fields are the OCI signing
+    # identity; ``base_model`` forges cost tracking and slips a
+    # client-chosen base model into provider routing (Veria #3).
+    "vertex_project",
+    "vertex_location",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "base_model",
+    "oci_signer",
+    "oci_user",
+    "oci_fingerprint",
+    "oci_tenancy",
+    "oci_key",
+    "oci_key_file",
+    # SEC: ``model_list`` is an SDK-only construct. main.py reads
+    # api_base/api_key out of its nested ``litellm_params`` and runs
+    # batch_completion_models with server creds, so it is also rejected
+    # outright in ``is_request_body_safe`` regardless of opt-in (Veria #1).
+    "model_list",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
     # ``extra_body``) and resolves it through ``get_secret`` before
@@ -364,6 +392,19 @@ def is_request_body_safe(
     ``litellm_embedding_config.api_base`` (VERIA-6) without exposing a
     recursion-depth DoS surface.
     """
+    # SEC: ``model_list`` is an SDK-only feature with no proxy API meaning.
+    # main.py extracts api_base/api_key from each entry's ``litellm_params``
+    # and dispatches batch_completion_models with server credentials, so the
+    # whole field is rejected unconditionally — the opt-ins don't apply, since
+    # there is no legitimate proxy use of caller-supplied deployments (Veria #1).
+    if "model_list" in request_body:
+        raise ValueError(
+            "Rejected Request: model_list is not allowed in request body. "
+            "It is an SDK-only feature and lets a caller smuggle deployment "
+            "credentials/endpoints into the proxy. "
+            "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
+        )
+
     _check_banned_params(request_body, general_settings, llm_router, model)
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
@@ -373,7 +414,30 @@ def is_request_body_safe(
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model)
+    # SEC: scan caller-supplied tool definitions. Provider interceptors read
+    # api_base/api_key out of a tool entry (e.g. the Anthropic
+    # advisor_20260301 tool) and fall back to server credentials, so the same
+    # banned-param check has to descend into each tool dict and its nested
+    # ``function`` object (Veria #6b, #7).
+    for tool in _iter_request_tools(request_body.get("tools")):
+        _check_banned_params(tool, general_settings, llm_router, model)
+        function = tool.get("function")
+        if isinstance(function, dict):
+            _check_banned_params(function, general_settings, llm_router, model)
     return True
+
+
+def _iter_request_tools(tools: Any) -> Tuple[Dict[str, Any], ...]:
+    """Return the dict entries of a request ``tools`` array.
+
+    The OpenAI ``tools`` field is a list of objects; provider-specific tools
+    (advisor, web search, etc.) carry routing fields at the top level of each
+    entry. Non-dict entries are skipped rather than raising so a malformed
+    array still reaches the normal request validation downstream.
+    """
+    if not isinstance(tools, (list, tuple)):
+        return ()
+    return tuple(tool for tool in tools if isinstance(tool, dict))
 
 
 def _coerce_metadata_to_dict(value: Any) -> Optional[Dict[str, Any]]:
