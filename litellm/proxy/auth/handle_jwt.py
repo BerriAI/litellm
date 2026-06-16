@@ -113,6 +113,12 @@ class JWTHandler:
         LITELLM_ORG_ID_CLAIM,
         LITELLM_END_USER_ID_CLAIM,
     )
+    # Registered JWT claims (RFC 7519) that are safe to carry through issuer
+    # normalization regardless of mapping config: they identify/scope the token
+    # itself and are never trusted for authorization by LiteLLM.
+    STANDARD_JWT_CLAIMS = frozenset(
+        ("iss", "sub", "aud", "exp", "nbf", "iat", "jti")
+    )
 
     def __init__(
         self,
@@ -941,8 +947,12 @@ class JWTHandler:
     def _apply_issuer_claim_mappings(
         self, token: dict, issuer_config: JWTIssuerConfig
     ) -> dict:
+        # SEC: allowlist JWT claims to prevent cross-issuer injection (Veria #2)
+        # Authorization-bearing claims (scope, roles, ...) survive only when THIS
+        # issuer's config maps them below; everything unmapped is dropped so a
+        # low-trust issuer can't smuggle "scope": "litellm_proxy_admin" through.
         normalized: dict = {
-            k: v for k, v in token.items() if k not in self.LITELLM_INTERNAL_CLAIMS
+            k: v for k, v in token.items() if k in self.STANDARD_JWT_CLAIMS
         }
         normalized[self.LITELLM_JWT_ISSUER_CLAIM] = issuer_config.issuer
         claim_mappings = [
