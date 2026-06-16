@@ -422,9 +422,7 @@ async def test_cancel_batch_with_unified_id_routes_with_decoded_model_and_batch_
 
     model_id = "deployment-123"
     raw_batch_id = "batch_openai_123"
-    unified_batch_id = _make_unified_batch_id(
-        model_id=model_id, batch_id=raw_batch_id
-    )
+    unified_batch_id = _make_unified_batch_id(model_id=model_id, batch_id=raw_batch_id)
     mock_response = _make_batch_response(batch_id=raw_batch_id, status="cancelled")
     mock_response._hidden_params = {}
     mock_router = MagicMock()
