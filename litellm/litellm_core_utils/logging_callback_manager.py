@@ -394,6 +394,22 @@ class LoggingCallbackManager:
             + litellm._async_failure_callback
         )
 
+    def remove_callback_from_all_lists(self, obj, require_self=False) -> None:
+        """
+        Remove a callback object from every callback list it may have been
+        promoted into, so a re-initialized callback leaves no stale instance behind.
+        """
+        for callback_list in (
+            litellm.callbacks,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        ):
+            self.remove_callback_from_list_by_object(
+                callback_list, obj, require_self=require_self
+            )
+
     def get_active_additional_logging_utils_from_custom_logger(
         self,
     ) -> Set[AdditionalLoggingUtils]:
