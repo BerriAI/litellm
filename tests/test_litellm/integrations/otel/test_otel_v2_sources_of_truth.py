@@ -546,6 +546,19 @@ def test_capture_span_content_resolves_modes():
     )
 
 
+def test_capture_message_content_normalizer_only_touches_strings():
+    """The casing normalizer lower-cases strings and leaves anything else
+    untouched, so a non-string value still fails the field's ``str`` validation
+    instead of being silently coerced into a bogus capture mode."""
+    import pytest
+    from pydantic import ValidationError
+
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+
+    with pytest.raises(ValidationError):
+        OpenTelemetryV2Config(capture_message_content=123)
+
+
 def test_v2_flag_is_off_by_default(monkeypatch):
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
     assert is_otel_v2_enabled() is False
