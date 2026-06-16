@@ -70,6 +70,17 @@ def configure_router(monkeypatch):
     monkeypatch.setattr(ps, "general_settings", {})
     monkeypatch.setattr(ps, "prisma_client", MagicMock())
     monkeypatch.setattr(ps, "user_api_key_cache", DualCache())
+
+    # Upstream's model_info_v1 invokes _populate_team_access_on_models,
+    # which hits UserRepository(prisma_client).table.find_unique. The
+    # MagicMock prisma_client above can't be awaited there; stub the
+    # helper to a pass-through so the route exercises the user.models
+    # filter (the thing these tests cover) without dragging in real DB
+    # mocks.
+    async def _passthrough(*, user_api_key_dict, prisma_client, llm_router, all_models):
+        return all_models
+
+    monkeypatch.setattr(ps, "_populate_team_access_on_models", _passthrough)
     return router
 
 
