@@ -183,10 +183,23 @@ async def update_budget(
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
+    # recompute budget_reset_at when the duration changes, unless the caller pinned a reset time explicitly
+    recomputed_reset_at = (
+        {
+            "budget_reset_at": get_budget_reset_time(
+                budget_duration=budget_obj.budget_duration
+            )
+        }
+        if budget_obj.budget_duration is not None
+        and "budget_reset_at" not in budget_obj.model_fields_set
+        else {}
+    )
+
     response = await BudgetRepository(prisma_client).table.update(
         where={"budget_id": budget_obj.budget_id},
         data={
             **budget_obj.model_dump(exclude_unset=True),  # type: ignore
+            **recomputed_reset_at,
             "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         },  # type: ignore
     )
