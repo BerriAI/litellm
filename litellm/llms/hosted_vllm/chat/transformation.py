@@ -24,7 +24,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import _parse_mime_type
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantToolCall,
     ChatCompletionFileObject,
+    ChatCompletionToolCallFunctionChunk,
     ChatCompletionVideoObject,
     ChatCompletionVideoUrlObject,
 )
@@ -201,7 +203,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
                     text_parts = []
-                    tool_calls: List[Dict[str, Any]] = []
+                    tool_calls: List[ChatCompletionAssistantToolCall] = []
                     dropped_types = []
                     for c in existing_content:
                         if isinstance(c, dict) and c.get("type") == "text":
@@ -209,18 +211,18 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                         elif isinstance(c, dict) and c.get("type") == "tool_use":
                             tool_input = c.get("input", {})
                             tool_calls.append(
-                                {
-                                    "id": c.get("id"),
-                                    "type": "function",
-                                    "function": {
-                                        "name": c.get("name"),
-                                        "arguments": (
+                                ChatCompletionAssistantToolCall(
+                                    id=c.get("id"),
+                                    type="function",
+                                    function=ChatCompletionToolCallFunctionChunk(
+                                        name=c.get("name"),
+                                        arguments=(
                                             tool_input
                                             if isinstance(tool_input, str)
                                             else json.dumps(tool_input)
                                         ),
-                                    },
-                                }
+                                    ),
+                                )
                             )
                         elif isinstance(c, dict):
                             dropped_types.append(c.get("type", "unknown"))
