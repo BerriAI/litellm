@@ -888,16 +888,26 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
         asyncio.create_task(_run_pw_migration())
 
+    ## use_redis_transaction_buffer: fall back to a standalone Redis (REDIS_* env)
+    ## when the proxy cache backend is not Redis ##
+    transaction_buffer_redis_cache = redis_usage_cache
+    if transaction_buffer_redis_cache is None:
+        transaction_buffer_redis_cache = (
+            ProxyStartupEvent._get_transaction_buffer_redis_cache(
+                general_settings=general_settings
+            )
+        )
+
     ProxyStartupEvent._initialize_startup_logging(
         llm_router=llm_router,
         proxy_logging_obj=proxy_logging_obj,
-        redis_usage_cache=redis_usage_cache,
+        redis_usage_cache=transaction_buffer_redis_cache,
     )
 
     ## Validate use_redis_transaction_buffer requires Redis cache ##
     ProxyStartupEvent._validate_redis_transaction_buffer_config(
         general_settings=general_settings,
-        redis_usage_cache=redis_usage_cache,
+        redis_usage_cache=transaction_buffer_redis_cache,
     )
 
     ## SEMANTIC TOOL FILTER ##
@@ -7300,14 +7310,47 @@ class ProxyStartupEvent:
         if _use_redis_transaction_buffer and redis_usage_cache is None:
             raise ValueError(
                 "`use_redis_transaction_buffer` is enabled in general_settings "
-                "but no Redis cache is configured. This will cause spend updates "
+                "but no Redis is configured. This will cause spend updates "
                 "to not be tracked. Add a Redis cache in litellm_settings:\n\n"
                 "litellm_settings:\n"
                 "  cache: true\n"
                 "  cache_params:\n"
                 "    type: redis\n"
-                "    url: os.environ/REDIS_URL\n"
+                "    url: os.environ/REDIS_URL\n\n"
+                "or set REDIS_* environment variables (e.g. REDIS_HOST, "
+                "REDIS_PORT, REDIS_PASSWORD, or REDIS_URL) to use a standalone "
+                "Redis for the transaction buffer."
             )
+
+    @staticmethod
+    def _get_transaction_buffer_redis_cache(
+        general_settings: dict,
+    ) -> Optional[RedisCache]:
+        """
+        Builds a standalone Redis cache from REDIS_* environment variables so
+        use_redis_transaction_buffer can run when the proxy cache backend is not
+        Redis (e.g. disk, s3).
+
+        Returns None when the buffer is disabled, or when no Redis host or url
+        is set in the environment.
+        """
+        from litellm._redis import _redis_kwargs_from_environment
+        from litellm.secret_managers.main import str_to_bool
+
+        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
+            general_settings.get("use_redis_transaction_buffer", False)
+        )
+        if isinstance(_use_redis_transaction_buffer, str):
+            _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
+
+        if not _use_redis_transaction_buffer:
+            return None
+
+        redis_env_kwargs = _redis_kwargs_from_environment()
+        if "host" not in redis_env_kwargs and "url" not in redis_env_kwargs:
+            return None
+
+        return RedisCache(**redis_env_kwargs)
 
     @classmethod
     async def _initialize_semantic_tool_filter(
