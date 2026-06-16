@@ -875,3 +875,91 @@ async def test_streaming_reports_advisor_usage_in_message_delta():
     assert advisor_iters[0]["model"] == "claude-opus-4-6"
     assert advisor_iters[0]["input_tokens"] == 1234
     assert advisor_iters[0]["output_tokens"] == 56
+
+
+# ---------------------------------------------------------------------------
+# 12. Advisor model access is validated against the caller's API key
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_advisor_model_access_denied_raises():
+    """When the proxy router is available and can_key_call_model rejects the
+    advisor model, the exception must propagate before any sub-call runs."""
+    from litellm.proxy._types import ProxyException
+
+    mock_router = MagicMock()
+    mock_token = MagicMock()
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+            return_value=mock_router,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            side_effect=ProxyException(
+                message="key not allowed to call claude-opus-4-6",
+                type="key_model_access_denied",
+                param="model",
+                code=403,
+            ),
+        ),
+    ):
+        with pytest.raises(ProxyException, match="key not allowed"):
+            from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+                anthropic_messages,
+            )
+
+            await anthropic_messages(
+                model="openai/gpt-4o-mini",
+                messages=MESSAGES,
+                tools=[ADVISOR_TOOL],
+                stream=False,
+                max_tokens=512,
+                custom_llm_provider="openai",
+                litellm_metadata={"user_api_key_auth": mock_token},
+            )
+
+    mock_router.anthropic_messages.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_advisor_model_access_skipped_without_router():
+    """Without a proxy router (standalone SDK), the auth check is skipped and
+    the advisor loop runs normally."""
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            return _text_resp("Advice.", model="claude-opus-4-6")
+        return _text_resp("Done.")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+            return_value=None,
+        ),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+            side_effect=mock_handler,
+        ),
+    ):
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            anthropic_messages,
+        )
+
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    assert call_count == 3

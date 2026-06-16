@@ -90,6 +90,8 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         advisor_api_key: Optional[str] = advisor_tool.get("api_key")
         advisor_api_base: Optional[str] = advisor_tool.get("api_base")
 
+        await _check_advisor_model_access(advisor_model, kwargs)
+
         # Build the synthetic tool definition the provider will receive.
         synthetic_advisor_tool = _make_synthetic_advisor_tool()
 
@@ -546,6 +548,34 @@ def _get_llm_router():
         return llm_router
     except ImportError:
         return None
+
+
+async def _check_advisor_model_access(advisor_model: str, kwargs: Dict) -> None:
+    """Validate that the caller's API key is allowed to invoke the advisor model.
+
+    Only runs when a proxy router is available (i.e. inside the proxy); standalone
+    SDK usage has no auth layer and skips the check."""
+    router = _get_llm_router()
+    if router is None:
+        return
+
+    litellm_metadata = kwargs.get("litellm_metadata")
+    if not isinstance(litellm_metadata, dict):
+        return
+
+    user_api_key_auth = litellm_metadata.get("user_api_key_auth")
+    if user_api_key_auth is None:
+        return
+
+    import litellm
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    await can_key_call_model(
+        model=advisor_model,
+        llm_model_list=getattr(litellm, "model_list", None),
+        valid_token=user_api_key_auth,
+        llm_router=router,
+    )
 
 
 async def _call_messages_handler(
