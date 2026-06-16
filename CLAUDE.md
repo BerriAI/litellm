@@ -38,6 +38,8 @@ Run tests, format your code, and lint your code before each commit
 
 When you fix strict-rule violations gated by `ruff-strict-budget.json`, run `make lint-strict-budget-update` and commit the lowered baselines so the ceilings ratchet down instead of leaving stale headroom
 
+When a lint or type-discipline check fails, refactor the code to follow functional programming best practices rather than introducing mutable data structures. Build values in one shot with comprehensions or generators wrapped in `tuple()` / `frozenset()` instead of seeding an empty `list`/`dict`/`set` and mutating it over time. Ideally `# mutable-ok` is never used; reach for it only as a genuine last resort when an immutable rewrite is truly impossible (for example, a hard boundary to an imperative third-party API), and always pair it with a real reason
+
 Ask to commit and push your work when you're done (or if you're confident that your code is good and works, just do it)
 
 When you must use real LLM models to, for example, write e2e tests, write a QA runbook, etc., make sure to use the latest models (doesn't have to be smartest, can also be a modern small, fast one. No strong preference for smart vs fast here, just use something modern) as of the year and month of the current date. Do a web search as necessary to figure that out

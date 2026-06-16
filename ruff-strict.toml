@@ -19,10 +19,10 @@ max-args = 5
 "typing.MutableSequence".msg = "Sequence[X]."
 "typing.MutableMapping".msg = "See typing.Dict."
 # Unchecked casts: cast() lies to the type checker with no runtime guarantee.
-# Validate into a concrete frozen type at the boundary (msgspec/pydantic) instead.
+# Validate into a concrete frozen type at the boundary (pydantic) instead.
 # Per-call-site coverage lives in check_type_discipline.py (LIT006); this freezes
 # new cast imports. Suppress (with a reason) via `# noqa: TID251  # <reason>`.
-"typing.cast".msg = "No unchecked casts: validate into a frozen dataclass/NamedTuple/ReadOnly TypedDict at the boundary (msgspec/pydantic)."
+"typing.cast".msg = "No unchecked casts: validate into a frozen dataclass/NamedTuple/ReadOnly TypedDict at the boundary (pydantic)."
 "typing_extensions.cast".msg = "Same as typing.cast."
 # Unverified narrowing predicates: the checker never validates the guard body, so a
 # wrong guard silently corrupts types. Banned outright (there are none today).
