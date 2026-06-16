@@ -9,7 +9,6 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Type, Union
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from websockets.asyncio.client import ClientConnection, connect
 
@@ -129,6 +128,18 @@ class AimGuardrail(CustomGuardrail):
             verbose_proxy_logger.error(f"Aim: {action_type} action")
         return data
 
+    @staticmethod
+    def _rejection(
+        message: str, *, openai_code: Optional[str] = None
+    ) -> ProxyException:
+        return ProxyException(
+            message=message,
+            type="invalid_request_error",
+            param=None,
+            code=400,
+            openai_code=openai_code,
+        )
+
     def _handle_block_action(self, analysis_result: Any, required_action: Any) -> None:
         detection_message = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
@@ -136,13 +147,7 @@ class AimGuardrail(CustomGuardrail):
                 policies=list(analysis_result["policy_drill_down"].keys()),
             ),
         )
-        raise ProxyException(
-            message=detection_message,
-            type="invalid_request_error",
-            param=None,
-            code=400,
-            openai_code="content_policy_violation",
-        )
+        raise self._rejection(detection_message, openai_code="content_policy_violation")
 
     def _anonymize_request(self, res: Any, data: dict) -> dict:
         verbose_proxy_logger.info("Aim: anonymize action")
@@ -154,14 +159,11 @@ class AimGuardrail(CustomGuardrail):
         # parts from a multimodal request — degrade to block so the
         # multimodal payload is never silently rewritten.
         if has_non_string_content(data):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Aim: anonymize action requested for multimodal input "
-                    "but mask-in-place would drop non-text parts. Send the "
-                    "request with plain string content to use anonymize, "
-                    "or rely on block-mode policies."
-                ),
+            raise self._rejection(
+                "Aim: anonymize action requested for multimodal input "
+                "but mask-in-place would drop non-text parts. Send the "
+                "request with plain string content to use anonymize, "
+                "or rely on block-mode policies."
             )
         redacted_messages = [
             {
@@ -293,9 +295,9 @@ class AimGuardrail(CustomGuardrail):
             if aim_output_guardrail_result and aim_output_guardrail_result.get(
                 "detection_message"
             ):
-                raise HTTPException(
-                    status_code=400,
-                    detail=aim_output_guardrail_result.get("detection_message"),
+                raise self._rejection(
+                    aim_output_guardrail_result.get("detection_message"),
+                    openai_code="content_policy_violation",
                 )
             if aim_output_guardrail_result and aim_output_guardrail_result.get(
                 "redacted_output"
