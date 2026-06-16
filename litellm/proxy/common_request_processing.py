@@ -590,6 +590,7 @@ class ProxyBaseLLMRequestProcessing:
         headers = {
             "x-litellm-call-id": call_id,
             "x-litellm-model-id": model_id,
+            "x-litellm-routed-model": hidden_params.get("routed_model"),
             "x-litellm-cache-key": cache_key,
             "x-litellm-model-api-base": (
                 api_base.split("?")[0] if api_base else None

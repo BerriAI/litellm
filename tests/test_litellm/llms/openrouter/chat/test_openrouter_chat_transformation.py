@@ -455,6 +455,124 @@ def test_openrouter_cost_tracking_non_streaming():
     )
 
 
+def test_openrouter_exposes_routed_model_in_headers():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/29406
+
+    When calling openrouter/auto, OpenRouter resolves the request to a concrete
+    model and returns it in the response body's top-level "model" field. The proxy
+    reports only the requested model group ("openrouter/auto"), so the actually
+    routed model must be captured into _hidden_params["routed_model"], which the proxy
+    surfaces as the x-litellm-routed-model response header.
+    """
+    from unittest.mock import Mock, patch
+    from litellm.types.utils import ModelResponse, Choices, Message, Usage
+
+    config = OpenrouterConfig()
+
+    requested_model = "openrouter/auto"
+    routed_model = "anthropic/claude-sonnet-4"
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "gen-123",
+        "model": routed_model,
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+    }
+    mock_response.headers = {}
+
+    model_response = ModelResponse(
+        id="gen-123",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="Hello!", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model=requested_model,
+        object="chat.completion",
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+
+    with patch.object(
+        OpenAIGPTConfig, "transform_response", return_value=model_response
+    ):
+        result = config.transform_response(
+            model=requested_model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    assert result._hidden_params["routed_model"] == routed_model
+    # the routed model must differ from the requested group, otherwise the header adds nothing
+    assert result._hidden_params["routed_model"] != requested_model
+
+    # A non-auto request whose response echoes the requested model must NOT set the
+    # header, so plain (non-auto) OpenRouter traffic is left untagged
+    echoed_model = "anthropic/claude-sonnet-4"
+    mock_echo = Mock(spec=httpx.Response)
+    mock_echo.json.return_value = {
+        "id": "gen-456",
+        "model": echoed_model,
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "Hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    mock_echo.headers = {}
+
+    echo_response = ModelResponse(
+        id="gen-456",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="Hi", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model=f"openrouter/{echoed_model}",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    with patch.object(
+        OpenAIGPTConfig, "transform_response", return_value=echo_response
+    ):
+        echo_result = config.transform_response(
+            model=f"openrouter/{echoed_model}",
+            raw_response=mock_echo,
+            model_response=echo_response,
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    assert "routed_model" not in echo_result._hidden_params
+
+
 def test_openrouter_cost_tracking_streaming():
     """
     Test OpenRouter cost tracking for streaming completions.
