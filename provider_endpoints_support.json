@@ -1922,6 +1922,15 @@
         "interactions": true
       }
     },
+    "qianfan": {
+      "display_name": "Qianfan (`qianfan`)",
+      "url": "https://docs.litellm.ai/docs/providers/qianfan",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
+      }
+    },
     "predibase": {
       "display_name": "Predibase (`predibase`)",
       "url": "https://docs.litellm.ai/docs/providers/predibase",

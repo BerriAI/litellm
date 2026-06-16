@@ -385,6 +385,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
+                    elif endpoint == "https://qianfan.baidubce.com/v2":
+                        custom_llm_provider = "qianfan"
+                        dynamic_api_key = api_key or get_secret_str("QIANFAN_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
