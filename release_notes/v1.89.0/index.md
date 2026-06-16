@@ -64,6 +64,8 @@ pip install litellm==1.89.0
 
 This release lets you securely store per-server credentials for MCP servers directly on the gateway. Define variables once on a server, scoped either as **Instance** (shared across all users) or **Per-user** (each user supplies their own value), and reference them in static headers or authentication using `${VAR_NAME}` syntax (for example, `${DB_PROTOCOL}://${CORP_USERNAME}:${CORP_PASSWORD}@${DB_HOSTNAME}`), letting each user connect their own identity.
 
+[Get Started](../../docs/mcp#server-variables)
+
 ## New Providers and Endpoints
 
 ### New Providers (3 new providers)

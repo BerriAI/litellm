@@ -166,6 +166,16 @@ These headers get sent with every request to the server. That's it.
 - You want full control over exactly what headers are sent
 - You're debugging and need to quickly add headers without changing auth configuration
 
+### Server Variables
+
+Store credentials on the server and reference them in static headers or authentication with `${VAR_NAME}` (e.g. `${DB_PROTOCOL}://${CORP_USERNAME}:${CORP_PASSWORD}@${DB_HOSTNAME}`). Scope each variable as **Instance** (shared) or **Per-user** (each user supplies their own).
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/12878e2be19140069170c3a270b50d1c" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+**When to use this:**
+- Each user needs to connect with their own static credentials
+- You want to reuse certain shared details (e.g., DB url) across users
+
 </TabItem>
 
 <TabItem value="config" label="config.yaml">
