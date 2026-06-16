@@ -4,6 +4,8 @@ Translates from OpenAI's `/v1/chat/completions` to ModelScope's `/v1/chat/comple
 
 from typing import Any, Coroutine, Literal, Optional, Tuple, Union, cast, overload
 
+from typing_extensions import override
+
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
@@ -69,6 +71,7 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         dynamic_api_key = api_key or get_secret_str("MODELSCOPE_API_KEY")
         return api_base, dynamic_api_key
 
+    @override
     def get_complete_url(
         self,
         api_base: Optional[str],
