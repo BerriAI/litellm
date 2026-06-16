@@ -15,6 +15,7 @@ import threading
 import time
 import traceback
 import warnings
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
@@ -8343,8 +8344,10 @@ async def model_list(
 
         # Surface the public name for team-scoped rows by default. Operators
         # that need legacy internal routing keys can explicitly disable this.
-        if general_settings.get("use_team_public_model_name", True):
-            all_models = _translate_model_names_for_listing(all_models, llm_router)
+        if _should_use_team_public_model_name():
+            all_models = _translate_model_names_for_listing(
+                all_models, _get_team_model_deployments_for_listing(llm_router)
+            )
 
         # Build response data with all proxy models
         model_data = []
@@ -8385,8 +8388,10 @@ async def model_list(
 
     # Surface the public name for team-scoped rows by default. Operators that
     # need legacy internal routing keys can explicitly disable this.
-    if general_settings.get("use_team_public_model_name", True):
-        all_models = _translate_model_names_for_listing(all_models, llm_router)
+    if _should_use_team_public_model_name():
+        all_models = _translate_model_names_for_listing(
+            all_models, _get_team_model_deployments_for_listing(llm_router)
+        )
 
     # Build response data
     model_data = []
@@ -12597,7 +12602,24 @@ def _translate_model_name_for_response(model: dict) -> dict:
     return {**model, "model_name": team_public}
 
 
-def _translate_model_names_for_listing(model_names: List[str], llm_router) -> List[str]:
+def _should_use_team_public_model_name() -> bool:
+    settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
+    use_public_name = settings.get("use_team_public_model_name", True)
+    return use_public_name is not False
+
+
+def _get_team_model_deployments_for_listing(
+    llm_router: Router | None,
+) -> Sequence[Mapping[str, object]]:
+    if llm_router is None:
+        return ()
+    return cast(Sequence[Mapping[str, object]], llm_router.get_model_list() or ())
+
+
+def _translate_model_names_for_listing(
+    model_names: list[str],
+    model_deployments: Sequence[Mapping[str, object]],
+) -> list[str]:
     """Swap internal team routing keys for their public names in list-style
     responses (e.g. `/v1/models`, `/models`).
 
@@ -12608,21 +12630,35 @@ def _translate_model_names_for_listing(model_names: List[str], llm_router) -> Li
     unchanged (see issue #28382). Sibling deployments collapse to one public
     name, so the result is de-duplicated while preserving order.
     """
-    if llm_router is None:
+    if not model_deployments:
         return model_names
-    internal_to_public: Dict[str, str] = {}
-    for m in getattr(llm_router, "model_list", None) or []:
-        model_info = m.get("model_info") or {}
-        if not isinstance(model_info, dict):
+    internal_to_public: dict[str, str] = {}
+    for model in model_deployments:
+        model_info_raw = model.get("model_info")
+        if not isinstance(model_info_raw, Mapping):
             continue
+        model_info = cast(Mapping[str, object], model_info_raw)  # any-ok: checked
         team_id = model_info.get("team_id")
         team_public = model_info.get("team_public_model_name")
-        name = m.get("model_name") or ""
-        if team_id and team_public and name.startswith(f"model_name_{team_id}_"):
+        name = model.get("model_name")
+        if (
+            isinstance(team_id, str)
+            and isinstance(team_public, str)
+            and isinstance(name, str)
+            and name.startswith(f"model_name_{team_id}_")
+        ):
             internal_to_public[name] = team_public
     if not internal_to_public:
         return model_names
-    return list(dict.fromkeys(internal_to_public.get(n, n) for n in model_names))
+    translated_names: list[str] = []
+    seen_names: set[str] = set()
+    for model_name in model_names:
+        translated_name = internal_to_public.get(model_name, model_name)
+        if translated_name in seen_names:
+            continue
+        seen_names.add(translated_name)
+        translated_names.append(translated_name)
+    return translated_names
 
 
 def _get_proxy_model_info(model: dict) -> dict:

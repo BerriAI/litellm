@@ -676,6 +676,46 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
     assert "tushar-gpt-4.1" not in ids
 
 
+@pytest.mark.asyncio
+async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
+    """include_metadata=true must build metadata for the public model id."""
+    team_dep = {
+        "model_name": "model_name_teamX_uuid9",
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {
+            "id": "id1",
+            "team_id": "teamX",
+            "team_public_model_name": "tushar-gpt-4.1",
+            "access_groups": ["grp-a"],
+        },
+    }
+    router = MagicMock()
+    router.get_model_names.return_value = ["model_name_teamX_uuid9"]
+    router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_fully_blocked_model_names.return_value = set()
+    router.model_list = [team_dep]
+    router.get_model_list.return_value = [team_dep]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {})
+
+    key = UserAPIKeyAuth(
+        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
+    )
+    resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
+
+    assert resp["data"] == [
+        {
+            "id": "tushar-gpt-4.1",
+            "object": "model",
+            "created": 1677610602,
+            "owned_by": "openai",
+            "metadata": {"fallbacks": []},
+        }
+    ]
+
+
 def test_translate_model_names_for_listing_swaps_and_dedupes():
     """Internal team routing keys -> public name; sibling deployments sharing a
     public name collapse to one entry (order preserved); globals untouched."""
@@ -701,7 +741,8 @@ def test_translate_model_names_for_listing_swaps_and_dedupes():
     ]
 
     out = _translate_model_names_for_listing(
-        ["model_name_teamX_uuidA", "model_name_teamX_uuidB", "gpt-4o"], router
+        ["model_name_teamX_uuidA", "model_name_teamX_uuidB", "gpt-4o"],
+        router.model_list,
     )
     assert out == ["tushar-gpt-4.1", "gpt-4o"]
 
@@ -712,14 +753,13 @@ def test_translate_model_names_for_listing_leaves_unmapped_names():
 
     router = MagicMock()
     router.model_list = [{"model_name": "gpt-4o", "model_info": {"db_model": False}}]
-    assert _translate_model_names_for_listing(["gpt-4o", "beta-group"], router) == [
-        "gpt-4o",
-        "beta-group",
-    ]
+    assert _translate_model_names_for_listing(
+        ["gpt-4o", "beta-group"], router.model_list
+    ) == ["gpt-4o", "beta-group"]
 
 
 def test_translate_model_names_for_listing_none_router():
     """No router -> return the input list unchanged."""
     from litellm.proxy.proxy_server import _translate_model_names_for_listing
 
-    assert _translate_model_names_for_listing(["a", "b"], None) == ["a", "b"]
+    assert _translate_model_names_for_listing(["a", "b"], ()) == ["a", "b"]
