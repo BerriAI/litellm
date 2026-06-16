@@ -42,6 +42,7 @@ proxy YAML config; the registration logic lives in
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from typing import Any
@@ -188,21 +189,19 @@ class MTHeadroomAggressive(HeadroomCallback, CustomLogger):
                 e,
             )
 
-    # LiteLLM's pre-call dispatch (litellm/proxy/utils.py:1515) calls the hook
-    # with a different signature than upstream HeadroomCallback expects:
-    #   LiteLLM    : (user_api_key_dict, cache, data, call_type)
-    #   upstream HC: (user_api_key, data, call_type)
-    # We accept LiteLLM's kwargs and adapt them to upstream's signature so
-    # the parent's compress() body still runs. The user_api_key string is
-    # only used by upstream for opaque pass-through to its compressor, so a
-    # synthetic value (the hashed token) is fine.
+    # LiteLLM's pre-call dispatch (litellm/proxy/utils.py:1515) calls this with:
+    #   (user_api_key_dict, cache, data, call_type)
+    # Defining it satisfies the dispatcher's three gates:
+    #   1. isinstance(_callback, CustomLogger) — MRO includes CustomLogger
+    #   2. "async_pre_call_hook" in vars(self.__class__) — defined here
+    #   3. cls.async_pre_call_hook != CustomLogger.async_pre_call_hook — overridden
     #
-    # Defining this method also satisfies the dispatcher's gates:
-    #   1. `isinstance(_callback, CustomLogger)` — covered by the MRO
-    #      (we mix CustomLogger in below).
-    #   2. `"async_pre_call_hook" in vars(self.__class__)` — defining it here.
-    #   3. `cls.async_pre_call_hook != CustomLogger.async_pre_call_hook` —
-    #      this override is not the CustomLogger no-op default.
+    # mt-007: We NO LONGER delegate to HeadroomCallback.async_pre_call_hook
+    # because it calls _local_compress SYNCHRONOUSLY, blocking the uvicorn
+    # event loop for 5-16s (ModernBERT inference on CPU). This starved the
+    # /health/liveliness endpoint → pod restart loops.
+    # Instead we implement the dispatch inline and run compress() via
+    # asyncio.to_thread() so the event loop stays responsive.
     async def async_pre_call_hook(  # type: ignore[override]
         self,
         user_api_key_dict: Any,
@@ -210,22 +209,40 @@ class MTHeadroomAggressive(HeadroomCallback, CustomLogger):
         data: dict[str, Any],
         call_type: str,
     ) -> dict[str, Any]:
-        # Upstream's hook gates on ``call_type in ("completion", "acompletion")``
-        # which excludes Anthropic-shape /v1/messages (route_type =
-        # "anthropic_messages"). Claude Code uses /v1/messages exclusively,
-        # so without this lift the entire Claude-Code path skips compression.
-        # Spoof the call_type as ``acompletion`` for upstream's gate; the
-        # compress() function itself doesn't care about the route name and
-        # handles both OAI tool_calls/tool and Anthropic tool_use/tool_result
-        # content blocks (verified in-pod with both shapes returning ~60%
-        # reduction).
-        ak = getattr(user_api_key_dict, "api_key", "") if user_api_key_dict else ""
-        upstream_call_type = (
+        # Gate: only compress chat completions and anthropic messages
+        effective_call_type = (
             "acompletion" if call_type == "anthropic_messages" else call_type
         )
-        return await HeadroomCallback.async_pre_call_hook(
-            self, ak, data, upstream_call_type
-        )
+        if effective_call_type not in ("completion", "acompletion"):
+            return data
+
+        messages = data.get("messages")
+        if not messages:
+            return data
+
+        model = data.get("model", "")
+        logger = logging.getLogger("headroom")
+
+        try:
+            result = await asyncio.to_thread(
+                self._local_compress, messages, model
+            )
+        except Exception as e:
+            logger.warning("Headroom compression failed (non-fatal): %s", e)
+            return data
+
+        if result and result.get("messages"):
+            data["messages"] = result["messages"]
+            saved = result.get("tokens_saved", 0)
+            before = result.get("tokens_before", 0)
+            after = result.get("tokens_after", 0)
+            pct = int((saved / before) * 100) if before else 0
+            logger.info(
+                "Headroom: %d→%d tokens (saved %d, %d%%)",
+                before, after, saved, pct,
+            )
+
+        return data
 
     def _local_compress(self, messages: list[dict], model: str) -> dict[str, Any] | None:
         from headroom.compress import compress  # type: ignore[import-not-found]
