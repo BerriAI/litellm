@@ -763,3 +763,10 @@ def test_translate_model_names_for_listing_none_router():
     from litellm.proxy.proxy_server import _translate_model_names_for_listing
 
     assert _translate_model_names_for_listing(["a", "b"], ()) == ["a", "b"]
+
+
+def test_get_team_model_deployments_for_listing_none_router():
+    """No router -> no deployment metadata to translate against."""
+    from litellm.proxy.proxy_server import _get_team_model_deployments_for_listing
+
+    assert _get_team_model_deployments_for_listing(None) == ()
