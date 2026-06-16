@@ -18,7 +18,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        # Check out the PR head, not the default refs/pull/N/merge: the merge ref
+        # folds in newer base commits, which the diff-based gates (ruff delta,
+        # Any-discipline) would otherwise blame on this branch.
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           clean: true
           persist-credentials: false
@@ -105,7 +109,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        # Check out the PR head, not the default refs/pull/N/merge: the merge ref
+        # folds in newer base commits, which the diff-based gates (ruff delta,
+        # Any-discipline) would otherwise blame on this branch.
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           clean: true
           persist-credentials: false
