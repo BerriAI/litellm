@@ -515,6 +515,20 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         or 0.0
     )
 
+    # Fallback: Anthropic/Bedrock-style usage objects may carry cache token
+    # counts as top-level fields (cache_read_input_tokens,
+    # cache_creation_input_tokens) even when prompt_tokens_details does not
+    # include them.  Use these as a fallback so cache costs are not silently
+    # dropped.
+    if cache_hit_tokens == 0:
+        _fallback_read = getattr(usage, "cache_read_input_tokens", None)
+        if _fallback_read is not None and isinstance(_fallback_read, int):
+            cache_hit_tokens = _fallback_read
+    if cache_creation_tokens == 0:
+        _fallback_create = getattr(usage, "cache_creation_input_tokens", None)
+        if _fallback_create is not None and isinstance(_fallback_create, int):
+            cache_creation_tokens = _fallback_create
+
     return PromptTokensDetailsResult(
         cache_hit_tokens=cache_hit_tokens,
         cache_creation_tokens=cache_creation_tokens,
@@ -725,6 +739,15 @@ def generic_cost_per_token(  # noqa: PLR0915
     )
     if usage.prompt_tokens_details:
         prompt_tokens_details = _parse_prompt_tokens_details(usage)
+    else:
+        # Fallback: Anthropic/Bedrock-style usage objects carry cache token
+        # counts as top-level fields even when prompt_tokens_details is absent.
+        _fallback_read = getattr(usage, "cache_read_input_tokens", None)
+        _fallback_create = getattr(usage, "cache_creation_input_tokens", None)
+        if _fallback_read is not None and isinstance(_fallback_read, int):
+            prompt_tokens_details["cache_hit_tokens"] = _fallback_read
+        if _fallback_create is not None and isinstance(_fallback_create, int):
+            prompt_tokens_details["cache_creation_tokens"] = _fallback_create
 
     ## EDGE CASE - text tokens not set or includes cached tokens (double-counting)
     ## Some providers (like xAI) report text_tokens = prompt_tokens (including cached)

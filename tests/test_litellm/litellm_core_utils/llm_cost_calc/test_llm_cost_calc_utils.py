@@ -1573,3 +1573,140 @@ def test_data_residency_composes_with_service_tier(_local_model_cost_map):
 
     assert priority_base_total > 0
     assert priority_eu_total == pytest.approx(priority_base_total * 1.10, rel=1e-9)
+
+
+class TestBedrockCacheTokenCost:
+    """
+    Verify that cache_creation and cache_read token costs are correctly
+    calculated for bedrock_converse models.
+
+    Regression tests for https://github.com/BerriAI/litellm/issues/29145
+    """
+
+    MODEL = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    PROVIDER = "bedrock"
+    # Rates from the model cost map for this model
+    INPUT_RATE = 3.3e-6
+    OUTPUT_RATE = 1.65e-5
+    CACHE_CREATE_RATE = 4.125e-6
+    CACHE_READ_RATE = 3.3e-7
+
+    TEXT_TOKENS = 1
+    CACHE_CREATE_TOKENS = 1190
+    CACHE_READ_TOKENS = 32634
+    COMPLETION_TOKENS = 672
+
+    EXPECTED_PROMPT_COST = (
+        TEXT_TOKENS * INPUT_RATE
+        + CACHE_CREATE_TOKENS * CACHE_CREATE_RATE
+        + CACHE_READ_TOKENS * CACHE_READ_RATE
+    )
+    EXPECTED_COMPLETION_COST = COMPLETION_TOKENS * OUTPUT_RATE
+
+    def test_bedrock_cache_cost_with_prompt_tokens_details(self, _local_model_cost_map):
+        """Normal non-streaming path: prompt_tokens_details is populated."""
+        usage = Usage(
+            prompt_tokens=(
+                self.TEXT_TOKENS + self.CACHE_READ_TOKENS + self.CACHE_CREATE_TOKENS
+            ),
+            completion_tokens=self.COMPLETION_TOKENS,
+            total_tokens=(
+                self.TEXT_TOKENS
+                + self.CACHE_READ_TOKENS
+                + self.CACHE_CREATE_TOKENS
+                + self.COMPLETION_TOKENS
+            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=self.CACHE_READ_TOKENS,
+                cache_creation_tokens=self.CACHE_CREATE_TOKENS,
+                text_tokens=self.TEXT_TOKENS,
+            ),
+            cache_creation_input_tokens=self.CACHE_CREATE_TOKENS,
+            cache_read_input_tokens=self.CACHE_READ_TOKENS,
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=self.MODEL,
+            usage=usage,
+            custom_llm_provider=self.PROVIDER,
+        )
+        assert prompt_cost == pytest.approx(self.EXPECTED_PROMPT_COST, rel=1e-6)
+        assert completion_cost == pytest.approx(self.EXPECTED_COMPLETION_COST, rel=1e-6)
+
+    def test_bedrock_cache_cost_without_prompt_tokens_details(
+        self, _local_model_cost_map
+    ):
+        """Fallback path: prompt_tokens_details is absent but Anthropic-style
+        cache fields are set on the Usage object (e.g. streaming chunk builder
+        output)."""
+        usage = Usage(
+            prompt_tokens=(
+                self.TEXT_TOKENS + self.CACHE_READ_TOKENS + self.CACHE_CREATE_TOKENS
+            ),
+            completion_tokens=self.COMPLETION_TOKENS,
+            total_tokens=(
+                self.TEXT_TOKENS
+                + self.CACHE_READ_TOKENS
+                + self.CACHE_CREATE_TOKENS
+                + self.COMPLETION_TOKENS
+            ),
+        )
+        # Mimic the streaming chunk builder: set cache fields via setattr
+        setattr(usage, "cache_creation_input_tokens", self.CACHE_CREATE_TOKENS)
+        setattr(usage, "cache_read_input_tokens", self.CACHE_READ_TOKENS)
+        usage._cache_creation_input_tokens = self.CACHE_CREATE_TOKENS
+        usage._cache_read_input_tokens = self.CACHE_READ_TOKENS
+
+        assert usage.prompt_tokens_details is None
+
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=self.MODEL,
+            usage=usage,
+            custom_llm_provider=self.PROVIDER,
+        )
+        assert prompt_cost == pytest.approx(self.EXPECTED_PROMPT_COST, rel=1e-6)
+        assert completion_cost == pytest.approx(self.EXPECTED_COMPLETION_COST, rel=1e-6)
+
+    def test_bedrock_cache_cost_prompt_details_missing_cache_fields(
+        self, _local_model_cost_map
+    ):
+        """prompt_tokens_details exists but lacks cache fields; top-level
+        Anthropic-style fields should be used as fallback."""
+        usage = Usage(
+            prompt_tokens=(
+                self.TEXT_TOKENS + self.CACHE_READ_TOKENS + self.CACHE_CREATE_TOKENS
+            ),
+            completion_tokens=self.COMPLETION_TOKENS,
+            total_tokens=(
+                self.TEXT_TOKENS
+                + self.CACHE_READ_TOKENS
+                + self.CACHE_CREATE_TOKENS
+                + self.COMPLETION_TOKENS
+            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=self.TEXT_TOKENS,
+            ),
+            cache_creation_input_tokens=self.CACHE_CREATE_TOKENS,
+            cache_read_input_tokens=self.CACHE_READ_TOKENS,
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=self.MODEL,
+            usage=usage,
+            custom_llm_provider=self.PROVIDER,
+        )
+        assert prompt_cost == pytest.approx(self.EXPECTED_PROMPT_COST, rel=1e-6)
+        assert completion_cost == pytest.approx(self.EXPECTED_COMPLETION_COST, rel=1e-6)
+
+    def test_bedrock_no_cache_tokens_unchanged(self, _local_model_cost_map):
+        """When no cache tokens are present, cost should be straightforward."""
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=500,
+            total_tokens=1500,
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=self.MODEL,
+            usage=usage,
+            custom_llm_provider=self.PROVIDER,
+        )
+        assert prompt_cost == pytest.approx(1000 * self.INPUT_RATE, rel=1e-6)
+        assert completion_cost == pytest.approx(500 * self.OUTPUT_RATE, rel=1e-6)
