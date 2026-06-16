@@ -127,6 +127,13 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES.users).toBe("users");
   });
 
+  it("maps the teams id to its route", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.teams).toBe("teams");
+  });
+
   it("maps the organizations id to its route", async () => {
     vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
     const { MIGRATED_PAGES } = await import("./migratedPages");

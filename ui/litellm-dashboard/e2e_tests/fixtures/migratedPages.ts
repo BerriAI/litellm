@@ -40,6 +40,7 @@ export const MIGRATED_E2E_PAGES: Record<string, string> = {
   agents: "agents",
   "router-settings": "router-settings",
   users: "users",
+  teams: "teams",
   organizations: "organizations",
 };
 
