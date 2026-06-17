@@ -1251,9 +1251,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def map_response_format_to_anthropic_output_format(
         self, value: dict | None
     ) -> AnthropicOutputSchema | None:
-        json_schema: dict | None = self._extract_json_schema_from_response_format(
-            value
-        )
+        json_schema: dict | None = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
 
@@ -1287,9 +1285,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):  # value is a no-op
             return None
 
-        json_schema: dict | None = self._extract_json_schema_from_response_format(
-            value
-        )
+        json_schema: dict | None = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
         """
@@ -2071,16 +2067,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         first_json = tool_calls[json_indices[0]]
         json_msg = AnthropicConfig._convert_tool_response_to_message([first_json])
-        extra_content: str | None = (
-            json_msg.content if json_msg is not None else None
-        )
+        extra_content: str | None = json_msg.content if json_msg is not None else None
         filtered_tools = [t for i, t in enumerate(tool_calls) if i not in json_indices]
         return None, filtered_tools, extra_content
 
     def extract_response_content(self, completion_response: dict) -> tuple[
         str,
         list[Any] | None,
-        list[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None,
+        list[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+        | None,
         str | None,
         list[ChatCompletionToolCallChunk],
         list[Any] | None,
@@ -2089,7 +2084,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ]:
         text_content = ""
         citations: list[Any] | None = None
-        thinking_blocks: list[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None = None
+        thinking_blocks: (
+            list[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+            | None
+        ) = None
         reasoning_content: str | None = None
         tool_calls: list[ChatCompletionToolCallChunk] = []
         web_search_results: list[Any] | None = None
@@ -2364,7 +2364,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         completion_response: dict,
         citations: list[Any] | None,
-        thinking_blocks: list[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None,
+        thinking_blocks: (
+            list[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+            | None
+        ),
         web_search_results: list[Any] | None,
         tool_results: list[Any] | None,
         compaction_blocks: list[Any] | None,
@@ -2606,9 +2611,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         """
         ## HANDLE JSON MODE - anthropic returns single function call
-        json_mode_content_str: str | None = tool_calls[0]["function"].get(
-            "arguments"
-        )
+        json_mode_content_str: str | None = tool_calls[0]["function"].get("arguments")
         try:
             if json_mode_content_str is not None:
                 args = json.loads(json_mode_content_str)

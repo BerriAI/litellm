@@ -73,7 +73,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         firewall_id: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         extra_headers: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback

@@ -1,7 +1,7 @@
 {
   "litellm/__init__.py": {
-    "baseline": 801,
-    "slack": 401
+    "baseline": 740,
+    "slack": 370
   },
   "litellm/_lazy_imports.py": {
     "baseline": 55,
@@ -16,11 +16,11 @@
     "slack": 208
   },
   "litellm/_redis_credential_provider.py": {
-    "baseline": 20,
+    "baseline": 19,
     "slack": 10
   },
   "litellm/_service_logger.py": {
-    "baseline": 96,
+    "baseline": 95,
     "slack": 48
   },
   "litellm/_uuid.py": {
@@ -52,8 +52,8 @@
     "slack": 43
   },
   "litellm/a2a_protocol/main.py": {
-    "baseline": 209,
-    "slack": 105
+    "baseline": 208,
+    "slack": 104
   },
   "litellm/a2a_protocol/providers/bedrock_agentcore/config.py": {
     "baseline": 15,
@@ -80,24 +80,24 @@
     "slack": 6
   },
   "litellm/a2a_protocol/providers/pydantic_ai_agents/transformation.py": {
-    "baseline": 142,
-    "slack": 71
+    "baseline": 139,
+    "slack": 70
   },
   "litellm/a2a_protocol/providers/watsonx_orchestrate/config.py": {
     "baseline": 13,
     "slack": 7
   },
   "litellm/a2a_protocol/providers/watsonx_orchestrate/handler.py": {
-    "baseline": 118,
-    "slack": 59
+    "baseline": 107,
+    "slack": 54
   },
   "litellm/a2a_protocol/providers/watsonx_orchestrate/transformation.py": {
-    "baseline": 60,
-    "slack": 30
+    "baseline": 58,
+    "slack": 29
   },
   "litellm/a2a_protocol/streaming_iterator.py": {
-    "baseline": 57,
-    "slack": 29
+    "baseline": 56,
+    "slack": 28
   },
   "litellm/a2a_protocol/utils.py": {
     "baseline": 36,
@@ -112,16 +112,16 @@
     "slack": 13
   },
   "litellm/anthropic_interface/exceptions/exceptions.py": {
-    "baseline": 7,
-    "slack": 4
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/anthropic_interface/messages/__init__.py": {
     "baseline": 17,
     "slack": 9
   },
   "litellm/assistants/main.py": {
-    "baseline": 398,
-    "slack": 199
+    "baseline": 382,
+    "slack": 191
   },
   "litellm/assistants/utils.py": {
     "baseline": 94,
@@ -136,8 +136,8 @@
     "slack": 65
   },
   "litellm/batches/main.py": {
-    "baseline": 240,
-    "slack": 120
+    "baseline": 221,
+    "slack": 111
   },
   "litellm/budget_manager.py": {
     "baseline": 117,
@@ -148,8 +148,8 @@
     "slack": 8
   },
   "litellm/caching/azure_blob_cache.py": {
-    "baseline": 77,
-    "slack": 39
+    "baseline": 74,
+    "slack": 37
   },
   "litellm/caching/base_cache.py": {
     "baseline": 2,
@@ -160,55 +160,55 @@
     "slack": 189
   },
   "litellm/caching/caching_handler.py": {
-    "baseline": 337,
-    "slack": 169
+    "baseline": 336,
+    "slack": 168
   },
   "litellm/caching/disk_cache.py": {
     "baseline": 75,
     "slack": 38
   },
   "litellm/caching/dual_cache.py": {
-    "baseline": 192,
-    "slack": 96
+    "baseline": 189,
+    "slack": 95
   },
   "litellm/caching/gcs_cache.py": {
     "baseline": 92,
     "slack": 46
   },
   "litellm/caching/in_memory_cache.py": {
-    "baseline": 173,
-    "slack": 87
+    "baseline": 172,
+    "slack": 86
   },
   "litellm/caching/llm_caching_handler.py": {
     "baseline": 32,
     "slack": 16
   },
   "litellm/caching/qdrant_semantic_cache.py": {
-    "baseline": 359,
-    "slack": 180
+    "baseline": 357,
+    "slack": 179
   },
   "litellm/caching/redis_cache.py": {
-    "baseline": 588,
-    "slack": 294
+    "baseline": 583,
+    "slack": 292
   },
   "litellm/caching/redis_cluster_cache.py": {
     "baseline": 35,
     "slack": 18
   },
   "litellm/caching/redis_semantic_cache.py": {
-    "baseline": 194,
-    "slack": 97
+    "baseline": 188,
+    "slack": 94
   },
   "litellm/caching/s3_cache.py": {
     "baseline": 138,
     "slack": 69
   },
   "litellm/completion_extras/litellm_responses_transformation/handler.py": {
-    "baseline": 187,
-    "slack": 94
+    "baseline": 177,
+    "slack": 89
   },
   "litellm/completion_extras/litellm_responses_transformation/transformation.py": {
-    "baseline": 562,
+    "baseline": 561,
     "slack": 281
   },
   "litellm/compression/compress.py": {
@@ -244,8 +244,8 @@
     "slack": 43
   },
   "litellm/containers/main.py": {
-    "baseline": 278,
-    "slack": 139
+    "baseline": 219,
+    "slack": 110
   },
   "litellm/containers/utils.py": {
     "baseline": 30,
@@ -256,64 +256,64 @@
     "slack": 214
   },
   "litellm/endpoints/speech/speech_to_completion_bridge/handler.py": {
-    "baseline": 59,
-    "slack": 30
+    "baseline": 51,
+    "slack": 26
   },
   "litellm/endpoints/speech/speech_to_completion_bridge/transformation.py": {
     "baseline": 31,
     "slack": 16
   },
   "litellm/evals/main.py": {
-    "baseline": 522,
-    "slack": 261
+    "baseline": 500,
+    "slack": 250
   },
   "litellm/exceptions.py": {
     "baseline": 481,
     "slack": 241
   },
   "litellm/experimental_mcp_client/client.py": {
-    "baseline": 174,
-    "slack": 87
+    "baseline": 172,
+    "slack": 86
   },
   "litellm/experimental_mcp_client/tools.py": {
     "baseline": 47,
     "slack": 24
   },
   "litellm/files/main.py": {
-    "baseline": 257,
-    "slack": 129
+    "baseline": 241,
+    "slack": 121
   },
   "litellm/files/streaming.py": {
-    "baseline": 47,
-    "slack": 24
+    "baseline": 45,
+    "slack": 23
   },
   "litellm/files/types.py": {
-    "baseline": 4,
-    "slack": 2
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/fine_tuning/main.py": {
-    "baseline": 167,
-    "slack": 84
+    "baseline": 157,
+    "slack": 79
   },
   "litellm/google_genai/adapters/handler.py": {
     "baseline": 49,
     "slack": 25
   },
   "litellm/google_genai/adapters/transformation.py": {
-    "baseline": 325,
-    "slack": 163
+    "baseline": 324,
+    "slack": 162
   },
   "litellm/google_genai/main.py": {
-    "baseline": 179,
-    "slack": 90
+    "baseline": 171,
+    "slack": 86
   },
   "litellm/google_genai/streaming_iterator.py": {
     "baseline": 56,
     "slack": 28
   },
   "litellm/images/main.py": {
-    "baseline": 326,
-    "slack": 163
+    "baseline": 311,
+    "slack": 156
   },
   "litellm/images/utils.py": {
     "baseline": 28,
@@ -328,12 +328,12 @@
     "slack": 24
   },
   "litellm/integrations/SlackAlerting/slack_alerting.py": {
-    "baseline": 644,
-    "slack": 322
+    "baseline": 635,
+    "slack": 318
   },
   "litellm/integrations/SlackAlerting/utils.py": {
-    "baseline": 15,
-    "slack": 8
+    "baseline": 14,
+    "slack": 7
   },
   "litellm/integrations/additional_logging_utils.py": {
     "baseline": 1,
@@ -364,8 +364,8 @@
     "slack": 18
   },
   "litellm/integrations/arize/arize_phoenix.py": {
-    "baseline": 159,
-    "slack": 80
+    "baseline": 158,
+    "slack": 79
   },
   "litellm/integrations/arize/arize_phoenix_client.py": {
     "baseline": 12,
@@ -380,7 +380,7 @@
     "slack": 43
   },
   "litellm/integrations/azure_sentinel/azure_sentinel.py": {
-    "baseline": 84,
+    "baseline": 83,
     "slack": 42
   },
   "litellm/integrations/azure_storage/azure_storage.py": {
@@ -416,8 +416,8 @@
     "slack": 4
   },
   "litellm/integrations/cloudzero/cz_stream_api.py": {
-    "baseline": 47,
-    "slack": 24
+    "baseline": 46,
+    "slack": 23
   },
   "litellm/integrations/cloudzero/database.py": {
     "baseline": 9,
@@ -436,7 +436,7 @@
     "slack": 20
   },
   "litellm/integrations/custom_guardrail.py": {
-    "baseline": 304,
+    "baseline": 303,
     "slack": 152
   },
   "litellm/integrations/custom_logger.py": {
@@ -452,8 +452,8 @@
     "slack": 1
   },
   "litellm/integrations/datadog/datadog.py": {
-    "baseline": 266,
-    "slack": 133
+    "baseline": 264,
+    "slack": 132
   },
   "litellm/integrations/datadog/datadog_cost_management.py": {
     "baseline": 79,
@@ -476,8 +476,8 @@
     "slack": 2
   },
   "litellm/integrations/datadog/datadog_team_handler.py": {
-    "baseline": 14,
-    "slack": 7
+    "baseline": 10,
+    "slack": 5
   },
   "litellm/integrations/deepeval/api.py": {
     "baseline": 31,
@@ -488,8 +488,8 @@
     "slack": 66
   },
   "litellm/integrations/deepeval/types.py": {
-    "baseline": 16,
-    "slack": 8
+    "baseline": 12,
+    "slack": 6
   },
   "litellm/integrations/dotprompt/__init__.py": {
     "baseline": 19,
@@ -515,37 +515,33 @@
     "baseline": 16,
     "slack": 8
   },
-  "litellm/integrations/focus/destinations/base.py": {
-    "baseline": 3,
-    "slack": 2
-  },
   "litellm/integrations/focus/destinations/factory.py": {
     "baseline": 50,
     "slack": 25
   },
   "litellm/integrations/focus/destinations/gcs_destination.py": {
-    "baseline": 16,
+    "baseline": 15,
     "slack": 8
   },
   "litellm/integrations/focus/destinations/mavvrik_destination.py": {
-    "baseline": 49,
-    "slack": 25
+    "baseline": 40,
+    "slack": 20
   },
   "litellm/integrations/focus/destinations/s3_destination.py": {
-    "baseline": 27,
-    "slack": 14
-  },
-  "litellm/integrations/focus/destinations/vantage_destination.py": {
-    "baseline": 25,
+    "baseline": 26,
     "slack": 13
   },
+  "litellm/integrations/focus/destinations/vantage_destination.py": {
+    "baseline": 19,
+    "slack": 10
+  },
   "litellm/integrations/focus/export_engine.py": {
-    "baseline": 47,
-    "slack": 24
+    "baseline": 44,
+    "slack": 22
   },
   "litellm/integrations/focus/focus_logger.py": {
-    "baseline": 30,
-    "slack": 15
+    "baseline": 23,
+    "slack": 12
   },
   "litellm/integrations/focus/schema.py": {
     "baseline": 76,
@@ -564,28 +560,32 @@
     "slack": 55
   },
   "litellm/integrations/galileo.py": {
-    "baseline": 381,
-    "slack": 191
+    "baseline": 370,
+    "slack": 185
   },
   "litellm/integrations/gcs_bucket/gcs_bucket.py": {
-    "baseline": 104,
-    "slack": 52
+    "baseline": 99,
+    "slack": 50
   },
   "litellm/integrations/gcs_bucket/gcs_bucket_base.py": {
-    "baseline": 48,
-    "slack": 24
+    "baseline": 38,
+    "slack": 19
   },
   "litellm/integrations/gcs_bucket/gcs_bucket_mock_client.py": {
     "baseline": 60,
     "slack": 30
   },
   "litellm/integrations/gcs_pubsub/pub_sub.py": {
-    "baseline": 56,
-    "slack": 28
+    "baseline": 54,
+    "slack": 27
   },
   "litellm/integrations/generic_api/generic_api_callback.py": {
-    "baseline": 198,
-    "slack": 99
+    "baseline": 196,
+    "slack": 98
+  },
+  "litellm/integrations/generic_prompt_management/__init__.py": {
+    "baseline": 7,
+    "slack": 4
   },
   "litellm/integrations/generic_prompt_management/generic_prompt_manager.py": {
     "baseline": 51,
@@ -616,8 +616,8 @@
     "slack": 2
   },
   "litellm/integrations/humanloop.py": {
-    "baseline": 47,
-    "slack": 24
+    "baseline": 43,
+    "slack": 22
   },
   "litellm/integrations/lago.py": {
     "baseline": 123,
@@ -648,8 +648,8 @@
     "slack": 60
   },
   "litellm/integrations/langsmith.py": {
-    "baseline": 245,
-    "slack": 123
+    "baseline": 244,
+    "slack": 122
   },
   "litellm/integrations/langsmith_mock_client.py": {
     "baseline": 5,
@@ -672,24 +672,24 @@
     "slack": 141
   },
   "litellm/integrations/logfire_logger.py": {
-    "baseline": 88,
-    "slack": 44
+    "baseline": 86,
+    "slack": 43
   },
   "litellm/integrations/lunary.py": {
     "baseline": 126,
     "slack": 63
   },
   "litellm/integrations/mavvrik_focus/mavvrik_focus_logger.py": {
-    "baseline": 32,
-    "slack": 16
+    "baseline": 25,
+    "slack": 13
   },
   "litellm/integrations/mlflow.py": {
     "baseline": 239,
     "slack": 120
   },
   "litellm/integrations/mock_client_factory.py": {
-    "baseline": 88,
-    "slack": 44
+    "baseline": 86,
+    "slack": 43
   },
   "litellm/integrations/newrelic/newrelic.py": {
     "baseline": 274,
@@ -708,12 +708,12 @@
     "slack": 2
   },
   "litellm/integrations/opentelemetry_utils/gen_ai_semconv.py": {
-    "baseline": 64,
+    "baseline": 63,
     "slack": 32
   },
   "litellm/integrations/opik/opik.py": {
-    "baseline": 82,
-    "slack": 41
+    "baseline": 80,
+    "slack": 40
   },
   "litellm/integrations/opik/opik_payload_builder/api.py": {
     "baseline": 53,
@@ -728,8 +728,8 @@
     "slack": 9
   },
   "litellm/integrations/opik/opik_payload_builder/types.py": {
-    "baseline": 24,
-    "slack": 12
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/integrations/opik/utils.py": {
     "baseline": 76,
@@ -768,16 +768,12 @@
     "slack": 3
   },
   "litellm/integrations/otel/model/metadata.py": {
-    "baseline": 42,
-    "slack": 21
+    "baseline": 31,
+    "slack": 16
   },
   "litellm/integrations/otel/model/payloads.py": {
-    "baseline": 67,
-    "slack": 34
-  },
-  "litellm/integrations/otel/model/spans.py": {
-    "baseline": 3,
-    "slack": 2
+    "baseline": 40,
+    "slack": 20
   },
   "litellm/integrations/otel/model/utils.py": {
     "baseline": 4,
@@ -788,8 +784,8 @@
     "slack": 7
   },
   "litellm/integrations/otel/plumbing/metrics.py": {
-    "baseline": 115,
-    "slack": 58
+    "baseline": 109,
+    "slack": 55
   },
   "litellm/integrations/otel/plumbing/providers.py": {
     "baseline": 2,
@@ -840,8 +836,8 @@
     "slack": 2
   },
   "litellm/integrations/prometheus.py": {
-    "baseline": 1095,
-    "slack": 548
+    "baseline": 1088,
+    "slack": 544
   },
   "litellm/integrations/prometheus_helpers/__init__.py": {
     "baseline": 11,
@@ -864,24 +860,24 @@
     "slack": 32
   },
   "litellm/integrations/prompt_management_base.py": {
-    "baseline": 27,
-    "slack": 14
+    "baseline": 20,
+    "slack": 10
   },
   "litellm/integrations/rubrik.py": {
-    "baseline": 205,
-    "slack": 103
+    "baseline": 203,
+    "slack": 102
   },
   "litellm/integrations/s3.py": {
     "baseline": 120,
     "slack": 60
   },
   "litellm/integrations/s3_v2.py": {
-    "baseline": 242,
+    "baseline": 241,
     "slack": 121
   },
   "litellm/integrations/sqs.py": {
-    "baseline": 120,
-    "slack": 60
+    "baseline": 117,
+    "slack": 59
   },
   "litellm/integrations/supabase.py": {
     "baseline": 79,
@@ -892,20 +888,20 @@
     "slack": 65
   },
   "litellm/integrations/vantage/vantage_logger.py": {
-    "baseline": 22,
-    "slack": 11
+    "baseline": 20,
+    "slack": 10
   },
   "litellm/integrations/vector_store_integrations/vector_store_pre_call_hook.py": {
-    "baseline": 75,
-    "slack": 38
+    "baseline": 74,
+    "slack": 37
   },
   "litellm/integrations/weave/weave_otel.py": {
     "baseline": 108,
     "slack": 54
   },
   "litellm/integrations/websearch_interception/handler.py": {
-    "baseline": 447,
-    "slack": 224
+    "baseline": 430,
+    "slack": 215
   },
   "litellm/integrations/websearch_interception/tools.py": {
     "baseline": 36,
@@ -916,24 +912,24 @@
     "slack": 93
   },
   "litellm/integrations/weights_biases.py": {
-    "baseline": 107,
-    "slack": 54
+    "baseline": 106,
+    "slack": 53
   },
   "litellm/interactions/agents/http_handler.py": {
-    "baseline": 170,
-    "slack": 85
+    "baseline": 165,
+    "slack": 83
   },
   "litellm/interactions/agents/main.py": {
-    "baseline": 194,
-    "slack": 97
+    "baseline": 189,
+    "slack": 95
   },
   "litellm/interactions/http_handler.py": {
-    "baseline": 158,
-    "slack": 79
+    "baseline": 154,
+    "slack": 77
   },
   "litellm/interactions/litellm_responses_transformation/handler.py": {
-    "baseline": 23,
-    "slack": 12
+    "baseline": 22,
+    "slack": 11
   },
   "litellm/interactions/litellm_responses_transformation/streaming_iterator.py": {
     "baseline": 35,
@@ -944,8 +940,8 @@
     "slack": 66
   },
   "litellm/interactions/main.py": {
-    "baseline": 153,
-    "slack": 77
+    "baseline": 147,
+    "slack": 74
   },
   "litellm/interactions/streaming_iterator.py": {
     "baseline": 48,
@@ -960,12 +956,12 @@
     "slack": 3
   },
   "litellm/litellm_core_utils/asyncify.py": {
-    "baseline": 21,
-    "slack": 11
-  },
-  "litellm/litellm_core_utils/audio_utils/utils.py": {
     "baseline": 19,
     "slack": 10
+  },
+  "litellm/litellm_core_utils/audio_utils/utils.py": {
+    "baseline": 16,
+    "slack": 8
   },
   "litellm/litellm_core_utils/cli_token_utils.py": {
     "baseline": 7,
@@ -976,8 +972,8 @@
     "slack": 4
   },
   "litellm/litellm_core_utils/completion_timeout.py": {
-    "baseline": 5,
-    "slack": 3
+    "baseline": 4,
+    "slack": 2
   },
   "litellm/litellm_core_utils/core_helpers.py": {
     "baseline": 192,
@@ -1020,8 +1016,8 @@
     "slack": 29
   },
   "litellm/litellm_core_utils/get_blog_posts.py": {
-    "baseline": 7,
-    "slack": 4
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/litellm_core_utils/get_litellm_params.py": {
     "baseline": 45,
@@ -1060,7 +1056,7 @@
     "slack": 31
   },
   "litellm/litellm_core_utils/litellm_logging.py": {
-    "baseline": 2348,
+    "baseline": 2347,
     "slack": 1174
   },
   "litellm/litellm_core_utils/llm_cost_calc/tool_call_cost_tracking.py": {
@@ -1072,15 +1068,15 @@
     "slack": 1
   },
   "litellm/litellm_core_utils/llm_cost_calc/utils.py": {
-    "baseline": 55,
-    "slack": 28
+    "baseline": 42,
+    "slack": 21
   },
   "litellm/litellm_core_utils/llm_request_utils.py": {
     "baseline": 37,
     "slack": 19
   },
   "litellm/litellm_core_utils/llm_response_utils/convert_dict_to_response.py": {
-    "baseline": 336,
+    "baseline": 335,
     "slack": 168
   },
   "litellm/litellm_core_utils/llm_response_utils/get_api_base.py": {
@@ -1108,8 +1104,8 @@
     "slack": 91
   },
   "litellm/litellm_core_utils/logging_worker.py": {
-    "baseline": 103,
-    "slack": 52
+    "baseline": 91,
+    "slack": 46
   },
   "litellm/litellm_core_utils/model_param_helper.py": {
     "baseline": 41,
@@ -1120,12 +1116,12 @@
     "slack": 26
   },
   "litellm/litellm_core_utils/prompt_templates/common_utils.py": {
-    "baseline": 362,
+    "baseline": 361,
     "slack": 181
   },
   "litellm/litellm_core_utils/prompt_templates/factory.py": {
-    "baseline": 1452,
-    "slack": 726
+    "baseline": 1445,
+    "slack": 723
   },
   "litellm/litellm_core_utils/prompt_templates/huggingface_template_handler.py": {
     "baseline": 30,
@@ -1136,8 +1132,8 @@
     "slack": 10
   },
   "litellm/litellm_core_utils/realtime_streaming.py": {
-    "baseline": 631,
-    "slack": 316
+    "baseline": 614,
+    "slack": 307
   },
   "litellm/litellm_core_utils/redact_messages.py": {
     "baseline": 195,
@@ -1148,7 +1144,7 @@
     "slack": 5
   },
   "litellm/litellm_core_utils/safe_json_dumps.py": {
-    "baseline": 64,
+    "baseline": 63,
     "slack": 32
   },
   "litellm/litellm_core_utils/safe_json_loads.py": {
@@ -1168,7 +1164,7 @@
     "slack": 157
   },
   "litellm/litellm_core_utils/streaming_handler.py": {
-    "baseline": 1020,
+    "baseline": 1019,
     "slack": 510
   },
   "litellm/litellm_core_utils/token_counter.py": {
@@ -1184,8 +1180,8 @@
     "slack": 4
   },
   "litellm/llms/a2a/chat/guardrail_translation/handler.py": {
-    "baseline": 158,
-    "slack": 79
+    "baseline": 155,
+    "slack": 78
   },
   "litellm/llms/a2a/chat/streaming_iterator.py": {
     "baseline": 13,
@@ -1220,20 +1216,20 @@
     "slack": 6
   },
   "litellm/llms/anthropic/batches/handler.py": {
-    "baseline": 30,
-    "slack": 15
+    "baseline": 28,
+    "slack": 14
   },
   "litellm/llms/anthropic/batches/transformation.py": {
     "baseline": 55,
     "slack": 28
   },
   "litellm/llms/anthropic/chat/guardrail_translation/handler.py": {
-    "baseline": 181,
-    "slack": 91
+    "baseline": 175,
+    "slack": 88
   },
   "litellm/llms/anthropic/chat/handler.py": {
-    "baseline": 390,
-    "slack": 195
+    "baseline": 388,
+    "slack": 194
   },
   "litellm/llms/anthropic/chat/transformation.py": {
     "baseline": 770,
@@ -1264,8 +1260,8 @@
     "slack": 10
   },
   "litellm/llms/anthropic/experimental_pass_through/adapters/handler.py": {
-    "baseline": 228,
-    "slack": 114
+    "baseline": 225,
+    "slack": 113
   },
   "litellm/llms/anthropic/experimental_pass_through/adapters/streaming_iterator.py": {
     "baseline": 434,
@@ -1284,20 +1280,16 @@
     "slack": 50
   },
   "litellm/llms/anthropic/experimental_pass_through/context_management/editors/compact.py": {
-    "baseline": 420,
-    "slack": 210
+    "baseline": 413,
+    "slack": 207
   },
   "litellm/llms/anthropic/experimental_pass_through/context_management/placeholders.py": {
     "baseline": 3,
     "slack": 2
   },
-  "litellm/llms/anthropic/experimental_pass_through/context_management/result.py": {
-    "baseline": 2,
-    "slack": 1
-  },
   "litellm/llms/anthropic/experimental_pass_through/messages/agentic_streaming_iterator.py": {
-    "baseline": 193,
-    "slack": 97
+    "baseline": 192,
+    "slack": 96
   },
   "litellm/llms/anthropic/experimental_pass_through/messages/fake_stream_iterator.py": {
     "baseline": 78,
@@ -1336,8 +1328,8 @@
     "slack": 125
   },
   "litellm/llms/anthropic/files/handler.py": {
-    "baseline": 54,
-    "slack": 27
+    "baseline": 52,
+    "slack": 26
   },
   "litellm/llms/anthropic/files/transformation.py": {
     "baseline": 47,
@@ -1360,24 +1352,24 @@
     "slack": 37
   },
   "litellm/llms/azure/assistants.py": {
-    "baseline": 114,
-    "slack": 57
+    "baseline": 101,
+    "slack": 51
   },
   "litellm/llms/azure/audio_transcription/transformation.py": {
     "baseline": 37,
     "slack": 19
   },
   "litellm/llms/azure/audio_transcriptions.py": {
-    "baseline": 47,
-    "slack": 24
+    "baseline": 46,
+    "slack": 23
   },
   "litellm/llms/azure/azure.py": {
-    "baseline": 459,
-    "slack": 230
+    "baseline": 453,
+    "slack": 227
   },
   "litellm/llms/azure/batches/handler.py": {
-    "baseline": 21,
-    "slack": 11
+    "baseline": 15,
+    "slack": 8
   },
   "litellm/llms/azure/chat/gpt_5_transformation.py": {
     "baseline": 29,
@@ -1396,8 +1388,8 @@
     "slack": 7
   },
   "litellm/llms/azure/common_utils.py": {
-    "baseline": 221,
-    "slack": 111
+    "baseline": 217,
+    "slack": 109
   },
   "litellm/llms/azure/completion/handler.py": {
     "baseline": 129,
@@ -1412,16 +1404,16 @@
     "slack": 3
   },
   "litellm/llms/azure/exception_mapping.py": {
-    "baseline": 36,
+    "baseline": 35,
     "slack": 18
   },
   "litellm/llms/azure/files/handler.py": {
-    "baseline": 27,
-    "slack": 14
+    "baseline": 15,
+    "slack": 8
   },
   "litellm/llms/azure/fine_tuning/handler.py": {
-    "baseline": 21,
-    "slack": 11
+    "baseline": 15,
+    "slack": 8
   },
   "litellm/llms/azure/image_edit/transformation.py": {
     "baseline": 19,
@@ -1464,12 +1456,12 @@
     "slack": 3
   },
   "litellm/llms/azure_ai/agents/handler.py": {
-    "baseline": 293,
-    "slack": 147
+    "baseline": 292,
+    "slack": 146
   },
   "litellm/llms/azure_ai/agents/transformation.py": {
-    "baseline": 49,
-    "slack": 25
+    "baseline": 48,
+    "slack": 24
   },
   "litellm/llms/azure_ai/anthropic/count_tokens/handler.py": {
     "baseline": 20,
@@ -1484,8 +1476,8 @@
     "slack": 4
   },
   "litellm/llms/azure_ai/anthropic/handler.py": {
-    "baseline": 101,
-    "slack": 51
+    "baseline": 100,
+    "slack": 50
   },
   "litellm/llms/azure_ai/anthropic/messages_transformation.py": {
     "baseline": 44,
@@ -1508,8 +1500,8 @@
     "slack": 4
   },
   "litellm/llms/azure_ai/embed/handler.py": {
-    "baseline": 79,
-    "slack": 40
+    "baseline": 77,
+    "slack": 39
   },
   "litellm/llms/azure_ai/image_edit/flux2_transformation.py": {
     "baseline": 26,
@@ -1532,12 +1524,12 @@
     "slack": 44
   },
   "litellm/llms/azure_ai/ocr/document_intelligence/transformation.py": {
-    "baseline": 126,
-    "slack": 63
+    "baseline": 124,
+    "slack": 62
   },
   "litellm/llms/azure_ai/ocr/transformation.py": {
-    "baseline": 12,
-    "slack": 6
+    "baseline": 9,
+    "slack": 5
   },
   "litellm/llms/azure_ai/rerank/transformation.py": {
     "baseline": 12,
@@ -1560,11 +1552,11 @@
     "slack": 3
   },
   "litellm/llms/base_llm/audio_transcription/transformation.py": {
-    "baseline": 10,
+    "baseline": 9,
     "slack": 5
   },
   "litellm/llms/base_llm/base_model_iterator.py": {
-    "baseline": 86,
+    "baseline": 85,
     "slack": 43
   },
   "litellm/llms/base_llm/base_utils.py": {
@@ -1596,8 +1588,8 @@
     "slack": 1
   },
   "litellm/llms/base_llm/files/azure_blob_storage_backend.py": {
-    "baseline": 54,
-    "slack": 27
+    "baseline": 50,
+    "slack": 25
   },
   "litellm/llms/base_llm/files/transformation.py": {
     "baseline": 2,
@@ -1632,8 +1624,8 @@
     "slack": 8
   },
   "litellm/llms/base_llm/managed_resources/base_managed_resource.py": {
-    "baseline": 111,
-    "slack": 56
+    "baseline": 108,
+    "slack": 54
   },
   "litellm/llms/base_llm/managed_resources/isolation.py": {
     "baseline": 13,
@@ -1644,8 +1636,8 @@
     "slack": 9
   },
   "litellm/llms/base_llm/ocr/transformation.py": {
-    "baseline": 13,
-    "slack": 7
+    "baseline": 9,
+    "slack": 5
   },
   "litellm/llms/base_llm/passthrough/transformation.py": {
     "baseline": 4,
@@ -1668,16 +1660,16 @@
     "slack": 14
   },
   "litellm/llms/base_llm/search/transformation.py": {
-    "baseline": 8,
-    "slack": 4
+    "baseline": 4,
+    "slack": 2
   },
   "litellm/llms/base_llm/skills/transformation.py": {
     "baseline": 2,
     "slack": 1
   },
   "litellm/llms/base_llm/text_to_speech/transformation.py": {
-    "baseline": 19,
-    "slack": 10
+    "baseline": 16,
+    "slack": 8
   },
   "litellm/llms/base_llm/vector_store/transformation.py": {
     "baseline": 7,
@@ -1696,8 +1688,8 @@
     "slack": 10
   },
   "litellm/llms/bedrock/base_aws_llm.py": {
-    "baseline": 341,
-    "slack": 171
+    "baseline": 338,
+    "slack": 169
   },
   "litellm/llms/bedrock/batches/handler.py": {
     "baseline": 78,
@@ -1712,20 +1704,20 @@
     "slack": 98
   },
   "litellm/llms/bedrock/chat/converse_handler.py": {
-    "baseline": 152,
-    "slack": 76
+    "baseline": 148,
+    "slack": 74
   },
   "litellm/llms/bedrock/chat/converse_transformation.py": {
-    "baseline": 527,
-    "slack": 264
+    "baseline": 521,
+    "slack": 261
   },
   "litellm/llms/bedrock/chat/invoke_agent/transformation.py": {
     "baseline": 65,
     "slack": 33
   },
   "litellm/llms/bedrock/chat/invoke_handler.py": {
-    "baseline": 634,
-    "slack": 317
+    "baseline": 631,
+    "slack": 316
   },
   "litellm/llms/bedrock/chat/invoke_transformations/amazon_ai21_transformation.py": {
     "baseline": 36,
@@ -1780,15 +1772,15 @@
     "slack": 20
   },
   "litellm/llms/bedrock/chat/invoke_transformations/anthropic_claude3_transformation.py": {
-    "baseline": 139,
-    "slack": 70
+    "baseline": 137,
+    "slack": 69
   },
   "litellm/llms/bedrock/chat/invoke_transformations/base_invoke_transformation.py": {
     "baseline": 192,
     "slack": 96
   },
   "litellm/llms/bedrock/chat/mantle/transformation.py": {
-    "baseline": 24,
+    "baseline": 23,
     "slack": 12
   },
   "litellm/llms/bedrock/claude_platform/common_utils.py": {
@@ -1832,7 +1824,7 @@
     "slack": 11
   },
   "litellm/llms/bedrock/embed/amazon_titan_v2_transformation.py": {
-    "baseline": 46,
+    "baseline": 45,
     "slack": 23
   },
   "litellm/llms/bedrock/embed/cohere_transformation.py": {
@@ -1848,8 +1840,8 @@
     "slack": 29
   },
   "litellm/llms/bedrock/files/handler.py": {
-    "baseline": 33,
-    "slack": 17
+    "baseline": 31,
+    "slack": 16
   },
   "litellm/llms/bedrock/files/transformation.py": {
     "baseline": 218,
@@ -1860,12 +1852,12 @@
     "slack": 78
   },
   "litellm/llms/bedrock/image_edit/handler.py": {
-    "baseline": 56,
-    "slack": 28
+    "baseline": 51,
+    "slack": 26
   },
   "litellm/llms/bedrock/image_edit/stability_transformation.py": {
-    "baseline": 87,
-    "slack": 44
+    "baseline": 86,
+    "slack": 43
   },
   "litellm/llms/bedrock/image_generation/amazon_nova_canvas_transformation.py": {
     "baseline": 79,
@@ -1888,8 +1880,8 @@
     "slack": 1
   },
   "litellm/llms/bedrock/image_generation/image_handler.py": {
-    "baseline": 59,
-    "slack": 30
+    "baseline": 54,
+    "slack": 27
   },
   "litellm/llms/bedrock/messages/invoke_transformations/anthropic_claude3_transformation.py": {
     "baseline": 237,
@@ -1900,8 +1892,8 @@
     "slack": 9
   },
   "litellm/llms/bedrock/passthrough/guardrail_translation/handler.py": {
-    "baseline": 337,
-    "slack": 169
+    "baseline": 335,
+    "slack": 168
   },
   "litellm/llms/bedrock/passthrough/transformation.py": {
     "baseline": 36,
@@ -1936,24 +1928,24 @@
     "slack": 32
   },
   "litellm/llms/black_forest_labs/image_edit/handler.py": {
-    "baseline": 126,
-    "slack": 63
+    "baseline": 123,
+    "slack": 62
   },
   "litellm/llms/black_forest_labs/image_edit/transformation.py": {
     "baseline": 45,
     "slack": 23
   },
   "litellm/llms/black_forest_labs/image_generation/handler.py": {
-    "baseline": 130,
-    "slack": 65
+    "baseline": 127,
+    "slack": 64
   },
   "litellm/llms/black_forest_labs/image_generation/transformation.py": {
     "baseline": 49,
     "slack": 25
   },
   "litellm/llms/brave/search/transformation.py": {
-    "baseline": 71,
-    "slack": 36
+    "baseline": 52,
+    "slack": 26
   },
   "litellm/llms/bytez/chat/transformation.py": {
     "baseline": 128,
@@ -2024,7 +2016,7 @@
     "slack": 26
   },
   "litellm/llms/cohere/rerank/guardrail_translation/handler.py": {
-    "baseline": 16,
+    "baseline": 15,
     "slack": 8
   },
   "litellm/llms/cohere/rerank/transformation.py": {
@@ -2056,12 +2048,12 @@
     "slack": 9
   },
   "litellm/llms/custom_httpx/aiohttp_handler.py": {
-    "baseline": 187,
-    "slack": 94
+    "baseline": 183,
+    "slack": 92
   },
   "litellm/llms/custom_httpx/aiohttp_transport.py": {
-    "baseline": 40,
-    "slack": 20
+    "baseline": 34,
+    "slack": 17
   },
   "litellm/llms/custom_httpx/async_client_cleanup.py": {
     "baseline": 42,
@@ -2072,16 +2064,16 @@
     "slack": 85
   },
   "litellm/llms/custom_httpx/http_handler.py": {
-    "baseline": 339,
-    "slack": 170
+    "baseline": 320,
+    "slack": 160
   },
   "litellm/llms/custom_httpx/httpx_handler.py": {
     "baseline": 22,
     "slack": 11
   },
   "litellm/llms/custom_httpx/llm_http_handler.py": {
-    "baseline": 3900,
-    "slack": 1950
+    "baseline": 3836,
+    "slack": 1918
   },
   "litellm/llms/custom_httpx/mock_transport.py": {
     "baseline": 13,
@@ -2091,17 +2083,13 @@
     "baseline": 10,
     "slack": 5
   },
-  "litellm/llms/dashscope/chat/transformation.py": {
-    "baseline": 1,
-    "slack": 1
-  },
   "litellm/llms/dashscope/common_utils.py": {
     "baseline": 2,
     "slack": 1
   },
   "litellm/llms/dashscope/cost_calculator.py": {
-    "baseline": 49,
-    "slack": 25
+    "baseline": 45,
+    "slack": 23
   },
   "litellm/llms/dashscope/embed/transformation.py": {
     "baseline": 44,
@@ -2116,7 +2104,7 @@
     "slack": 30
   },
   "litellm/llms/databricks/chat/transformation.py": {
-    "baseline": 168,
+    "baseline": 167,
     "slack": 84
   },
   "litellm/llms/databricks/common_utils.py": {
@@ -2160,8 +2148,8 @@
     "slack": 34
   },
   "litellm/llms/deepseek/chat/transformation.py": {
-    "baseline": 51,
-    "slack": 26
+    "baseline": 50,
+    "slack": 25
   },
   "litellm/llms/deepseek/messages/transformation.py": {
     "baseline": 35,
@@ -2176,24 +2164,24 @@
     "slack": 38
   },
   "litellm/llms/docker_model_runner/chat/transformation.py": {
-    "baseline": 15,
-    "slack": 8
+    "baseline": 14,
+    "slack": 7
   },
   "litellm/llms/duckduckgo/search/transformation.py": {
-    "baseline": 67,
-    "slack": 34
+    "baseline": 61,
+    "slack": 31
   },
   "litellm/llms/elevenlabs/audio_transcription/transformation.py": {
     "baseline": 44,
     "slack": 22
   },
   "litellm/llms/elevenlabs/text_to_speech/transformation.py": {
-    "baseline": 94,
+    "baseline": 93,
     "slack": 47
   },
   "litellm/llms/exa_ai/search/transformation.py": {
-    "baseline": 40,
-    "slack": 20
+    "baseline": 24,
+    "slack": 12
   },
   "litellm/llms/fal_ai/cost_calculator.py": {
     "baseline": 2,
@@ -2244,16 +2232,16 @@
     "slack": 13
   },
   "litellm/llms/fastcrw/search/transformation.py": {
-    "baseline": 27,
-    "slack": 14
+    "baseline": 23,
+    "slack": 12
   },
   "litellm/llms/featherless_ai/chat/transformation.py": {
     "baseline": 34,
     "slack": 17
   },
   "litellm/llms/firecrawl/search/transformation.py": {
-    "baseline": 55,
-    "slack": 28
+    "baseline": 45,
+    "slack": 23
   },
   "litellm/llms/fireworks_ai/chat/transformation.py": {
     "baseline": 124,
@@ -2300,7 +2288,7 @@
     "slack": 20
   },
   "litellm/llms/gemini/google_genai/transformation.py": {
-    "baseline": 84,
+    "baseline": 83,
     "slack": 42
   },
   "litellm/llms/gemini/image_edit/cost_calculator.py": {
@@ -2308,7 +2296,7 @@
     "slack": 1
   },
   "litellm/llms/gemini/image_edit/transformation.py": {
-    "baseline": 44,
+    "baseline": 43,
     "slack": 22
   },
   "litellm/llms/gemini/image_generation/cost_calculator.py": {
@@ -2340,7 +2328,7 @@
     "slack": 39
   },
   "litellm/llms/gigachat/authenticator.py": {
-    "baseline": 42,
+    "baseline": 41,
     "slack": 21
   },
   "litellm/llms/gigachat/chat/streaming.py": {
@@ -2356,8 +2344,8 @@
     "slack": 17
   },
   "litellm/llms/gigachat/file_handler.py": {
-    "baseline": 47,
-    "slack": 24
+    "baseline": 45,
+    "slack": 23
   },
   "litellm/llms/github_copilot/authenticator.py": {
     "baseline": 35,
@@ -2380,8 +2368,8 @@
     "slack": 35
   },
   "litellm/llms/google_pse/search/transformation.py": {
-    "baseline": 61,
-    "slack": 31
+    "baseline": 36,
+    "slack": 18
   },
   "litellm/llms/gradient_ai/chat/transformation.py": {
     "baseline": 21,
@@ -2392,20 +2380,20 @@
     "slack": 7
   },
   "litellm/llms/groq/chat/transformation.py": {
-    "baseline": 55,
-    "slack": 28
+    "baseline": 54,
+    "slack": 27
   },
   "litellm/llms/groq/stt/transformation.py": {
     "baseline": 31,
     "slack": 16
   },
   "litellm/llms/heroku/chat/transformation.py": {
-    "baseline": 2,
+    "baseline": 1,
     "slack": 1
   },
   "litellm/llms/hosted_vllm/chat/transformation.py": {
-    "baseline": 80,
-    "slack": 40
+    "baseline": 71,
+    "slack": 36
   },
   "litellm/llms/hosted_vllm/embedding/transformation.py": {
     "baseline": 19,
@@ -2432,16 +2420,16 @@
     "slack": 8
   },
   "litellm/llms/huggingface/embedding/handler.py": {
-    "baseline": 157,
-    "slack": 79
+    "baseline": 156,
+    "slack": 78
   },
   "litellm/llms/huggingface/embedding/transformation.py": {
     "baseline": 224,
     "slack": 112
   },
   "litellm/llms/huggingface/rerank/transformation.py": {
-    "baseline": 70,
-    "slack": 35
+    "baseline": 67,
+    "slack": 34
   },
   "litellm/llms/hyperbolic/chat/transformation.py": {
     "baseline": 1,
@@ -2500,8 +2488,8 @@
     "slack": 33
   },
   "litellm/llms/linkup/search/transformation.py": {
-    "baseline": 43,
-    "slack": 22
+    "baseline": 31,
+    "slack": 16
   },
   "litellm/llms/litellm_proxy/chat/transformation.py": {
     "baseline": 21,
@@ -2520,8 +2508,8 @@
     "slack": 56
   },
   "litellm/llms/litellm_proxy/skills/handler.py": {
-    "baseline": 67,
-    "slack": 34
+    "baseline": 66,
+    "slack": 33
   },
   "litellm/llms/litellm_proxy/skills/prompt_injection.py": {
     "baseline": 54,
@@ -2532,8 +2520,8 @@
     "slack": 30
   },
   "litellm/llms/litellm_proxy/skills/transformation.py": {
-    "baseline": 57,
-    "slack": 29
+    "baseline": 45,
+    "slack": 23
   },
   "litellm/llms/lm_studio/chat/transformation.py": {
     "baseline": 25,
@@ -2576,19 +2564,19 @@
     "slack": 17
   },
   "litellm/llms/mistral/chat/transformation.py": {
-    "baseline": 183,
-    "slack": 92
+    "baseline": 180,
+    "slack": 90
   },
   "litellm/llms/mistral/ocr/guardrail_translation/handler.py": {
-    "baseline": 39,
-    "slack": 20
+    "baseline": 37,
+    "slack": 19
   },
   "litellm/llms/mistral/ocr/transformation.py": {
     "baseline": 22,
     "slack": 11
   },
   "litellm/llms/modelscope/chat/transformation.py": {
-    "baseline": 12,
+    "baseline": 11,
     "slack": 6
   },
   "litellm/llms/modelscope/image_generation/transformation.py": {
@@ -2596,7 +2584,7 @@
     "slack": 17
   },
   "litellm/llms/moonshot/chat/transformation.py": {
-    "baseline": 54,
+    "baseline": 53,
     "slack": 27
   },
   "litellm/llms/morph/chat/transformation.py": {
@@ -2640,16 +2628,16 @@
     "slack": 2
   },
   "litellm/llms/nvidia_nim/rerank/transformation.py": {
-    "baseline": 58,
-    "slack": 29
+    "baseline": 48,
+    "slack": 24
   },
   "litellm/llms/nvidia_riva/audio_transcription/audio_utils.py": {
-    "baseline": 89,
-    "slack": 45
+    "baseline": 85,
+    "slack": 43
   },
   "litellm/llms/nvidia_riva/audio_transcription/handler.py": {
-    "baseline": 142,
-    "slack": 71
+    "baseline": 140,
+    "slack": 70
   },
   "litellm/llms/nvidia_riva/audio_transcription/transformation.py": {
     "baseline": 83,
@@ -2672,8 +2660,8 @@
     "slack": 80
   },
   "litellm/llms/oci/common_utils.py": {
-    "baseline": 221,
-    "slack": 111
+    "baseline": 217,
+    "slack": 109
   },
   "litellm/llms/oci/embed/transformation.py": {
     "baseline": 45,
@@ -2716,24 +2704,24 @@
     "slack": 4
   },
   "litellm/llms/openai/chat/gpt_transformation.py": {
-    "baseline": 132,
-    "slack": 66
+    "baseline": 129,
+    "slack": 65
   },
   "litellm/llms/openai/chat/guardrail_translation/handler.py": {
-    "baseline": 196,
-    "slack": 98
+    "baseline": 188,
+    "slack": 94
   },
   "litellm/llms/openai/chat/o_series_transformation.py": {
-    "baseline": 20,
+    "baseline": 19,
     "slack": 10
   },
   "litellm/llms/openai/common_utils.py": {
-    "baseline": 46,
-    "slack": 23
-  },
-  "litellm/llms/openai/completion/guardrail_translation/handler.py": {
     "baseline": 43,
     "slack": 22
+  },
+  "litellm/llms/openai/completion/guardrail_translation/handler.py": {
+    "baseline": 40,
+    "slack": 20
   },
   "litellm/llms/openai/completion/handler.py": {
     "baseline": 140,
@@ -2756,16 +2744,16 @@
     "slack": 3
   },
   "litellm/llms/openai/embeddings/guardrail_translation/handler.py": {
-    "baseline": 35,
-    "slack": 18
+    "baseline": 33,
+    "slack": 17
   },
   "litellm/llms/openai/evals/transformation.py": {
     "baseline": 73,
     "slack": 37
   },
   "litellm/llms/openai/fine_tuning/handler.py": {
-    "baseline": 36,
-    "slack": 18
+    "baseline": 30,
+    "slack": 15
   },
   "litellm/llms/openai/image_edit/dalle2_transformation.py": {
     "baseline": 46,
@@ -2792,20 +2780,20 @@
     "slack": 12
   },
   "litellm/llms/openai/image_generation/guardrail_translation/handler.py": {
-    "baseline": 14,
+    "baseline": 13,
     "slack": 7
   },
   "litellm/llms/openai/image_variations/handler.py": {
-    "baseline": 69,
-    "slack": 35
+    "baseline": 68,
+    "slack": 34
   },
   "litellm/llms/openai/image_variations/transformation.py": {
     "baseline": 6,
     "slack": 3
   },
   "litellm/llms/openai/openai.py": {
-    "baseline": 664,
-    "slack": 332
+    "baseline": 626,
+    "slack": 313
   },
   "litellm/llms/openai/realtime/handler.py": {
     "baseline": 31,
@@ -2828,15 +2816,15 @@
     "slack": 43
   },
   "litellm/llms/openai/responses/guardrail_translation/handler.py": {
-    "baseline": 256,
-    "slack": 128
+    "baseline": 247,
+    "slack": 124
   },
   "litellm/llms/openai/responses/transformation.py": {
     "baseline": 126,
     "slack": 63
   },
   "litellm/llms/openai/speech/guardrail_translation/handler.py": {
-    "baseline": 14,
+    "baseline": 13,
     "slack": 7
   },
   "litellm/llms/openai/transcriptions/gpt_transformation.py": {
@@ -2844,16 +2832,16 @@
     "slack": 2
   },
   "litellm/llms/openai/transcriptions/guardrail_translation/handler.py": {
-    "baseline": 17,
-    "slack": 9
+    "baseline": 16,
+    "slack": 8
   },
   "litellm/llms/openai/transcriptions/handler.py": {
     "baseline": 74,
     "slack": 37
   },
   "litellm/llms/openai/transcriptions/whisper_transformation.py": {
-    "baseline": 23,
-    "slack": 12
+    "baseline": 22,
+    "slack": 11
   },
   "litellm/llms/openai/vector_store_files/transformation.py": {
     "baseline": 42,
@@ -2868,8 +2856,8 @@
     "slack": 77
   },
   "litellm/llms/openai_like/chat/handler.py": {
-    "baseline": 113,
-    "slack": 57
+    "baseline": 110,
+    "slack": 55
   },
   "litellm/llms/openai_like/chat/transformation.py": {
     "baseline": 36,
@@ -2884,7 +2872,7 @@
     "slack": 37
   },
   "litellm/llms/openai_like/embedding/handler.py": {
-    "baseline": 56,
+    "baseline": 55,
     "slack": 28
   },
   "litellm/llms/openai_like/json_loader.py": {
@@ -2896,8 +2884,8 @@
     "slack": 1
   },
   "litellm/llms/openrouter/chat/transformation.py": {
-    "baseline": 88,
-    "slack": 44
+    "baseline": 74,
+    "slack": 37
   },
   "litellm/llms/openrouter/embedding/transformation.py": {
     "baseline": 27,
@@ -2928,12 +2916,12 @@
     "slack": 13
   },
   "litellm/llms/parallel_ai/search/transformation.py": {
-    "baseline": 55,
-    "slack": 28
+    "baseline": 39,
+    "slack": 20
   },
   "litellm/llms/pass_through/guardrail_translation/handler.py": {
-    "baseline": 84,
-    "slack": 42
+    "baseline": 82,
+    "slack": 41
   },
   "litellm/llms/perplexity/chat/transformation.py": {
     "baseline": 59,
@@ -2952,8 +2940,8 @@
     "slack": 11
   },
   "litellm/llms/perplexity/search/transformation.py": {
-    "baseline": 29,
-    "slack": 15
+    "baseline": 24,
+    "slack": 12
   },
   "litellm/llms/petals/common_utils.py": {
     "baseline": 1,
@@ -2972,8 +2960,8 @@
     "slack": 5
   },
   "litellm/llms/predibase/chat/handler.py": {
-    "baseline": 98,
-    "slack": 49
+    "baseline": 96,
+    "slack": 48
   },
   "litellm/llms/predibase/chat/transformation.py": {
     "baseline": 116,
@@ -3008,12 +2996,12 @@
     "slack": 23
   },
   "litellm/llms/reducto/ocr/transformation.py": {
-    "baseline": 53,
-    "slack": 27
+    "baseline": 50,
+    "slack": 25
   },
   "litellm/llms/replicate/chat/handler.py": {
-    "baseline": 139,
-    "slack": 70
+    "baseline": 136,
+    "slack": 68
   },
   "litellm/llms/replicate/chat/transformation.py": {
     "baseline": 76,
@@ -3028,20 +3016,20 @@
     "slack": 1
   },
   "litellm/llms/runwayml/image_generation/transformation.py": {
-    "baseline": 80,
-    "slack": 40
+    "baseline": 78,
+    "slack": 39
   },
   "litellm/llms/runwayml/text_to_speech/transformation.py": {
-    "baseline": 116,
-    "slack": 58
+    "baseline": 114,
+    "slack": 57
   },
   "litellm/llms/runwayml/videos/transformation.py": {
     "baseline": 125,
     "slack": 63
   },
   "litellm/llms/s3_vectors/vector_stores/transformation.py": {
-    "baseline": 71,
-    "slack": 36
+    "baseline": 67,
+    "slack": 34
   },
   "litellm/llms/sagemaker/chat/handler.py": {
     "baseline": 81,
@@ -3092,36 +3080,36 @@
     "slack": 50
   },
   "litellm/llms/sap/chat/models.py": {
-    "baseline": 95,
-    "slack": 48
+    "baseline": 54,
+    "slack": 27
   },
   "litellm/llms/sap/chat/transformation.py": {
     "baseline": 182,
     "slack": 91
   },
   "litellm/llms/sap/credentials.py": {
-    "baseline": 61,
-    "slack": 31
+    "baseline": 58,
+    "slack": 29
   },
   "litellm/llms/sap/embed/transformation.py": {
-    "baseline": 82,
-    "slack": 41
+    "baseline": 65,
+    "slack": 33
   },
   "litellm/llms/scaleway/audio_transcription/transformation.py": {
     "baseline": 30,
     "slack": 15
   },
   "litellm/llms/searchapi/search/transformation.py": {
-    "baseline": 58,
-    "slack": 29
+    "baseline": 38,
+    "slack": 19
   },
   "litellm/llms/searxng/search/transformation.py": {
-    "baseline": 43,
-    "slack": 22
+    "baseline": 36,
+    "slack": 18
   },
   "litellm/llms/serper/search/transformation.py": {
-    "baseline": 37,
-    "slack": 19
+    "baseline": 29,
+    "slack": 15
   },
   "litellm/llms/snowflake/chat/transformation.py": {
     "baseline": 244,
@@ -3140,12 +3128,12 @@
     "slack": 13
   },
   "litellm/llms/soniox/audio_transcription/handler.py": {
-    "baseline": 196,
-    "slack": 98
+    "baseline": 192,
+    "slack": 96
   },
   "litellm/llms/soniox/audio_transcription/transformation.py": {
-    "baseline": 107,
-    "slack": 54
+    "baseline": 106,
+    "slack": 53
   },
   "litellm/llms/soniox/common_utils.py": {
     "baseline": 68,
@@ -3160,8 +3148,8 @@
     "slack": 21
   },
   "litellm/llms/tavily/search/transformation.py": {
-    "baseline": 38,
-    "slack": 19
+    "baseline": 23,
+    "slack": 12
   },
   "litellm/llms/together_ai/chat.py": {
     "baseline": 14,
@@ -3176,7 +3164,7 @@
     "slack": 5
   },
   "litellm/llms/together_ai/rerank/handler.py": {
-    "baseline": 18,
+    "baseline": 17,
     "slack": 9
   },
   "litellm/llms/together_ai/rerank/transformation.py": {
@@ -3188,7 +3176,7 @@
     "slack": 1
   },
   "litellm/llms/topaz/image_variations/transformation.py": {
-    "baseline": 18,
+    "baseline": 17,
     "slack": 9
   },
   "litellm/llms/triton/common_utils.py": {
@@ -3228,8 +3216,8 @@
     "slack": 3
   },
   "litellm/llms/vertex_ai/batches/handler.py": {
-    "baseline": 118,
-    "slack": 59
+    "baseline": 115,
+    "slack": 58
   },
   "litellm/llms/vertex_ai/batches/transformation.py": {
     "baseline": 10,
@@ -3244,27 +3232,27 @@
     "slack": 8
   },
   "litellm/llms/vertex_ai/context_caching/vertex_ai_context_caching.py": {
-    "baseline": 85,
-    "slack": 43
+    "baseline": 83,
+    "slack": 42
   },
   "litellm/llms/vertex_ai/cost_calculator.py": {
     "baseline": 4,
     "slack": 2
   },
   "litellm/llms/vertex_ai/count_tokens/handler.py": {
-    "baseline": 9,
-    "slack": 5
+    "baseline": 8,
+    "slack": 4
   },
   "litellm/llms/vertex_ai/files/handler.py": {
-    "baseline": 28,
-    "slack": 14
+    "baseline": 21,
+    "slack": 11
   },
   "litellm/llms/vertex_ai/files/transformation.py": {
     "baseline": 177,
     "slack": 89
   },
   "litellm/llms/vertex_ai/fine_tuning/handler.py": {
-    "baseline": 56,
+    "baseline": 55,
     "slack": 28
   },
   "litellm/llms/vertex_ai/gemini/transformation.py": {
@@ -3272,12 +3260,12 @@
     "slack": 156
   },
   "litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py": {
-    "baseline": 912,
-    "slack": 456
+    "baseline": 907,
+    "slack": 454
   },
   "litellm/llms/vertex_ai/gemini_embeddings/batch_embed_content_handler.py": {
-    "baseline": 82,
-    "slack": 41
+    "baseline": 77,
+    "slack": 39
   },
   "litellm/llms/vertex_ai/gemini_embeddings/batch_embed_content_transformation.py": {
     "baseline": 32,
@@ -3292,12 +3280,12 @@
     "slack": 1
   },
   "litellm/llms/vertex_ai/image_edit/vertex_gemini_transformation.py": {
-    "baseline": 70,
+    "baseline": 69,
     "slack": 35
   },
   "litellm/llms/vertex_ai/image_edit/vertex_imagen_transformation.py": {
-    "baseline": 85,
-    "slack": 43
+    "baseline": 84,
+    "slack": 42
   },
   "litellm/llms/vertex_ai/image_generation/image_generation_handler.py": {
     "baseline": 71,
@@ -3312,7 +3300,7 @@
     "slack": 25
   },
   "litellm/llms/vertex_ai/multimodal_embeddings/embedding_handler.py": {
-    "baseline": 50,
+    "baseline": 49,
     "slack": 25
   },
   "litellm/llms/vertex_ai/multimodal_embeddings/transformation.py": {
@@ -3324,12 +3312,12 @@
     "slack": 33
   },
   "litellm/llms/vertex_ai/ocr/transformation.py": {
-    "baseline": 20,
-    "slack": 10
+    "baseline": 17,
+    "slack": 9
   },
   "litellm/llms/vertex_ai/rag_engine/ingestion.py": {
-    "baseline": 58,
-    "slack": 29
+    "baseline": 56,
+    "slack": 28
   },
   "litellm/llms/vertex_ai/rag_engine/transformation.py": {
     "baseline": 14,
@@ -3344,8 +3332,8 @@
     "slack": 33
   },
   "litellm/llms/vertex_ai/text_to_speech/text_to_speech_handler.py": {
-    "baseline": 48,
-    "slack": 24
+    "baseline": 38,
+    "slack": 19
   },
   "litellm/llms/vertex_ai/text_to_speech/transformation.py": {
     "baseline": 84,
@@ -3384,7 +3372,7 @@
     "slack": 28
   },
   "litellm/llms/vertex_ai/vertex_ai_partner_models/count_tokens/handler.py": {
-    "baseline": 24,
+    "baseline": 23,
     "slack": 12
   },
   "litellm/llms/vertex_ai/vertex_ai_partner_models/gpt_oss/transformation.py": {
@@ -3404,16 +3392,12 @@
     "slack": 10
   },
   "litellm/llms/vertex_ai/vertex_embeddings/embedding_handler.py": {
-    "baseline": 46,
-    "slack": 23
+    "baseline": 44,
+    "slack": 22
   },
   "litellm/llms/vertex_ai/vertex_embeddings/transformation.py": {
     "baseline": 84,
     "slack": 42
-  },
-  "litellm/llms/vertex_ai/vertex_embeddings/types.py": {
-    "baseline": 16,
-    "slack": 8
   },
   "litellm/llms/vertex_ai/vertex_gemma_models/main.py": {
     "baseline": 16,
@@ -3424,8 +3408,8 @@
     "slack": 43
   },
   "litellm/llms/vertex_ai/vertex_llm_base.py": {
-    "baseline": 305,
-    "slack": 153
+    "baseline": 301,
+    "slack": 151
   },
   "litellm/llms/vertex_ai/vertex_model_garden/main.py": {
     "baseline": 17,
@@ -3496,12 +3480,12 @@
     "slack": 22
   },
   "litellm/llms/watsonx/common_utils.py": {
-    "baseline": 101,
-    "slack": 51
+    "baseline": 100,
+    "slack": 50
   },
   "litellm/llms/watsonx/completion/transformation.py": {
-    "baseline": 117,
-    "slack": 59
+    "baseline": 116,
+    "slack": 58
   },
   "litellm/llms/watsonx/embed/transformation.py": {
     "baseline": 22,
@@ -3528,8 +3512,8 @@
     "slack": 3
   },
   "litellm/llms/xai/oauth.py": {
-    "baseline": 84,
-    "slack": 42
+    "baseline": 81,
+    "slack": 41
   },
   "litellm/llms/xai/realtime/handler.py": {
     "baseline": 1,
@@ -3544,87 +3528,51 @@
     "slack": 6
   },
   "litellm/llms/you_com/search/transformation.py": {
-    "baseline": 49,
-    "slack": 25
+    "baseline": 41,
+    "slack": 21
   },
   "litellm/main.py": {
-    "baseline": 3138,
-    "slack": 1569
-  },
-  "litellm/models/access_group.py": {
-    "baseline": 2,
-    "slack": 1
+    "baseline": 3102,
+    "slack": 1551
   },
   "litellm/models/base.py": {
     "baseline": 12,
     "slack": 6
   },
-  "litellm/models/budget.py": {
-    "baseline": 1,
-    "slack": 1
-  },
-  "litellm/models/config.py": {
-    "baseline": 2,
-    "slack": 1
-  },
   "litellm/models/credentials.py": {
-    "baseline": 8,
-    "slack": 4
-  },
-  "litellm/models/end_user.py": {
-    "baseline": 6,
+    "baseline": 5,
     "slack": 3
   },
-  "litellm/models/managed_files.py": {
-    "baseline": 21,
-    "slack": 11
-  },
-  "litellm/models/mcp_server.py": {
-    "baseline": 3,
-    "slack": 2
-  },
-  "litellm/models/model.py": {
-    "baseline": 18,
-    "slack": 9
-  },
-  "litellm/models/object_permission.py": {
-    "baseline": 1,
-    "slack": 1
-  },
-  "litellm/models/organization.py": {
+  "litellm/models/end_user.py": {
     "baseline": 4,
     "slack": 2
   },
+  "litellm/models/model.py": {
+    "baseline": 15,
+    "slack": 8
+  },
+  "litellm/models/organization.py": {
+    "baseline": 1,
+    "slack": 1
+  },
   "litellm/models/organization_membership.py": {
-    "baseline": 9,
-    "slack": 5
-  },
-  "litellm/models/project.py": {
-    "baseline": 1,
-    "slack": 1
-  },
-  "litellm/models/skills.py": {
-    "baseline": 1,
-    "slack": 1
+    "baseline": 5,
+    "slack": 3
   },
   "litellm/models/spend_logs.py": {
-    "baseline": 11,
-    "slack": 6
-  },
-  "litellm/models/tag.py": {
-    "baseline": 9,
-    "slack": 5
-  },
-  "litellm/models/team.py": {
-    "baseline": 42,
-    "slack": 21
-  },
-  "litellm/models/team_membership.py": {
     "baseline": 2,
     "slack": 1
   },
+  "litellm/models/tag.py": {
+    "baseline": 8,
+    "slack": 4
+  },
+  "litellm/models/team.py": {
+    "baseline": 37,
+    "slack": 19
+  },
   "litellm/models/user.py": {
-    "baseline": 18,
+    "baseline": 17,
     "slack": 9
   },
   "litellm/models/verification_token.py": {
@@ -3632,12 +3580,12 @@
     "slack": 5
   },
   "litellm/ocr/main.py": {
-    "baseline": 80,
-    "slack": 40
+    "baseline": 77,
+    "slack": 39
   },
   "litellm/passthrough/main.py": {
-    "baseline": 100,
-    "slack": 50
+    "baseline": 91,
+    "slack": 46
   },
   "litellm/passthrough/timeout_utils.py": {
     "baseline": 15,
@@ -3648,15 +3596,15 @@
     "slack": 21
   },
   "litellm/proxy/_experimental/mcp_server/auth/token_exchange.py": {
-    "baseline": 21,
-    "slack": 11
+    "baseline": 20,
+    "slack": 10
   },
   "litellm/proxy/_experimental/mcp_server/auth/user_api_key_auth_mcp.py": {
-    "baseline": 175,
-    "slack": 88
+    "baseline": 154,
+    "slack": 77
   },
   "litellm/proxy/_experimental/mcp_server/byok_oauth_endpoints.py": {
-    "baseline": 58,
+    "baseline": 57,
     "slack": 29
   },
   "litellm/proxy/_experimental/mcp_server/cost_calculator.py": {
@@ -3664,32 +3612,32 @@
     "slack": 4
   },
   "litellm/proxy/_experimental/mcp_server/db.py": {
-    "baseline": 428,
-    "slack": 214
+    "baseline": 424,
+    "slack": 212
   },
   "litellm/proxy/_experimental/mcp_server/discoverable_endpoints.py": {
-    "baseline": 193,
-    "slack": 97
+    "baseline": 189,
+    "slack": 95
   },
   "litellm/proxy/_experimental/mcp_server/elicitation_handler.py": {
     "baseline": 57,
     "slack": 29
   },
   "litellm/proxy/_experimental/mcp_server/guardrail_translation/handler.py": {
-    "baseline": 21,
-    "slack": 11
+    "baseline": 20,
+    "slack": 10
   },
   "litellm/proxy/_experimental/mcp_server/mcp_debug.py": {
     "baseline": 10,
     "slack": 5
   },
   "litellm/proxy/_experimental/mcp_server/mcp_server_manager.py": {
-    "baseline": 877,
-    "slack": 439
+    "baseline": 833,
+    "slack": 417
   },
   "litellm/proxy/_experimental/mcp_server/oauth2_token_cache.py": {
-    "baseline": 36,
-    "slack": 18
+    "baseline": 32,
+    "slack": 16
   },
   "litellm/proxy/_experimental/mcp_server/oauth_utils.py": {
     "baseline": 21,
@@ -3700,24 +3648,24 @@
     "slack": 107
   },
   "litellm/proxy/_experimental/mcp_server/rest_endpoints.py": {
-    "baseline": 288,
-    "slack": 144
+    "baseline": 277,
+    "slack": 139
   },
   "litellm/proxy/_experimental/mcp_server/sampling_handler.py": {
-    "baseline": 541,
-    "slack": 271
+    "baseline": 533,
+    "slack": 267
   },
   "litellm/proxy/_experimental/mcp_server/semantic_tool_filter.py": {
-    "baseline": 98,
-    "slack": 49
+    "baseline": 96,
+    "slack": 48
   },
   "litellm/proxy/_experimental/mcp_server/server.py": {
-    "baseline": 971,
-    "slack": 486
+    "baseline": 914,
+    "slack": 457
   },
   "litellm/proxy/_experimental/mcp_server/sse_transport.py": {
-    "baseline": 61,
-    "slack": 31
+    "baseline": 53,
+    "slack": 27
   },
   "litellm/proxy/_experimental/mcp_server/tool_registry.py": {
     "baseline": 9,
@@ -3728,16 +3676,16 @@
     "slack": 23
   },
   "litellm/proxy/_experimental/mcp_server/ui_session_utils.py": {
-    "baseline": 11,
-    "slack": 6
+    "baseline": 10,
+    "slack": 5
   },
   "litellm/proxy/_experimental/mcp_server/utils.py": {
     "baseline": 99,
     "slack": 50
   },
   "litellm/proxy/_lazy_features.py": {
-    "baseline": 84,
-    "slack": 42
+    "baseline": 79,
+    "slack": 40
   },
   "litellm/proxy/_lazy_openapi_snapshot.py": {
     "baseline": 72,
@@ -3748,8 +3696,8 @@
     "slack": 5
   },
   "litellm/proxy/_types.py": {
-    "baseline": 848,
-    "slack": 424
+    "baseline": 501,
+    "slack": 251
   },
   "litellm/proxy/a2a/agent_card.py": {
     "baseline": 51,
@@ -3760,36 +3708,36 @@
     "slack": 9
   },
   "litellm/proxy/a2a/endpoints.py": {
-    "baseline": 12,
-    "slack": 6
+    "baseline": 10,
+    "slack": 5
   },
   "litellm/proxy/agent_endpoints/a2a_endpoints.py": {
-    "baseline": 333,
-    "slack": 167
+    "baseline": 324,
+    "slack": 162
   },
   "litellm/proxy/agent_endpoints/a2a_routing.py": {
-    "baseline": 11,
-    "slack": 6
+    "baseline": 10,
+    "slack": 5
   },
   "litellm/proxy/agent_endpoints/agent_registry.py": {
-    "baseline": 143,
-    "slack": 72
+    "baseline": 140,
+    "slack": 70
   },
   "litellm/proxy/agent_endpoints/auth/agent_permission_handler.py": {
-    "baseline": 36,
-    "slack": 18
+    "baseline": 23,
+    "slack": 12
   },
   "litellm/proxy/agent_endpoints/databricks_oauth.py": {
-    "baseline": 36,
-    "slack": 18
+    "baseline": 30,
+    "slack": 15
   },
   "litellm/proxy/agent_endpoints/endpoints.py": {
-    "baseline": 222,
-    "slack": 111
+    "baseline": 208,
+    "slack": 104
   },
   "litellm/proxy/agent_endpoints/model_list_helpers.py": {
-    "baseline": 7,
-    "slack": 4
+    "baseline": 5,
+    "slack": 3
   },
   "litellm/proxy/analytics_endpoints/analytics_endpoints.py": {
     "baseline": 13,
@@ -3800,32 +3748,32 @@
     "slack": 113
   },
   "litellm/proxy/anthropic_endpoints/endpoints.py": {
-    "baseline": 77,
-    "slack": 39
+    "baseline": 73,
+    "slack": 37
   },
   "litellm/proxy/anthropic_endpoints/skills_endpoints.py": {
-    "baseline": 106,
-    "slack": 53
+    "baseline": 103,
+    "slack": 52
   },
   "litellm/proxy/auth/auth_checks.py": {
-    "baseline": 654,
-    "slack": 327
+    "baseline": 601,
+    "slack": 301
   },
   "litellm/proxy/auth/auth_checks_organization.py": {
     "baseline": 7,
     "slack": 4
   },
   "litellm/proxy/auth/auth_exception_handler.py": {
-    "baseline": 15,
-    "slack": 8
+    "baseline": 14,
+    "slack": 7
   },
   "litellm/proxy/auth/auth_utils.py": {
-    "baseline": 276,
-    "slack": 138
+    "baseline": 274,
+    "slack": 137
   },
   "litellm/proxy/auth/handle_jwt.py": {
-    "baseline": 378,
-    "slack": 189
+    "baseline": 359,
+    "slack": 180
   },
   "litellm/proxy/auth/ip_address_utils.py": {
     "baseline": 17,
@@ -3836,8 +3784,8 @@
     "slack": 32
   },
   "litellm/proxy/auth/login_utils.py": {
-    "baseline": 40,
-    "slack": 20
+    "baseline": 34,
+    "slack": 17
   },
   "litellm/proxy/auth/model_checks.py": {
     "baseline": 52,
@@ -3864,12 +3812,12 @@
     "slack": 10
   },
   "litellm/proxy/auth/user_api_key_auth.py": {
-    "baseline": 590,
-    "slack": 295
+    "baseline": 535,
+    "slack": 268
   },
   "litellm/proxy/batches_endpoints/endpoints.py": {
-    "baseline": 344,
-    "slack": 172
+    "baseline": 330,
+    "slack": 165
   },
   "litellm/proxy/caching_routes.py": {
     "baseline": 105,
@@ -3904,8 +3852,8 @@
     "slack": 50
   },
   "litellm/proxy/client/cli/commands/models.py": {
-    "baseline": 151,
-    "slack": 76
+    "baseline": 145,
+    "slack": 73
   },
   "litellm/proxy/client/cli/commands/teams.py": {
     "baseline": 66,
@@ -3956,8 +3904,8 @@
     "slack": 5
   },
   "litellm/proxy/common_request_processing.py": {
-    "baseline": 753,
-    "slack": 377
+    "baseline": 720,
+    "slack": 360
   },
   "litellm/proxy/common_utils/admin_ui_utils.py": {
     "baseline": 9,
@@ -3968,8 +3916,8 @@
     "slack": 2
   },
   "litellm/proxy/common_utils/cache_coordinator.py": {
-    "baseline": 23,
-    "slack": 12
+    "baseline": 18,
+    "slack": 9
   },
   "litellm/proxy/common_utils/cache_pydantic_utils.py": {
     "baseline": 15,
@@ -3992,16 +3940,16 @@
     "slack": 9
   },
   "litellm/proxy/common_utils/expired_ui_session_key_cleanup_manager.py": {
-    "baseline": 39,
-    "slack": 20
+    "baseline": 38,
+    "slack": 19
   },
   "litellm/proxy/common_utils/get_routes.py": {
     "baseline": 45,
     "slack": 23
   },
   "litellm/proxy/common_utils/http_parsing_utils.py": {
-    "baseline": 177,
-    "slack": 89
+    "baseline": 176,
+    "slack": 88
   },
   "litellm/proxy/common_utils/key_rotation_manager.py": {
     "baseline": 66,
@@ -4032,12 +3980,12 @@
     "slack": 2
   },
   "litellm/proxy/common_utils/rbac_utils.py": {
-    "baseline": 8,
+    "baseline": 7,
     "slack": 4
   },
   "litellm/proxy/common_utils/reset_budget_job.py": {
-    "baseline": 539,
-    "slack": 270
+    "baseline": 535,
+    "slack": 268
   },
   "litellm/proxy/common_utils/swagger_utils.py": {
     "baseline": 10,
@@ -4060,19 +4008,19 @@
     "slack": 2
   },
   "litellm/proxy/container_endpoints/endpoints.py": {
-    "baseline": 85,
-    "slack": 43
+    "baseline": 80,
+    "slack": 40
   },
   "litellm/proxy/container_endpoints/handler_factory.py": {
-    "baseline": 120,
-    "slack": 60
+    "baseline": 114,
+    "slack": 57
   },
   "litellm/proxy/container_endpoints/ownership.py": {
-    "baseline": 167,
-    "slack": 84
+    "baseline": 164,
+    "slack": 82
   },
   "litellm/proxy/credential_endpoints/endpoints.py": {
-    "baseline": 118,
+    "baseline": 117,
     "slack": 59
   },
   "litellm/proxy/custom_hooks/custom_ui_sso_hook.py": {
@@ -4096,44 +4044,44 @@
     "slack": 22
   },
   "litellm/proxy/db/db_spend_update_writer.py": {
-    "baseline": 347,
-    "slack": 174
+    "baseline": 308,
+    "slack": 154
   },
   "litellm/proxy/db/db_transaction_queue/base_update_queue.py": {
     "baseline": 22,
     "slack": 11
   },
   "litellm/proxy/db/db_transaction_queue/daily_spend_update_queue.py": {
-    "baseline": 22,
+    "baseline": 21,
     "slack": 11
   },
   "litellm/proxy/db/db_transaction_queue/pod_lock_manager.py": {
-    "baseline": 35,
-    "slack": 18
+    "baseline": 34,
+    "slack": 17
   },
   "litellm/proxy/db/db_transaction_queue/redis_update_buffer.py": {
-    "baseline": 140,
-    "slack": 70
+    "baseline": 130,
+    "slack": 65
   },
   "litellm/proxy/db/db_transaction_queue/spend_log_cleanup.py": {
-    "baseline": 24,
-    "slack": 12
+    "baseline": 16,
+    "slack": 8
   },
   "litellm/proxy/db/db_transaction_queue/spend_logs_partition_manager.py": {
-    "baseline": 19,
-    "slack": 10
+    "baseline": 18,
+    "slack": 9
   },
   "litellm/proxy/db/db_transaction_queue/spend_update_queue.py": {
-    "baseline": 25,
-    "slack": 13
+    "baseline": 24,
+    "slack": 12
   },
   "litellm/proxy/db/db_url_settings.py": {
     "baseline": 1,
     "slack": 1
   },
   "litellm/proxy/db/dynamo_db.py": {
-    "baseline": 27,
-    "slack": 14
+    "baseline": 26,
+    "slack": 13
   },
   "litellm/proxy/db/exception_handler.py": {
     "baseline": 39,
@@ -4144,24 +4092,24 @@
     "slack": 26
   },
   "litellm/proxy/db/prisma_client.py": {
-    "baseline": 51,
-    "slack": 26
+    "baseline": 40,
+    "slack": 20
   },
   "litellm/proxy/db/routing_prisma_wrapper.py": {
-    "baseline": 46,
-    "slack": 23
+    "baseline": 41,
+    "slack": 21
   },
   "litellm/proxy/db/spend_counter_reseed.py": {
-    "baseline": 65,
-    "slack": 33
+    "baseline": 59,
+    "slack": 30
   },
   "litellm/proxy/db/spend_log_tool_index.py": {
     "baseline": 83,
     "slack": 42
   },
   "litellm/proxy/db/tool_registry_writer.py": {
-    "baseline": 145,
-    "slack": 73
+    "baseline": 144,
+    "slack": 72
   },
   "litellm/proxy/discovery_endpoints/ui_discovery_endpoints.py": {
     "baseline": 17,
@@ -4192,8 +4140,8 @@
     "slack": 4
   },
   "litellm/proxy/fine_tuning_endpoints/endpoints.py": {
-    "baseline": 222,
-    "slack": 111
+    "baseline": 218,
+    "slack": 109
   },
   "litellm/proxy/google_endpoints/agents_endpoints.py": {
     "baseline": 158,
@@ -4208,68 +4156,104 @@
     "slack": 59
   },
   "litellm/proxy/guardrails/guardrail_endpoints.py": {
-    "baseline": 610,
-    "slack": 305
+    "baseline": 579,
+    "slack": 290
   },
   "litellm/proxy/guardrails/guardrail_helpers.py": {
     "baseline": 27,
     "slack": 14
   },
+  "litellm/proxy/guardrails/guardrail_hooks/aim/__init__.py": {
+    "baseline": 1,
+    "slack": 1
+  },
   "litellm/proxy/guardrails/guardrail_hooks/aim/aim.py": {
-    "baseline": 139,
-    "slack": 70
+    "baseline": 138,
+    "slack": 69
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/akto/__init__.py": {
+    "baseline": 7,
+    "slack": 4
   },
   "litellm/proxy/guardrails/guardrail_hooks/akto/akto.py": {
-    "baseline": 127,
-    "slack": 64
+    "baseline": 123,
+    "slack": 62
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/aporia_ai/__init__.py": {
+    "baseline": 1,
+    "slack": 1
   },
   "litellm/proxy/guardrails/guardrail_hooks/aporia_ai/aporia_ai.py": {
-    "baseline": 66,
+    "baseline": 65,
     "slack": 33
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/azure/__init__.py": {
+    "baseline": 5,
+    "slack": 3
   },
   "litellm/proxy/guardrails/guardrail_hooks/azure/base.py": {
     "baseline": 18,
     "slack": 9
   },
   "litellm/proxy/guardrails/guardrail_hooks/azure/prompt_shield.py": {
-    "baseline": 9,
-    "slack": 5
+    "baseline": 8,
+    "slack": 4
   },
   "litellm/proxy/guardrails/guardrail_hooks/azure/text_moderation.py": {
-    "baseline": 33,
-    "slack": 17
+    "baseline": 30,
+    "slack": 15
   },
   "litellm/proxy/guardrails/guardrail_hooks/bedrock_guardrails.py": {
-    "baseline": 271,
-    "slack": 136
+    "baseline": 260,
+    "slack": 130
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/block_code_execution/__init__.py": {
+    "baseline": 14,
+    "slack": 7
   },
   "litellm/proxy/guardrails/guardrail_hooks/block_code_execution/block_code_execution.py": {
     "baseline": 27,
     "slack": 14
   },
+  "litellm/proxy/guardrails/guardrail_hooks/cato_networks/__init__.py": {
+    "baseline": 2,
+    "slack": 1
+  },
   "litellm/proxy/guardrails/guardrail_hooks/cato_networks/cato_networks.py": {
-    "baseline": 402,
-    "slack": 201
+    "baseline": 397,
+    "slack": 199
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/cisco_ai_defense/__init__.py": {
+    "baseline": 49,
+    "slack": 25
   },
   "litellm/proxy/guardrails/guardrail_hooks/cisco_ai_defense/cisco_ai_defense.py": {
-    "baseline": 756,
-    "slack": 378
+    "baseline": 746,
+    "slack": 373
   },
   "litellm/proxy/guardrails/guardrail_hooks/cisco_ai_defense/cisco_ai_defense_mcp.py": {
-    "baseline": 324,
-    "slack": 162
+    "baseline": 319,
+    "slack": 160
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/crowdstrike_aidr/__init__.py": {
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/proxy/guardrails/guardrail_hooks/crowdstrike_aidr/crowdstrike_aidr.py": {
-    "baseline": 104,
-    "slack": 52
+    "baseline": 99,
+    "slack": 50
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/custom_code/__init__.py": {
+    "baseline": 4,
+    "slack": 2
   },
   "litellm/proxy/guardrails/guardrail_hooks/custom_code/custom_code_guardrail.py": {
-    "baseline": 68,
+    "baseline": 67,
     "slack": 34
   },
   "litellm/proxy/guardrails/guardrail_hooks/custom_code/primitives.py": {
-    "baseline": 102,
-    "slack": 51
+    "baseline": 100,
+    "slack": 50
   },
   "litellm/proxy/guardrails/guardrail_hooks/custom_code/sandbox.py": {
     "baseline": 34,
@@ -4279,13 +4263,33 @@
     "baseline": 21,
     "slack": 11
   },
+  "litellm/proxy/guardrails/guardrail_hooks/deepkeep/__init__.py": {
+    "baseline": 4,
+    "slack": 2
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/deepkeep/deepkeep.py": {
+    "baseline": 86,
+    "slack": 43
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/dynamoai/__init__.py": {
+    "baseline": 1,
+    "slack": 1
+  },
   "litellm/proxy/guardrails/guardrail_hooks/dynamoai/dynamoai.py": {
-    "baseline": 83,
-    "slack": 42
+    "baseline": 80,
+    "slack": 40
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/enkryptai/__init__.py": {
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/proxy/guardrails/guardrail_hooks/enkryptai/enkryptai.py": {
-    "baseline": 79,
-    "slack": 40
+    "baseline": 75,
+    "slack": 38
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/generic_guardrail_api/__init__.py": {
+    "baseline": 6,
+    "slack": 3
   },
   "litellm/proxy/guardrails/guardrail_hooks/generic_guardrail_api/generic_guardrail_api.py": {
     "baseline": 107,
@@ -4299,24 +4303,40 @@
     "baseline": 154,
     "slack": 77
   },
+  "litellm/proxy/guardrails/guardrail_hooks/guardrails_ai/__init__.py": {
+    "baseline": 2,
+    "slack": 1
+  },
   "litellm/proxy/guardrails/guardrail_hooks/guardrails_ai/guardrails_ai.py": {
-    "baseline": 59,
-    "slack": 30
+    "baseline": 45,
+    "slack": 23
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/hiddenlayer/__init__.py": {
+    "baseline": 4,
+    "slack": 2
   },
   "litellm/proxy/guardrails/guardrail_hooks/hiddenlayer/hiddenlayer.py": {
-    "baseline": 194,
-    "slack": 97
+    "baseline": 192,
+    "slack": 96
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/ibm_guardrails/__init__.py": {
+    "baseline": 18,
+    "slack": 9
   },
   "litellm/proxy/guardrails/guardrail_hooks/ibm_guardrails/ibm_detector.py": {
-    "baseline": 66,
-    "slack": 33
+    "baseline": 60,
+    "slack": 30
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/javelin/__init__.py": {
+    "baseline": 3,
+    "slack": 2
   },
   "litellm/proxy/guardrails/guardrail_hooks/javelin/javelin.py": {
-    "baseline": 57,
-    "slack": 29
+    "baseline": 56,
+    "slack": 28
   },
   "litellm/proxy/guardrails/guardrail_hooks/lakera_ai.py": {
-    "baseline": 92,
+    "baseline": 91,
     "slack": 46
   },
   "litellm/proxy/guardrails/guardrail_hooks/lakera_ai_v2.py": {
@@ -4328,8 +4348,12 @@
     "slack": 1
   },
   "litellm/proxy/guardrails/guardrail_hooks/lasso/lasso.py": {
-    "baseline": 373,
-    "slack": 187
+    "baseline": 364,
+    "slack": 182
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/__init__.py": {
+    "baseline": 8,
+    "slack": 4
   },
   "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/competitor_intent/airline.py": {
     "baseline": 56,
@@ -4340,8 +4364,8 @@
     "slack": 17
   },
   "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/content_filter.py": {
-    "baseline": 275,
-    "slack": 138
+    "baseline": 270,
+    "slack": 135
   },
   "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks/test_eval.py": {
     "baseline": 194,
@@ -4355,49 +4379,89 @@
     "baseline": 84,
     "slack": 42
   },
+  "litellm/proxy/guardrails/guardrail_hooks/mcp_end_user_permission/__init__.py": {
+    "baseline": 4,
+    "slack": 2
+  },
   "litellm/proxy/guardrails/guardrail_hooks/mcp_end_user_permission/mcp_end_user_permission.py": {
-    "baseline": 29,
-    "slack": 15
+    "baseline": 25,
+    "slack": 13
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/mcp_jwt_signer/__init__.py": {
+    "baseline": 27,
+    "slack": 14
   },
   "litellm/proxy/guardrails/guardrail_hooks/mcp_jwt_signer/mcp_jwt_signer.py": {
     "baseline": 202,
     "slack": 101
   },
+  "litellm/proxy/guardrails/guardrail_hooks/mcp_security/__init__.py": {
+    "baseline": 2,
+    "slack": 1
+  },
   "litellm/proxy/guardrails/guardrail_hooks/mcp_security/mcp_security_guardrail.py": {
     "baseline": 21,
     "slack": 11
   },
+  "litellm/proxy/guardrails/guardrail_hooks/microsoft_purview/__init__.py": {
+    "baseline": 13,
+    "slack": 7
+  },
   "litellm/proxy/guardrails/guardrail_hooks/microsoft_purview/base.py": {
-    "baseline": 160,
+    "baseline": 159,
     "slack": 80
   },
   "litellm/proxy/guardrails/guardrail_hooks/microsoft_purview/purview_dlp.py": {
-    "baseline": 131,
-    "slack": 66
+    "baseline": 130,
+    "slack": 65
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/model_armor/__init__.py": {
+    "baseline": 1,
+    "slack": 1
   },
   "litellm/proxy/guardrails/guardrail_hooks/model_armor/model_armor.py": {
-    "baseline": 196,
+    "baseline": 195,
     "slack": 98
   },
+  "litellm/proxy/guardrails/guardrail_hooks/noma/__init__.py": {
+    "baseline": 6,
+    "slack": 3
+  },
   "litellm/proxy/guardrails/guardrail_hooks/noma/noma.py": {
-    "baseline": 202,
-    "slack": 101
+    "baseline": 191,
+    "slack": 96
   },
   "litellm/proxy/guardrails/guardrail_hooks/noma/noma_v2.py": {
     "baseline": 69,
     "slack": 35
   },
+  "litellm/proxy/guardrails/guardrail_hooks/onyx/__init__.py": {
+    "baseline": 1,
+    "slack": 1
+  },
   "litellm/proxy/guardrails/guardrail_hooks/onyx/onyx.py": {
     "baseline": 23,
     "slack": 12
   },
+  "litellm/proxy/guardrails/guardrail_hooks/openai/__init__.py": {
+    "baseline": 17,
+    "slack": 9
+  },
   "litellm/proxy/guardrails/guardrail_hooks/openai/moderations.py": {
-    "baseline": 48,
+    "baseline": 47,
     "slack": 24
   },
+  "litellm/proxy/guardrails/guardrail_hooks/ovalix/__init__.py": {
+    "baseline": 11,
+    "slack": 6
+  },
   "litellm/proxy/guardrails/guardrail_hooks/ovalix/ovalix.py": {
-    "baseline": 34,
-    "slack": 17
+    "baseline": 32,
+    "slack": 16
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/pangea/__init__.py": {
+    "baseline": 1,
+    "slack": 1
   },
   "litellm/proxy/guardrails/guardrail_hooks/pangea/pangea.py": {
     "baseline": 83,
@@ -4408,32 +4472,60 @@
     "slack": 2
   },
   "litellm/proxy/guardrails/guardrail_hooks/panw_prisma_airs/panw_prisma_airs.py": {
-    "baseline": 656,
-    "slack": 328
+    "baseline": 651,
+    "slack": 326
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/pillar/__init__.py": {
+    "baseline": 24,
+    "slack": 12
   },
   "litellm/proxy/guardrails/guardrail_hooks/pillar/pillar.py": {
-    "baseline": 181,
-    "slack": 91
+    "baseline": 180,
+    "slack": 90
   },
   "litellm/proxy/guardrails/guardrail_hooks/presidio.py": {
-    "baseline": 462,
-    "slack": 231
+    "baseline": 435,
+    "slack": 218
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/prompt_security/__init__.py": {
+    "baseline": 1,
+    "slack": 1
   },
   "litellm/proxy/guardrails/guardrail_hooks/prompt_security/prompt_security.py": {
-    "baseline": 259,
-    "slack": 130
+    "baseline": 255,
+    "slack": 128
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/promptguard/__init__.py": {
+    "baseline": 1,
+    "slack": 1
   },
   "litellm/proxy/guardrails/guardrail_hooks/promptguard/promptguard.py": {
     "baseline": 41,
     "slack": 21
   },
+  "litellm/proxy/guardrails/guardrail_hooks/qohash/__init__.py": {
+    "baseline": 3,
+    "slack": 2
+  },
   "litellm/proxy/guardrails/guardrail_hooks/qohash/qohash.py": {
     "baseline": 14,
     "slack": 7
   },
+  "litellm/proxy/guardrails/guardrail_hooks/qualifire/__init__.py": {
+    "baseline": 10,
+    "slack": 5
+  },
   "litellm/proxy/guardrails/guardrail_hooks/qualifire/qualifire.py": {
-    "baseline": 127,
-    "slack": 64
+    "baseline": 126,
+    "slack": 63
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/rubrik/__init__.py": {
+    "baseline": 1,
+    "slack": 1
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/semantic_guard/__init__.py": {
+    "baseline": 7,
+    "slack": 4
   },
   "litellm/proxy/guardrails/guardrail_hooks/semantic_guard/route_loader.py": {
     "baseline": 40,
@@ -4447,6 +4539,10 @@
     "baseline": 210,
     "slack": 105
   },
+  "litellm/proxy/guardrails/guardrail_hooks/tool_policy/__init__.py": {
+    "baseline": 1,
+    "slack": 1
+  },
   "litellm/proxy/guardrails/guardrail_hooks/tool_policy/tool_policy_guardrail.py": {
     "baseline": 73,
     "slack": 37
@@ -4455,13 +4551,25 @@
     "baseline": 144,
     "slack": 72
   },
+  "litellm/proxy/guardrails/guardrail_hooks/vigil_guard/__init__.py": {
+    "baseline": 1,
+    "slack": 1
+  },
   "litellm/proxy/guardrails/guardrail_hooks/vigil_guard/vigil_guard.py": {
-    "baseline": 118,
+    "baseline": 117,
     "slack": 59
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/xecguard/__init__.py": {
+    "baseline": 1,
+    "slack": 1
   },
   "litellm/proxy/guardrails/guardrail_hooks/xecguard/xecguard.py": {
     "baseline": 221,
     "slack": 111
+  },
+  "litellm/proxy/guardrails/guardrail_hooks/zscaler_ai_guard/__init__.py": {
+    "baseline": 1,
+    "slack": 1
   },
   "litellm/proxy/guardrails/guardrail_hooks/zscaler_ai_guard/zscaler_ai_guard.py": {
     "baseline": 194,
@@ -4484,8 +4592,8 @@
     "slack": 15
   },
   "litellm/proxy/guardrails/usage_endpoints.py": {
-    "baseline": 454,
-    "slack": 227
+    "baseline": 414,
+    "slack": 207
   },
   "litellm/proxy/guardrails/usage_tracking.py": {
     "baseline": 85,
@@ -4496,20 +4604,20 @@
     "slack": 151
   },
   "litellm/proxy/health_check_utils/shared_health_check_manager.py": {
-    "baseline": 85,
-    "slack": 43
+    "baseline": 81,
+    "slack": 41
   },
   "litellm/proxy/health_endpoints/_health_endpoints.py": {
-    "baseline": 686,
-    "slack": 343
+    "baseline": 676,
+    "slack": 338
   },
   "litellm/proxy/hooks/azure_content_safety.py": {
     "baseline": 86,
     "slack": 43
   },
   "litellm/proxy/hooks/batch_rate_limiter.py": {
-    "baseline": 111,
-    "slack": 56
+    "baseline": 99,
+    "slack": 50
   },
   "litellm/proxy/hooks/batch_redis_get.py": {
     "baseline": 50,
@@ -4520,56 +4628,56 @@
     "slack": 7
   },
   "litellm/proxy/hooks/dynamic_rate_limiter.py": {
-    "baseline": 42,
-    "slack": 21
-  },
-  "litellm/proxy/hooks/dynamic_rate_limiter_v3.py": {
-    "baseline": 112,
-    "slack": 56
-  },
-  "litellm/proxy/hooks/key_management_event_hooks.py": {
-    "baseline": 114,
-    "slack": 57
-  },
-  "litellm/proxy/hooks/litellm_skills/main.py": {
-    "baseline": 389,
-    "slack": 195
-  },
-  "litellm/proxy/hooks/max_budget_limiter.py": {
-    "baseline": 5,
-    "slack": 3
-  },
-  "litellm/proxy/hooks/max_budget_per_session_limiter.py": {
-    "baseline": 73,
-    "slack": 37
-  },
-  "litellm/proxy/hooks/max_iterations_limiter.py": {
     "baseline": 37,
     "slack": 19
   },
-  "litellm/proxy/hooks/mcp_semantic_filter/hook.py": {
-    "baseline": 105,
+  "litellm/proxy/hooks/dynamic_rate_limiter_v3.py": {
+    "baseline": 106,
     "slack": 53
   },
+  "litellm/proxy/hooks/key_management_event_hooks.py": {
+    "baseline": 112,
+    "slack": 56
+  },
+  "litellm/proxy/hooks/litellm_skills/main.py": {
+    "baseline": 383,
+    "slack": 192
+  },
+  "litellm/proxy/hooks/max_budget_limiter.py": {
+    "baseline": 4,
+    "slack": 2
+  },
+  "litellm/proxy/hooks/max_budget_per_session_limiter.py": {
+    "baseline": 70,
+    "slack": 35
+  },
+  "litellm/proxy/hooks/max_iterations_limiter.py": {
+    "baseline": 34,
+    "slack": 17
+  },
+  "litellm/proxy/hooks/mcp_semantic_filter/hook.py": {
+    "baseline": 104,
+    "slack": 52
+  },
   "litellm/proxy/hooks/model_max_budget_limiter.py": {
-    "baseline": 115,
-    "slack": 58
+    "baseline": 113,
+    "slack": 57
   },
   "litellm/proxy/hooks/parallel_request_limiter.py": {
-    "baseline": 417,
-    "slack": 209
+    "baseline": 408,
+    "slack": 204
   },
   "litellm/proxy/hooks/parallel_request_limiter_v3.py": {
-    "baseline": 630,
-    "slack": 315
+    "baseline": 593,
+    "slack": 297
   },
   "litellm/proxy/hooks/prompt_injection_detection.py": {
-    "baseline": 23,
-    "slack": 12
+    "baseline": 22,
+    "slack": 11
   },
   "litellm/proxy/hooks/proxy_track_cost_callback.py": {
-    "baseline": 204,
-    "slack": 102
+    "baseline": 193,
+    "slack": 97
   },
   "litellm/proxy/hooks/rate_limiter_utils.py": {
     "baseline": 14,
@@ -4580,35 +4688,35 @@
     "slack": 29
   },
   "litellm/proxy/hooks/sensitive_data_routing.py": {
-    "baseline": 30,
-    "slack": 15
+    "baseline": 27,
+    "slack": 14
   },
   "litellm/proxy/hooks/user_management_event_hooks.py": {
-    "baseline": 18,
+    "baseline": 17,
     "slack": 9
   },
   "litellm/proxy/image_endpoints/endpoints.py": {
-    "baseline": 125,
-    "slack": 63
+    "baseline": 118,
+    "slack": 59
   },
   "litellm/proxy/lambda.py": {
     "baseline": 1,
     "slack": 1
   },
   "litellm/proxy/litellm_pre_call_utils.py": {
-    "baseline": 912,
+    "baseline": 911,
     "slack": 456
   },
   "litellm/proxy/management_endpoints/access_group_endpoints.py": {
-    "baseline": 277,
-    "slack": 139
+    "baseline": 256,
+    "slack": 128
   },
   "litellm/proxy/management_endpoints/budget_management_endpoints.py": {
     "baseline": 70,
     "slack": 35
   },
   "litellm/proxy/management_endpoints/cache_settings_endpoints.py": {
-    "baseline": 154,
+    "baseline": 153,
     "slack": 77
   },
   "litellm/proxy/management_endpoints/callback_management_endpoints.py": {
@@ -4620,64 +4728,64 @@
     "slack": 223
   },
   "litellm/proxy/management_endpoints/common_utils.py": {
-    "baseline": 147,
-    "slack": 74
+    "baseline": 146,
+    "slack": 73
   },
   "litellm/proxy/management_endpoints/compliance_endpoints.py": {
     "baseline": 8,
     "slack": 4
   },
   "litellm/proxy/management_endpoints/config_override_endpoints.py": {
-    "baseline": 165,
-    "slack": 83
+    "baseline": 163,
+    "slack": 82
   },
   "litellm/proxy/management_endpoints/cost_tracking_settings.py": {
     "baseline": 104,
     "slack": 52
   },
   "litellm/proxy/management_endpoints/customer_endpoints.py": {
-    "baseline": 198,
-    "slack": 99
+    "baseline": 195,
+    "slack": 98
   },
   "litellm/proxy/management_endpoints/fallback_management_endpoints.py": {
     "baseline": 50,
     "slack": 25
   },
   "litellm/proxy/management_endpoints/internal_user_endpoints.py": {
-    "baseline": 720,
-    "slack": 360
+    "baseline": 707,
+    "slack": 354
   },
   "litellm/proxy/management_endpoints/jwt_key_mapping_endpoints.py": {
     "baseline": 83,
     "slack": 42
   },
   "litellm/proxy/management_endpoints/key_management_endpoints.py": {
-    "baseline": 1565,
-    "slack": 783
+    "baseline": 1499,
+    "slack": 750
   },
   "litellm/proxy/management_endpoints/mcp_management_endpoints.py": {
-    "baseline": 625,
-    "slack": 313
+    "baseline": 564,
+    "slack": 282
   },
   "litellm/proxy/management_endpoints/model_access_group_management_endpoints.py": {
-    "baseline": 163,
-    "slack": 82
+    "baseline": 154,
+    "slack": 77
   },
   "litellm/proxy/management_endpoints/model_management_endpoints.py": {
-    "baseline": 389,
-    "slack": 195
+    "baseline": 367,
+    "slack": 184
   },
   "litellm/proxy/management_endpoints/organization_endpoints.py": {
-    "baseline": 322,
-    "slack": 161
+    "baseline": 308,
+    "slack": 154
   },
   "litellm/proxy/management_endpoints/policy_endpoints/ai_policy_suggester.py": {
     "baseline": 34,
     "slack": 17
   },
   "litellm/proxy/management_endpoints/policy_endpoints/endpoints.py": {
-    "baseline": 286,
-    "slack": 143
+    "baseline": 260,
+    "slack": 130
   },
   "litellm/proxy/management_endpoints/router_settings_endpoints.py": {
     "baseline": 37,
@@ -4688,8 +4796,8 @@
     "slack": 15
   },
   "litellm/proxy/management_endpoints/scim/scim_v2.py": {
-    "baseline": 640,
-    "slack": 320
+    "baseline": 600,
+    "slack": 300
   },
   "litellm/proxy/management_endpoints/sso/custom_microsoft_sso.py": {
     "baseline": 5,
@@ -4700,72 +4808,72 @@
     "slack": 1
   },
   "litellm/proxy/management_endpoints/tag_management_endpoints.py": {
-    "baseline": 207,
-    "slack": 104
+    "baseline": 198,
+    "slack": 99
   },
   "litellm/proxy/management_endpoints/team_callback_endpoints.py": {
-    "baseline": 127,
-    "slack": 64
+    "baseline": 122,
+    "slack": 61
   },
   "litellm/proxy/management_endpoints/team_endpoints.py": {
-    "baseline": 1236,
-    "slack": 618
+    "baseline": 1179,
+    "slack": 590
   },
   "litellm/proxy/management_endpoints/tool_management_endpoints.py": {
-    "baseline": 172,
-    "slack": 86
+    "baseline": 157,
+    "slack": 79
   },
   "litellm/proxy/management_endpoints/types.py": {
-    "baseline": 7,
-    "slack": 4
+    "baseline": 6,
+    "slack": 3
   },
   "litellm/proxy/management_endpoints/ui_sso.py": {
-    "baseline": 1009,
-    "slack": 505
+    "baseline": 985,
+    "slack": 493
   },
   "litellm/proxy/management_endpoints/usage_endpoints/ai_usage_chat.py": {
-    "baseline": 163,
-    "slack": 82
+    "baseline": 141,
+    "slack": 71
   },
   "litellm/proxy/management_endpoints/usage_endpoints/endpoints.py": {
-    "baseline": 7,
-    "slack": 4
+    "baseline": 5,
+    "slack": 3
   },
   "litellm/proxy/management_endpoints/user_agent_analytics_endpoints.py": {
-    "baseline": 176,
-    "slack": 88
+    "baseline": 156,
+    "slack": 78
   },
   "litellm/proxy/management_endpoints/workflow_management_endpoints.py": {
-    "baseline": 147,
-    "slack": 74
+    "baseline": 140,
+    "slack": 70
   },
   "litellm/proxy/management_helpers/audit_logs.py": {
-    "baseline": 30,
-    "slack": 15
+    "baseline": 28,
+    "slack": 14
   },
   "litellm/proxy/management_helpers/object_permission_utils.py": {
-    "baseline": 145,
-    "slack": 73
+    "baseline": 140,
+    "slack": 70
   },
   "litellm/proxy/management_helpers/team_member_permission_checks.py": {
-    "baseline": 4,
-    "slack": 2
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/proxy/management_helpers/user_invitation.py": {
     "baseline": 12,
     "slack": 6
   },
   "litellm/proxy/management_helpers/utils.py": {
-    "baseline": 277,
-    "slack": 139
+    "baseline": 276,
+    "slack": 138
   },
   "litellm/proxy/mcp_tools.py": {
     "baseline": 4,
     "slack": 2
   },
   "litellm/proxy/memory/memory_endpoints.py": {
-    "baseline": 178,
-    "slack": 89
+    "baseline": 172,
+    "slack": 86
   },
   "litellm/proxy/middleware/in_flight_requests_middleware.py": {
     "baseline": 15,
@@ -4776,48 +4884,48 @@
     "slack": 13
   },
   "litellm/proxy/middleware/request_size_limit_middleware.py": {
-    "baseline": 29,
-    "slack": 15
+    "baseline": 27,
+    "slack": 14
   },
   "litellm/proxy/ocr_endpoints/endpoints.py": {
-    "baseline": 50,
-    "slack": 25
+    "baseline": 47,
+    "slack": 24
   },
   "litellm/proxy/openai_evals_endpoints/endpoints.py": {
-    "baseline": 265,
-    "slack": 133
+    "baseline": 256,
+    "slack": 128
   },
   "litellm/proxy/openai_files_endpoints/common_utils.py": {
-    "baseline": 206,
-    "slack": 103
+    "baseline": 201,
+    "slack": 101
   },
   "litellm/proxy/openai_files_endpoints/file_content_streaming_handler.py": {
-    "baseline": 35,
-    "slack": 18
+    "baseline": 34,
+    "slack": 17
   },
   "litellm/proxy/openai_files_endpoints/files_endpoints.py": {
-    "baseline": 427,
-    "slack": 214
+    "baseline": 405,
+    "slack": 203
   },
   "litellm/proxy/openai_files_endpoints/storage_backend_service.py": {
-    "baseline": 22,
-    "slack": 11
+    "baseline": 20,
+    "slack": 10
   },
   "litellm/proxy/pass_through_endpoints/jsonpath_extractor.py": {
     "baseline": 13,
     "slack": 7
   },
   "litellm/proxy/pass_through_endpoints/llm_passthrough_endpoints.py": {
-    "baseline": 375,
-    "slack": 188
+    "baseline": 361,
+    "slack": 181
   },
   "litellm/proxy/pass_through_endpoints/llm_provider_handlers/anthropic_passthrough_logging_handler.py": {
     "baseline": 164,
     "slack": 82
   },
   "litellm/proxy/pass_through_endpoints/llm_provider_handlers/assembly_passthrough_logging_handler.py": {
-    "baseline": 45,
-    "slack": 23
+    "baseline": 39,
+    "slack": 20
   },
   "litellm/proxy/pass_through_endpoints/llm_provider_handlers/base_passthrough_logging_handler.py": {
     "baseline": 32,
@@ -4847,17 +4955,13 @@
     "baseline": 163,
     "slack": 82
   },
-  "litellm/proxy/pass_through_endpoints/managed_id_codec.py": {
-    "baseline": 3,
-    "slack": 2
-  },
   "litellm/proxy/pass_through_endpoints/managed_id_rewriter.py": {
-    "baseline": 312,
-    "slack": 156
+    "baseline": 302,
+    "slack": 151
   },
   "litellm/proxy/pass_through_endpoints/pass_through_endpoints.py": {
-    "baseline": 937,
-    "slack": 469
+    "baseline": 894,
+    "slack": 447
   },
   "litellm/proxy/pass_through_endpoints/passthrough_endpoint_router.py": {
     "baseline": 14,
@@ -4868,40 +4972,40 @@
     "slack": 14
   },
   "litellm/proxy/pass_through_endpoints/streaming_handler.py": {
-    "baseline": 35,
-    "slack": 18
+    "baseline": 34,
+    "slack": 17
   },
   "litellm/proxy/pass_through_endpoints/success_handler.py": {
-    "baseline": 113,
-    "slack": 57
+    "baseline": 112,
+    "slack": 56
   },
   "litellm/proxy/policy_engine/attachment_registry.py": {
-    "baseline": 83,
-    "slack": 42
+    "baseline": 81,
+    "slack": 41
   },
   "litellm/proxy/policy_engine/init_policies.py": {
-    "baseline": 71,
-    "slack": 36
+    "baseline": 69,
+    "slack": 35
   },
   "litellm/proxy/policy_engine/pipeline_executor.py": {
     "baseline": 55,
     "slack": 28
   },
   "litellm/proxy/policy_engine/policy_endpoints.py": {
-    "baseline": 84,
-    "slack": 42
+    "baseline": 65,
+    "slack": 33
   },
   "litellm/proxy/policy_engine/policy_registry.py": {
-    "baseline": 257,
-    "slack": 129
+    "baseline": 255,
+    "slack": 128
   },
   "litellm/proxy/policy_engine/policy_resolve_endpoints.py": {
-    "baseline": 187,
-    "slack": 94
+    "baseline": 185,
+    "slack": 93
   },
   "litellm/proxy/policy_engine/policy_validator.py": {
-    "baseline": 13,
-    "slack": 7
+    "baseline": 12,
+    "slack": 6
   },
   "litellm/proxy/post_call_rules.py": {
     "baseline": 7,
@@ -4920,8 +5024,8 @@
     "slack": 2
   },
   "litellm/proxy/prompts/prompt_endpoints.py": {
-    "baseline": 181,
-    "slack": 91
+    "baseline": 176,
+    "slack": 88
   },
   "litellm/proxy/prompts/prompt_registry.py": {
     "baseline": 70,
@@ -4932,64 +5036,60 @@
     "slack": 154
   },
   "litellm/proxy/proxy_server.py": {
-    "baseline": 5145,
-    "slack": 2573
+    "baseline": 5015,
+    "slack": 2508
   },
   "litellm/proxy/public_endpoints/public_endpoints.py": {
     "baseline": 165,
     "slack": 83
   },
   "litellm/proxy/rag_endpoints/endpoints.py": {
-    "baseline": 249,
-    "slack": 125
-  },
-  "litellm/proxy/realtime_endpoints/endpoints.py": {
-    "baseline": 243,
+    "baseline": 244,
     "slack": 122
   },
+  "litellm/proxy/realtime_endpoints/endpoints.py": {
+    "baseline": 237,
+    "slack": 119
+  },
   "litellm/proxy/rerank_endpoints/endpoints.py": {
-    "baseline": 53,
-    "slack": 27
+    "baseline": 51,
+    "slack": 26
   },
   "litellm/proxy/response_api_endpoints/endpoints.py": {
-    "baseline": 322,
-    "slack": 161
+    "baseline": 302,
+    "slack": 151
   },
   "litellm/proxy/response_polling/background_streaming.py": {
-    "baseline": 162,
-    "slack": 81
+    "baseline": 155,
+    "slack": 78
   },
   "litellm/proxy/response_polling/polling_handler.py": {
-    "baseline": 82,
+    "baseline": 81,
     "slack": 41
   },
   "litellm/proxy/route_llm_request.py": {
-    "baseline": 138,
+    "baseline": 137,
     "slack": 69
   },
   "litellm/proxy/search_endpoints/endpoints.py": {
-    "baseline": 59,
-    "slack": 30
+    "baseline": 55,
+    "slack": 28
   },
   "litellm/proxy/search_endpoints/search_tool_management.py": {
-    "baseline": 95,
-    "slack": 48
+    "baseline": 85,
+    "slack": 43
   },
   "litellm/proxy/search_endpoints/search_tool_registry.py": {
     "baseline": 53,
     "slack": 27
   },
-  "litellm/proxy/shutdown/graceful_shutdown_manager.py": {
-    "baseline": 1,
-    "slack": 1
-  },
   "litellm/proxy/spend_tracking/budget_reservation.py": {
-    "baseline": 245,
-    "slack": 123
+    "baseline": 222,
+    "slack": 111
   },
   "litellm/proxy/spend_tracking/cloudzero_endpoints.py": {
-    "baseline": 121,
-    "slack": 61
+    "baseline": 120,
+    "slack": 60
   },
   "litellm/proxy/spend_tracking/cold_storage_handler.py": {
     "baseline": 3,
@@ -5000,152 +5100,152 @@
     "slack": 2
   },
   "litellm/proxy/spend_tracking/spend_management_endpoints.py": {
-    "baseline": 980,
-    "slack": 490
+    "baseline": 974,
+    "slack": 487
   },
   "litellm/proxy/spend_tracking/spend_tracking_utils.py": {
     "baseline": 274,
     "slack": 137
   },
   "litellm/proxy/spend_tracking/vantage_endpoints.py": {
-    "baseline": 177,
-    "slack": 89
+    "baseline": 176,
+    "slack": 88
   },
   "litellm/proxy/types_utils/utils.py": {
-    "baseline": 11,
-    "slack": 6
+    "baseline": 9,
+    "slack": 5
   },
   "litellm/proxy/ui_crud_endpoints/proxy_setting_endpoints.py": {
-    "baseline": 481,
-    "slack": 241
+    "baseline": 477,
+    "slack": 239
   },
   "litellm/proxy/utils.py": {
-    "baseline": 1731,
-    "slack": 866
+    "baseline": 1683,
+    "slack": 842
   },
   "litellm/proxy/vector_store_endpoints/endpoints.py": {
-    "baseline": 163,
-    "slack": 82
+    "baseline": 161,
+    "slack": 81
   },
   "litellm/proxy/vector_store_endpoints/management_endpoints.py": {
-    "baseline": 248,
-    "slack": 124
+    "baseline": 234,
+    "slack": 117
   },
   "litellm/proxy/vector_store_endpoints/utils.py": {
-    "baseline": 37,
-    "slack": 19
+    "baseline": 32,
+    "slack": 16
   },
   "litellm/proxy/vector_store_files_endpoints/endpoints.py": {
-    "baseline": 292,
-    "slack": 146
+    "baseline": 274,
+    "slack": 137
   },
   "litellm/proxy/vertex_ai_endpoints/langfuse_endpoints.py": {
     "baseline": 38,
     "slack": 19
   },
   "litellm/proxy/video_endpoints/endpoints.py": {
-    "baseline": 238,
-    "slack": 119
+    "baseline": 229,
+    "slack": 115
   },
   "litellm/proxy/video_endpoints/utils.py": {
     "baseline": 27,
     "slack": 14
   },
   "litellm/proxy_auth/credentials.py": {
-    "baseline": 16,
-    "slack": 8
+    "baseline": 14,
+    "slack": 7
   },
   "litellm/rag/__init__.py": {
     "baseline": 7,
     "slack": 4
   },
   "litellm/rag/ingestion/base_ingestion.py": {
-    "baseline": 64,
-    "slack": 32
+    "baseline": 59,
+    "slack": 30
   },
   "litellm/rag/ingestion/bedrock_ingestion.py": {
-    "baseline": 273,
-    "slack": 137
+    "baseline": 267,
+    "slack": 134
   },
   "litellm/rag/ingestion/file_parsers/pdf_parser.py": {
     "baseline": 19,
     "slack": 10
   },
   "litellm/rag/ingestion/gemini_ingestion.py": {
-    "baseline": 64,
-    "slack": 32
+    "baseline": 60,
+    "slack": 30
   },
   "litellm/rag/ingestion/openai_ingestion.py": {
     "baseline": 31,
     "slack": 16
   },
   "litellm/rag/ingestion/s3_vectors_ingestion.py": {
-    "baseline": 252,
-    "slack": 126
+    "baseline": 250,
+    "slack": 125
   },
   "litellm/rag/ingestion/vertex_ai_ingestion.py": {
-    "baseline": 134,
-    "slack": 67
+    "baseline": 130,
+    "slack": 65
   },
   "litellm/rag/main.py": {
-    "baseline": 108,
-    "slack": 54
+    "baseline": 102,
+    "slack": 51
   },
   "litellm/rag/rag_query.py": {
     "baseline": 51,
     "slack": 26
   },
   "litellm/realtime_api/main.py": {
-    "baseline": 165,
-    "slack": 83
+    "baseline": 160,
+    "slack": 80
   },
   "litellm/repositories/base_repository.py": {
     "baseline": 54,
     "slack": 27
   },
   "litellm/repositories/budget_repository.py": {
-    "baseline": 29,
-    "slack": 15
+    "baseline": 25,
+    "slack": 13
   },
   "litellm/repositories/config_repository.py": {
-    "baseline": 94,
-    "slack": 47
+    "baseline": 89,
+    "slack": 45
   },
   "litellm/repositories/credentials_repository.py": {
     "baseline": 28,
     "slack": 14
   },
   "litellm/repositories/model_repository.py": {
-    "baseline": 77,
-    "slack": 39
+    "baseline": 72,
+    "slack": 36
   },
   "litellm/repositories/object_permission_repository.py": {
-    "baseline": 29,
-    "slack": 15
+    "baseline": 25,
+    "slack": 13
   },
   "litellm/repositories/organization_repository.py": {
-    "baseline": 28,
-    "slack": 14
+    "baseline": 23,
+    "slack": 12
   },
   "litellm/repositories/project_repository.py": {
-    "baseline": 42,
-    "slack": 21
+    "baseline": 37,
+    "slack": 19
   },
   "litellm/repositories/table_repositories.py": {
-    "baseline": 7,
-    "slack": 4
+    "baseline": 6,
+    "slack": 3
   },
   "litellm/repositories/team_repository.py": {
-    "baseline": 163,
-    "slack": 82
+    "baseline": 149,
+    "slack": 75
   },
   "litellm/repositories/user_repository.py": {
-    "baseline": 81,
-    "slack": 41
+    "baseline": 73,
+    "slack": 37
   },
   "litellm/repositories/verification_token_repository.py": {
-    "baseline": 116,
-    "slack": 58
+    "baseline": 108,
+    "slack": 54
   },
   "litellm/rerank_api/main.py": {
     "baseline": 129,
@@ -5156,72 +5256,72 @@
     "slack": 7
   },
   "litellm/responses/file_search/emulated_handler.py": {
-    "baseline": 280,
+    "baseline": 279,
     "slack": 140
   },
   "litellm/responses/litellm_completion_transformation/handler.py": {
-    "baseline": 28,
+    "baseline": 27,
     "slack": 14
   },
   "litellm/responses/litellm_completion_transformation/session_handler.py": {
-    "baseline": 43,
-    "slack": 22
+    "baseline": 42,
+    "slack": 21
   },
   "litellm/responses/litellm_completion_transformation/streaming_iterator.py": {
-    "baseline": 152,
+    "baseline": 151,
     "slack": 76
   },
   "litellm/responses/litellm_completion_transformation/transformation.py": {
-    "baseline": 555,
-    "slack": 278
+    "baseline": 552,
+    "slack": 276
   },
   "litellm/responses/main.py": {
-    "baseline": 567,
-    "slack": 284
+    "baseline": 548,
+    "slack": 274
   },
   "litellm/responses/mcp/chat_completions_handler.py": {
     "baseline": 367,
     "slack": 184
   },
   "litellm/responses/mcp/litellm_proxy_mcp_handler.py": {
-    "baseline": 454,
-    "slack": 227
+    "baseline": 445,
+    "slack": 223
   },
   "litellm/responses/mcp/mcp_streaming_iterator.py": {
-    "baseline": 202,
-    "slack": 101
+    "baseline": 193,
+    "slack": 97
   },
   "litellm/responses/sse_output_recovery.py": {
     "baseline": 48,
     "slack": 24
   },
   "litellm/responses/streaming_iterator.py": {
-    "baseline": 990,
-    "slack": 495
+    "baseline": 977,
+    "slack": 489
   },
   "litellm/responses/utils.py": {
-    "baseline": 295,
-    "slack": 148
+    "baseline": 294,
+    "slack": 147
   },
   "litellm/router.py": {
-    "baseline": 4343,
-    "slack": 2172
+    "baseline": 4303,
+    "slack": 2152
   },
   "litellm/router_strategy/adaptive_router/adaptive_router.py": {
-    "baseline": 48,
-    "slack": 24
+    "baseline": 44,
+    "slack": 22
   },
   "litellm/router_strategy/adaptive_router/bandit.py": {
-    "baseline": 3,
-    "slack": 2
+    "baseline": 1,
+    "slack": 1
   },
   "litellm/router_strategy/adaptive_router/hooks.py": {
-    "baseline": 143,
-    "slack": 72
+    "baseline": 142,
+    "slack": 71
   },
   "litellm/router_strategy/adaptive_router/signals.py": {
-    "baseline": 42,
-    "slack": 21
+    "baseline": 38,
+    "slack": 19
   },
   "litellm/router_strategy/adaptive_router/update_queue.py": {
     "baseline": 30,
@@ -5232,24 +5332,24 @@
     "slack": 22
   },
   "litellm/router_strategy/auto_router/litellm_encoder.py": {
-    "baseline": 19,
-    "slack": 10
+    "baseline": 16,
+    "slack": 8
   },
   "litellm/router_strategy/base_routing_strategy.py": {
-    "baseline": 114,
-    "slack": 57
+    "baseline": 111,
+    "slack": 56
   },
   "litellm/router_strategy/budget_limiter.py": {
-    "baseline": 347,
-    "slack": 174
+    "baseline": 342,
+    "slack": 171
   },
   "litellm/router_strategy/complexity_router/complexity_router.py": {
     "baseline": 59,
     "slack": 30
   },
   "litellm/router_strategy/complexity_router/evals/eval_complexity_router.py": {
-    "baseline": 24,
-    "slack": 12
+    "baseline": 21,
+    "slack": 11
   },
   "litellm/router_strategy/least_busy.py": {
     "baseline": 155,
@@ -5308,20 +5408,20 @@
     "slack": 32
   },
   "litellm/router_utils/cooldown_cache.py": {
-    "baseline": 42,
-    "slack": 21
+    "baseline": 38,
+    "slack": 19
   },
   "litellm/router_utils/cooldown_callbacks.py": {
     "baseline": 22,
     "slack": 11
   },
   "litellm/router_utils/cooldown_handlers.py": {
-    "baseline": 26,
-    "slack": 13
+    "baseline": 24,
+    "slack": 12
   },
   "litellm/router_utils/fallback_event_handlers.py": {
-    "baseline": 56,
-    "slack": 28
+    "baseline": 54,
+    "slack": 27
   },
   "litellm/router_utils/get_retry_from_policy.py": {
     "baseline": 3,
@@ -5332,35 +5432,35 @@
     "slack": 11
   },
   "litellm/router_utils/health_state_cache.py": {
-    "baseline": 22,
-    "slack": 11
+    "baseline": 19,
+    "slack": 10
   },
   "litellm/router_utils/pattern_match_deployments.py": {
     "baseline": 41,
     "slack": 21
   },
   "litellm/router_utils/pre_call_checks/deployment_affinity_check.py": {
-    "baseline": 112,
+    "baseline": 111,
     "slack": 56
   },
   "litellm/router_utils/pre_call_checks/encrypted_content_affinity_check.py": {
-    "baseline": 86,
-    "slack": 43
+    "baseline": 84,
+    "slack": 42
   },
   "litellm/router_utils/pre_call_checks/model_rate_limit_check.py": {
-    "baseline": 134,
+    "baseline": 133,
     "slack": 67
   },
   "litellm/router_utils/pre_call_checks/prompt_caching_deployment_check.py": {
-    "baseline": 35,
-    "slack": 18
+    "baseline": 34,
+    "slack": 17
   },
   "litellm/router_utils/pre_call_checks/responses_api_deployment_check.py": {
     "baseline": 13,
     "slack": 7
   },
   "litellm/router_utils/prompt_caching_cache.py": {
-    "baseline": 44,
+    "baseline": 43,
     "slack": 22
   },
   "litellm/router_utils/router_callbacks/track_deployment_metrics.py": {
@@ -5372,28 +5472,28 @@
     "slack": 31
   },
   "litellm/scheduler.py": {
-    "baseline": 54,
-    "slack": 27
+    "baseline": 47,
+    "slack": 24
   },
   "litellm/search/cost_calculator.py": {
     "baseline": 16,
     "slack": 8
   },
   "litellm/search/main.py": {
-    "baseline": 57,
-    "slack": 29
+    "baseline": 55,
+    "slack": 28
   },
   "litellm/secret_managers/aws_secret_manager.py": {
     "baseline": 28,
     "slack": 14
   },
   "litellm/secret_managers/aws_secret_manager_v2.py": {
-    "baseline": 132,
-    "slack": 66
+    "baseline": 122,
+    "slack": 61
   },
   "litellm/secret_managers/base_secret_manager.py": {
-    "baseline": 11,
-    "slack": 6
+    "baseline": 9,
+    "slack": 5
   },
   "litellm/secret_managers/custom_secret_manager_loader.py": {
     "baseline": 19,
@@ -5432,380 +5532,168 @@
     "slack": 55
   },
   "litellm/skills/main.py": {
-    "baseline": 215,
-    "slack": 108
+    "baseline": 207,
+    "slack": 104
   },
   "litellm/timeout.py": {
     "baseline": 70,
     "slack": 35
   },
-  "litellm/types/access_group.py": {
-    "baseline": 10,
-    "slack": 5
+  "litellm/types/agents.py": {
+    "baseline": 23,
+    "slack": 12
   },
-  "litellm/types/adapter.py": {
+  "litellm/types/caching.py": {
+    "baseline": 3,
+    "slack": 2
+  },
+  "litellm/types/completion.py": {
     "baseline": 2,
     "slack": 1
   },
-  "litellm/types/agents.py": {
-    "baseline": 117,
-    "slack": 59
-  },
-  "litellm/types/caching.py": {
-    "baseline": 21,
-    "slack": 11
-  },
-  "litellm/types/completion.py": {
-    "baseline": 33,
-    "slack": 17
-  },
-  "litellm/types/compression.py": {
-    "baseline": 7,
-    "slack": 4
-  },
   "litellm/types/containers/main.py": {
-    "baseline": 96,
-    "slack": 48
-  },
-  "litellm/types/embedding.py": {
-    "baseline": 1,
-    "slack": 1
+    "baseline": 62,
+    "slack": 31
   },
   "litellm/types/files.py": {
-    "baseline": 12,
-    "slack": 6
-  },
-  "litellm/types/google_genai/main.py": {
-    "baseline": 11,
-    "slack": 6
-  },
-  "litellm/types/guardrails.py": {
-    "baseline": 81,
-    "slack": 41
-  },
-  "litellm/types/images/main.py": {
-    "baseline": 12,
-    "slack": 6
-  },
-  "litellm/types/integrations/anthropic_cache_control_hook.py": {
-    "baseline": 6,
-    "slack": 3
-  },
-  "litellm/types/integrations/argilla.py": {
-    "baseline": 5,
-    "slack": 3
-  },
-  "litellm/types/integrations/arize.py": {
     "baseline": 4,
     "slack": 2
   },
-  "litellm/types/integrations/arize_phoenix.py": {
-    "baseline": 2,
+  "litellm/types/google_genai/main.py": {
+    "baseline": 9,
+    "slack": 5
+  },
+  "litellm/types/guardrails.py": {
+    "baseline": 48,
+    "slack": 24
+  },
+  "litellm/types/integrations/anthropic_cache_control_hook.py": {
+    "baseline": 1,
     "slack": 1
   },
-  "litellm/types/integrations/base_health_check.py": {
+  "litellm/types/integrations/arize.py": {
     "baseline": 2,
     "slack": 1
-  },
-  "litellm/types/integrations/compression_interception.py": {
-    "baseline": 5,
-    "slack": 3
   },
   "litellm/types/integrations/custom_logger.py": {
     "baseline": 3,
     "slack": 2
   },
   "litellm/types/integrations/datadog.py": {
-    "baseline": 6,
-    "slack": 3
-  },
-  "litellm/types/integrations/datadog_cost_management.py": {
-    "baseline": 7,
-    "slack": 4
-  },
-  "litellm/types/integrations/datadog_llm_obs.py": {
-    "baseline": 39,
-    "slack": 20
-  },
-  "litellm/types/integrations/datadog_metrics.py": {
-    "baseline": 8,
-    "slack": 4
-  },
-  "litellm/types/integrations/gcs_bucket.py": {
-    "baseline": 6,
-    "slack": 3
-  },
-  "litellm/types/integrations/langfuse.py": {
-    "baseline": 8,
-    "slack": 4
+    "baseline": 1,
+    "slack": 1
   },
   "litellm/types/integrations/langfuse_otel.py": {
     "baseline": 2,
     "slack": 1
   },
-  "litellm/types/integrations/langsmith.py": {
-    "baseline": 12,
-    "slack": 6
-  },
-  "litellm/types/integrations/pagerduty.py": {
-    "baseline": 31,
-    "slack": 16
-  },
-  "litellm/types/integrations/posthog.py": {
-    "baseline": 5,
-    "slack": 3
-  },
   "litellm/types/integrations/prometheus.py": {
-    "baseline": 60,
-    "slack": 30
-  },
-  "litellm/types/integrations/rag/bedrock_knowledgebase.py": {
-    "baseline": 47,
-    "slack": 24
-  },
-  "litellm/types/integrations/s3_v2.py": {
-    "baseline": 3,
-    "slack": 2
-  },
-  "litellm/types/integrations/slack_alerting.py": {
-    "baseline": 22,
-    "slack": 11
-  },
-  "litellm/types/integrations/websearch_interception.py": {
-    "baseline": 2,
-    "slack": 1
+    "baseline": 51,
+    "slack": 26
   },
   "litellm/types/interactions/generated.py": {
-    "baseline": 77,
-    "slack": 39
-  },
-  "litellm/types/litellm_core_utils/streaming_chunk_builder_utils.py": {
-    "baseline": 8,
-    "slack": 4
-  },
-  "litellm/types/llms/aiml.py": {
-    "baseline": 10,
-    "slack": 5
+    "baseline": 69,
+    "slack": 35
   },
   "litellm/types/llms/anthropic.py": {
-    "baseline": 258,
-    "slack": 129
+    "baseline": 11,
+    "slack": 6
   },
   "litellm/types/llms/anthropic_messages/anthropic_response.py": {
-    "baseline": 26,
-    "slack": 13
-  },
-  "litellm/types/llms/anthropic_skills.py": {
-    "baseline": 21,
-    "slack": 11
+    "baseline": 1,
+    "slack": 1
   },
   "litellm/types/llms/azure_ai.py": {
-    "baseline": 7,
-    "slack": 4
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/types/llms/base.py": {
     "baseline": 29,
     "slack": 15
   },
   "litellm/types/llms/bedrock.py": {
-    "baseline": 402,
-    "slack": 201
-  },
-  "litellm/types/llms/bedrock_agentcore.py": {
-    "baseline": 28,
-    "slack": 14
-  },
-  "litellm/types/llms/bedrock_invoke_agents.py": {
-    "baseline": 46,
-    "slack": 23
-  },
-  "litellm/types/llms/cohere.py": {
-    "baseline": 46,
-    "slack": 23
+    "baseline": 36,
+    "slack": 18
   },
   "litellm/types/llms/custom_http.py": {
     "baseline": 1,
     "slack": 1
   },
-  "litellm/types/llms/custom_llm.py": {
+  "litellm/types/llms/databricks.py": {
     "baseline": 2,
     "slack": 1
   },
-  "litellm/types/llms/databricks.py": {
-    "baseline": 36,
-    "slack": 18
-  },
   "litellm/types/llms/gemini.py": {
-    "baseline": 64,
-    "slack": 32
-  },
-  "litellm/types/llms/langgraph.py": {
-    "baseline": 19,
-    "slack": 10
-  },
-  "litellm/types/llms/mistral.py": {
-    "baseline": 9,
-    "slack": 5
+    "baseline": 4,
+    "slack": 2
   },
   "litellm/types/llms/oci.py": {
-    "baseline": 62,
-    "slack": 31
-  },
-  "litellm/types/llms/ollama.py": {
-    "baseline": 12,
-    "slack": 6
+    "baseline": 3,
+    "slack": 2
   },
   "litellm/types/llms/openai.py": {
-    "baseline": 750,
-    "slack": 375
+    "baseline": 132,
+    "slack": 66
   },
   "litellm/types/llms/openai_evals.py": {
-    "baseline": 68,
-    "slack": 34
-  },
-  "litellm/types/llms/openrouter.py": {
     "baseline": 3,
     "slack": 2
-  },
-  "litellm/types/llms/recraft.py": {
-    "baseline": 21,
-    "slack": 11
-  },
-  "litellm/types/llms/rerank.py": {
-    "baseline": 3,
-    "slack": 2
-  },
-  "litellm/types/llms/stability.py": {
-    "baseline": 60,
-    "slack": 30
   },
   "litellm/types/llms/vertex_ai.py": {
-    "baseline": 347,
-    "slack": 174
-  },
-  "litellm/types/llms/vertex_ai_text_to_speech.py": {
-    "baseline": 9,
-    "slack": 5
-  },
-  "litellm/types/llms/watsonx.py": {
-    "baseline": 14,
-    "slack": 7
-  },
-  "litellm/types/llms/xai.py": {
-    "baseline": 12,
-    "slack": 6
-  },
-  "litellm/types/management_endpoints/cache_settings_endpoints.py": {
-    "baseline": 5,
-    "slack": 3
+    "baseline": 18,
+    "slack": 9
   },
   "litellm/types/management_endpoints/router_settings_endpoints.py": {
-    "baseline": 23,
-    "slack": 12
+    "baseline": 18,
+    "slack": 9
   },
   "litellm/types/mcp.py": {
-    "baseline": 34,
-    "slack": 17
-  },
-  "litellm/types/mcp_server/mcp_server_manager.py": {
-    "baseline": 3,
-    "slack": 2
-  },
-  "litellm/types/mcp_server/mcp_toolset.py": {
     "baseline": 6,
     "slack": 3
   },
-  "litellm/types/mcp_server/tool_registry.py": {
+  "litellm/types/memory_management.py": {
+    "baseline": 2,
+    "slack": 1
+  },
+  "litellm/types/prompts/init_prompts.py": {
     "baseline": 10,
     "slack": 5
   },
-  "litellm/types/memory_management.py": {
-    "baseline": 9,
-    "slack": 5
-  },
-  "litellm/types/passthrough_endpoints/pass_through_endpoints.py": {
-    "baseline": 5,
-    "slack": 3
-  },
-  "litellm/types/prompts/init_prompts.py": {
-    "baseline": 19,
-    "slack": 10
-  },
   "litellm/types/proxy/claude_code_endpoints.py": {
-    "baseline": 25,
-    "slack": 13
+    "baseline": 13,
+    "slack": 7
   },
   "litellm/types/proxy/cloudzero_endpoints.py": {
-    "baseline": 6,
-    "slack": 3
-  },
-  "litellm/types/proxy/compliance_endpoints.py": {
-    "baseline": 8,
-    "slack": 4
-  },
-  "litellm/types/proxy/control_plane_endpoints.py": {
-    "baseline": 3,
-    "slack": 2
-  },
-  "litellm/types/proxy/discovery_endpoints/ui_discovery_endpoints.py": {
-    "baseline": 5,
-    "slack": 3
-  },
-  "litellm/types/proxy/guardrails/guardrail_hooks/azure/azure_prompt_shield.py": {
-    "baseline": 5,
-    "slack": 3
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/types/proxy/guardrails/guardrail_hooks/azure/azure_text_moderation.py": {
-    "baseline": 12,
-    "slack": 6
+    "baseline": 3,
+    "slack": 2
   },
   "litellm/types/proxy/guardrails/guardrail_hooks/base.py": {
     "baseline": 2,
     "slack": 1
   },
   "litellm/types/proxy/guardrails/guardrail_hooks/bedrock_guardrails.py": {
-    "baseline": 60,
-    "slack": 30
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/types/proxy/guardrails/guardrail_hooks/block_code_execution.py": {
-    "baseline": 12,
-    "slack": 6
+    "baseline": 6,
+    "slack": 3
   },
   "litellm/types/proxy/guardrails/guardrail_hooks/cisco_ai_defense.py": {
     "baseline": 5,
     "slack": 3
   },
-  "litellm/types/proxy/guardrails/guardrail_hooks/dynamoai.py": {
-    "baseline": 31,
-    "slack": 16
-  },
-  "litellm/types/proxy/guardrails/guardrail_hooks/enkryptai.py": {
-    "baseline": 29,
-    "slack": 15
-  },
   "litellm/types/proxy/guardrails/guardrail_hooks/generic_guardrail_api.py": {
-    "baseline": 20,
-    "slack": 10
-  },
-  "litellm/types/proxy/guardrails/guardrail_hooks/ibm/ibm_detector.py": {
-    "baseline": 15,
-    "slack": 8
-  },
-  "litellm/types/proxy/guardrails/guardrail_hooks/javelin.py": {
-    "baseline": 34,
-    "slack": 17
-  },
-  "litellm/types/proxy/guardrails/guardrail_hooks/lakera_ai_v2.py": {
-    "baseline": 24,
-    "slack": 12
+    "baseline": 5,
+    "slack": 3
   },
   "litellm/types/proxy/guardrails/guardrail_hooks/litellm_content_filter.py": {
-    "baseline": 36,
-    "slack": 18
-  },
-  "litellm/types/proxy/guardrails/guardrail_hooks/presidio.py": {
-    "baseline": 10,
-    "slack": 5
+    "baseline": 7,
+    "slack": 4
   },
   "litellm/types/proxy/guardrails/guardrail_hooks/tool_permission.py": {
     "baseline": 22,
@@ -5816,156 +5704,120 @@
     "slack": 1
   },
   "litellm/types/proxy/litellm_pre_call_utils.py": {
-    "baseline": 2,
+    "baseline": 1,
     "slack": 1
   },
   "litellm/types/proxy/management_endpoints/common_daily_activity.py": {
-    "baseline": 11,
-    "slack": 6
+    "baseline": 1,
+    "slack": 1
   },
   "litellm/types/proxy/management_endpoints/config_overrides.py": {
     "baseline": 3,
     "slack": 2
   },
   "litellm/types/proxy/management_endpoints/internal_user_endpoints.py": {
-    "baseline": 27,
-    "slack": 14
-  },
-  "litellm/types/proxy/management_endpoints/key_management_endpoints.py": {
-    "baseline": 11,
-    "slack": 6
-  },
-  "litellm/types/proxy/management_endpoints/model_management_endpoints.py": {
-    "baseline": 11,
-    "slack": 6
+    "baseline": 17,
+    "slack": 9
   },
   "litellm/types/proxy/management_endpoints/scim_v2.py": {
-    "baseline": 45,
-    "slack": 23
-  },
-  "litellm/types/proxy/management_endpoints/team_endpoints.py": {
-    "baseline": 20,
-    "slack": 10
+    "baseline": 25,
+    "slack": 13
   },
   "litellm/types/proxy/management_endpoints/ui_sso.py": {
-    "baseline": 16,
-    "slack": 8
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/types/proxy/policy_engine/pipeline_types.py": {
-    "baseline": 8,
-    "slack": 4
+    "baseline": 3,
+    "slack": 2
   },
   "litellm/types/proxy/policy_engine/policy_types.py": {
     "baseline": 1,
     "slack": 1
   },
   "litellm/types/proxy/policy_engine/resolver_types.py": {
-    "baseline": 30,
-    "slack": 15
+    "baseline": 16,
+    "slack": 8
   },
   "litellm/types/proxy/policy_engine/validation_types.py": {
     "baseline": 5,
     "slack": 3
   },
-  "litellm/types/proxy/prompt_endpoints.py": {
+  "litellm/types/proxy/vantage_endpoints.py": {
+    "baseline": 2,
+    "slack": 1
+  },
+  "litellm/types/rag.py": {
     "baseline": 1,
     "slack": 1
   },
-  "litellm/types/proxy/public_endpoints/public_endpoints.py": {
-    "baseline": 22,
-    "slack": 11
+  "litellm/types/realtime.py": {
+    "baseline": 4,
+    "slack": 2
   },
-  "litellm/types/proxy/ui_sso.py": {
+  "litellm/types/rerank.py": {
+    "baseline": 8,
+    "slack": 4
+  },
+  "litellm/types/responses/main.py": {
     "baseline": 12,
     "slack": 6
   },
-  "litellm/types/proxy/vantage_endpoints.py": {
+  "litellm/types/router.py": {
+    "baseline": 103,
+    "slack": 52
+  },
+  "litellm/types/services.py": {
+    "baseline": 10,
+    "slack": 5
+  },
+  "litellm/types/tool_management.py": {
     "baseline": 6,
     "slack": 3
   },
-  "litellm/types/rag.py": {
-    "baseline": 78,
-    "slack": 39
-  },
-  "litellm/types/realtime.py": {
-    "baseline": 28,
-    "slack": 14
-  },
-  "litellm/types/rerank.py": {
-    "baseline": 29,
-    "slack": 15
-  },
-  "litellm/types/responses/main.py": {
-    "baseline": 49,
-    "slack": 25
-  },
-  "litellm/types/router.py": {
-    "baseline": 194,
-    "slack": 97
-  },
-  "litellm/types/search.py": {
-    "baseline": 21,
-    "slack": 11
-  },
-  "litellm/types/services.py": {
-    "baseline": 13,
-    "slack": 7
-  },
-  "litellm/types/tag_management.py": {
-    "baseline": 5,
-    "slack": 3
-  },
-  "litellm/types/tool_management.py": {
-    "baseline": 27,
-    "slack": 14
-  },
   "litellm/types/utils.py": {
-    "baseline": 1085,
-    "slack": 543
-  },
-  "litellm/types/vector_store_files.py": {
-    "baseline": 38,
-    "slack": 19
+    "baseline": 637,
+    "slack": 319
   },
   "litellm/types/vector_stores.py": {
-    "baseline": 118,
-    "slack": 59
+    "baseline": 9,
+    "slack": 5
   },
   "litellm/types/videos/main.py": {
-    "baseline": 59,
-    "slack": 30
+    "baseline": 33,
+    "slack": 17
   },
   "litellm/types/videos/utils.py": {
-    "baseline": 5,
-    "slack": 3
+    "baseline": 2,
+    "slack": 1
   },
   "litellm/utils.py": {
-    "baseline": 3367,
-    "slack": 1684
+    "baseline": 3362,
+    "slack": 1681
   },
   "litellm/vector_store_files/main.py": {
-    "baseline": 244,
-    "slack": 122
+    "baseline": 232,
+    "slack": 116
   },
   "litellm/vector_store_files/utils.py": {
     "baseline": 17,
     "slack": 9
   },
   "litellm/vector_stores/main.py": {
-    "baseline": 268,
-    "slack": 134
+    "baseline": 260,
+    "slack": 130
   },
   "litellm/vector_stores/utils.py": {
     "baseline": 19,
     "slack": 10
   },
   "litellm/vector_stores/vector_store_registry.py": {
-    "baseline": 94,
-    "slack": 47
+    "baseline": 92,
+    "slack": 46
   },
   "litellm/videos/main.py": {
-    "baseline": 513,
-    "slack": 257
+    "baseline": 479,
+    "slack": 240
   },
   "litellm/videos/utils.py": {
     "baseline": 54,

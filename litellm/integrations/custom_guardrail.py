@@ -83,7 +83,9 @@ class CustomGuardrail(CustomLogger):
         self,
         guardrail_name: str | None = None,
         supported_event_hooks: list[GuardrailEventHooks] | None = None,
-        event_hook: Union[GuardrailEventHooks, list[GuardrailEventHooks], Mode] | None = None,
+        event_hook: (
+            Union[GuardrailEventHooks, list[GuardrailEventHooks], Mode] | None
+        ) = None,
         default_on: bool = False,
         mask_request_content: bool = False,
         mask_response_content: bool = False,
@@ -115,7 +117,9 @@ class CustomGuardrail(CustomLogger):
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
-        self.event_hook: Union[GuardrailEventHooks, list[GuardrailEventHooks], Mode] | None = event_hook
+        self.event_hook: (
+            Union[GuardrailEventHooks, list[GuardrailEventHooks], Mode] | None
+        ) = event_hook
         self.default_on: bool = default_on
         self.mask_request_content: bool = mask_request_content
         self.mask_response_content: bool = mask_response_content
@@ -124,9 +128,7 @@ class CustomGuardrail(CustomLogger):
         self.on_violation: str | None = on_violation
         self.realtime_violation_message: str | None = realtime_violation_message
         self.on_sensitive_data: str | None = on_sensitive_data
-        self.sensitive_data_route_to_model: str | None = (
-            sensitive_data_route_to_model
-        )
+        self.sensitive_data_route_to_model: str | None = sensitive_data_route_to_model
         self.sticky_session_routing: bool = sticky_session_routing
 
         if supported_event_hooks:

@@ -81,9 +81,7 @@ class GenAIMetricRecorder:
     survives.
     """
 
-    def __init__(
-        self, metrics: GenAIMetrics, callback_name: str | None = None
-    ) -> None:
+    def __init__(self, metrics: GenAIMetrics, callback_name: str | None = None) -> None:
         self._metrics = metrics
         self._callback_name = callback_name
         self._include: frozenset[str] | None = None
