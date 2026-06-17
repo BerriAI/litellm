@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Any-discipline gate: fail when a *changed* file holds a value typed `Any`.
+"""Any-discipline gate: per-file budget on values typed `Any`.
 
 Where ruff, `mypy --strict`, and even basedpyright's `reportAny` stop short, this
 catches the case that actually bites: a *union* hiding an `Any`. For example
@@ -7,23 +7,23 @@ catches the case that actually bites: a *union* hiding an `Any`. For example
 -> `list[Any]`/`dict[..., Any]`. Any value whose inferred type *contains* `Any`
 (recursively, through unions / generics / tuples) is reported.
 
-Scope: changed-only, changed-lines
-----------------------------------
+Scope: per-file grandfathering
+------------------------------
 litellm already contains a large amount of pre-existing `Any` (a single legacy
 file can have >100 findings), and a whole-tree scan would have to re-export types
-for litellm's entire import closure on every run (~2 min, ~3 GB). So this gate is
-*changed-only* and reports a finding only on a line that the diff against
-`--base` actually adds or edits (untracked files count as wholly new). A brand
-new file is therefore checked in full, while editing a legacy file only requires
-*your* lines to be clean -- you can't introduce an `X | Any`, but you aren't
-forced to clean the file's existing debt. This mirrors how `ruff_strict_gate.py`
-blames a change only for the violations it introduces; cold legacy code is left
-to the ratchet gates (mypy/basedpyright/ruff budgets).
+for litellm's entire import closure on every run (~2 min, ~3 GB). So the gate
+grandfathers each file at its current count in `any-discipline-budget.json` and
+gives it ~50% headroom: a file fails once its `Any`-tainted values exceed
+`baseline + ceil(baseline * 0.50)`. A file with no entry is budgeted at zero, so
+a brand new file must be `Any`-free, and a legacy file may absorb a little drift
+before it has to be cleaned. Cold files the change doesn't touch are left to the
+ratchet (run `--update`); like the mypy/basedpyright budgets, the gate only
+re-counts the files a change actually edits, so CI stays fast.
 
 How it works
 ------------
 It loads `litellm/mypy.ini` (the same config `make lint-mypy` uses, so findings
-match what developers already see), builds the changed files with mypy asking for
+match what developers already see), builds the target files with mypy asking for
 its exported expression->type map, and walks each file's AST applying a recursive
 "contains Any" predicate -- the test `mypy --disallow-any-expr` uses internally
 but applies inconsistently (python/mypy#12856).
@@ -48,25 +48,31 @@ whose signature mentions `Any` is not flagged -- only the value its call produce
 
 Usage
 -----
-    # gate mode (CI / pre-push): check changed lines under litellm/
+    # gate mode (CI / pre-push): budget the changed files under litellm/
     uv run --no-sync python scripts/check_any_discipline.py --changed --base origin/litellm_internal_staging
 
-    # whole-file spot-check (no line filter), paths relative to repo root
+    # ratchet: re-capture every file's baseline from the current tree
+    uv run --no-sync python scripts/check_any_discipline.py --update
+
+    # whole-file spot-check (no budget), paths relative to repo root
     uv run --no-sync python scripts/check_any_discipline.py litellm/budget_manager.py
 
-Exit code 1 if any Any-tainted value is found, 2 on a setup/usage error.
+Exit code 1 if a file is over budget (or has a malformed any-ok), 2 on a
+setup/usage error.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
 import sys
 import tokenize
-from collections.abc import Iterable, Sequence
+from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -102,12 +108,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LITELLM_DIR = REPO_ROOT / "litellm"
 MYPY_INI = LITELLM_DIR / "mypy.ini"
 CACHE_DIR = REPO_ROOT / ".mypy_cache_any"
+BUDGET_PATH = REPO_ROOT / "any-discipline-budget.json"
 PY_TAG = f"{sys.version_info.major}.{sys.version_info.minor}"
 DEFAULT_BASE = "origin/litellm_internal_staging"
 
+# Headroom each grandfathered file gets over its baseline before the gate trips.
+HEADROOM_RATIO = 0.50
+
+# `--update` re-counts every file. Type-checking each module also preserves its
+# AST and exports its types, so we re-check in bounded batches against a warmed
+# cache rather than holding all ~2k modules in memory at once.
+UPDATE_BATCH = 150
+
 MIN_REASON_LEN = 3
 ANY_OK_RE = re.compile(r"#\s*any-ok(?::\s*(?P<reason>.*))?")
-_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 # Files allowed to surface `Any` (the typed/untyped boundary). A finding is
 # skipped if any fragment below is a substring of the file's posix path. Keep
@@ -144,6 +158,11 @@ class Violation(NamedTuple):
 
     def render(self) -> str:
         return f"{self.path}:{self.line}:{self.col}: {self.code} {self.message}"
+
+
+def cap_for(baseline: int) -> int:
+    """The most `Any`-tainted values a file may hold: baseline plus ~50%."""
+    return baseline + math.ceil(baseline * HEADROOM_RATIO)
 
 
 # --------------------------------------------------------------------------- #
@@ -329,6 +348,31 @@ def _force_recheck(sources: Sequence[BuildSource]) -> None:
             continue
 
 
+def _warm_cache(rel_paths: Sequence[str]) -> Violation | None:
+    """Populate `.mypy_cache_any` for the whole closure without retaining ASTs or
+    exported types (neither affects cache validity, see mypy's
+    OPTIONS_AFFECTING_CACHE). Run before a batched `--update` so each batch then
+    re-checks only its own targets against a warm cache, bounding peak memory."""
+    prev_cwd = Path.cwd()
+    os.chdir(LITELLM_DIR)
+    try:
+        opts = _build_options()
+        opts.export_types = False
+        opts.preserve_asts = False
+        fscache = FileSystemCache()
+        sources = create_source_list(list(rel_paths), opts, fscache)
+        try:
+            build.build(sources, options=opts, fscache=fscache)
+        except build.CompileError as exc:
+            joined = "; ".join(exc.messages[:3]) or "blocking error"
+            return Violation(
+                Path(rel_paths[0]), 0, 0, "LIT000", f"mypy could not build: {joined}"
+            )
+    finally:
+        os.chdir(prev_cwd)
+    return None
+
+
 def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
     """`rel_paths` are relative to the litellm package dir (the build cwd)."""
     prev_cwd = Path.cwd()
@@ -396,20 +440,8 @@ def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
 
 
 # --------------------------------------------------------------------------- #
-# File selection (changed-only, changed-lines) + driver
+# Budget (per-file grandfathering) + file selection + driver
 # --------------------------------------------------------------------------- #
-
-
-class _AllLines:
-    """Sentinel: a wholly new / untracked file -- every line is in scope.
-
-    A distinct object, not None, so that `line_map.get(path)` returning None for
-    a path absent from the map is never mistaken for "whole file in scope"."""
-
-
-# A changed file's in-scope lines: a specific set, or every line.
-LineScope = set[int] | _AllLines
-ALL_LINES = _AllLines()
 
 
 def _is_boundary(path: Path) -> bool:
@@ -427,52 +459,56 @@ def _git(*args: str) -> list[str]:
     return result.stdout.splitlines()
 
 
-def _parse_added_lines(diff_text: str) -> dict[str, set[int]]:
-    """Map repo-relative path -> set of new-file line numbers the diff adds/edits."""
-    changed: dict[str, set[int]] = {}
-    path: str | None = None
-    for line in diff_text.splitlines():
-        if line.startswith("+++ b/"):
-            path = line[6:]
-        elif path and (m := _HUNK_RE.match(line)):
-            start = int(m.group(1))
-            count = int(m.group(2)) if m.group(2) is not None else 1
-            if count:
-                changed.setdefault(path, set()).update(range(start, start + count))
-    return changed
+def load_budget() -> dict[str, int]:
+    if not BUDGET_PATH.exists():
+        return {}
+    return json.loads(BUDGET_PATH.read_text())
 
 
-def changed_line_map(base: str) -> dict[str, LineScope] | None:
-    """Repo-relative `.py` path under litellm/ -> changed line numbers (or
-    ALL_LINES for untracked files). Compares the working tree to the merge-base
-    with `base`, so it covers committed-on-branch + unstaged edits. None if git
-    is unavailable / not a repo."""
+def lit009_counts(violations: Iterable[Violation]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for v in violations:
+        if v.code == "LIT009":
+            counts[v.path.as_posix()] += 1
+    return dict(counts)
+
+
+def budget_breaches(
+    counts: Mapping[str, int], budget: Mapping[str, int]
+) -> list[tuple[str, int, int]]:
+    """Files whose `Any` count clears their ceiling. A file with no budget entry
+    is grandfathered at zero, so any `Any` in it breaches."""
+    breaches = [
+        (path, total, cap_for(budget.get(path, 0)))
+        for path, total in counts.items()
+        if total > cap_for(budget.get(path, 0))
+    ]
+    return sorted(breaches)
+
+
+def changed_files(base: str) -> list[str] | None:
+    """Repo-relative `.py` paths under litellm/ that the working tree changed vs
+    the merge-base with `base` (committed-on-branch + unstaged + untracked). None
+    if git is unavailable / not a repo."""
     try:
         merge_base = _git("merge-base", base, "HEAD")
         point = merge_base[0].strip() if merge_base else base
-        diff = "\n".join(
-            _git(
-                "diff",
-                "--unified=0",
-                "--no-color",
-                "--diff-filter=d",
-                point,
-                "--",
-                "litellm",
-            )
-        )
+        tracked = _git("diff", "--name-only", "--diff-filter=d", point, "--", "litellm")
         untracked = _git("ls-files", "--others", "--exclude-standard", "--", "litellm")
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
+    return _py_under_litellm([*tracked, *untracked])
 
-    out: dict[str, LineScope] = {}
-    for name, lines in _parse_added_lines(diff).items():
-        if name.endswith(".py") and (REPO_ROOT / name).exists():
-            out[name] = lines
-    for name in untracked:
-        if name.endswith(".py") and (REPO_ROOT / name).exists():
-            out[name] = ALL_LINES
-    return out
+
+def all_tracked_files() -> list[str]:
+    return _py_under_litellm(_git("ls-files", "--", "litellm"))
+
+
+def _py_under_litellm(names: Iterable[str]) -> list[str]:
+    out = {
+        name for name in names if name.endswith(".py") and (REPO_ROOT / name).exists()
+    }
+    return sorted(out)
 
 
 def _to_litellm_relative(paths: Iterable[Path]) -> list[str]:
@@ -485,71 +521,144 @@ def _to_litellm_relative(paths: Iterable[Path]) -> list[str]:
     return rels
 
 
-def _in_scope(v: Violation, line_map: dict[str, LineScope] | None) -> bool:
-    """A finding survives if line filtering is off (explicit paths), it's a build
-    error, or its line is one the diff added/edited."""
-    if line_map is None or v.code == "LIT000":
-        return True
-    lines = line_map.get(v.path.as_posix())
-    return lines is ALL_LINES or (lines is not None and v.line in lines)
+def _setup_errors(violations: Sequence[Violation]) -> tuple[Violation, ...]:
+    return tuple(v for v in violations if v.code == "LIT000")
+
+
+def _batched(items: Sequence[str], size: int) -> Iterable[Sequence[str]]:
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def cmd_update() -> int:
+    rel_paths = _to_litellm_relative(
+        (REPO_ROOT / name).resolve() for name in all_tracked_files()
+    )
+    if not rel_paths:
+        print("check_any_discipline: no Python files under litellm/", file=sys.stderr)
+        return 2
+    warm_error = _warm_cache(rel_paths)
+    if warm_error is not None:
+        print(warm_error.render(), file=sys.stderr)
+        return 2
+
+    counts: dict[str, int] = {}
+    for batch in _batched(rel_paths, UPDATE_BATCH):
+        violations = check_files(batch)
+        errors = _setup_errors(violations)
+        if errors:
+            for v in errors:
+                print(v.render(), file=sys.stderr)
+            return 2
+        counts.update(lit009_counts(violations))
+    budget = dict(sorted(counts.items()))
+    BUDGET_PATH.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
+    print(
+        f"Re-captured Any-discipline budget: {len(budget)} file(s) hold "
+        f"{sum(budget.values())} grandfathered Any-typed value(s)"
+    )
+    return 0
+
+
+def _report_breaches(
+    breaches: Sequence[tuple[str, int, int]],
+    per_file: dict[str, list[Violation]],
+    hard: Sequence[Violation],
+) -> None:
+    if breaches:
+        print("FAIL: file(s) over their Any-discipline budget:")
+        for path, total, cap in breaches:
+            print(f"  {path}: {total} Any-typed value(s) over ceiling {cap}")
+            for v in sorted(per_file.get(path, [])):
+                print(f"    {v.line}:{v.col} {v.message}")
+        print(
+            "Give the new values a concrete type, annotate `# any-ok: <reason>`, or "
+            "run 'make lint-any-budget-update' if the ceiling should move."
+        )
+    for v in sorted(hard):
+        print(v.render(), file=sys.stderr)
+
+
+def cmd_check(base: str) -> int:
+    files = changed_files(base)
+    if files is None:
+        print(
+            "check_any_discipline: not a git repository; nothing to check",
+            file=sys.stderr,
+        )
+        return 0
+    if not files:
+        print("OK: no changed Python files under litellm/ to check")
+        return 0
+
+    rel_paths = _to_litellm_relative((REPO_ROOT / name).resolve() for name in files)
+    violations = check_files(rel_paths)
+    errors = _setup_errors(violations)
+    if errors:
+        for v in errors:
+            print(v.render(), file=sys.stderr)
+        return 2
+
+    budget = load_budget()
+    counts = lit009_counts(violations)
+    per_file: dict[str, list[Violation]] = {}
+    for v in violations:
+        if v.code == "LIT009":
+            per_file.setdefault(v.path.as_posix(), []).append(v)
+
+    breaches = budget_breaches(counts, budget)
+    hard = tuple(v for v in violations if v.code == "LIT005")
+
+    if not breaches and not hard:
+        print(f"OK: {len(files)} changed file(s) under litellm/ are within budget")
+        return 0
+    _report_breaches(breaches, per_file, hard)
+    return 1
+
+
+def cmd_paths(paths: Sequence[str]) -> int:
+    rel_paths = _to_litellm_relative((REPO_ROOT / p).resolve() for p in paths)
+    if not rel_paths:
+        print("OK: no Python files under litellm/ to check")
+        return 0
+    violations = check_files(rel_paths)
+    for v in sorted(violations):
+        print(v.render())
+    if any(v.code == "LIT000" for v in violations):
+        return 2
+    return 1 if violations else 0
 
 
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Any-discipline gate (changed-only, changed-lines)."
+        description="Any-discipline gate (per-file grandfathering)."
     )
     parser.add_argument(
         "paths",
         nargs="*",
-        help="explicit files (repo-root relative); whole-file, no line filter",
+        help="explicit files (repo-root relative); whole-file, no budget",
     )
     parser.add_argument(
         "--changed",
         action="store_true",
-        help="check changed lines under litellm/ vs --base",
+        help="budget the changed files under litellm/ vs --base",
+    )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="re-capture every file's baseline into any-discipline-budget.json",
     )
     parser.add_argument("--base", default=os.environ.get("ANY_GATE_BASE", DEFAULT_BASE))
     args = parser.parse_args(list(argv))
 
-    line_map: dict[str, LineScope] | None = None
+    if args.update:
+        return cmd_update()
     if args.changed:
-        line_map = changed_line_map(args.base)
-        if line_map is None:
-            print(
-                "check_any_discipline: not a git repository; nothing to check",
-                file=sys.stderr,
-            )
-            return 0
-        rel_paths = _to_litellm_relative(
-            (REPO_ROOT / name).resolve() for name in line_map
-        )
-    elif args.paths:
-        rel_paths = _to_litellm_relative((REPO_ROOT / p).resolve() for p in args.paths)
-    else:
-        parser.error("pass --changed or explicit file paths")
-        return 2
-
-    if not rel_paths:
-        print("OK: no changed Python lines under litellm/ to check")
-        return 0
-
-    violations = tuple(v for v in check_files(rel_paths) if _in_scope(v, line_map))
-
-    for v in sorted(violations):
-        print(v.render())
-
-    if violations:
-        n = len(violations)
-        print(
-            f"\nFAIL: {n} Any-discipline violation(s) on changed lines.\n"
-            "Give the value a concrete type, or annotate the line `# any-ok: <reason>`.",
-            file=sys.stderr,
-        )
-        return 1
-    print(
-        f"OK: {len(rel_paths)} changed file(s) under litellm/ have no Any-typed values on changed lines"
-    )
-    return 0
+        return cmd_check(args.base)
+    if args.paths:
+        return cmd_paths(args.paths)
+    parser.error("pass --changed, --update, or explicit file paths")
+    return 2
 
 
 if __name__ == "__main__":

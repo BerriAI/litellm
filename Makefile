@@ -6,7 +6,7 @@
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
 	lint-mypy lint-mypy-budget-update lint-basedpyright lint-basedpyright-budget-update \
-	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-any \
+	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-any lint-any-budget-update \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
@@ -32,7 +32,8 @@ help:
 	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its ceiling"
 	@echo "  make lint-ruff-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
 	@echo "  make lint-budget-update - Re-capture all three ratchet budgets (ruff + mypy + basedpyright)"
-	@echo "  make lint-any           - Fail if changed lines under litellm/ hold an Any-typed value"
+	@echo "  make lint-any           - Fail if a changed file exceeds its Any-typed value budget (baseline + ~50%)"
+	@echo "  make lint-any-budget-update - Re-capture the per-file Any baseline (ratchet)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -151,6 +152,9 @@ lint-budget-update: lint-ruff-budget-update lint-mypy-budget-update lint-basedpy
 
 lint-any: install-dev
 	$(UV_RUN) python scripts/check_any_discipline.py --changed
+
+lint-any-budget-update: install-dev
+	$(UV_RUN) python scripts/check_any_discipline.py --update
 
 check-circular-imports: install-dev
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
