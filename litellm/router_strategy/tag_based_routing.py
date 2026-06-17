@@ -149,12 +149,82 @@ def _ban_only_base_pool(
     return defaults if defaults else list(deployments)
 
 
+def _model_has_matching_deployment(
+    candidate_deployments: list,
+    request_tags: Optional[list[str]],
+    header_strings: list[str],
+    match_any: bool,
+) -> bool:
+    """
+    Whether any deployment in *candidate_deployments* would be selected for this
+    request - via exact tag, tag_regex, or a "default" tag.
+
+    The caller passes the routing candidate set (already narrowed by team / access
+    / health filters), so this check never looks beyond what the request is
+    authorized to route to. Used to distinguish "matching deployment(s) exist but
+    are temporarily unavailable, e.g. all in cooldown" (retryable) from "no
+    deployment is configured for this request" (a genuine 401).
+    """
+    for deployment in candidate_deployments or []:
+        if (
+            _match_deployment(
+                deployment=deployment,
+                request_tags=request_tags,
+                header_strings=header_strings,
+                match_any=match_any,
+            )
+            is not None
+        ):
+            return True
+        deployment_tags = deployment.get("litellm_params", {}).get("tags")
+        if deployment_tags and "default" in deployment_tags:
+            return True
+    return False
+
+
+def _handle_no_tag_match(
+    candidate_deployments: list,
+    model: str,
+    request_tags: Optional[list[str]],
+    header_strings: list[str],
+    match_any: bool,
+) -> list:
+    """
+    Called when tag filtering matched no healthy deployment.
+
+    If a deployment matching this request exists among the (already authorized)
+    routing candidates but is temporarily unavailable (e.g. all matches in
+    cooldown), return [] so the router raises its standard, retryable
+    RouterRateLimitError (mapped to 429) instead of this tags error (mapped to
+    401). Only raise when no candidate matches this request at all (genuine
+    misconfiguration / no access).
+    https://github.com/BerriAI/litellm/issues/15016
+    """
+    if _model_has_matching_deployment(
+        candidate_deployments=candidate_deployments,
+        request_tags=request_tags,
+        header_strings=header_strings,
+        match_any=match_any,
+    ):
+        verbose_logger.debug(
+            "get_deployments_for_tag: matching deployment(s) exist for model=%s "
+            "but none are currently healthy; returning [] so the router raises a "
+            "retryable error",
+            model,
+        )
+        return []
+    raise ValueError(
+        f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
+    )
+
+
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
     healthy_deployments: Union[list[Any], dict[Any, Any]],
     request_kwargs: Optional[dict[Any, Any]] = None,
     metadata_variable_name: Literal["metadata", "litellm_metadata"] = "metadata",
+    routing_candidates: Optional[list] = None,
 ):
     """
     Returns a list of deployments that match the requested model and tags in the request.
@@ -239,9 +309,12 @@ async def get_deployments_for_tag(
                     default_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
-                raise ValueError(
-                    f"{RouterErrors.no_deployments_with_tag_routing.value}."
-                    f" Passed model={model} and tags={request_tags}"
+                return _handle_no_tag_match(
+                    candidate_deployments=routing_candidates or [],
+                    model=model,
+                    request_tags=positive_tags,
+                    header_strings=header_strings,
+                    match_any=match_any,
                 )
 
             return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments

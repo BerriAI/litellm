@@ -1019,3 +1019,138 @@ async def test_negation_removes_tag_regex_deployment_falls_to_ban_only():
             mock_response="hi",
         )
         assert response._hidden_params["model_id"] == "openai-deployment"
+
+
+@pytest.mark.asyncio()
+async def test_tag_routing_returns_empty_when_matching_deployment_unavailable():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/15016.
+
+    When a deployment matching the request tags exists for the model but is not
+    in the currently-healthy set (e.g. in cooldown after upstream errors) while
+    other same-model_name deployments (for other tags) are still healthy, tag
+    routing must return [] so the router raises its standard retryable
+    RouterRateLimitError (mapped to 429) instead of the misleading
+    no_deployments_with_tag_routing error (mapped to 401).
+    """
+    from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o", "tags": ["teamA"]},
+                "model_info": {"id": "team-a-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o-mini", "tags": ["teamB"]},
+                "model_info": {"id": "team-b-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    # Simulate the teamA deployment being in cooldown: only teamB remains in the
+    # healthy candidate set, but the request targets teamA.
+    healthy_deployments = [
+        d
+        for d in (router.get_model_list(model_name="gpt-4") or [])
+        if "teamB" in (d.get("litellm_params", {}).get("tags") or [])
+    ]
+
+    # routing_candidates is the authorized, pre-cooldown candidate set (teamA +
+    # teamB); teamA is the cooled match that is absent from healthy_deployments.
+    result = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="gpt-4",
+        healthy_deployments=healthy_deployments,
+        request_kwargs={"metadata": {"tags": ["teamA"]}},
+        routing_candidates=router.get_model_list(model_name="gpt-4"),
+    )
+
+    assert result == []
+
+
+@pytest.mark.asyncio()
+async def test_tag_routing_still_raises_when_no_matching_deployment_exists():
+    """
+    When no deployment carries the requested tag at all (genuine misconfiguration
+    / no access), tag routing still raises no_deployments_with_tag_routing rather
+    than returning an empty (retryable) result.
+    """
+    from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+    from litellm.types.router import RouterErrors
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o", "tags": ["teamA"]},
+                "model_info": {"id": "team-a-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    healthy_deployments = router.get_model_list(model_name="gpt-4")
+
+    with pytest.raises(ValueError) as exc_info:
+        await get_deployments_for_tag(
+            llm_router_instance=router,
+            model="gpt-4",
+            healthy_deployments=healthy_deployments,
+            request_kwargs={"metadata": {"tags": ["nonexistent-tag"]}},
+            routing_candidates=router.get_model_list(model_name="gpt-4"),
+        )
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_tag_routing_does_not_leak_unauthorized_tags():
+    """
+    Security: the retryable-vs-error decision must only consider deployments the
+    request is authorized to route to (routing_candidates). A tag that exists only
+    on a deployment outside that set (e.g. another team's) must still raise
+    no_deployments_with_tag_routing - identical to a non-existent tag - so an
+    authenticated caller cannot probe guessed tags and tell them apart.
+    https://github.com/BerriAI/litellm/issues/15016
+    """
+    from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+    from litellm.types.router import RouterErrors
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o", "tags": ["teamA"]},
+                "model_info": {"id": "team-a-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o-mini", "tags": ["teamB"]},
+                "model_info": {"id": "team-b-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    teamA_only = [
+        d
+        for d in (router.get_model_list(model_name="gpt-4") or [])
+        if "teamA" in (d.get("litellm_params", {}).get("tags") or [])
+    ]
+
+    # The request probes "teamB" (which exists in the config) but is only
+    # authorized for teamA -> must raise, not return a retryable [].
+    with pytest.raises(ValueError) as exc_info:
+        await get_deployments_for_tag(
+            llm_router_instance=router,
+            model="gpt-4",
+            healthy_deployments=teamA_only,
+            request_kwargs={"metadata": {"tags": ["teamB"]}},
+            routing_candidates=teamA_only,
+        )
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
