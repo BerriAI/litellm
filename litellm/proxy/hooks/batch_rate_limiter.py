@@ -540,7 +540,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # For managed files the unified file id encodes the proxy model
             # alias(es) the file was uploaded for; auth validates against those.
             target_model_names = (
-                get_models_from_unified_file_id(is_managed_file) if is_managed_file else []
+                get_models_from_unified_file_id(is_managed_file)
+                if is_managed_file
+                else []
             )
             if is_managed_file and user_api_key_dict is not None:
                 file_content = await self._fetch_managed_file_content(
