@@ -1,7 +1,7 @@
 """The OAuth / upstream-credential vocabulary — the v2 typed seam.
 
 This module is the *contract* the credential build implements and the spec tests assert
-against. It ships the data types only; the resolver lives in `upstream_credentials.py`.
+against. It ships the data types only; the resolver lives in `resolver.py`.
 
 Design invariants encoded here:
 

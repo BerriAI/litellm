@@ -26,7 +26,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     SharedKey,
     Subject,
 )
-from litellm.proxy.gateway.mcp.outbound_credentials.upstream_credentials import (
+from litellm.proxy.gateway.mcp.outbound_credentials.resolver import (
     UpstreamCredentialProvider,
 )
 from litellm.proxy.gateway.mcp.result import Error, Ok
