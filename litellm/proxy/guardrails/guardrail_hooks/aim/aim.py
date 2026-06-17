@@ -130,7 +130,7 @@ class AimGuardrail(CustomGuardrail):
 
     @staticmethod
     def _rejection(
-        message: str, *, openai_code: Optional[str] = None
+        message: str, *, openai_code: str | None = None
     ) -> ProxyException:
         return ProxyException(
             message=message,
