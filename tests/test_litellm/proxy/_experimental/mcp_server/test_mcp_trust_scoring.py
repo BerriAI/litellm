@@ -109,11 +109,14 @@ def _isolated_client(
     )
 
 
-def test_normalize_trust_score_accepts_fraction_and_percent() -> None:
-    assert normalize_trust_score(0.85) == 0.85
+def test_normalize_trust_score_maps_do_percent_scale_to_fraction() -> None:
+    assert normalize_trust_score(85) == 0.85
     normalized = normalize_trust_score(92.5)
     assert normalized is not None
     assert abs(normalized - 0.925) < 1e-9
+    low_trust = normalize_trust_score(1.0)
+    assert low_trust is not None
+    assert abs(low_trust - 0.01) < 1e-9
 
 
 def test_parse_trust_response_found_server() -> None:

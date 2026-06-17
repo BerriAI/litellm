@@ -162,8 +162,6 @@ def normalize_trust_score(raw_score: object) -> Optional[float]:
     score = float(raw_score)
     if score < 0:
         return None
-    if score <= 1.0:
-        return score
     return min(score / 100.0, 1.0)
 
 

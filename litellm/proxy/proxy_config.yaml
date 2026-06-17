@@ -62,7 +62,7 @@ litellm_settings:
     similarity_threshold: 0.3
 
   mcp_trust_scoring:
-    enabled: true
+    enabled: false
     min_trust_score: 0.5
     cache_ttl_seconds: 3600
     fail_open: true
