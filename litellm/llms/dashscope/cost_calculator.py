@@ -186,20 +186,25 @@ def _calculate_completion_cost(
     )
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def cost_per_token(
+    model: str, usage: Usage, custom_llm_provider: str = "dashscope"
+) -> Tuple[float, float]:
     """
-    Calculate cost per token for Dashscope models.
+    Calculate cost per token for tiered-pricing models.
 
-    Supports both tiered and flat pricing with cached and reasoning tokens.
+    Supports both tiered and flat pricing with cached and reasoning tokens. The logic reads
+    `tiered_pricing` from the model map, so it is provider-agnostic and shared by other providers
+    with the same tiered structure (e.g. Volcengine/Doubao) via the `custom_llm_provider` argument.
 
     Args:
         model: Model name without provider prefix
         usage: LiteLLM Usage block
+        custom_llm_provider: Provider to resolve the model under (defaults to "dashscope")
 
     Returns:
         Tuple[float, float] - (prompt_cost_in_usd, completion_cost_in_usd)
     """
-    model_info = get_model_info(model=model, custom_llm_provider="dashscope")
+    model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     breakdown = _extract_token_breakdown(usage)
     tiered_pricing = (
         model_info.get("tiered_pricing")
