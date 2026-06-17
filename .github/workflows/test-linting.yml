@@ -87,14 +87,9 @@ jobs:
         run: |
           uv run --no-sync python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
 
-      - name: Run MyPy type checking
-        run: |
-          cd litellm
-          (uv run --no-sync mypy . || true) | uv run --no-sync python ../scripts/type_check_gate.py --tool mypy
-
       - name: Run basedpyright type checking
         run: |
-          (uv run --no-sync basedpyright --outputjson || true) | uv run --no-sync python scripts/type_check_gate.py --tool basedpyright
+          (uv run --no-sync basedpyright --outputjson || true) | uv run --no-sync python scripts/type_check_gate.py
 
       - name: Check for circular imports
         run: |

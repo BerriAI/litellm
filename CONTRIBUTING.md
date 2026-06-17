@@ -154,7 +154,7 @@ Individual linting commands:
 ```bash
 make format-check       # Check Black formatting
 make lint-ruff          # Run Ruff linting
-make lint-mypy          # Run MyPy type checking
+make lint-basedpyright  # Run basedpyright type checking
 make lint-any           # Gate changed files against their per-file Any budget
 make check-circular-imports    # Check for circular imports
 make check-import-safety       # Check import safety
@@ -217,7 +217,7 @@ LiteLLM follows the [Google Python Style Guide](https://google.github.io/stylegu
 Our automated quality checks include:
 - **Black** for consistent code formatting
 - **Ruff** for linting and code quality
-- **MyPy** for static type checking
+- **basedpyright** for static type checking
 - **Circular import detection**
 - **Import safety validation**
 
@@ -231,7 +231,7 @@ If `make lint` fails:
 
 1. **Formatting issues**: Run `make format` to auto-fix
 2. **Ruff issues**: Check the output and fix manually
-3. **MyPy issues**: Add proper type hints
+3. **basedpyright issues**: Add proper type hints
 4. **Circular imports**: Refactor import dependencies
 5. **Import safety**: Fix any unprotected imports
 
@@ -246,7 +246,7 @@ If `make test-unit` fails:
 
 ### 3. Common Development Tips
 
-- **Use type hints**: MyPy requires proper type annotations
+- **Use type hints**: basedpyright requires proper type annotations
 - **Write descriptive commit messages**: Help reviewers understand your changes
 - **Keep PRs focused**: One feature/fix per PR
 - **Test edge cases**: Don't just test the happy path

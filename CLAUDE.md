@@ -36,7 +36,7 @@ Don't hesitate to use values in .env to get needed API keys and other secrets, a
 
 Run tests, format your code, and lint your code before each commit
 
-When you fix violations gated by `ruff-strict-budget.json`, `mypy-code-budget.json`, `basedpyright-code-budget.json`, or `any-discipline-budget.json`, run `make lint-budget-update` and commit the lowered baselines so the ceilings ratchet down instead of leaving stale headroom
+When you fix violations gated by `ruff-strict-budget.json`, `basedpyright-code-budget.json`, or `any-discipline-budget.json`, run `make lint-budget-update` and commit the lowered baselines so the ceilings ratchet down instead of leaving stale headroom
 
 If you're trying to create a new function that relies on untyped stuff, instead of adding more Any's and bringing it closer to the max, just validate it in the caller with Pydantic (a model or `TypeAdapter` that returns the typed thing or raises will do) and then pass the now typed variable in
 

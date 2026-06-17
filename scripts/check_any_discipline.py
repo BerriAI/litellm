@@ -30,8 +30,7 @@ a file's ceiling may fall but never rise. Drive a file's count down and rerun
 
 How it works
 ------------
-It loads `litellm/mypy.ini` (the same config `make lint-mypy` uses, so findings
-match what developers already see), builds the changed files with mypy asking for
+It loads `litellm/mypy.ini`, builds the changed files with mypy asking for
 its exported expression->type map, and walks each file's AST applying a recursive
 "contains Any" predicate -- the test `mypy --disallow-any-expr` uses internally
 but applies inconsistently (python/mypy#12856).
@@ -339,7 +338,7 @@ def scan_any_ok(
 
 
 # --------------------------------------------------------------------------- #
-# mypy build (parity with `make lint-mypy`) + forced target re-check
+# mypy build (using litellm/mypy.ini) + forced target re-check
 # --------------------------------------------------------------------------- #
 
 

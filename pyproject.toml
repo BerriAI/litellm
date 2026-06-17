@@ -148,6 +148,8 @@ dev = [
     "diff-cover==9.7.2",
     "flake8==7.3.0",
     "black==26.3.1",
+    # Type checking is basedpyright-only; mypy is imported as a library by the
+    # Any-discipline gate (scripts/check_any_discipline.py), not run as a checker.
     "mypy==1.19.0",
     "basedpyright==1.39.7",
     "pytest==9.0.3",
@@ -277,9 +279,6 @@ version = "1.89.0"
 version_files = [
     "pyproject.toml:^version",
 ]
-
-[tool.mypy]
-plugins = "pydantic.mypy"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
