@@ -244,7 +244,24 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     if tool_calls:
                         existing_tool_calls = message.get("tool_calls")
                         if isinstance(existing_tool_calls, list):
-                            message["tool_calls"] = existing_tool_calls + tool_calls
+                            existing_tool_call_ids = {
+                                tool_call.get("id")  # any-ok: untyped content
+                                for tool_call in existing_tool_calls
+                                if isinstance(
+                                    tool_call, dict
+                                )  # any-ok: untyped content
+                                and tool_call.get("id")
+                                is not None  # any-ok: untyped content
+                            }
+                            new_tool_calls = [
+                                tool_call
+                                for tool_call in tool_calls
+                                if tool_call.get("id") not in existing_tool_call_ids
+                            ]
+                            if new_tool_calls:
+                                message["tool_calls"] = (
+                                    existing_tool_calls + new_tool_calls
+                                )
                         else:
                             message["tool_calls"] = tool_calls
                     content_str = "\n".join(text_parts)  # any-ok: untyped content
