@@ -179,6 +179,49 @@ async def _try_websearch_short_circuit(
     return None
 
 
+def _supports_native_anthropic_messages(
+    model: str,
+    custom_llm_provider: str | None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+) -> bool:
+    """Return True when the resolved provider serves ``/v1/messages`` natively.
+
+    Mirrors the native-vs-adapter predicate in ``anthropic_messages_handler``
+    (a non-None ``get_provider_anthropic_messages_config``). Fallback providers
+    routed through the chat/completions or Responses adapters return False — an
+    Anthropic block-level ``cache_control`` rewrite is only correct for the
+    native path; on the fallback path the downstream OpenAI hook owns caching.
+
+    ``api_base`` / ``api_key`` are forwarded to ``get_llm_provider`` so a native
+    provider selected purely by endpoint (e.g. an ``/anthropic`` ``api_base``)
+    resolves the same way it will in the handler, instead of being misread as a
+    fallback and having its cache injection skipped.
+    """
+    from litellm.types.utils import LlmProviders
+
+    try:
+        resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    except Exception:
+        return False
+    if not resolved_provider or resolved_provider not in [
+        provider.value for provider in LlmProviders
+    ]:
+        return False
+    return (
+        ProviderConfigManager.get_provider_anthropic_messages_config(
+            model=resolved_model,
+            provider=LlmProviders(resolved_provider),
+        )
+        is not None
+    )
+
+
 @client
 async def anthropic_messages(
     max_tokens: int,
@@ -187,7 +230,7 @@ async def anthropic_messages(
     metadata: Optional[Dict] = None,
     stop_sequences: Optional[List[str]] = None,
     stream: Optional[bool] = False,
-    system: Optional[str] = None,
+    system: str | list[dict] | None = None,
     temperature: Optional[float] = None,
     thinking: Optional[Dict] = None,
     tool_choice: Optional[Dict] = None,
@@ -259,6 +302,43 @@ async def anthropic_messages(
     request_kwargs.pop("litellm_params", None)
     # Merge back any other modifications
     kwargs.update(request_kwargs)
+
+    # Apply deployment-level `cache_control_injection_points` to the native
+    # Anthropic Messages payload. The OpenAI chat/completions path injects this
+    # via `litellm_logging_obj.async_get_chat_completion_prompt`, but that hook
+    # never runs on the native `/v1/messages` path, so config-level cache
+    # injection was silently dropped here (cache_creation_input_tokens stayed
+    # 0). Rewrite `messages` / `system` / `tools` at block level (the only form
+    # `/v1/messages` accepts) and pop the param so it does not leak upstream as
+    # an unknown field; locations not representable here (e.g. Bedrock
+    # tool_config) are forwarded but inert on this native path. See
+    # BerriAI/litellm#30293.
+    #
+    # Gate on native support: providers without a native Anthropic Messages
+    # config fall back to the chat/completions (or Responses) adapter, which
+    # applies caching via the OpenAI-path hook in the format those providers
+    # understand. Rewriting to Anthropic block form there would consume the
+    # param and silently break caching for e.g. Gemini, so leave it untouched.
+    if kwargs.get(
+        "cache_control_injection_points"
+    ) and _supports_native_anthropic_messages(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
+    ):
+        from litellm.integrations.anthropic_cache_control_hook import (
+            AnthropicCacheControlHook,
+        )
+
+        messages, system, tools = (
+            AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+                messages=messages,
+                system=system,
+                tools=tools,
+                non_default_params=kwargs,
+            )
+        )
 
     # Short-circuit web-search-only requests: detect the pattern, execute
     # search directly via Tavily/Perplexity, and return a synthetic response
@@ -360,7 +440,7 @@ def anthropic_messages_handler(
     metadata: Optional[Dict] = None,
     stop_sequences: Optional[List[str]] = None,
     stream: Optional[bool] = False,
-    system: Optional[str] = None,
+    system: str | list[dict] | None = None,
     temperature: Optional[float] = None,
     thinking: Optional[Dict] = None,
     tool_choice: Optional[Dict] = None,
