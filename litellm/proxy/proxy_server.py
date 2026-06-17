@@ -8348,20 +8348,20 @@ async def model_list(
             all_models = [m for m in all_models if m not in hidden_names]
 
         # Surface the public team name by default; legacy internal keys via flag.
-        all_models = TeamModelNameTranslator.translate_listing(
-            all_models, llm_router, settings
-        )
-
-        # Build response data with all proxy models
+        # The internal routing key drives the metadata/fallback lookup, while the
+        # public name is what the client sees as the model id.
         model_data = []
-        for model in all_models:
+        for response_id, lookup_id in TeamModelNameTranslator.listing_entries(
+            all_models, llm_router, settings
+        ):
             model_info = create_model_info_response(
-                model_id=model,
+                model_id=lookup_id,
                 provider="openai",
                 include_metadata=include_metadata or False,
                 fallback_type=fallback_type,
                 llm_router=llm_router,
             )
+            model_info["id"] = response_id
             model_data.append(model_info)
 
         return dict(
@@ -8390,20 +8390,20 @@ async def model_list(
         all_models = [m for m in all_models if m not in hidden_names]
 
     # Surface the public team name by default; legacy internal keys via flag.
-    all_models = TeamModelNameTranslator.translate_listing(
-        all_models, llm_router, settings
-    )
-
-    # Build response data
+    # The internal routing key drives the metadata/fallback lookup, while the
+    # public name is what the client sees as the model id.
     model_data = []
-    for model in all_models:
+    for response_id, lookup_id in TeamModelNameTranslator.listing_entries(
+        all_models, llm_router, settings
+    ):
         model_info = create_model_info_response(
-            model_id=model,
+            model_id=lookup_id,
             provider="openai",
             include_metadata=include_metadata or False,
             fallback_type=fallback_type,
             llm_router=llm_router,
         )
+        model_info["id"] = response_id
         model_data.append(model_info)
 
     return dict(
