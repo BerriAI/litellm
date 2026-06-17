@@ -12,6 +12,12 @@ its own content at the merge-base with the target branch and fails (exits 1, red
 
 New rules and lowered/equal ceilings are fine.
 
+The any-discipline budget is keyed by file rather than rule: its gate treats an
+absent file as ceiling 0 (the file must be Any-free), so an entry vanishing means
+that file was cleaned to zero -- a tightening, and exactly the cleanup this
+ratchet exists to encourage. Such a budget is therefore exempt from the
+dropped-entry rule (a raised ceiling is still caught).
+
 This is deliberately NOT a gating check. It should turn the run red so that a
 loosening is impossible to miss in review, but it must stay OUT of the
 branch-protection required-checks list: a justified bump (e.g. banning a new API,
@@ -42,6 +48,12 @@ DEFAULT_BUDGETS: tuple[str, ...] = (
     "basedpyright-code-budget.json",
     "any-discipline-budget.json",
 )
+
+# File-keyed budgets whose gate treats an absent entry as ceiling 0 (the file
+# must stay clean). Dropping an entry there is a tightening, not the "untracked,
+# now unbounded" loosening a vanished rule is for the rule-keyed budgets, so a
+# dropped entry must not read as a regression.
+ZERO_FLOOR_BUDGETS: frozenset[str] = frozenset({"any-discipline-budget.json"})
 
 
 class Regression(NamedTuple):
@@ -100,10 +112,12 @@ def regressions_for(rel: str, base: dict | None, head: dict | None) -> list[Regr
 
     base_caps = _caps(base)
     head_caps = _caps(head)
+    drop_floors_to_zero = rel in ZERO_FLOOR_BUDGETS
     out: list[Regression] = []
     for rule, base_cap in sorted(base_caps.items()):
         if rule not in head_caps:
-            out.append(Regression(rel, rule, f"rule dropped (ceiling {base_cap} -> removed)"))
+            if not drop_floors_to_zero:
+                out.append(Regression(rel, rule, f"rule dropped (ceiling {base_cap} -> removed)"))
         elif head_caps[rule] > base_cap:
             out.append(Regression(rel, rule, f"ceiling raised {base_cap} -> {head_caps[rule]}"))
     return out
