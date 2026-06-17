@@ -547,20 +547,64 @@ def test_openrouter_usage_accounting_not_top_level():
 
 def test_openrouter_usage_accounting_preserves_user_extra_body():
     """
-    User-provided OpenRouter params still flatten to the top level (issue #8425)
-    while usage accounting is added under extra_body without clobbering them.
+    Regression for the real request path (issue #8425): user-provided OpenRouter
+    params (e.g. provider routing) must land at the top level of the body that
+    ships, and usage accounting must reach that body without clobbering them.
+
+    This drives the full completion path on purpose. `extra_body` is popped in
+    llm_http_handler before `transform_request` runs, so the merge that lifts user
+    params to the top level happens in the handler, not in `transform_request`;
+    asserting on `transform_request` in isolation would test a path production
+    never takes.
     """
-    transformed_request = OpenrouterConfig().transform_request(
+    import json
+    from unittest.mock import MagicMock
+
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    payload = {
+        "id": "x",
+        "object": "chat.completion",
+        "model": "openai/gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.json.return_value = payload
+    mock_response.text = json.dumps(payload)
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_client.post.return_value = mock_response
+
+    litellm.completion(
         model="openrouter/openai/gpt-4o",
         messages=[{"role": "user", "content": "Hello"}],
-        optional_params={"extra_body": {"provider": {"order": ["OpenAI"]}}},
-        litellm_params={},
-        headers={},
+        extra_body={"provider": {"order": ["OpenAI"]}},
+        api_key="sk-fake",
+        client=mock_client,
     )
 
-    assert "usage" not in transformed_request
-    assert transformed_request["provider"]["order"] == ["OpenAI"]
-    assert transformed_request["extra_body"]["usage"] == {"include": True}
+    shipped_body = json.loads(mock_client.post.call_args.kwargs["data"])
+
+    # User-provided OpenRouter param survives at the top level. It is merged by the
+    # handler, not by transform_request (which never sees extra_body in the real
+    # path), so dropping the handler merge would fail here.
+    assert shipped_body["provider"] == {"order": ["OpenAI"]}
+
+    # Usage accounting reaches the shipped body without clobbering the user param.
+    usage_flag = shipped_body.get("usage") or shipped_body.get("extra_body", {}).get(
+        "usage"
+    )
+    assert usage_flag == {"include": True}
 
 
 def test_openrouter_reasoning_models_allow_reasoning_effort_param():
