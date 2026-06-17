@@ -741,6 +741,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         For multiple messages in /chat/completions, we'll need to call them in parallel.
         """
+        # Respect the configured event hook. In `logging_only` mode (and any config that
+        # excludes pre_call) the live request must not be masked - masking is applied to a
+        # copy at logging time via `async_logging_hook`. Without this gate the request sent
+        # to the model would carry anonymization tokens and the response would echo them.
+        if (
+            self.should_run_guardrail(
+                data=data,  # any-ok: untyped request
+                event_type=GuardrailEventHooks.pre_call,  # any-ok: untyped request
+            )
+            is not True
+        ):
+            return data  # any-ok: untyped request
 
         try:
             content_safety = data.get("content_safety", None)

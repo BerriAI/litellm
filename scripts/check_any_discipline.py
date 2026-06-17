@@ -76,7 +76,7 @@ try:
     from mypy.find_sources import create_source_list
     from mypy.fscache import FileSystemCache
     from mypy.modulefinder import BuildSource
-    from mypy.nodes import AssignmentStmt, Expression, NameExpr, Node
+    from mypy.nodes import AssignmentStmt, Expression, NameExpr, Node, TempNode
     from mypy.options import Options
     from mypy.types import (
         AnyType,
@@ -134,6 +134,19 @@ _HARMLESS_ANY = frozenset(
 # against ExtendedTraverserVisitor across the full grammar (see commit notes).
 _NON_SYNTACTIC_ATTRS = frozenset({"node", "info"})
 
+# Awaitable / coroutine / generator instances carry synthetic `Any` in their
+# send (and, for coroutines, yield) protocol slots: `async def f() -> float`
+# produces `Coroutine[Any, Any, float]`, so the bare call expression `f()` would
+# be flagged even though the awaited value is a clean `float`. Only the args that
+# hold a value the caller observes (the awaited result, the yielded item) are
+# meaningful; a real `Any` there -- e.g. a coroutine that returns `Any` -- is
+# still caught because that index is still checked.
+_SYNTHETIC_SEND_YIELD_VALUE_ARGS: dict[str, tuple[int, ...]] = {
+    "typing.Coroutine": (2,),
+    "typing.Generator": (0, 2),
+    "typing.AsyncGenerator": (0,),
+}
+
 
 class Violation(NamedTuple):
     path: Path
@@ -168,6 +181,12 @@ def contains_any(t: Type, _seen: set[int] | None = None) -> bool:
     if isinstance(p, UnionType):
         return any(contains_any(item, seen) for item in p.items)
     if isinstance(p, Instance):
+        value_arg_indices = _SYNTHETIC_SEND_YIELD_VALUE_ARGS.get(p.type.fullname)
+        if value_arg_indices is not None:
+            return any(
+                index < len(p.args) and contains_any(p.args[index], seen)
+                for index in value_arg_indices
+            )
         return any(contains_any(arg, seen) for arg in p.args)
     if isinstance(p, TupleType):
         return any(contains_any(item, seen) for item in p.items)
@@ -224,7 +243,11 @@ def find_any_in_tree(tree: Node, idmap: dict[int, Type]) -> list[tuple[int, int,
     exprs, skip_lvalues = _walk_file(tree)
     findings: list[tuple[int, int, str]] = []
     for expr in exprs:
-        if id(expr) in skip_lvalues:
+        # A TempNode is mypy's synthetic placeholder for a position with no real
+        # expression -- e.g. the rvalue of an annotation-only `field: T` in a
+        # TypedDict / class body, whose `special_form` `Any` is not a value the
+        # author wrote. It never corresponds to a runtime value, so skip it.
+        if id(expr) in skip_lvalues or isinstance(expr, TempNode):
             continue
         t = idmap.get(id(expr))
         if t is not None and contains_any(t):

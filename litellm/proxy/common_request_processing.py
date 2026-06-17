@@ -31,6 +31,7 @@ from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_DETAILED_TIMING,
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     STREAM_SSE_DATA_PREFIX,
 )
@@ -67,7 +68,12 @@ if TYPE_CHECKING:
 else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+from litellm.types.utils import (
+    ModelResponse,
+    ModelResponseStream,
+    StandardLoggingPayloadErrorInformation,
+    Usage,
+)
 
 # Datadog streaming spans are a no-op when ddtrace is not enabled, but the
 # ``with tracer.trace(...)`` context manager still allocates a NullSpan and
@@ -75,6 +81,77 @@ from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 # the per-chunk hot path can skip the context manager entirely when tracing
 # is off (the default).
 _DD_STREAMING_TRACE_ENABLED = not isinstance(tracer, NullTracer)
+
+
+_CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation = {
+    "error_code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
+    "error_message": "Client disconnected the request",
+    "error_class": "ClientDisconnected",
+}
+
+
+def _apply_client_disconnect_metadata(target_metadata: dict[str, object]) -> None:
+    target_metadata["client_disconnected"] = True
+    target_metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
+
+
+async def _record_streaming_client_disconnect_if_needed(
+    request: Request | None,
+    request_data: dict,
+    client_disconnected: bool = False,
+) -> bool:
+    if not client_disconnected:
+        if request is None:
+            return False
+        try:
+            disconnected = await request.is_disconnected()
+        except Exception:  # noqa: BLE001
+            return False
+        if not disconnected:
+            return False
+
+    logging_obj = request_data.get("litellm_logging_obj")  # any-ok: untyped request
+    if logging_obj is not None:  # any-ok: untyped request
+        litellm_params = (
+            logging_obj.model_call_details.setdefault(  # any-ok: untyped request
+                "litellm_params", {}
+            )
+        )
+        _apply_client_disconnect_metadata(
+            litellm_params.setdefault("metadata", {})  # any-ok: untyped request
+        )
+        _apply_client_disconnect_metadata(
+            logging_obj.model_call_details.setdefault(  # any-ok: untyped request
+                "metadata", {}
+            )
+        )
+
+    _apply_client_disconnect_metadata(
+        request_data.setdefault("metadata", {})  # any-ok: untyped request
+    )
+    litellm_params = request_data.setdefault(  # any-ok: untyped request
+        "litellm_params", {}  # any-ok: untyped request
+    )
+    _apply_client_disconnect_metadata(
+        litellm_params.setdefault("metadata", {})  # any-ok: untyped request
+    )
+
+    verbose_proxy_logger.debug(
+        "Recorded streaming client disconnect with error_code=499 for litellm_call_id=%s",
+        request_data.get("litellm_call_id"),  # any-ok: untyped request
+    )
+    return True
+
+
+async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
+    pending_tasks = [task for task in tasks if not task.done()]  # any-ok: untyped task
+    for task in pending_tasks:  # any-ok: untyped task
+        task.cancel()  # any-ok: untyped task
+    for task in pending_tasks:  # any-ok: untyped task
+        try:
+            await task  # any-ok: untyped request
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
 
 
 def _serialize_http_exception_detail(
@@ -242,20 +319,6 @@ def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
     return default_error
 
 
-async def _aclose_upstream_response(response: Any) -> None:
-    """Release the upstream HTTP connection when a stream ends for any
-    reason, including client disconnect. Mirrors the finally block of
-    async_data_generator in proxy_server.py."""
-    with anyio.CancelScope(shield=True):
-        if hasattr(response, "aclose"):
-            try:
-                await response.aclose()
-            except BaseException as e:
-                verbose_proxy_logger.debug(
-                    "error closing upstream response stream: %s", e
-                )
-
-
 class _UpstreamClosingStreamingResponse(StreamingResponse):
     """StreamingResponse that always closes its body iterator and the wrapped
     upstream generator.
@@ -300,7 +363,7 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
                         )
 
 
-async def create_response(  # noqa: PLR0915
+async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
     headers: dict,
@@ -1148,7 +1211,7 @@ class ProxyBaseLLMRequestProcessing:
                 _payload_str,
             )
 
-    async def base_process_llm_request(  # noqa: PLR0915
+    async def base_process_llm_request(
         self,
         request: Request,
         fastapi_response: Response,
@@ -1338,19 +1401,24 @@ class ProxyBaseLLMRequestProcessing:
             user_model=user_model,
             user_api_key_dict=user_api_key_dict,
         )
-        tasks.append(llm_call)
+        llm_call_task = asyncio.create_task(llm_call)  # any-ok: untyped task
+        tasks.append(llm_call_task)  # any-ok: untyped task
 
-        # wait for call to end
         llm_responses = asyncio.gather(
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        if general_settings.get("cancel_on_disconnect", False):
-            responses = await _await_llm_call_cancelling_on_disconnect(
-                request, llm_responses
-            )
-        else:
-            responses = await llm_responses
+        try:
+            if general_settings.get(  # any-ok: untyped request
+                "cancel_on_disconnect", False
+            ):
+                responses = await _await_llm_call_cancelling_on_disconnect(  # any-ok: untyped request
+                    request, llm_responses  # any-ok: untyped task
+                )
+            else:
+                responses = await llm_responses  # any-ok: untyped request
+        finally:
+            await _cancel_pending_gather_tasks(tasks)  # any-ok: untyped task
 
         response = responses[1]
 
@@ -1526,6 +1594,7 @@ class ProxyBaseLLMRequestProcessing:
                                 user_api_key_dict=user_api_key_dict,
                                 request_data=self.data,
                                 proxy_logging_obj=proxy_logging_obj,
+                                request=request,
                             )
                         )
                         return await create_response(
@@ -1539,6 +1608,7 @@ class ProxyBaseLLMRequestProcessing:
                         response=response,
                         user_api_key_dict=user_api_key_dict,
                         request_data=self.data,
+                        request=request,
                     )
                     if route_type == "aresponses":
                         # Streaming /v1/responses returns here without
@@ -2295,6 +2365,13 @@ class ProxyBaseLLMRequestProcessing:
 
         self._apply_router_cooldown_retry_after(headers, e)
 
+        if isinstance(e, ProxyException):
+            e.headers = {
+                **e.headers,
+                **{k: v if isinstance(v, str) else str(v) for k, v in headers.items()},
+            }
+            raise e
+
         if isinstance(e, HTTPException):
             raw_detail = getattr(e, "detail", str(e))
             message, structured_fields = _serialize_http_exception_detail(raw_detail)
@@ -2384,6 +2461,41 @@ class ProxyBaseLLMRequestProcessing:
             return chunk
 
     @staticmethod
+    async def _finalize_streaming_generator_cleanup(
+        request: Request | None,
+        request_data: dict,
+        response: Any,
+        stream_completed: bool = False,
+        client_disconnected: bool = False,
+    ) -> None:
+        with anyio.CancelScope(shield=True):
+            should_record_client_disconnect = client_disconnected or (
+                not stream_completed
+            )
+            recorded_client_disconnect = False
+            if should_record_client_disconnect:
+                recorded_client_disconnect = (
+                    await _record_streaming_client_disconnect_if_needed(
+                        request,
+                        request_data,  # any-ok: untyped request
+                        client_disconnected,  # any-ok: untyped request
+                    )
+                )
+            if recorded_client_disconnect:
+                ProxyLogging._fire_deferred_stream_logging(
+                    request_data  # any-ok: untyped request
+                )
+
+            if hasattr(response, "aclose"):  # any-ok: untyped request
+                try:
+                    await response.aclose()  # any-ok: untyped request
+                except BaseException as e:  # noqa: BLE001
+                    verbose_proxy_logger.debug(
+                        "async_streaming_data_generator: error closing response stream: %s",
+                        e,
+                    )
+
+    @staticmethod
     async def async_streaming_data_generator(
         response: Any,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2392,6 +2504,7 @@ class ProxyBaseLLMRequestProcessing:
         *,
         serialize_chunk: StreamChunkSerializer,
         serialize_error: StreamErrorSerializer,
+        request: Request | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
@@ -2416,6 +2529,8 @@ class ProxyBaseLLMRequestProcessing:
             and not cost_injection_enabled
         )
         debug_enabled = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
+        stream_completed = False
+        client_disconnected = False
         try:
             str_so_far = ""
             async for (
@@ -2463,6 +2578,7 @@ class ProxyBaseLLMRequestProcessing:
                     )
                 )
                 yield serialize_chunk(chunk)
+            stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
             # Client disconnected mid-stream. CancelledError / GeneratorExit
             # are BaseException and bypass the success/failure logging
@@ -2470,9 +2586,11 @@ class ProxyBaseLLMRequestProcessing:
             # release it here. This is the outermost generator Starlette closes
             # on disconnect, so the nested iterator hook (which only sees
             # GeneratorExit on GC) cannot own the refund.
-            proxy_logging_obj._release_max_parallel_requests_on_disconnect(
-                user_api_key_dict
-            )
+            if not stream_completed:
+                proxy_logging_obj._release_max_parallel_requests_on_disconnect(
+                    user_api_key_dict
+                )
+                client_disconnected = True
             raise
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -2501,9 +2619,16 @@ class ProxyBaseLLMRequestProcessing:
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
+            stream_completed = True
             yield serialize_error(proxy_exception)
         finally:
-            await _aclose_upstream_response(response)
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=request,
+                request_data=request_data,  # any-ok: untyped request
+                response=response,  # any-ok: untyped request
+                stream_completed=stream_completed,
+                client_disconnected=client_disconnected,
+            )
 
     @staticmethod
     def async_sse_data_generator(
@@ -2511,6 +2636,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
         proxy_logging_obj: ProxyLogging,
+        request: Request | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events.
@@ -2529,6 +2655,7 @@ class ProxyBaseLLMRequestProcessing:
             serialize_error=lambda proxy_exc: (
                 f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n"
             ),
+            request=request,
         )
 
     @staticmethod

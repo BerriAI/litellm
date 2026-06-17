@@ -188,28 +188,30 @@ function LoginPageContent() {
             <Text type="secondary">Access your LiteLLM Admin UI.</Text>
           </div>
 
-          <Alert
-            message="Default Credentials"
-            description={
-              <>
-                <Paragraph className="text-sm">
-                  By default, Username is <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">admin</code> and
-                  Password is your set LiteLLM Proxy
-                  <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">MASTER_KEY</code>.
-                </Paragraph>
-                <Paragraph className="text-sm">
-                  Need to set UI credentials or SSO?{" "}
-                  <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank" rel="noopener noreferrer">
-                    Check the documentation
-                  </a>
-                  .
-                </Paragraph>
-              </>
-            }
-            type="info"
-            icon={<InfoCircleOutlined />}
-            showIcon
-          />
+          {!uiConfig?.hide_default_credentials_hint && (
+            <Alert
+              message="Default Credentials"
+              description={
+                <>
+                  <Paragraph className="text-sm">
+                    By default, Username is <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">admin</code> and
+                    Password is your set LiteLLM Proxy
+                    <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">MASTER_KEY</code>.
+                  </Paragraph>
+                  <Paragraph className="text-sm">
+                    Need to set UI credentials or SSO?{" "}
+                    <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank" rel="noopener noreferrer">
+                      Check the documentation
+                    </a>
+                    .
+                  </Paragraph>
+                </>
+              }
+              type="info"
+              icon={<InfoCircleOutlined />}
+              showIcon
+            />
+          )}
 
           {error && <Alert message={error} type="error" showIcon />}
 
