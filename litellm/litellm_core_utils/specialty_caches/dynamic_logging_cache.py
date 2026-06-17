@@ -31,7 +31,7 @@ class LangfuseInMemoryCache(InMemoryCache):
         """
         Override _remove_key in InMemoryCache to ensure we do proper cleanup of Langfuse initialized clients.
 
-        LangfuseLoggers consume threads when initalized, this shuts them down when they are expired
+        LangfuseLoggers consume threads when initialized, this shuts them down when they are expired
 
         Relevant Issue: https://github.com/BerriAI/litellm/issues/11169
         """
@@ -68,15 +68,11 @@ class DynamicLoggingCache:
         return cache_key
 
     def get_cache(self, credentials: dict, service_name: str) -> Optional[Any]:
-        key_name = self.get_cache_key(
-            args={**credentials, "service_name": service_name}
-        )
+        key_name = self.get_cache_key(args={**credentials, "service_name": service_name})
         response = self.cache.get_cache(key=key_name)
         return response
 
     def set_cache(self, credentials: dict, service_name: str, logging_obj: Any) -> None:
-        key_name = self.get_cache_key(
-            args={**credentials, "service_name": service_name}
-        )
+        key_name = self.get_cache_key(args={**credentials, "service_name": service_name})
         self.cache.set_cache(key=key_name, value=logging_obj)
         return None

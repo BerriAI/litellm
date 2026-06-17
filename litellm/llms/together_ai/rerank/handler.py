@@ -1,7 +1,7 @@
 """
-Re rank api
+Rerank API
 
-LiteLLM supports the re rank API format, no paramter transformation occurs
+LiteLLM supports the rerank API format, no parameter transformation occurs
 """
 
 from typing import Any, Dict, List, Optional, Union
@@ -70,9 +70,7 @@ class TogetherAIRerank(BaseLLM):
         request_data_dict: Dict[str, Any],
         api_key: str,
     ) -> RerankResponse:
-        client = get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.TOGETHER_AI
-        )  # Use async client
+        client = get_async_httpx_client(llm_provider=litellm.LlmProviders.TOGETHER_AI)  # Use async client
 
         response = await client.post(
             "https://api.together.xyz/v1/rerank",
