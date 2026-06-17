@@ -2733,3 +2733,44 @@ def test_openrouter_gemini_3_1_flash_lite_stable_pricing():
     assert model_info["cache_read_input_token_cost"] == 2.5e-08
     assert model_info["max_input_tokens"] == 1048576
     assert model_info["max_output_tokens"] == 65536
+
+
+def test_volcengine_tiered_pricing_graduated_cost(monkeypatch):
+    """Regression test for #30346.
+
+    Volcengine (Doubao) models define `tiered_pricing` but no flat per-token cost, so the cost
+    calculator billed them at $0. They must route to the shared tiered-pricing handler and produce
+    the correct graduated cost across tiers.
+    """
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    model = "doubao-seed-2-0-pro-260215"
+    model_info = litellm.get_model_info(f"volcengine/{model}")
+    tier_0, tier_1 = model_info["tiered_pricing"][0], model_info["tiered_pricing"][1]
+    boundary = int(tier_0["range"][1])
+
+    prompt_tokens = boundary + 10000
+    completion_tokens = boundary + 5000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+
+    prompt_cost, completion_cost = cost_per_token(
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        custom_llm_provider="volcengine",
+        usage_object=usage,
+    )
+
+    expected_prompt_cost = (boundary * tier_0["input_cost_per_token"]) + (
+        10000 * tier_1["input_cost_per_token"]
+    )
+    expected_completion_cost = (boundary * tier_0["output_cost_per_token"]) + (
+        5000 * tier_1["output_cost_per_token"]
+    )
+
+    assert prompt_cost > 0 and completion_cost > 0
+    assert prompt_cost == pytest.approx(expected_prompt_cost, rel=1e-10)
+    assert completion_cost == pytest.approx(expected_completion_cost, rel=1e-10)
