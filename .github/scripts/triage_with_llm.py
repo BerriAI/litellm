@@ -281,18 +281,40 @@ def _iter_paginated_json(*api_args: str) -> Any:
             continue
 
 
-def fetch_last_close_actor(repo: str, number: int) -> str | None:
-    """Return the login of the actor who most recently closed this PR/issue.
+def fetch_last_close_event(
+    repo: str, number: int
+) -> tuple[str | None, dt.datetime | None]:
+    """Return the actor login and timestamp of the most recent `closed` event.
 
-    Returns None if no `closed` event is found (unusual for a closed item,
-    but possible if the events API returns nothing — in which case the
-    bot-closed guard should fail-closed, i.e. refuse to reopen).
+    Either field may be None: actor when the events API returns nothing
+    (unusual for a closed item, but possible on transient errors), and
+    timestamp when the event lacks `created_at` or the value can't be
+    parsed. `was_closed_by_agent_shin` fail-closes on either.
     """
-    last: str | None = None
+    actor: str | None = None
+    closed_at: dt.datetime | None = None
     for event in _iter_paginated_json(f"repos/{repo}/issues/{number}/events"):
-        if event.get("event") == "closed":
-            last = (event.get("actor") or {}).get("login")
-    return last
+        if event.get("event") != "closed":
+            continue
+        actor = (event.get("actor") or {}).get("login")
+        created = event.get("created_at")
+        if not created:
+            closed_at = None
+            continue
+        try:
+            closed_at = parse_iso8601(created)
+        except ValueError:
+            closed_at = None
+    return actor, closed_at
+
+
+# How much older than the latest `closed` event the Agent Shin marker
+# comment is allowed to be while still counting as "this close was Agent
+# Shin's". Agent Shin posts the close comment immediately before closing,
+# so the marker timestamp is normally at most a few seconds before the
+# close event; the buffer just absorbs clock skew between the comments
+# API and the events API.
+AGENT_SHIN_CLOSE_MARKER_SKEW_SECONDS = 300
 
 
 def was_closed_by_agent_shin(
@@ -304,13 +326,17 @@ def was_closed_by_agent_shin(
     item Agent Shin did not close — a maintainer closing for non-rubric
     reasons (security, duplicate, design rejection), or a different workflow
     (stale/duplicate sweeps) closing under the shared `github-actions[bot]`
-    identity. Two independent signals must both hold, because that identity is
-    not unique to Agent Shin:
+    identity. Three independent signals must all hold, because that identity
+    is not unique to Agent Shin and a marker comment from a prior
+    closed/reopened cycle would otherwise vouch for an unrelated close:
 
       1. The most recent `closed` event's actor is the bot identity.
       2. Agent Shin left one of its auto-close comments, detected via
-         `AGENT_SHIN_CLOSE_MARKER`. The actor check alone can't tell an Agent
-         Shin close from any other `github-actions[bot]` close.
+         `AGENT_SHIN_CLOSE_MARKER`. The actor check alone can't tell an
+         Agent Shin close from any other `github-actions[bot]` close.
+      3. That marker comment was posted at (or just before) the latest
+         close event, not on a previous close in an
+         Agent-Shin-close -> reconsider-reopen -> other-bot-reclose cycle.
 
     The check is intentionally fail-closed: any uncertainty about who closed
     the item is treated as "not Agent Shin" so the destructive reopen path
@@ -321,13 +347,18 @@ def was_closed_by_agent_shin(
         or os.environ.get("AGENT_SHIN_BOT_LOGIN")
         or AGENT_SHIN_DEFAULT_BOT_LOGIN
     ).lower()
-    actor = fetch_last_close_actor(repo, number)
-    if not actor or actor.lower() != expected:
+    actor, closed_at = fetch_last_close_event(repo, number)
+    if not actor or actor.lower() != expected or closed_at is None:
         return False
-    return (
-        seconds_since_last_agent_shin_close(repo, number, bot_login=bot_login)
-        is not None
+    marker_seconds = seconds_since_last_agent_shin_close(
+        repo, number, bot_login=bot_login
     )
+    if marker_seconds is None:
+        return False
+    close_age_seconds = (
+        dt.datetime.now(dt.timezone.utc) - closed_at
+    ).total_seconds()
+    return marker_seconds <= close_age_seconds + AGENT_SHIN_CLOSE_MARKER_SKEW_SECONDS
 
 
 def _seconds_since_latest_marker_comment(
@@ -1500,15 +1531,17 @@ def triage(
     decision = (verdict.get("verdict") or "").lower()
 
     if reconsider:
-        # Reconsider: pass -> reopen + post reopen comment;
-        # fail -> leave closed + post a "still failing" comment so the
-        # contributor can iterate again.
+        # Reconsider: an explicit `pass` -> reopen + post reopen comment;
+        # anything else (fail, missing/malformed verdict, typo) -> leave
+        # closed + post a "still failing" comment so the contributor can
+        # iterate again. Reopen is destructive, so a flaky/empty verdict
+        # must not satisfy the gate.
         # In dry-run (`close=False`) we return `would-*` actions instead
         # of touching GitHub state, mirroring the regular triage flow's
         # `would-close`. This lets a local operator preview the outcome
         # of `python triage_with_llm.py --reconsider --pr N` without
         # risking accidental comments or reopens.
-        if decision != "fail":
+        if decision == "pass":
             reopen_body = format_reopen_comment(kind)
             if not close:
                 return {

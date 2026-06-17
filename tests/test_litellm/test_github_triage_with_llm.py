@@ -327,26 +327,52 @@ class TestWasClosedByAgentShin:
     """Bot-closed guard: only Agent Shin's own closures are reopen candidates."""
 
     @staticmethod
-    def _stub_close_marker_present(triage_module, monkeypatch, *, present: bool):
+    def _stub_close_event(
+        triage_module,
+        monkeypatch,
+        *,
+        actor: str | None,
+        closed_at: object = "now",
+    ):
+        """Stub the most recent `closed` event used by the guard.
+
+        `actor` is the login that closed the item. `closed_at` defaults
+        to "now" so the marker comment (stubbed at 42s ago) reads as
+        recent enough relative to the close; tests can pass a concrete
+        ``datetime`` to simulate older closes (e.g. the stale-marker
+        regression scenario).
+        """
+        import datetime as real_dt
+
+        if closed_at == "now":
+            closed_at = real_dt.datetime.now(real_dt.timezone.utc)
+        monkeypatch.setattr(
+            triage_module,
+            "fetch_last_close_event",
+            lambda repo, n: (actor, closed_at),
+        )
+
+    @staticmethod
+    def _stub_close_marker_present(
+        triage_module, monkeypatch, *, present: bool, age_seconds: float = 42.0
+    ):
         """Stub the Agent Shin close-comment marker lookup.
 
-        `was_closed_by_agent_shin` requires both the closing actor AND an
-        Agent Shin close comment; these tests pin the latter so they exercise
-        the actor half in isolation.
+        `was_closed_by_agent_shin` requires the closing actor AND a
+        recent Agent Shin close comment; these tests pin the latter so
+        they exercise the actor half in isolation.
         """
         monkeypatch.setattr(
             triage_module,
             "seconds_since_last_agent_shin_close",
-            lambda *a, **kw: 42.0 if present else None,
+            lambda *a, **kw: age_seconds if present else None,
         )
 
     def test_should_return_true_when_bot_closed_and_close_comment_present(
         self, triage_module, monkeypatch
     ):
-        monkeypatch.setattr(
-            triage_module,
-            "fetch_last_close_actor",
-            lambda repo, n: "github-actions[bot]",
+        self._stub_close_event(
+            triage_module, monkeypatch, actor="github-actions[bot]"
         )
         self._stub_close_marker_present(triage_module, monkeypatch, present=True)
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is True
@@ -358,10 +384,8 @@ class TestWasClosedByAgentShin:
         # stale/duplicate sweep closing under that identity must NOT let
         # @agent-shin reconsider reopen the item: without an Agent Shin close
         # comment the guard fails closed.
-        monkeypatch.setattr(
-            triage_module,
-            "fetch_last_close_actor",
-            lambda repo, n: "github-actions[bot]",
+        self._stub_close_event(
+            triage_module, monkeypatch, actor="github-actions[bot]"
         )
         self._stub_close_marker_present(triage_module, monkeypatch, present=False)
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
@@ -372,11 +396,7 @@ class TestWasClosedByAgentShin:
         # A maintainer closed it (e.g. duplicate, security, design). The
         # bot must refuse to reopen on @agent-shin reconsider even if an
         # earlier Agent Shin close comment is still on the thread.
-        monkeypatch.setattr(
-            triage_module,
-            "fetch_last_close_actor",
-            lambda repo, n: "krrishdholakia",
-        )
+        self._stub_close_event(triage_module, monkeypatch, actor="krrishdholakia")
         self._stub_close_marker_present(triage_module, monkeypatch, present=True)
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
 
@@ -384,10 +404,46 @@ class TestWasClosedByAgentShin:
         # If the events API returns nothing (network blip, repo permission
         # quirk), the guard must fail-closed: refuse to reopen rather than
         # assume the bot did it.
-        monkeypatch.setattr(
-            triage_module, "fetch_last_close_actor", lambda repo, n: None
+        self._stub_close_event(
+            triage_module, monkeypatch, actor=None, closed_at=None
         )
         self._stub_close_marker_present(triage_module, monkeypatch, present=True)
+        assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
+
+    def test_should_fail_closed_when_close_event_has_no_timestamp(
+        self, triage_module, monkeypatch
+    ):
+        # Without a usable close timestamp the guard cannot prove the
+        # marker comment belongs to the latest close; fail-closed.
+        self._stub_close_event(
+            triage_module, monkeypatch, actor="github-actions[bot]", closed_at=None
+        )
+        self._stub_close_marker_present(triage_module, monkeypatch, present=True)
+        assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
+
+    def test_should_return_false_when_marker_predates_latest_close(
+        self, triage_module, monkeypatch
+    ):
+        # Regression for the stale-marker bug: Agent Shin closed once
+        # (marker stamped), reconsider reopened, and a different workflow
+        # later closed under the same bot identity without stamping the
+        # marker. The old marker is still on the thread but does NOT
+        # belong to the latest close, so reconsider must not reopen.
+        import datetime as real_dt
+
+        now = real_dt.datetime.now(real_dt.timezone.utc)
+        # Latest close happened a minute ago.
+        self._stub_close_event(
+            triage_module,
+            monkeypatch,
+            actor="github-actions[bot]",
+            closed_at=now - real_dt.timedelta(seconds=60),
+        )
+        # The most recent Agent Shin marker is from an hour ago (a prior
+        # closed/reopened cycle), which is well outside the skew window.
+        self._stub_close_marker_present(
+            triage_module, monkeypatch, present=True, age_seconds=3600.0
+        )
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
 
     def test_should_respect_bot_login_override_via_env(
@@ -398,15 +454,11 @@ class TestWasClosedByAgentShin:
         # respect the override so non-default deployments still work.
         monkeypatch.setenv("AGENT_SHIN_BOT_LOGIN", "my-bot")
         self._stub_close_marker_present(triage_module, monkeypatch, present=True)
-        monkeypatch.setattr(
-            triage_module, "fetch_last_close_actor", lambda repo, n: "my-bot"
-        )
+        self._stub_close_event(triage_module, monkeypatch, actor="my-bot")
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is True
         # Default "github-actions[bot]" should NOT match when env is set.
-        monkeypatch.setattr(
-            triage_module,
-            "fetch_last_close_actor",
-            lambda repo, n: "github-actions[bot]",
+        self._stub_close_event(
+            triage_module, monkeypatch, actor="github-actions[bot]"
         )
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
 
@@ -1209,6 +1261,44 @@ class TestTriageOrchestration:
         assert result["action"] == "reconsider-still-failing"
         assert posted["n"] == 42
         assert "QA proof" in posted["body"]
+
+    def test_should_not_reopen_on_reconsider_with_ambiguous_verdict(
+        self, triage_module, monkeypatch
+    ):
+        # Regression: only an explicit `pass` verdict reopens. Missing,
+        # empty, or unexpected verdict strings ("failed", "", garbage)
+        # must fall through to the still-failing branch rather than
+        # reopen a PR the rubric did not actually clear.
+        pr = self._make_pr(state="closed", body="still empty")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
+        posted = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("must not reopen on ambiguous verdict"),
+        )
+
+        for ambiguous in ("", "failed", "needs-info", "unknown"):
+            posted.clear()
+            result = triage_module.triage(
+                repo="o/r",
+                kind="pr",
+                number=42,
+                close=True,
+                model="m",
+                judge=lambda p, v=ambiguous: json.dumps(
+                    {"verdict": v, "missing": [], "explanation": "weird"}
+                ),
+                reconsider=True,
+            )
+            assert result["action"] == "reconsider-still-failing", ambiguous
+            assert "body" in posted, ambiguous
 
     def test_should_dry_run_reconsider_fail_when_close_false(
         self, triage_module, monkeypatch
