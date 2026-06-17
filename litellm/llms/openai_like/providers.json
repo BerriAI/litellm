@@ -163,6 +163,7 @@
   "pinstripes": {
     "base_url": "https://pinstripes.io/v1",
     "api_key_env": "PINSTRIPES_API_KEY",
+    "api_base_env": "PINSTRIPES_API_BASE",
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
