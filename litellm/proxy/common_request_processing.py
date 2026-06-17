@@ -2467,6 +2467,10 @@ class ProxyBaseLLMRequestProcessing:
                 )
             if recorded_client_disconnect:
                 ProxyLogging._fire_deferred_stream_logging(request_data)
+                await ProxyBaseLLMRequestProcessing._bill_partial_stream_on_disconnect(
+                    response,
+                    request_data,
+                )
 
             if hasattr(response, "aclose"):
                 try:
@@ -2476,6 +2480,71 @@ class ProxyBaseLLMRequestProcessing:
                         "async_streaming_data_generator: error closing response stream: %s",
                         e,
                     )
+
+    @staticmethod
+    async def _bill_partial_stream_on_disconnect(
+        response: Any, request_data: dict
+    ) -> None:
+        """Record SpendLogs for tokens already produced when a stream is cut off.
+
+        A mid-stream client disconnect surfaces as CancelledError / GeneratorExit
+        (both BaseException), so the stream never reaches normal completion and
+        the assembled-response success logging never runs. The provider has
+        already generated and billed for the chunks received so far, but they are
+        never written to SpendLogs. Assemble the partial usage from the received
+        chunks and dispatch success logging for it; dispatch_success_handlers
+        de-dupes via has_dispatched_final_stream_success, so this is a no-op when
+        normal completion already logged.
+        """
+        logging_obj = request_data.get("litellm_logging_obj")
+        chunks = getattr(response, "chunks", None)
+        if logging_obj is None or not chunks:
+            return
+        # Optimization, not a correctness guard: dispatch_success_handlers is the
+        # authoritative de-dup via has_dispatched_final_stream_success. This just
+        # skips the stream_chunk_builder assembly when completion already logged.
+        if logging_obj.model_call_details.get("has_dispatched_final_stream_success"):
+            return
+        try:
+            partial_response = litellm.stream_chunk_builder(
+                chunks=chunks,
+                messages=getattr(response, "messages", None),
+                logging_obj=logging_obj,
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Failed to assemble partial streaming usage on client disconnect"
+            )
+            return
+        if partial_response is None:
+            return
+        # When post-call guardrails are active, normal completion routes the
+        # assembled response through the deferred guardrail path (guardrails,
+        # then logging). Mirror that here so a cancelled guarded stream is not
+        # logged unguarded.
+        #
+        # Best-effort: a logging/callback failure must not escape, or it would
+        # exit the shielded cleanup before response.aclose() and leak the
+        # upstream connection.
+        deferred_complete = getattr(logging_obj, "_on_deferred_stream_complete", None)
+        try:
+            if deferred_complete is not None:
+                await deferred_complete(partial_response, False)
+            else:
+                # start_time=None -> logging falls back to self.start_time
+                # (original request start); end_time=None -> now. Correct for a
+                # partial record.
+                await logging_obj.dispatch_success_handlers(
+                    partial_response,
+                    start_time=None,
+                    end_time=None,
+                    cache_hit=False,
+                    prefer_async_handlers=True,
+                )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Failed to record partial streaming usage on client disconnect"
+            )
 
     @staticmethod
     async def async_streaming_data_generator(
