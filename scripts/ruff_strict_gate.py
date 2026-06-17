@@ -23,6 +23,7 @@ STRICT_CONFIG = REPO_ROOT / "ruff-strict.toml"
 BUDGET_PATH = REPO_ROOT / "ruff-strict-budget.json"
 TARGET = "litellm"
 DEFAULT_BASE = "origin/litellm_internal_staging"
+_FALLBACK_BASE = "upstream/litellm_internal_staging"
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
@@ -60,12 +61,7 @@ def head_violations() -> list:
     out = []
     for item in _ruff_json(REPO_ROOT, STRICT_CONFIG):
         name = Path(item["filename"])
-        rel = (
-            (name if name.is_absolute() else REPO_ROOT / name)
-            .resolve()
-            .relative_to(REPO_ROOT)
-            .as_posix()
-        )
+        rel = (name if name.is_absolute() else REPO_ROOT / name).resolve().relative_to(REPO_ROOT).as_posix()
         out.append(Violation(rel, item["location"]["row"], item["code"]))
     return out
 
@@ -124,15 +120,11 @@ def cmd_check(base: str) -> None:
         return
     new = introduced(
         head,
-        parse_changed_lines(
-            _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
-        ),
+        parse_changed_lines(_run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])),
     )
     print(f"FAIL: strict-rule totals exceed their ceiling (base {base}):")
     for breach in breaches:
-        print(
-            f"  {breach.rule}: total {breach.total} over cap {breach.cap} (this change added {breach.added})"
-        )
+        print(f"  {breach.rule}: total {breach.total} over cap {breach.cap} (this change added {breach.added})")
         for violation in sorted(v for v in new if v.code == breach.rule):
             print(f"    {violation.file}:{violation.line}")
     print(
@@ -150,12 +142,42 @@ def cmd_update() -> None:
     print("Re-captured per-rule baselines from the current tree")
 
 
+def _resolve_base(ref: str) -> str:
+    """Return ref if it resolves; fall back to the upstream remote equivalent.
+
+    Forks that use a different remote name (e.g. Azure DevOps as 'origin')
+    won't have 'origin/litellm_internal_staging', so we try the upstream
+    remote as a fallback before giving up.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", ref],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        return ref
+    fallback = ref.replace("origin/", "upstream/", 1)
+    if fallback != ref:
+        fb_result = subprocess.run(
+            ["git", "rev-parse", "--verify", fallback],
+            cwd=REPO_ROOT,
+            capture_output=True,
+        )
+        if fb_result.returncode == 0:
+            print(f"Note: '{ref}' not found, using '{fallback}' as base.", file=sys.stderr)
+            return fallback
+    return ref  # let cmd_check fail with a clear git error
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args()
-    cmd_update() if args.update else cmd_check(args.base)
+    if args.update:
+        cmd_update()
+    else:
+        cmd_check(_resolve_base(args.base))
 
 
 if __name__ == "__main__":

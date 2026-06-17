@@ -126,8 +126,7 @@ lint-mypy: install-dev
 lint-black: format-check
 
 lint-strict-budget: install-dev
-	$(UV_RUN) python scripts/ruff_strict_gate.py \
-		--base $$(git rev-parse --verify origin/litellm_internal_staging 2>/dev/null && echo origin/litellm_internal_staging || echo upstream/litellm_internal_staging)
+	$(UV_RUN) python scripts/ruff_strict_gate.py
 
 lint-strict-budget-update: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py --update
