@@ -164,7 +164,6 @@ dev = [
     "responses==0.26.0",
     "respx==0.22.0",
     "ruff==0.15.3",
-    "basedpyright==1.39.8",
     "types-requests==2.32.4.20260107",
     "types-setuptools==75.8.0.20250225",
     "types-redis==4.6.0.20241004",
