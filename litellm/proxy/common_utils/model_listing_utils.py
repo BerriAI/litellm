@@ -86,24 +86,21 @@ class TeamModelNameTranslator:
 
         For team-scoped rows `response_id` is the public name shown to the client,
         while `metadata_lookup_id` stays the internal routing key so downstream
-        metadata/fallback lookups (keyed by the routing name) still resolve. Both
-        ids are identical for unmapped names (globals, access-group keys).
+        metadata/fallback lookups (keyed by the routing name) still resolve. The
+        lookup id is always one of `model_names` (the caller's accessible set), so
+        a public name shared across teams never resolves to another team's
+        internal key. Both ids are identical for unmapped names (globals,
+        access-group keys).
         """
         internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(
             llm_router, general_settings
         )
         if not internal_to_public:
             return [(name, name) for name in model_names]
-        public_to_internal = {
-            public: internal for internal, public in internal_to_public.items()
+        deduped_entries = {
+            internal_to_public.get(name, name): name for name in model_names
         }
-        ordered_response_ids: dict[str, None] = {
-            internal_to_public.get(name, name): None for name in model_names
-        }
-        return [
-            (response_id, public_to_internal.get(response_id, response_id))
-            for response_id in ordered_response_ids
-        ]
+        return list(deduped_entries.items())
 
     @staticmethod
     def translate_listing(
