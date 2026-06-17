@@ -2961,6 +2961,7 @@ async def team_member_update(
     returned_team_info: TeamInfoResponseObject = await team_info(
         http_request=http_request,
         team_id=data.team_id,
+        key_limit=None,
         user_api_key_dict=user_api_key_dict,
     )
 

@@ -70,7 +70,14 @@ class TestCommandR7bPricingModelInfo:
     """``get_model_info`` must report the corrected, un-swapped costs."""
 
     def test_get_model_info_costs(self):
-        info = litellm.get_model_info(MODEL)
-        assert info["input_cost_per_token"] == EXPECTED_INPUT_COST
-        assert info["output_cost_per_token"] == EXPECTED_OUTPUT_COST
-        assert info["output_cost_per_token"] > info["input_cost_per_token"]
+        # Patch litellm.model_cost with the local backup so the test is not
+        # dependent on the remote fetch hitting a not-yet-merged main branch.
+        original = litellm.model_cost
+        try:
+            litellm.model_cost = _load_json(_backup_path())
+            info = litellm.get_model_info(MODEL)
+            assert info["input_cost_per_token"] == EXPECTED_INPUT_COST
+            assert info["output_cost_per_token"] == EXPECTED_OUTPUT_COST
+            assert info["output_cost_per_token"] > info["input_cost_per_token"]
+        finally:
+            litellm.model_cost = original
