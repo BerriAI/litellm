@@ -17,10 +17,12 @@ from typing import (
     Union,
 )
 
+import anyio
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 import litellm
 from litellm._logging import _redact_string, verbose_proxy_logger
@@ -240,7 +242,65 @@ def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
     return default_error
 
 
-async def create_response(  # noqa: PLR0915
+async def _aclose_upstream_response(response: Any) -> None:
+    """Release the upstream HTTP connection when a stream ends for any
+    reason, including client disconnect. Mirrors the finally block of
+    async_data_generator in proxy_server.py."""
+    with anyio.CancelScope(shield=True):
+        if hasattr(response, "aclose"):
+            try:
+                await response.aclose()
+            except BaseException as e:
+                verbose_proxy_logger.debug(
+                    "error closing upstream response stream: %s", e
+                )
+
+
+class _UpstreamClosingStreamingResponse(StreamingResponse):
+    """StreamingResponse that always closes its body iterator and the wrapped
+    upstream generator.
+
+    When the client disconnects mid-stream, Starlette abandons the body
+    iterator without calling aclose(), leaving the upstream LLM connection
+    open until garbage collection; the backend (e.g. vLLM) keeps generating
+    into a dead pipe. The upstream generator is closed directly (not via the
+    body iterator) because aclose() on a never-started generator skips its
+    body, so a cascade through it would be a no-op if the client disconnects
+    before the first chunk is sent.
+    """
+
+    def __init__(
+        self,
+        content: AsyncGenerator[str, None],
+        *,
+        media_type: Optional[str] = None,
+        headers: Optional[dict] = None,
+        status_code: int = status.HTTP_200_OK,
+        upstream_generator: Optional[AsyncGenerator[str, None]] = None,
+    ) -> None:
+        super().__init__(
+            content, status_code=status_code, headers=headers, media_type=media_type
+        )
+        self._upstream_generator = upstream_generator
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                for target in (self.body_iterator, self._upstream_generator):
+                    aclose = getattr(target, "aclose", None)
+                    if aclose is None:
+                        continue
+                    try:
+                        await aclose()
+                    except BaseException as e:
+                        verbose_proxy_logger.debug(
+                            "error closing streaming generator: %s", e
+                        )
+
+
+async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
     headers: dict,
@@ -366,11 +426,12 @@ async def create_response(  # noqa: PLR0915
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
-    return StreamingResponse(
+    return _UpstreamClosingStreamingResponse(
         combined_generator(),
         media_type=media_type,
         headers=streaming_headers,
         status_code=final_status_code,
+        upstream_generator=generator,
     )
 
 
@@ -1087,7 +1148,7 @@ class ProxyBaseLLMRequestProcessing:
                 _payload_str,
             )
 
-    async def base_process_llm_request(  # noqa: PLR0915
+    async def base_process_llm_request(
         self,
         request: Request,
         fastapi_response: Response,
@@ -1701,6 +1762,23 @@ class ProxyBaseLLMRequestProcessing:
                     await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
                         response=completed_obj,
                         user_api_key_dict=user_api_key_dict,
+                    )
+                else:
+                    # Silent skip caused #30210: the proxy's Router wrapper
+                    # of the responses streaming iterator wasn't propagating
+                    # ``completed_response``, so this hook recorded nothing
+                    # and follow-up /v1/containers/<id>/files calls 403'd
+                    # for non-admin keys with no proxy-side hint. Log a
+                    # warning so future regressions of the same shape
+                    # surface in operator logs.
+                    verbose_proxy_logger.warning(
+                        "Container ownership recording skipped on streaming "
+                        "/v1/responses: no completed_response on stream "
+                        "iterator %s. If this stream created any tool "
+                        "container (e.g. code_interpreter), follow-up "
+                        "/v1/containers/<id>/files calls will 403 for "
+                        "non-admin keys.",
+                        type(original_stream_response).__name__,
                     )
             except Exception as e:
                 verbose_proxy_logger.exception(
@@ -2424,6 +2502,8 @@ class ProxyBaseLLMRequestProcessing:
                 code=getattr(e, "status_code", 500),
             )
             yield serialize_error(proxy_exception)
+        finally:
+            await _aclose_upstream_response(response)
 
     @staticmethod
     def async_sse_data_generator(

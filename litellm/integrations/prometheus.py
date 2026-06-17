@@ -75,7 +75,7 @@ class PrometheusLogger(CustomLogger):
                 return cb
         return None
 
-    def __init__(  # noqa: PLR0915
+    def __init__(
         self,
         **kwargs,
     ):
@@ -2255,7 +2255,7 @@ class PrometheusLogger(CustomLogger):
             or _litellm_params_metadata.get("user_agent"),
         }
 
-    def set_llm_deployment_failure_metrics(self, request_kwargs: dict):  # noqa: PLR0915
+    def set_llm_deployment_failure_metrics(self, request_kwargs: dict):
         """
         Sets Failure metrics when an LLM API call fails
 

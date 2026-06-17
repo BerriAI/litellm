@@ -726,7 +726,7 @@ def _key_metadata(
     return KeyMetadata(key_alias=meta.get("key_alias"), team_id=meta.get("team_id"))
 
 
-def _aggregate_grouping_sets_records_sync(  # noqa: PLR0915
+def _aggregate_grouping_sets_records_sync(
     *,
     records: List[Any],
     api_key_metadata: Dict[str, Dict[str, Any]],
