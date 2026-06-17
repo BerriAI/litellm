@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
+    CallTypes,
     ChatCompletionMessageToolCall,
     CostBreakdown,
     Function,
@@ -187,6 +188,31 @@ def _normalize_team_metadata_keys(value: Any) -> List[str]:
     if isinstance(value, str):
         return [item.strip() for item in value.split(",") if item.strip()]
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _response_obj_as_mapping(response_obj: Optional[Any]) -> Optional[Dict[str, Any]]:
+    """Return a dict view of ``response_obj`` for the OTEL attribute writers.
+
+    Chat-completions and Responses-API responses already behave like dicts.
+    MCP tool calls pass ``mcp.types.CallToolResult`` (a Pydantic model with no
+    ``.get``); without coercion every ``response_obj.get(...)`` in
+    ``set_attributes`` raises ``AttributeError`` and the span loses its output
+    attributes (issue #30651). ``model_dump`` is the documented way to
+    flatten a Pydantic ``BaseModel`` to a dict.
+    """
+    if response_obj is None:
+        return None
+    if isinstance(response_obj, dict):
+        return response_obj
+    model_dump = getattr(response_obj, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump()
+        except Exception:
+            return None
+        if isinstance(dumped, dict):
+            return dumped
+    return None
 
 
 @dataclass
@@ -1461,6 +1487,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         return attrs
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
+        response_obj = _response_obj_as_mapping(response_obj)
         duration_s = (end_time - start_time).total_seconds()
         params = kwargs.get("litellm_params") or {}
         provider = params.get("custom_llm_provider", "Unknown")
@@ -2233,6 +2260,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if standard_logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
 
+            response_obj = _response_obj_as_mapping(response_obj)
+
             # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
             # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
             #############################################
@@ -2574,6 +2603,34 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                             key=SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS.value,
                             value=safe_dumps([status]),
                         )
+
+                elif (
+                    standard_logging_payload.get("call_type")
+                    == CallTypes.call_mcp_tool.value
+                ):
+                    # mcp.types.CallToolResult (dict-coerced above): captures
+                    # the tool output that the chat / responses branches miss.
+                    content = response_obj.get("content")
+                    if content is not None:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value,
+                            value=safe_dumps(content),
+                        )
+                    structured = response_obj.get("structuredContent")
+                    if structured is not None:
+                        self.safe_set_attribute(
+                            span=span,
+                            key="gen_ai.mcp.tool_call.structured_content",
+                            value=safe_dumps(structured),
+                        )
+                    self.safe_set_attribute(
+                        span=span,
+                        key=SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS.value,
+                        value=safe_dumps(
+                            ["error"] if response_obj.get("isError") else ["stop"]
+                        ),
+                    )
 
         except Exception as e:
             self.handle_callback_failure(

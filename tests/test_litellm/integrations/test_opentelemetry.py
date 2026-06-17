@@ -385,6 +385,104 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         assert ("gen_ai.cost.original_cost", 0.004) not in call_args_list
 
 
+class TestOpenTelemetryMCPToolCall(unittest.TestCase):
+    """Regression coverage for issue #30651.
+
+    MCP tool calls hand ``set_attributes`` an ``mcp.types.CallToolResult``
+    (a Pydantic model with no ``.get``). Before the fix every
+    ``response_obj.get(...)`` in ``set_attributes`` raised ``AttributeError``,
+    the span lost every output attribute, and ``verbose_logger`` filled with
+    "OpenTelemetry logging error in set_attributes" lines.
+    """
+
+    def _mcp_kwargs(self):
+        return {
+            "model": "mcp-tool-call",
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "litellm_mcp"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "call_mcp_tool",
+                "metadata": {},
+            },
+        }
+
+    def test_set_attributes_does_not_raise_on_pydantic_call_tool_result(self):
+        try:
+            from mcp.types import CallToolResult, TextContent
+        except ImportError:
+            self.skipTest("mcp not installed")
+
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        result = CallToolResult(content=[TextContent(type="text", text="20")])
+
+        with patch(
+            "litellm.integrations.opentelemetry.verbose_logger"
+        ) as mock_logger:
+            otel.set_attributes(
+                span=mock_span, kwargs=self._mcp_kwargs(), response_obj=result
+            )
+
+        # The pre-fix failure mode was the exception being caught and logged
+        # via ``verbose_logger.exception`` after the AttributeError fired; if
+        # ``exception`` is ever called we have regressed.
+        assert not mock_logger.exception.called, (
+            "set_attributes raised on a Pydantic CallToolResult: "
+            f"{mock_logger.exception.call_args}"
+        )
+
+    def test_set_attributes_writes_tool_output_for_mcp_call_tool_result(self):
+        try:
+            from mcp.types import CallToolResult, TextContent
+        except ImportError:
+            self.skipTest("mcp not installed")
+
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        result = CallToolResult(
+            content=[TextContent(type="text", text="20")],
+            isError=False,
+        )
+
+        otel.set_attributes(
+            span=mock_span, kwargs=self._mcp_kwargs(), response_obj=result
+        )
+
+        recorded = {
+            call.args[0]: call.args[1]
+            for call in mock_span.set_attribute.call_args_list
+        }
+
+        assert "gen_ai.output.messages" in recorded
+        output_payload = json.loads(recorded["gen_ai.output.messages"])
+        assert output_payload[0].get("text") == "20"
+        assert json.loads(recorded["gen_ai.response.finish_reasons"]) == ["stop"]
+
+    def test_set_attributes_marks_failed_mcp_call_with_error_finish_reason(self):
+        try:
+            from mcp.types import CallToolResult, TextContent
+        except ImportError:
+            self.skipTest("mcp not installed")
+
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        result = CallToolResult(
+            content=[TextContent(type="text", text="boom")],
+            isError=True,
+        )
+
+        otel.set_attributes(
+            span=mock_span, kwargs=self._mcp_kwargs(), response_obj=result
+        )
+
+        recorded = {
+            call.args[0]: call.args[1]
+            for call in mock_span.set_attribute.call_args_list
+        }
+        assert json.loads(recorded["gen_ai.response.finish_reasons"]) == ["error"]
+
+
 class TestOpenTelemetryProviderInitialization(unittest.TestCase):
     """Test suite for verifying provider initialization respects existing providers"""
 
