@@ -33,7 +33,7 @@ def register_plugins_from_config(general_settings: dict) -> None:
             _plugin_registry[name] = plugin
 
 
-@router.get("/api/plugins", tags=["plugins"])
+@router.get("/api/plugins", tags=["plugins"], include_in_schema=False)
 async def list_plugins(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> list:
