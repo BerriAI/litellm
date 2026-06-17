@@ -308,8 +308,8 @@
     "slack": 90
   },
   "litellm/google_genai/streaming_iterator.py": {
-    "baseline": 56,
-    "slack": 28
+    "baseline": 41,
+    "slack": 21
   },
   "litellm/images/main.py": {
     "baseline": 326,
