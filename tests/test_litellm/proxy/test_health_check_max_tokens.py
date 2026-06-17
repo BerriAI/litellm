@@ -473,3 +473,29 @@ def test_bedrock_prefix_strip_preserves_explicit_custom_llm_provider():
 
     assert updated["custom_llm_provider"] == "bedrock_converse"
     assert updated["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_threads_resolved_mode_to_ahealth_check():
+    """The resolved mode must reach `ahealth_check`, not just the params builder.
+
+    A Bedrock embedding deployment declared without an explicit `model_info.mode`
+    has to be probed with `mode="embedding"` so the call routes to the embedding
+    handler; if the resolution were dropped it would fall back to `chat`. This
+    also guards that the embedding params (no `max_tokens`, provider pinned) are
+    the ones actually handed to the probe.
+    """
+    fake_ahealth_check = AsyncMock(return_value={})
+    model = {
+        "litellm_params": {"model": "bedrock/amazon.titan-embed-text-v2:0"},
+        "model_info": {},
+    }
+
+    with patch.object(hc_module.litellm, "ahealth_check", fake_ahealth_check):
+        await hc_module._run_model_health_check(model)
+
+    assert fake_ahealth_check.call_args.kwargs["mode"] == "embedding"
+    probed_params = fake_ahealth_check.call_args.args[0]
+    assert "max_tokens" not in probed_params
+    assert probed_params["custom_llm_provider"] == "bedrock"
+    assert probed_params["model"] == "amazon.titan-embed-text-v2:0"
