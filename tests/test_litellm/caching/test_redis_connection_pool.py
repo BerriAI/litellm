@@ -164,13 +164,10 @@ def test_coerce_redis_kwargs_types_non_string_unchanged():
 
 
 def test_health_check_interval_from_env_is_int(monkeypatch):
-    """REDIS_HEALTH_CHECK_INTERVAL set as string env var must produce an int
-    on the Redis connection, so Redis can do float + int arithmetic for health checks."""
     monkeypatch.setenv("REDIS_HOST", "localhost")
     monkeypatch.setenv("REDIS_HEALTH_CHECK_INTERVAL", "30")
 
-    with patch("litellm._redis.get_redis_client"):
-        pool = get_redis_connection_pool()
+    pool = get_redis_connection_pool()
 
     assert pool is not None
     interval = pool.connection_kwargs.get("health_check_interval")
