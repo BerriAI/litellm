@@ -1,52 +1,43 @@
 """
 Plugin proxy routes for litellm.
 
-Enables external services to register as plugins and be proxied through
-the litellm proxy server.
+Enables external services (e.g. litellm-agent-platform) to register as plugins
+and be proxied through the litellm proxy server.
 
 Config (in litellm config.yaml general_settings):
   plugins:
-    - name: my-plugin
+    - name: litellm-platform-plugin
       url: "http://localhost:3210"
-      display_name: "My Plugin"
-      plugin_key: "sk-..."   # optional: plugin's own auth key
+      display_name: "Agent Control Plane"
 """
 
-from fastapi import APIRouter, Depends, Request, Response
-
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+import httpx
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import StreamingResponse
+import asyncio
 
 router = APIRouter()
 
 # In-memory plugin registry — populated from general_settings at startup
-_plugin_registry: dict = {}
+_plugin_registry: dict[str, dict] = {}
 
 
 def register_plugins_from_config(general_settings: dict) -> None:
-    """Replace the plugin registry from general_settings.
-
-    Replaces (not merges) so plugins removed from config are immediately
-    unreachable without requiring a process restart.
-    """
-    _plugin_registry.clear()
-    for plugin in general_settings.get("plugins", []):
+    """Call at startup to load plugin config from general_settings."""
+    plugins = general_settings.get("plugins", [])
+    for plugin in plugins:
         name = plugin.get("name")
         if name:
             _plugin_registry[name] = plugin
 
 
 @router.get("/api/plugins", tags=["plugins"])
-async def list_plugins(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> list:
-    """Return registered plugins for authenticated UI callers.
+async def list_plugins(request: Request) -> list[dict]:
+    """Return registered plugins for UI discovery.
 
-    plugin_key is only returned to proxy admins — not to regular users —
-    so plugin credentials cannot be extracted by non-admin callers.
+    plugin_key is only returned to authenticated requests (Authorization header present).
     """
-    is_admin = getattr(user_api_key_dict, "user_role", None) == "proxy_admin"
+    authed = bool(request.headers.get("Authorization") or request.cookies.get("token"))
     result = []
     for name, plugin in _plugin_registry.items():
         entry: dict = {
@@ -54,7 +45,7 @@ async def list_plugins(
             "display_name": plugin.get("display_name", name),
             "url": plugin.get("url", ""),
         }
-        if is_admin and plugin.get("plugin_key"):
+        if authed and plugin.get("plugin_key"):
             entry["plugin_key"] = plugin["plugin_key"]
         result.append(entry)
     return result
@@ -66,13 +57,8 @@ async def list_plugins(
     tags=["plugins"],
     include_in_schema=False,
 )
-async def plugin_proxy(
-    plugin_name: str,
-    path: str,
-    request: Request,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> Response:
-    """Authenticated reverse-proxy to a registered plugin backend."""
+async def plugin_proxy(plugin_name: str, path: str, request: Request) -> Response:
+    """Reverse-proxy any request to the registered plugin's backend."""
     plugin = _plugin_registry.get(plugin_name)
     if not plugin:
         return Response(
@@ -87,34 +73,28 @@ async def plugin_proxy(
 
     body = await request.body()
 
+    # Forward headers, strip hop-by-hop
     forward_headers = {
         k: v
         for k, v in request.headers.items()
         if k.lower()
-        not in {
-            "host",
-            "connection",
-            "transfer-encoding",
-            "te",
-            "trailers",
-            "upgrade",
-        }
+        not in {"host", "connection", "transfer-encoding", "te", "trailers", "upgrade"}
     }
 
-    handler = get_async_httpx_client(llm_provider=None)
-    try:
-        req = handler.client.build_request(
-            method=request.method,
-            url=target_url,
-            headers=forward_headers,
-            content=body,
-        )
-        resp = await handler.client.send(req, follow_redirects=True)
-    except Exception:
-        return Response(
-            content=f"Cannot connect to plugin '{plugin_name}' at {plugin['url']}",
-            status_code=502,
-        )
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            resp = await client.request(
+                method=request.method,
+                url=target_url,
+                headers=forward_headers,
+                content=body,
+                follow_redirects=True,
+            )
+        except httpx.ConnectError:
+            return Response(
+                content=f"Cannot connect to plugin '{plugin_name}' at {plugin['url']}",
+                status_code=502,
+            )
 
     return Response(
         content=resp.content,

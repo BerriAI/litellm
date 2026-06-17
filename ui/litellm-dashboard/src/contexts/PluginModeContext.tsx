@@ -1,7 +1,6 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
 
 export type PluginMode = "ai-gateway" | "litellm-platform-plugin";
@@ -42,25 +41,26 @@ const PluginModeContext = createContext<PluginModeContextValue>({
 });
 
 const STORAGE_KEY = "litellm_plugin_mode";
-const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
-
-function readStoredMode(): PluginMode {
-  if (typeof window === "undefined") return "ai-gateway";
-  const stored = localStorage.getItem(STORAGE_KEY) as PluginMode | null;
-  return stored === "litellm-platform-plugin" || stored === "ai-gateway" ? stored : "ai-gateway";
-}
 
 export function PluginModeProvider({ children }: { children: React.ReactNode }) {
-  // Lazy initializer reads localStorage once — no setState in effect
-  const [mode, setModeState] = useState<PluginMode>(readStoredMode);
+  const [mode, setModeState] = useState<PluginMode>("ai-gateway");
   const [pluginKey, setPluginKey] = useState<string | null>(null);
   const [agentPlatformUrl, setAgentPlatformUrl] = useState<string>("");
   const [agentPlatformPath, setAgentPlatformPath] = useState<string>("/sessions");
 
   useEffect(() => {
-    const token = document.cookie.match(/token=([^;]+)/)?.[1] ?? localStorage.getItem("token") ?? "";
-    pluginApiClient
-      .get("/api/plugins", { accessToken: token })
+    const stored = localStorage.getItem(STORAGE_KEY) as PluginMode | null;
+    if (stored === "litellm-platform-plugin" || stored === "ai-gateway") {
+      setModeState(stored);
+    }
+
+    // Fetch plugin registry to get plugin_key and url
+    const base = getProxyBaseUrl() ?? "";
+    fetch(`${base}/api/plugins`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${document.cookie.match(/token=([^;]+)/)?.[1] ?? ""}` },
+    })
+      .then((r) => r.json())
       .then((plugins: Plugin[]) => {
         const lap = plugins.find((p) => p.name === "litellm-platform-plugin");
         if (lap) {
@@ -77,16 +77,7 @@ export function PluginModeProvider({ children }: { children: React.ReactNode }) 
   };
 
   return (
-    <PluginModeContext.Provider
-      value={{
-        mode,
-        setMode,
-        pluginKey,
-        agentPlatformUrl,
-        agentPlatformPath,
-        setAgentPlatformPath,
-      }}
-    >
+    <PluginModeContext.Provider value={{ mode, setMode, pluginKey, agentPlatformUrl, agentPlatformPath, setAgentPlatformPath }}>
       {children}
     </PluginModeContext.Provider>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useState, useRef, useEffect } from "react";
+import React, { Suspense, useState } from "react";
 import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -14,22 +14,6 @@ import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext"
 function AgentControlPlaneView() {
   const { agentPlatformUrl, agentPlatformPath } = usePluginMode();
   const { accessToken } = useAuth();
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-
-  // Send auth token via postMessage after iframe loads — avoids exposing the
-  // token in the URL (browser history, server logs, Referer headers).
-  useEffect(() => {
-    const iframe = iframeRef.current;
-    if (!iframe || !accessToken || !agentPlatformUrl) return;
-    const send = () => {
-      iframe.contentWindow?.postMessage(
-        { type: "litellm-auth", token: accessToken },
-        agentPlatformUrl, // targetOrigin — only the configured plugin receives this
-      );
-    };
-    iframe.addEventListener("load", send);
-    return () => iframe.removeEventListener("load", send);
-  }, [accessToken, agentPlatformUrl]);
 
   if (!agentPlatformUrl) {
     return (
@@ -42,10 +26,14 @@ function AgentControlPlaneView() {
     );
   }
 
+  // Pass the user's litellm virtual key — LAP validates it against litellm's /key/info.
+  // This propagates litellm's user hierarchy (role, team, budget) into the agent control plane.
+  const params = accessToken ? `?token=${encodeURIComponent(accessToken)}` : "";
+  const iframeSrc = `${agentPlatformUrl}${agentPlatformPath}${params}`;
+
   return (
     <iframe
-      ref={iframeRef}
-      src={`${agentPlatformUrl}${agentPlatformPath}`}
+      src={iframeSrc}
       style={{
         width: "100%",
         height: "100%",
