@@ -39,8 +39,9 @@ export const MIGRATED_PAGES: Record<string, string> = {
   "admin-panel": "admin-panel",
   "logging-and-alerts": "logging-and-alerts",
   "model-hub-table": "model-hub-table",
-  // The modern usage dashboard; the old ?page=usage report stays on the legacy switch.
+  // The modern usage dashboard; the legacy ?page=usage report routes to /old-usage.
   new_usage: "usage",
+  usage: "old-usage",
   agents: "agents",
   "router-settings": "router-settings",
   users: "users",
