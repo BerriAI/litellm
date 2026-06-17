@@ -41,11 +41,7 @@ const ensureConfig = (config?: ToolPermissionConfig): ToolPermissionConfig => ({
   rules: config?.rules ? [...config.rules] : [],
 });
 
-const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
-  value,
-  onChange,
-  disabled = false,
-}) => {
+const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ value, onChange, disabled = false }) => {
   const config = ensureConfig(value);
 
   const updateConfig = (partial: Partial<ToolPermissionConfig>) => {
@@ -57,9 +53,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
   };
 
   const updateRule = (ruleIndex: number, updates: Partial<ToolPermissionRuleConfig>) => {
-    const nextRules = config.rules.map((rule, index) =>
-      index === ruleIndex ? { ...rule, ...updates } : rule,
-    );
+    const nextRules = config.rules.map((rule, index) => (index === ruleIndex ? { ...rule, ...updates } : rule));
     updateConfig({ rules: nextRules });
   };
 
@@ -80,10 +74,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
     updateConfig({ rules: nextRules });
   };
 
-  const updateAllowedParamEntries = (
-    ruleIndex: number,
-    mutate: (entries: [string, string][]) => void,
-  ) => {
+  const updateAllowedParamEntries = (ruleIndex: number, mutate: (entries: [string, string][]) => void) => {
     const targetRule = config.rules[ruleIndex];
     if (!targetRule) {
       return;
@@ -95,16 +86,11 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
       updatedObject[key] = value;
     });
     updateRule(ruleIndex, {
-      allowed_param_patterns:
-        Object.keys(updatedObject).length > 0 ? updatedObject : undefined,
+      allowed_param_patterns: Object.keys(updatedObject).length > 0 ? updatedObject : undefined,
     });
   };
 
-  const updateAllowedParamPath = (
-    ruleIndex: number,
-    entryIndex: number,
-    nextPath: string,
-  ) => {
+  const updateAllowedParamPath = (ruleIndex: number, entryIndex: number, nextPath: string) => {
     updateAllowedParamEntries(ruleIndex, (entries) => {
       if (!entries[entryIndex]) {
         return;
@@ -114,11 +100,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
     });
   };
 
-  const updateAllowedParamPattern = (
-    ruleIndex: number,
-    entryIndex: number,
-    pattern: string,
-  ) => {
+  const updateAllowedParamPattern = (ruleIndex: number, entryIndex: number, pattern: string) => {
     updateAllowedParamEntries(ruleIndex, (entries) => {
       if (!entries[entryIndex]) {
         return;
@@ -195,8 +177,8 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
         <div>
           <Text className="text-lg font-semibold">LiteLLM Tool Permission Guardrail</Text>
           <Text className="text-sm text-gray-500">
-            Provide regex patterns (e.g., ^mcp__github_.*$) for tool names or types and optionally
-            constrain payload fields.
+            Provide regex patterns (e.g., ^mcp__github_.*$) for tool names or types and optionally constrain payload
+            fields.
           </Text>
         </div>
         {!disabled && (
@@ -315,9 +297,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
           <Select
             disabled={disabled}
             value={config.on_disallowed_action}
-            onChange={(value) =>
-              updateConfig({ on_disallowed_action: value as ToolPermissionOnDisallowedAction })
-            }
+            onChange={(value) => updateConfig({ on_disallowed_action: value as ToolPermissionOnDisallowedAction })}
           >
             <Select.Option value="block">Block</Select.Option>
             <Select.Option value="rewrite">Rewrite</Select.Option>

@@ -9,8 +9,15 @@ from pydantic.fields import FieldInfo
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.table_repositories import (
+    DailyTagSpendRepository,
+    SSOConfigRepository,
+    UISettingsRepository,
+)
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     InProductNudgeResponse,
@@ -18,6 +25,16 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 )
 
 router = APIRouter()
+
+# SSO secret fields returned by /get/sso_settings. These are masked on read so
+# the UI can show "(set)" without ever transporting the plaintext OAuth secret
+# off the server, matching the write-once + masked-on-read contract used for
+# the HashiCorp Vault config override.
+_SSO_SENSITIVE_FIELDS: Set[str] = {
+    "google_client_secret",
+    "microsoft_client_secret",
+    "generic_client_secret",
+}
 
 
 class IPAddress(BaseModel):
@@ -99,6 +116,11 @@ class UISettings(BaseModel):
         description="If true, requires authentication for accessing the public AI Hub.",
     )
 
+    allow_public_health_readiness_details: bool = Field(
+        default=False,
+        description="If true, returns the legacy detailed payload from the unauthenticated /health/readiness endpoint.",
+    )
+
     forward_client_headers_to_llm_api: bool = Field(
         default=False,
         description=(
@@ -156,6 +178,11 @@ class UISettings(BaseModel):
         description="If true, org admins cannot generate API keys via /key/generate.",
     )
 
+    disable_ui_nudges: bool = Field(
+        default=False,
+        description="If true, suppresses in-product UI nudges (survey and Claude Code feedback popups) for all users.",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -169,6 +196,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
+    "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
@@ -178,11 +206,13 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "scope_user_search_to_org",
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
+    "disable_ui_nudges",
 }
 
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS = [
+    "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
@@ -647,7 +677,7 @@ async def get_sso_settings():
         )
 
     # Get SSO config from dedicated table
-    sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+    sso_db_record = await SSOConfigRepository(prisma_client).table.find_unique(
         where={"id": "sso_config"}
     )
 
@@ -721,8 +751,9 @@ async def get_sso_settings():
 
     schema = TypeAdapter(SSOConfig).json_schema(by_alias=True)
 
-    # Convert to dict for response
-    sso_dict = sso_config.model_dump()
+    # Convert to dict for response, masking OAuth client secrets so plaintext
+    # is never sent to the UI.
+    sso_dict = mask_sensitive_keys(sso_config.model_dump(), _SSO_SENSITIVE_FIELDS)
 
     # Add descriptions to the response
     result = {
@@ -817,7 +848,7 @@ async def update_sso_settings(sso_config: SSOConfig):
     )
 
     # Save to dedicated SSO table
-    await prisma_client.db.litellm_ssoconfig.upsert(
+    await SSOConfigRepository(prisma_client).table.upsert(
         where={"id": "sso_config"},
         data={
             "create": {
@@ -832,7 +863,7 @@ async def update_sso_settings(sso_config: SSOConfig):
 
     # Remove SSO-related env vars from config.environment_variables
     try:
-        env_var_entry = await prisma_client.db.litellm_config.find_unique(
+        env_var_entry = await ConfigRepository(prisma_client).table.find_unique(
             where={"param_name": "environment_variables"}
         )
 
@@ -853,7 +884,7 @@ async def update_sso_settings(sso_config: SSOConfig):
                 if key not in env_vars_to_remove
             }
 
-            await prisma_client.db.litellm_config.update(
+            await ConfigRepository(prisma_client).table.update(
                 where={"param_name": "environment_variables"},
                 data={
                     "param_value": json.dumps(filtered_env_vars, default=str),
@@ -1104,7 +1135,7 @@ async def get_in_product_nudges():
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    db_record = await prisma_client.db.litellm_dailytagspend.find_first(
+    db_record = await DailyTagSpendRepository(prisma_client).table.find_first(
         where={"tag": "User-Agent: claude-cli"}
     )
 
@@ -1136,7 +1167,7 @@ async def get_ui_settings_cached() -> Dict[str, Any]:
     if prisma_client is None:
         return {}
 
-    db_record = await prisma_client.db.litellm_uisettings.find_unique(
+    db_record = await UISettingsRepository(prisma_client).table.find_unique(
         where={"id": "ui_settings"}
     )
     ui_settings: Dict[str, Any] = {}
@@ -1177,7 +1208,7 @@ async def get_ui_settings():
 
     ui_settings: Dict[str, Any] = {}
 
-    db_record = await prisma_client.db.litellm_uisettings.find_unique(
+    db_record = await UISettingsRepository(prisma_client).table.find_unique(
         where={"id": "ui_settings"}
     )
 
@@ -1290,7 +1321,7 @@ async def update_ui_settings(
     # Merge with existing persisted settings so a partial PATCH doesn't
     # overwrite fields the caller didn't send.
     existing: dict = {}
-    db_existing = await prisma_client.db.litellm_uisettings.find_unique(
+    db_existing = await UISettingsRepository(prisma_client).table.find_unique(
         where={"id": "ui_settings"}
     )
     if db_existing and db_existing.ui_settings:
@@ -1299,7 +1330,7 @@ async def update_ui_settings(
 
     ui_settings = {**existing, **incoming}
 
-    await prisma_client.db.litellm_uisettings.upsert(
+    await UISettingsRepository(prisma_client).table.upsert(
         where={"id": "ui_settings"},
         data={
             "create": {

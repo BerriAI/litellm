@@ -267,6 +267,7 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
                 api_base="http://localhost:9380",
                 litellm_logging_obj=logging_obj,
                 litellm_params={},
+                extra_body=None,
             )
 
     def test_transform_search_vector_store_response_not_implemented(self):

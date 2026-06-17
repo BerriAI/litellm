@@ -10,6 +10,8 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.types.proxy.cloudzero_endpoints import (
     CloudZeroExportRequest,
     CloudZeroExportResponse,
@@ -52,7 +54,7 @@ async def _set_cloudzero_settings(api_key: str, connection_id: str, timezone: st
         "timezone": timezone,
     }
 
-    await prisma_client.db.litellm_config.upsert(
+    await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "cloudzero_settings"},
         data={
             "create": {
@@ -79,7 +81,7 @@ async def _get_cloudzero_settings():
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    cloudzero_config = await prisma_client.db.litellm_config.find_first(
+    cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
         where={"param_name": "cloudzero_settings"}
     )
     if cloudzero_config is None or cloudzero_config.param_value is None:
@@ -127,10 +129,10 @@ async def get_cloudzero_settings(
     Only the first 4 and last 4 characters of the API key are shown.
     Returns null/empty values when settings are not configured (consistent with other settings endpoints).
 
-    Only admin users can view CloudZero settings.
+    Only admin users (Proxy Admin or Admin Viewer) can view CloudZero settings.
     """
-    # Validation
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Validation — Admin Viewer follows the read-parity rule.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -281,7 +283,7 @@ async def is_cloudzero_setup_in_db() -> bool:
             return False
 
         # Check for CloudZero settings in database
-        cloudzero_config = await prisma_client.db.litellm_config.find_first(
+        cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
             where={"param_name": "cloudzero_settings"}
         )
 
@@ -547,7 +549,7 @@ async def delete_cloudzero_settings(
             )
 
         # Check if CloudZero settings exist
-        cloudzero_config = await prisma_client.db.litellm_config.find_first(
+        cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
             where={"param_name": "cloudzero_settings"}
         )
 
@@ -559,7 +561,7 @@ async def delete_cloudzero_settings(
 
         # Delete only the CloudZero settings entry
         # This uses a specific where clause to target only the cloudzero_settings row
-        await prisma_client.db.litellm_config.delete(
+        await ConfigRepository(prisma_client).table.delete(
             where={"param_name": "cloudzero_settings"}
         )
 

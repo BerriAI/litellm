@@ -28,14 +28,10 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
   isLoading = false,
   progressInfo,
 }) => {
-  const [selectedGuardrails, setSelectedGuardrails] = useState<Set<string>>(
-    new Set()
-  );
+  const [selectedGuardrails, setSelectedGuardrails] = useState<Set<string>>(new Set());
 
   // Prepare guardrail info with existence status
-  const guardrailsInfo: GuardrailInfo[] = (
-    template?.guardrailDefinitions || []
-  ).map((def: any) => ({
+  const guardrailsInfo: GuardrailInfo[] = (template?.guardrailDefinitions || []).map((def: any) => ({
     guardrail_name: def.guardrail_name,
     description: def.guardrail_info?.description || "No description available",
     alreadyExists: existingGuardrails.has(def.guardrail_name),
@@ -45,9 +41,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
   // Initialize selection: select only new guardrails by default
   useEffect(() => {
     if (visible && template) {
-      const newGuardrails = guardrailsInfo
-        .filter((g) => !g.alreadyExists)
-        .map((g) => g.guardrail_name);
+      const newGuardrails = guardrailsInfo.filter((g) => !g.alreadyExists).map((g) => g.guardrail_name);
       setSelectedGuardrails(new Set(newGuardrails));
     }
   }, [visible, template]);
@@ -65,9 +59,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
   };
 
   const handleSelectAll = () => {
-    const allNew = guardrailsInfo
-      .filter((g) => !g.alreadyExists)
-      .map((g) => g.guardrail_name);
+    const allNew = guardrailsInfo.filter((g) => !g.alreadyExists).map((g) => g.guardrail_name);
     setSelectedGuardrails(new Set(allNew));
   };
 
@@ -82,9 +74,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
     onConfirm(selectedDefinitions);
   };
 
-  const newGuardrailsCount = guardrailsInfo.filter(
-    (g) => !g.alreadyExists
-  ).length;
+  const newGuardrailsCount = guardrailsInfo.filter((g) => !g.alreadyExists).length;
   const existingCount = guardrailsInfo.filter((g) => g.alreadyExists).length;
   const selectedCount = selectedGuardrails.size;
 
@@ -131,19 +121,13 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
           <InfoCircleOutlined className="text-blue-600 text-lg" />
           <div className="flex-1">
             <div className="text-sm">
-              <span className="font-medium text-gray-900">
-                {guardrailsInfo.length} total guardrails
-              </span>
+              <span className="font-medium text-gray-900">{guardrailsInfo.length} total guardrails</span>
               <span className="text-gray-600 mx-2">•</span>
-              <span className="text-green-600 font-medium">
-                {newGuardrailsCount} new
-              </span>
+              <span className="text-green-600 font-medium">{newGuardrailsCount} new</span>
               {existingCount > 0 && (
                 <>
                   <span className="text-gray-600 mx-2">•</span>
-                  <span className="text-gray-600">
-                    {existingCount} already exist
-                  </span>
+                  <span className="text-gray-600">{existingCount} already exist</span>
                 </>
               )}
             </div>
@@ -184,24 +168,18 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="font-mono text-sm font-medium text-gray-900">
-                      {guardrail.guardrail_name}
-                    </span>
+                    <span className="font-mono text-sm font-medium text-gray-900">{guardrail.guardrail_name}</span>
                     {guardrail.alreadyExists && (
                       <Tag color="green" className="text-xs">
                         Already exists
                       </Tag>
                     )}
                   </div>
-                  <p className="text-sm text-gray-600">
-                    {guardrail.description}
-                  </p>
-                  
+                  <p className="text-sm text-gray-600">{guardrail.description}</p>
+
                   {/* Show guardrail type and mode */}
                   <div className="flex gap-2 mt-2">
-                    <Tag className="text-xs">
-                      {guardrail.definition?.litellm_params?.guardrail || "unknown"}
-                    </Tag>
+                    <Tag className="text-xs">{guardrail.definition?.litellm_params?.guardrail || "unknown"}</Tag>
                     <Tag className="text-xs" color="blue">
                       {guardrail.definition?.litellm_params?.mode || "unknown"}
                     </Tag>
@@ -225,9 +203,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
         {guardrailsInfo.length === 0 && (
           <div className="text-center py-8 text-gray-500">
             <p>No guardrails defined for this template.</p>
-            <p className="text-sm mt-2">
-              This template will use existing guardrails in your system.
-            </p>
+            <p className="text-sm mt-2">This template will use existing guardrails in your system.</p>
           </div>
         )}
 
@@ -262,16 +238,15 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
         <div className="text-sm text-gray-600">
           {selectedCount > 0 ? (
             <p>
-              <span className="font-medium text-gray-900">{selectedCount}</span>{" "}
-              guardrail{selectedCount > 1 ? "s" : ""} will be created
+              <span className="font-medium text-gray-900">{selectedCount}</span> guardrail{selectedCount > 1 ? "s" : ""}{" "}
+              will be created
             </p>
           ) : existingCount > 0 ? (
-            <p className="text-green-600">
-              All guardrails already exist. You can proceed to use this template.
-            </p>
+            <p className="text-green-600">All guardrails already exist. You can proceed to use this template.</p>
           ) : (
             <p className="text-orange-600">
-              Select at least one guardrail to create, or click &quot;Use Template&quot; to proceed without creating new guardrails.
+              Select at least one guardrail to create, or click &quot;Use Template&quot; to proceed without creating new
+              guardrails.
             </p>
           )}
         </div>

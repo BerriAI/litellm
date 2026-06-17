@@ -23,6 +23,13 @@ def _raise_env_reference_error(param: str, *, source: str) -> None:
     )
 
 
+def validate_no_callback_env_reference(
+    param: str, value: object, *, source: str
+) -> None:
+    if _is_env_reference(value):
+        _raise_env_reference_error(param, source=source)
+
+
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
 _supported_callback_params = [
     "langfuse_public_key",
@@ -30,8 +37,6 @@ _supported_callback_params = [
     "langfuse_secret_key",
     "langfuse_host",
     "langfuse_prompt_version",
-    "gcs_bucket_name",
-    "gcs_path_service_account",
     "langsmith_api_key",
     "langsmith_project",
     "langsmith_base_url",
@@ -48,7 +53,20 @@ _supported_callback_params = [
     "braintrust_host",
     "slack_webhook_url",
     "lunary_public_key",
+    "dd_api_key",
+    "dd_site",
+    "dd_agent_host",
+    "dd_agent_port",
 ]
+
+_request_blocked_callback_params = {
+    "gcs_bucket_name",
+    "gcs_path_service_account",
+    "dd_api_key",
+    "dd_site",
+    "dd_agent_host",
+    "dd_agent_port",
+}
 
 
 def initialize_standard_callback_dynamic_params(
@@ -57,17 +75,20 @@ def initialize_standard_callback_dynamic_params(
     """
     Initialize the standard callback dynamic params from the kwargs
 
-    checks if langfuse_secret_key, gcs_bucket_name in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
+    checks supported request callback params in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
     """
 
     standard_callback_dynamic_params = StandardCallbackDynamicParams()
     if kwargs:
         # 1. Check top-level kwargs
         for param in _supported_callback_params:
+            if param in _request_blocked_callback_params:
+                continue
             if param in kwargs:
                 _param_value = kwargs.get(param)
-                if _is_env_reference(_param_value):
-                    _raise_env_reference_error(param, source="request body")
+                validate_no_callback_env_reference(
+                    param, _param_value, source="request body"
+                )
                 standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
         # 2. Fallback: check "metadata" or "litellm_params" -> "metadata"
@@ -78,10 +99,13 @@ def initialize_standard_callback_dynamic_params(
 
         if isinstance(metadata, dict):
             for param in _supported_callback_params:
+                if param in _request_blocked_callback_params:
+                    continue
                 if param not in standard_callback_dynamic_params and param in metadata:
                     _param_value = metadata.get(param)
-                    if _is_env_reference(_param_value):
-                        _raise_env_reference_error(param, source="metadata")
+                    validate_no_callback_env_reference(
+                        param, _param_value, source="metadata"
+                    )
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
     return standard_callback_dynamic_params

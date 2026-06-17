@@ -24,6 +24,12 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     regenerate_key_fn,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import (
+    DeprecatedVerificationTokenRepository,
+)
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 
 
 class KeyRotationManager:
@@ -124,20 +130,20 @@ class KeyRotationManager:
         """
         now = datetime.now(timezone.utc)
 
-        keys_with_rotation = (
-            await self.prisma_client.db.litellm_verificationtoken.find_many(
-                where={
-                    "auto_rotate": True,  # Only keys marked for auto rotation
-                    "OR": [
-                        {
-                            "key_rotation_at": None
-                        },  # Keys that need initial rotation time setup
-                        {
-                            "key_rotation_at": {"lte": now}
-                        },  # Keys where rotation time has passed
-                    ],
-                }
-            )
+        keys_with_rotation = await VerificationTokenRepository(
+            self.prisma_client
+        ).table.find_many(
+            where={
+                "auto_rotate": True,  # Only keys marked for auto rotation
+                "OR": [
+                    {
+                        "key_rotation_at": None
+                    },  # Keys that need initial rotation time setup
+                    {
+                        "key_rotation_at": {"lte": now}
+                    },  # Keys where rotation time has passed
+                ],
+            }
         )
 
         return keys_with_rotation
@@ -148,9 +154,9 @@ class KeyRotationManager:
         """
         try:
             now = datetime.now(timezone.utc)
-            result = await self.prisma_client.db.litellm_deprecatedverificationtoken.delete_many(
-                where={"revoke_at": {"lt": now}}
-            )
+            result = await DeprecatedVerificationTokenRepository(
+                self.prisma_client
+            ).table.delete_many(where={"revoke_at": {"lt": now}})
             if result > 0:
                 verbose_proxy_logger.debug(
                     "Cleaned up %s expired deprecated key(s)", result
@@ -206,7 +212,7 @@ class KeyRotationManager:
             # Calculate next rotation time using helper function
             now = datetime.now(timezone.utc)
             next_rotation_time = _calculate_key_rotation_time(key.rotation_interval)
-            await self.prisma_client.db.litellm_verificationtoken.update(
+            await VerificationTokenRepository(self.prisma_client).table.update(
                 where={"token": response.token_id},
                 data={
                     "rotation_count": (key.rotation_count or 0) + 1,

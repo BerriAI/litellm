@@ -198,7 +198,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "us_ssn" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
@@ -454,6 +454,71 @@ class TestContentFilterGuardrail:
         assert "Contact me at [EMAIL_REDACTED] for info" in full_content
 
     @pytest.mark.asyncio
+    async def test_streaming_hook_mask_checks_all_choices(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-mask-all-choices",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.during_call,
+        )
+
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="chunk1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Contact first@ex"),
+                        index=0,
+                    ),
+                    StreamingChoices(
+                        delta=Delta(content="Email second@ex"),
+                        index=1,
+                    ),
+                ],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="chunk2",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="ample.com for help"),
+                        index=0,
+                        finish_reason="stop",
+                    ),
+                    StreamingChoices(
+                        delta=Delta(content="ample.com for support"),
+                        index=1,
+                        finish_reason="stop",
+                    ),
+                ],
+                model="gpt-4",
+            )
+
+        content_by_choice = {0: "", 1: ""}
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=mock_stream(),
+            request_data={},
+        ):
+            for choice in chunk.choices:
+                if choice.delta.content:
+                    content_by_choice[choice.index] += choice.delta.content
+
+        assert "first@example.com" not in content_by_choice[0]
+        assert "second@example.com" not in content_by_choice[1]
+        assert content_by_choice[0] == "Contact [EMAIL_REDACTED] for help"
+        assert content_by_choice[1] == "Email [EMAIL_REDACTED] for support"
+
+    @pytest.mark.asyncio
     async def test_streaming_hook_block(self):
         """
         Test streaming hook with BLOCK action
@@ -498,7 +563,7 @@ class TestContentFilterGuardrail:
             ):
                 pass
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "us_ssn" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
@@ -945,7 +1010,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "danger_word" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
@@ -1233,7 +1298,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         detail = exc_info.value.detail
         if isinstance(detail, dict):
             assert detail.get("category") == "harm_toxic_abuse"
@@ -1262,7 +1327,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         detail = exc_info.value.detail
         if isinstance(detail, dict):
             assert detail.get("category") == "harm_toxic_abuse"
@@ -1310,7 +1375,7 @@ class TestContentFilterGuardrail:
                     input_type="request",
                 )
 
-            assert exc_info.value.status_code == 403, f"Failed to block: '{test_input}'"
+            assert exc_info.value.status_code == 400, f"Failed to block: '{test_input}'"
             detail = exc_info.value.detail
             if isinstance(detail, dict):
                 assert detail.get("category") == "harm_toxic_abuse"
@@ -1378,7 +1443,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "te*st" in str(exc_info.value.detail)
 
     def test_check_category_keywords_asterisk_pattern_matching(self):
@@ -1445,7 +1510,7 @@ class TestContentFilterGuardrail:
                     input_type="request",
                 )
 
-            assert exc_info.value.status_code == 403, f"Failed to block: '{test_input}'"
+            assert exc_info.value.status_code == 400, f"Failed to block: '{test_input}'"
             detail = exc_info.value.detail
             if isinstance(detail, dict):
                 assert detail.get("category") == "harm_toxic_abuse"
@@ -1495,7 +1560,7 @@ class TestContentFilterGuardrail:
                     input_type="request",
                 )
 
-            assert exc_info.value.status_code == 403, f"Failed to block: '{test_input}'"
+            assert exc_info.value.status_code == 400, f"Failed to block: '{test_input}'"
             detail = exc_info.value.detail
             if isinstance(detail, dict):
                 assert detail.get("category") == "harm_toxic_abuse"
@@ -1581,7 +1646,7 @@ class TestContentFilterGuardrail:
                 )
 
             assert (
-                exc_info.value.status_code == 403
+                exc_info.value.status_code == 400
             ), f"Failed to block Spanish: '{test_input}'"
 
     @pytest.mark.asyncio
@@ -1618,7 +1683,7 @@ class TestContentFilterGuardrail:
                 )
 
             assert (
-                exc_info.value.status_code == 403
+                exc_info.value.status_code == 400
             ), f"Failed to block French: '{test_input}'"
 
     @pytest.mark.asyncio
@@ -1655,7 +1720,7 @@ class TestContentFilterGuardrail:
                 )
 
             assert (
-                exc_info.value.status_code == 403
+                exc_info.value.status_code == 400
             ), f"Failed to block German: '{test_input}'"
 
     @pytest.mark.asyncio
@@ -1701,7 +1766,7 @@ class TestContentFilterGuardrail:
                 )
 
             assert (
-                exc_info.value.status_code == 403
+                exc_info.value.status_code == 400
             ), f"Failed to block Australian: '{test_input}'"
 
     async def test_html_tags_in_messages_not_blocked(self):
@@ -1877,7 +1942,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "harmful_child_safety" in str(exc_info.value.detail)
 
         # Test case 2: Should BLOCK - identifier + block word combination
@@ -1891,7 +1956,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 3: Should BLOCK - explicit content + minors
         with pytest.raises(HTTPException) as exc_info:
@@ -1902,7 +1967,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 4: Should NOT block - identifier word alone (no block word)
         result = await guardrail.apply_guardrail(
@@ -1944,7 +2009,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_conditional_category_sentence_boundaries(self):
@@ -2028,7 +2093,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "bias_racial" in str(exc_info.value.detail)
 
         # Test case 2: Should BLOCK - identifier + dehumanizing language
@@ -2042,7 +2107,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 3: Should BLOCK - supremacist content
         with pytest.raises(HTTPException) as exc_info:
@@ -2055,7 +2120,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 4: Should BLOCK - elimination rhetoric
         with pytest.raises(HTTPException) as exc_info:
@@ -2068,7 +2133,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 5: Should NOT block - identifier word alone (no block word)
         result = await guardrail.apply_guardrail(
@@ -2106,7 +2171,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 9: Should NOT block - block word alone (no identifier)
         result = await guardrail.apply_guardrail(

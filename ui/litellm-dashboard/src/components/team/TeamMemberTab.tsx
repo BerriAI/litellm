@@ -137,7 +137,9 @@ export default function TeamMemberTab({
         return (
           <Space wrap>
             {displayed.map((m) => (
-              <Typography.Text key={m} code style={{ fontSize: "12px" }}>{m}</Typography.Text>
+              <Typography.Text key={m} code style={{ fontSize: "12px" }}>
+                {m}
+              </Typography.Text>
             ))}
             {remaining > 0 && (
               <Tooltip title={models.slice(2).join(", ")}>
@@ -182,9 +184,7 @@ export default function TeamMemberTab({
       render: (_: unknown, record: Member) => {
         const budget = getUserBudget(record.user_id);
         return (
-          <Typography.Text>
-            {budget ? `$${formatNumberWithCommas(Number(budget), 4)}` : "No Limit"}
-          </Typography.Text>
+          <Typography.Text>{budget ? `$${formatNumberWithCommas(Number(budget), 4)}` : "No Limit"}</Typography.Text>
         );
       },
     },
@@ -210,9 +210,7 @@ export default function TeamMemberTab({
         </Space>
       ),
       key: "rate_limits",
-      render: (_: unknown, record: Member) => (
-        <Typography.Text>{getUserRateLimits(record.user_id)}</Typography.Text>
-      ),
+      render: (_: unknown, record: Member) => <Typography.Text>{getUserRateLimits(record.user_id)}</Typography.Text>,
     },
   ];
 
@@ -227,6 +225,7 @@ export default function TeamMemberTab({
           onSearch={(v) => { setSearchText(v); setMemberTablePage(1); }}
         />
         <Select
+          aria-label="Filter by role"
           placeholder="Filter by role"
           allowClear
           style={{ width: 160 }}
@@ -251,6 +250,7 @@ export default function TeamMemberTab({
             max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
             tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
             rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
+            budget_duration: membership?.litellm_budget_table?.budget_duration || null,
             allowed_models: membership?.litellm_budget_table?.allowed_models || [],
           };
           setSelectedEditMember(enhancedMember);

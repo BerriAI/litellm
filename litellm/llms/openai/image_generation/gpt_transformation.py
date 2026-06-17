@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 class GPTImageGenerationConfig(BaseImageGenerationConfig):
     """
-    OpenAI gpt-image-1 image generation config
+    OpenAI gpt-image image generation config
     """
 
     def get_supported_openai_params(

@@ -10,7 +10,7 @@ image:
   repository: ghcr.io/berriai/litellm-database
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
-  # tag: "main-latest"
+  # tag: "latest"
   tag: ""
 
 imagePullSecrets: []
@@ -88,26 +88,20 @@ service:
   # optionally specify loadBalancerClass
   # loadBalancerClass: tailscale
 
-# Separate health app configuration
-# When enabled, health checks will use a separate port and the application
-# will receive SEPARATE_HEALTH_APP=1 and SEPARATE_HEALTH_PORT from environment variables
-separateHealthApp: false
-separateHealthPort: 8081
-
-# Probe tuning for proxy container
+# Probes for LiteLLM gateway container
 livenessProbe:
   path: /health/liveliness
   initialDelaySeconds: 0
-  periodSeconds: 10
-  timeoutSeconds: 1
+  periodSeconds: 15
+  timeoutSeconds: 5
   successThreshold: 1
-  failureThreshold: 3
+  failureThreshold: 5
 
 readinessProbe:
   path: /health/readiness
   initialDelaySeconds: 0
   periodSeconds: 10
-  timeoutSeconds: 1
+  timeoutSeconds: 5
   successThreshold: 1
   failureThreshold: 3
 
@@ -115,7 +109,7 @@ startupProbe:
   path: /health/readiness
   initialDelaySeconds: 0
   periodSeconds: 10
-  timeoutSeconds: 1
+  timeoutSeconds: 5
   successThreshold: 1
   failureThreshold: 30
 
@@ -190,6 +184,7 @@ autoscaling:
   maxReplicas: 100
   targetCPUUtilizationPercentage: 80
   # targetMemoryUtilizationPercentage: 80
+  # behavior: {}
 
 # Autoscaling with keda is mutually exclusive with hpa
 keda:
@@ -258,6 +253,26 @@ db:
     passwordKey: password
     # Optional: when set, DATABASE_HOST will be sourced from this secret key instead of db.endpoint
     endpointKey: ""
+    # Optional: when set, DATABASE_URL_READ_REPLICA will be sourced from this
+    # secret key instead of db.readReplicaUrl. Prefer this over the plain
+    # value: read-replica URLs typically embed credentials, and a value
+    # written to db.readReplicaUrl ends up visible in the rendered pod spec
+    # and the Helm release secret.
+    readReplicaUrlKey: ""
+
+  # Optional read-replica routing. When set, the proxy sends read-only
+  # queries (find_*, count, group_by, query_raw/_first) to this URL while
+  # writes continue to go to db.url. Useful for Aurora-style clusters with
+  # separate reader/writer endpoints. Leave empty to keep single-DB behavior.
+  # When IAM_TOKEN_DB_AUTH is enabled, the reader URL is auto-refreshed
+  # alongside the writer (host/port/user/db are parsed from this URL once
+  # at startup; only the IAM token rotates).
+  #
+  # If the URL embeds credentials, prefer db.secret.readReplicaUrlKey over
+  # this field — the plain value is rendered into the pod spec and the
+  # Helm release secret. This field is intended for credential-less URLs
+  # only (e.g. when IAM_TOKEN_DB_AUTH supplies the token at runtime).
+  readReplicaUrl: ""
 
   # Use the Stackgres Helm chart to deploy an instance of a Stackgres cluster.
   #  The Stackgres Operator must already be installed within the target
@@ -270,11 +285,31 @@ db:
   deployStandalone: true
 
 # Lifecycle hooks for the LiteLLM container
+#
+# Prefer the native /health/drain preStop hook over a fixed `sleep`: it marks
+# the pod NotReady and blocks only until in-flight requests actually finish
+# (bounded by GRACEFUL_SHUTDOWN_TIMEOUT, default 30s), instead of always
+# waiting the worst-case duration. The drain runs once (the preStop hook and
+# the SIGTERM handler share it), so set terminationGracePeriodSeconds a few
+# seconds above GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before
+# SIGKILL.
+#
+# /health/drain is off by default; enable it with
+# general_settings.enable_drain_endpoint: true. The kubelet calls preStop
+# hooks without proxy credentials, so when the health port is reachable from
+# other pods (the common case) also set
+# general_settings.drain_endpoint_token (or the DRAIN_ENDPOINT_TOKEN env
+# var) and send the same value on the X-Drain-Token header from the hook.
+# Calls missing/wrong the token get a 401 and have no side effect.
 # Example:
 # lifecycle:
 #   preStop:
-#     exec:
-#       command: ["/bin/sh", "-c", "sleep 10"]
+#     httpGet:
+#       path: /health/drain
+#       port: 4000
+#       httpHeaders:
+#         - name: X-Drain-Token
+#           value: <same value as drain_endpoint_token>
 lifecycle: {}
 
 # Settings for Bitnami postgresql chart (if db.deployStandalone is true, ignored
@@ -328,6 +363,17 @@ migrationJob:
       enabled: true
     helm:
       enabled: false
+
+# Log level for the litellm proxy (sets LITELLM_LOG in the deployment env).
+# Rendered as a direct `env:` entry, which in Kubernetes takes precedence over
+# any `envFrom:` source. If you currently source LITELLM_LOG from an
+# environmentSecret or environmentConfigMap, set `logLevel: ""` here to
+# disable injection — otherwise this value silently overrides your secret /
+# configmap entry.
+#
+# Setting LITELLM_LOG inside `envVars:` below also wins: the template skips
+# this injection entirely when envVars already defines LITELLM_LOG.
+logLevel: INFO
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {}

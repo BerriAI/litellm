@@ -1,8 +1,10 @@
 from typing import Optional
 
+from litellm.llms.openai.data_residency import infer_openai_data_residency
+
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
-_OPTIONAL_KWARGS_KEYS = frozenset(
+OPTIONAL_KWARGS_KEYS = frozenset(
     {
         "azure_ad_token",
         "tenant_id",
@@ -30,10 +32,15 @@ _OPTIONAL_KWARGS_KEYS = frozenset(
         "aws_sts_endpoint",
         "aws_external_id",
         "aws_bedrock_runtime_endpoint",
+        "aws_bedrock_project_id",
         "tpm",
         "rpm",
+        "use_xai_oauth",
     }
 )
+
+# Backward-compatible alias for existing imports/tests.
+_OPTIONAL_KWARGS_KEYS = OPTIONAL_KWARGS_KEYS
 
 
 def _get_base_model_from_litellm_call_metadata(
@@ -103,6 +110,10 @@ def get_litellm_params(
     if litellm_trace_id is None:
         litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
 
+    data_residency: Optional[str] = infer_openai_data_residency(
+        custom_llm_provider, api_base
+    )
+
     # Build base dict with explicit parameters (always included)
     litellm_params = {
         "acompletion": acompletion,
@@ -112,6 +123,7 @@ def get_litellm_params(
         "verbose": verbose,
         "custom_llm_provider": custom_llm_provider,
         "api_base": api_base,
+        "data_residency": data_residency,
         "litellm_call_id": litellm_call_id,
         "model_alias_map": model_alias_map,
         "completion_call_id": completion_call_id,
@@ -157,7 +169,7 @@ def get_litellm_params(
 
     # Sparse extraction: only add kwargs keys that are actually present
     if kwargs:
-        for key in _OPTIONAL_KWARGS_KEYS:
+        for key in OPTIONAL_KWARGS_KEYS:
             if key in kwargs:
                 litellm_params[key] = kwargs[key]
 

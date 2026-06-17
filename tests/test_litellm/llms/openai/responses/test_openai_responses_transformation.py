@@ -86,6 +86,90 @@ class TestOpenAIResponsesAPIConfig:
 
         self.validate_responses_api_request_params(result, expected_fields)
 
+    def test_transform_strips_cache_control_from_input_content_blocks(self):
+        """`cache_control` markers (Anthropic-only) must be stripped from
+        Responses API input content blocks before sending to OpenAI.
+
+        OpenAI rejects unknown params on input content blocks with HTTP 400:
+            "Unknown parameter: 'input[0].content[0].cache_control'"
+        Chat Completions strips these via
+        `remove_cache_control_flag_from_messages_and_tools`; the Responses
+        path must do the same.
+        """
+        input_with_cache_control = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_with_cache_control,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "cache_control" not in result["input"][0]["content"][0]
+        assert result["input"][0]["content"][0]["type"] == "input_text"
+        assert result["input"][0]["content"][0]["text"] == "Hello"
+
+    def test_transform_strips_cache_control_from_tools(self):
+        """`cache_control` markers must also be stripped from tools for
+        symmetry with the Chat Completions path. OpenAI currently accepts
+        cache_control on tools silently but stripping keeps the wire payload
+        clean and matches `remove_cache_control_flag_from_messages_and_tools`.
+        """
+        tools_with_cache_control = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="hi",
+            response_api_optional_request_params={"tools": tools_with_cache_control},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "cache_control" not in result["tools"][0]
+        assert result["tools"][0]["name"] == "get_weather"
+
+    def test_transform_preserves_input_without_cache_control(self):
+        """Inputs without cache_control must pass through unmodified."""
+        input_clean = [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hello"}],
+            }
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_clean,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["input"] == input_clean
+
     def test_transform_streaming_response(self):
         """Test streaming response transformation"""
         # Test with a text delta event
@@ -163,6 +247,7 @@ class TestOpenAIResponsesAPIConfig:
 
         assert "Authorization" in result
         assert result["Authorization"] == f"Bearer {api_key}"
+        assert result["Content-Type"] == "application/json"
 
         # Test with empty headers
         headers = {}
@@ -264,6 +349,24 @@ class TestOpenAIResponsesAPIConfig:
         )
 
         assert result == "https://custom-openai.example.com/v1/responses"
+
+    def test_response_id_path_requests_encode_response_id(self):
+        """Test response_id is treated as one upstream URL path segment."""
+        api_base = "https://custom-openai.example.com/v1/responses"
+        response_id = "../../files?x=1#frag"
+
+        url, data = self.config.transform_list_input_items_request(
+            response_id=response_id,
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert (
+            url
+            == "https://custom-openai.example.com/v1/responses/..%2F..%2Ffiles%3Fx%3D1%23frag/input_items"
+        )
+        assert data["limit"] == 20
 
     def test_get_event_model_class_generic_event(self):
         """Test that get_event_model_class returns the correct event model class"""
@@ -547,7 +650,12 @@ class TestOpenAIResponsesAPIConfig:
         """Base helper strips ``namespace`` from custom_tool_call for every provider path."""
         inp = [
             {"type": "function_call", "call_id": "a", "name": "f", "namespace": "keep"},
-            {"type": "custom_tool_call", "call_id": "b", "name": "c", "namespace": "drop"},
+            {
+                "type": "custom_tool_call",
+                "call_id": "b",
+                "name": "c",
+                "namespace": "drop",
+            },
         ]
         out = BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
             inp

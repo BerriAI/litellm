@@ -69,6 +69,7 @@ const createMockTeamData = (overrides: Partial<TeamData> = {}): TeamData => ({
       team_id: "team-123",
       budget_id: "budget1",
       spend: 100.5,
+      total_spend: 250.75,
       litellm_budget_table: {
         budget_id: "budget1",
         soft_budget: null,
@@ -78,6 +79,7 @@ const createMockTeamData = (overrides: Partial<TeamData> = {}): TeamData => ({
         rpm_limit: 100,
         model_max_budget: null,
         budget_duration: null,
+        budget_reset_at: null,
       },
     },
   ],
@@ -401,7 +403,7 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    const roleSelect = screen.getByRole("combobox");
+    const roleSelect = screen.getByRole("combobox", { name: "Filter by role" });
     await user.click(roleSelect);
     // "Admin" filter: only user2 (role: "admin") should remain
     await user.click(screen.getByText("Admin"));
@@ -423,7 +425,7 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    const roleSelect = screen.getByRole("combobox");
+    const roleSelect = screen.getByRole("combobox", { name: "Filter by role" });
     await user.click(roleSelect);
     // "Non-admin" filter: only user1 (role: "member") should remain
     await user.click(screen.getByText("Non-admin"));

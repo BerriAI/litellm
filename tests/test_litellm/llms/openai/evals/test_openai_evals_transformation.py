@@ -49,6 +49,17 @@ def test_get_complete_url_with_eval_id(config: OpenAIEvalsConfig):
     assert url == "https://api.openai.com/v1/evals/eval_123"
 
 
+def test_get_complete_url_encodes_eval_id(config: OpenAIEvalsConfig):
+    """Test eval_id is treated as a single path segment."""
+    url = config.get_complete_url(
+        api_base="https://api.openai.com",
+        endpoint="evals",
+        eval_id="../../files?x=1#frag",
+    )
+
+    assert url == "https://api.openai.com/v1/evals/..%2F..%2Ffiles%3Fx%3D1%23frag"
+
+
 def test_get_complete_url_without_eval_id(config: OpenAIEvalsConfig):
     """Test URL construction without eval_id"""
     url = config.get_complete_url(
@@ -253,3 +264,20 @@ def test_transform_cancel_eval_response(config: OpenAIEvalsConfig):
 
     assert result.id == "eval_123"
     assert result.object == "eval"
+
+
+def test_transform_run_requests_encode_eval_and_run_ids(config: OpenAIEvalsConfig):
+    """Test run path IDs are treated as single path segments."""
+    url, _, request_body = config.transform_cancel_run_request(
+        eval_id="../../evals?x=1#frag",
+        run_id="../runs#other",
+        api_base="https://api.openai.com",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert (
+        url
+        == "https://api.openai.com/v1/evals/..%2F..%2Fevals%3Fx%3D1%23frag/runs/..%2Fruns%23other/cancel"
+    )
+    assert request_body == {}

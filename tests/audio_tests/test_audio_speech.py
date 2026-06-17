@@ -26,24 +26,7 @@ import pytest
 import litellm
 
 
-@pytest.mark.parametrize(
-    "sync_mode",
-    [True, False],
-)
-@pytest.mark.parametrize(
-    "model, api_key, api_base",
-    [
-        (
-            "azure/tts",
-            os.getenv("AZURE_TTS_API_KEY"),
-            os.getenv("AZURE_TTS_API_BASE"),
-        ),
-        ("openai/tts-1", os.getenv("OPENAI_API_KEY"), None),
-    ],
-)  # ,
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
+async def _run_audio_speech_litellm(sync_mode, model, api_base, api_key):
     litellm._turn_on_debug()
     speech_file_path = Path(__file__).parent / "speech.mp3"
 
@@ -83,6 +66,30 @@ async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
         from litellm.llms.openai.openai import HttpxBinaryResponseContent
 
         assert isinstance(response, HttpxBinaryResponseContent)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_audio_speech_litellm_azure(sync_mode):
+    await _run_audio_speech_litellm(
+        sync_mode=sync_mode,
+        model="azure/tts",
+        api_base=os.getenv("AZURE_TTS_API_BASE"),
+        api_key=os.getenv("AZURE_TTS_API_KEY"),
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_audio_speech_litellm_openai(sync_mode):
+    await _run_audio_speech_litellm(
+        sync_mode=sync_mode,
+        model="openai/tts-1",
+        api_base=None,
+        api_key=os.getenv("OPENAI_API_KEY"),
+    )
 
 
 @pytest.mark.parametrize(

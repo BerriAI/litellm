@@ -1,5 +1,5 @@
 """
-Transformation logic for context caching. 
+Transformation logic for context caching.
 
 Why separate file? Make it easy to see how transformation works
 """
@@ -19,7 +19,7 @@ from ..gemini.transformation import (
 
 
 def get_first_continuous_block_idx(
-    filtered_messages: List[Tuple[int, AllMessageValues]]  # (idx, message)
+    filtered_messages: List[Tuple[int, AllMessageValues]],  # (idx, message)
 ) -> int:
     """
     Find the array index that ends the first continuous sequence of message blocks.
@@ -174,7 +174,9 @@ def transform_openai_messages_to_gemini_context_caching(
     )
 
     transformed_messages = _gemini_convert_messages_with_history(
-        messages=new_messages, model=model
+        messages=new_messages,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
     )
 
     model_name = "models/{}".format(model)

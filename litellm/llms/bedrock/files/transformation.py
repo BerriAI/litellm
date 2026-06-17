@@ -2,6 +2,7 @@ import json
 import os
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import unquote
 
 import httpx
 from httpx import Headers, Response
@@ -10,6 +11,14 @@ from openai.types.file_deleted import FileDeleted
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.files.utils import FilesAPIUtils
+from litellm.litellm_core_utils.cloud_storage_security import (
+    BEDROCK_MANAGED_S3_BATCH_PREFIX,
+    BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
+    build_managed_cloud_object_name,
+    encode_s3_object_key_for_url,
+    sanitize_cloud_object_component,
+    split_configured_cloud_bucket_name,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -116,10 +125,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if _model.startswith("bedrock/"):
             _model = _model[8:]
 
-        # Replace colons with hyphens for Bedrock S3 URI compliance
-        _model = _model.replace(":", "-")
+        safe_model = sanitize_cloud_object_component(
+            _model.replace(":", "-"), fallback="model"
+        )
 
-        object_name = f"litellm-bedrock-files-{_model}-{uuid.uuid4()}.jsonl"
+        object_name = (
+            f"{BEDROCK_MANAGED_S3_BATCH_PREFIX}{safe_model}-{uuid.uuid4()}.jsonl"
+        )
         return object_name
 
     def get_object_name(
@@ -146,12 +158,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             if len(openai_jsonl_content) > 0:
                 return self._get_s3_object_name_from_batch_jsonl(openai_jsonl_content)
 
-        ## 2. If not jsonl, return the filename
+        ## 2. If not jsonl, store under a server-generated managed object name
         filename = extracted_file_data.get("filename")
-        if filename:
-            return filename
-        ## 3. If no file name, return timestamp
-        return str(int(time.time()))
+        return build_managed_cloud_object_name(
+            prefix=BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
+            filename=filename,
+            fallback_filename="file",
+        )
 
     def get_complete_file_url(
         self,
@@ -172,6 +185,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             raise ValueError(
                 "S3 bucket_name is required. Set 's3_bucket_name' in litellm_params or AWS_S3_BUCKET_NAME env var"
             )
+        bucket_name, object_prefix = split_configured_cloud_bucket_name(bucket_name)
 
         s3_region_name = litellm_params.get("s3_region_name") or optional_params.get(
             "s3_region_name"
@@ -188,14 +202,17 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             raise ValueError("purpose is required")
         extracted_file_data = extract_file_data(file_data)
         object_name = self.get_object_name(extracted_file_data, purpose)
+        if object_prefix:
+            object_name = f"{object_prefix}/{object_name}"
+        encoded_object_name = encode_s3_object_key_for_url(object_name)
 
         # S3 endpoint URL format
         s3_endpoint_url = (
             optional_params.get("s3_endpoint_url")
             or f"https://s3.{aws_region_name}.amazonaws.com"
-        )
+        ).rstrip("/")
 
-        return f"{s3_endpoint_url}/{bucket_name}/{object_name}"
+        return f"{s3_endpoint_url}/{bucket_name}/{encoded_object_name}"
 
     def get_supported_openai_params(
         self, model: str
@@ -215,6 +232,259 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     # (messages + inferenceConfig + image blocks). Nova is the primary
     # example; add others here as they adopt the same schema.
     CONVERSE_INVOKE_PROVIDERS = ("nova",)
+
+    # OpenAI batch URL that signals an embedding request. Per OpenAI Batch API
+    # spec, every JSONL record carries a `url` field; we use it as the
+    # authoritative signal to route the line to the embedding code path
+    # instead of inferring from the presence of `input` vs `messages`.
+    OPENAI_EMBEDDINGS_URL = "/v1/embeddings"
+
+    @staticmethod
+    def _is_embedding_record(openai_jsonl_record: Dict[str, Any]) -> bool:
+        """
+        Decide whether an OpenAI batch JSONL line is an embedding request.
+
+        Precedence (strict - any explicit `url` short-circuits):
+          1. `url == "/v1/embeddings"` -> embedding. Authoritative per the
+             OpenAI Batch API spec.
+          2. Any other non-empty `url` (e.g. `/v1/chat/completions`) -> NOT
+             embedding. We trust the caller's explicit signal even if the
+             body would otherwise suggest embedding; misrouting a chat
+             record into the embedding transformer would corrupt the
+             modelInput, while a chat-shaped body sent to the chat path
+             either succeeds or fails cleanly inside that transformer.
+          3. `url` missing/empty -> fall back to body shape. Requires
+             `input` present AND `messages` absent so a malformed record
+             carrying both keys routes to the chat path (safer default:
+             Anthropic transforms ignore unknown top-level keys, whereas
+             the embedding transformer would silently drop the messages).
+        """
+        url = openai_jsonl_record.get("url")
+        if url == BedrockFilesConfig.OPENAI_EMBEDDINGS_URL:
+            return True
+        if url:
+            return False
+        body = openai_jsonl_record.get("body", {})
+        if not isinstance(body, dict):
+            return False
+        return "input" in body and "messages" not in body
+
+    # Identifier for the Bedrock Titan v2 InvokeModel body schema as stored
+    # in `model_prices_and_context_window.json`. Centralized so future
+    # embedding-schema variants can add their own value
+    # (e.g. `cohere_v3`, `titan_g1`, `titan_multimodal`) without touching
+    # the detection logic.
+    _TITAN_V2_INVOCATION_SCHEMA = "titan_v2"
+
+    # Substring marker used as a fallback when the registry can't resolve
+    # the model id - notably cross-region inference profile prefixes
+    # (`us.amazon.titan-embed-text-v2:0`) and Bedrock ARN forms, which
+    # `get_model_info` doesn't normalize today.
+    _TITAN_V2_EMBED_MODEL_MARKER = "titan-embed-text-v2"
+
+    # Nested field name under `provider_specific_entry` that identifies the
+    # Bedrock InvokeModel body schema for batch inference.
+    # `provider_specific_entry` is the registry's escape hatch for fields
+    # `get_model_info` doesn't promote to top-level - exactly what we need
+    # here. Documented in the `sample_spec` entry of
+    # `model_prices_and_context_window.json` and surfaced by
+    # `get_model_info` (see `ModelInfo.provider_specific_entry`).
+    _BEDROCK_INVOCATION_SCHEMA_FIELD = "bedrock_invocation_schema"
+
+    @staticmethod
+    def _is_titan_v2_embed_model(model: str) -> bool:
+        """
+        True iff `model` refers to Amazon Titan Text Embeddings V2.
+
+        Resolution order:
+          1. `model_prices_and_context_window.json` via `get_model_info`.
+             The Titan v2 registry entry carries an explicit
+             `provider_specific_entry.bedrock_invocation_schema` discriminator
+             (`"titan_v2"`). When the registry resolves the id we trust that
+             field as the source of truth - no hardcoded model-id comparison
+             needed.
+          2. Substring fallback (`titan-embed-text-v2` followed by `:`, `/`,
+             or end-of-string) for ids the registry can't normalize. This
+             catches cross-region inference profile prefixes
+             (`us.amazon.titan-embed-text-v2:0`) and Bedrock ARN forms; the
+             marker boundary check rejects lookalikes like
+             `titan-embed-text-v20` or `titan-embed-text-v2-experimental`.
+
+        Tolerant of common id shapes:
+          - "amazon.titan-embed-text-v2:0"
+          - "bedrock/amazon.titan-embed-text-v2:0"
+          - "us.amazon.titan-embed-text-v2:0" (cross-region inference profile)
+          - ARN forms ending in ".../amazon.titan-embed-text-v2:0"
+        """
+        # Registry-driven path: when get_model_info resolves the id we trust
+        # the registry's discriminator. A resolved id with a different (or
+        # absent) schema value here is intentionally not given a substring
+        # second-chance - the registry is authoritative for ids it knows.
+        registry_schema = BedrockFilesConfig._lookup_provider_specific_field(
+            model, BedrockFilesConfig._BEDROCK_INVOCATION_SCHEMA_FIELD
+        )
+        if registry_schema is not None:
+            return registry_schema == BedrockFilesConfig._TITAN_V2_INVOCATION_SCHEMA
+
+        # Registry silence -> substring fallback for unmapped ids only.
+        normalized = model.lower()
+        if normalized.startswith("bedrock/"):
+            normalized = normalized[len("bedrock/") :]
+        marker = BedrockFilesConfig._TITAN_V2_EMBED_MODEL_MARKER
+        idx = normalized.find(marker)
+        if idx < 0:
+            return False
+        end = idx + len(marker)
+        return end == len(normalized) or normalized[end] in (":", "/")
+
+    @staticmethod
+    def _lookup_provider_specific_field(model_id: str, field: str) -> Optional[str]:
+        """
+        Read a nested string field from the registry entry's
+        `provider_specific_entry` dict via `litellm.get_model_info`.
+
+        Returns the field's string value when:
+          - the registry resolves `model_id`,
+          - the entry exposes `provider_specific_entry` as a dict, and
+          - that dict has `field` mapped to a non-empty string.
+        Otherwise returns `None`.
+
+        Isolating this means feature detectors (Titan v2 today, future
+        Cohere Embed / Nova Multimodal branches) share one defensive
+        try/except shape instead of duplicating it. The `None` return
+        covers every realistic failure mode: `get_model_info` raises
+        (cross-region profile prefixes, Bedrock ARN forms, unreleased
+        models), returns a non-dict, has no `provider_specific_entry`, or
+        the requested field is missing / non-string / empty.
+        """
+        try:
+            from litellm import get_model_info
+
+            info = get_model_info(model_id)
+        except Exception:
+            return None
+        if not isinstance(info, dict):
+            return None
+        provider_specific = info.get("provider_specific_entry")
+        if not isinstance(provider_specific, dict):
+            return None
+        value = provider_specific.get(field)
+        return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _coerce_embedding_input_to_string(raw_input: Any, model: str = "") -> str:
+        """
+        Normalize an OpenAI /v1/embeddings `input` field into the single
+        string that Bedrock Titan v2 InvokeModel expects in `inputText`.
+
+        Accepts: a string, or a single-element list containing one string.
+        Rejects (with actionable messages):
+          - None / missing -> ValueError
+          - Multi-element string lists -> ValueError, prompts caller to
+            emit one JSONL line per input
+          - Pre-tokenized inputs (List[int], List[List[int]]) -> NotImplementedError
+          - Any other type -> ValueError
+
+        Extracted so the validation can be exercised in isolation and so
+        future embedding-provider branches (Titan G1, Cohere) can reuse it
+        without duplicating the type-shaping logic.
+        """
+        if raw_input is None:
+            raise ValueError(
+                "Embedding batch record is missing required `input` field: "
+                f"model={model}"
+            )
+
+        # Bedrock InvokeModel for Titan v2 takes exactly one string `inputText`
+        # per call. Pre-tokenized inputs and multi-element string lists are
+        # explicitly unsupported so callers emit one JSONL line per embedding
+        # instead of relying on us to silently fan out or concatenate.
+        if isinstance(raw_input, list):
+            if len(raw_input) == 1:
+                candidate = raw_input[0]
+            else:
+                raise ValueError(
+                    "Bedrock batch embedding requires one input per JSONL "
+                    "record. Got a list with "
+                    f"{len(raw_input)} items for model={model}; emit one "
+                    "JSONL line per input string instead."
+                )
+        else:
+            candidate = raw_input
+
+        # Catches pre-tokenized inputs (List[int] from OpenAI spec, or a
+        # single int slipping past the list-unwrap above).
+        # NOTE: bool is a subclass of int but treating True/False as a token
+        # is meaningless either way, so the broad check is fine.
+        if isinstance(candidate, (list, int)):
+            raise NotImplementedError(
+                "Bedrock Titan v2 batch embedding does not support "
+                "pre-tokenized integer inputs. Pass `input` as a string "
+                f"(model={model})."
+            )
+        if not isinstance(candidate, str):
+            raise ValueError(
+                "Bedrock batch embedding `input` must be a string (or a "
+                "single-element list of strings). Got type "
+                f"{type(candidate).__name__} for model={model}."
+            )
+        return candidate
+
+    def _map_openai_embedding_to_bedrock_params(
+        self,
+        openai_request_body: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Transform an OpenAI /v1/embeddings request body into the
+        Bedrock InvokeModel `modelInput` for embedding models that AWS
+        supports via batch inference (CreateModelInvocationJob).
+
+        Currently routes Amazon Titan Text Embeddings V2 only; other
+        embedding providers (Titan G1, Titan Multimodal, Cohere Embed,
+        Nova Multimodal Embeddings) raise NotImplementedError until they
+        get a dedicated branch. Splitting them keeps PR scope tight and
+        lets each model's request schema be exercised by its own tests.
+
+        AWS docs (Titan v2 InvokeModel body):
+        https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+        """
+        from litellm.llms.bedrock.embed.amazon_titan_v2_transformation import (
+            AmazonTitanV2Config,
+        )
+
+        _model = openai_request_body.get("model", "")
+        if not self._is_titan_v2_embed_model(_model):
+            # Refuse early instead of silently shaping the body for the wrong
+            # provider. The synchronous /v1/embeddings path supports more
+            # models, but each has a different InvokeModel schema; mapping
+            # them here without dedicated tests would risk corrupt batches.
+            raise NotImplementedError(
+                "Bedrock batch embedding currently supports only Amazon "
+                "Titan Text Embeddings V2 (model id contains "
+                f"'titan-embed-text-v2'). Got model={_model!r}. Track other "
+                "embedding models in https://github.com/BerriAI/litellm/issues."
+            )
+
+        input_text = self._coerce_embedding_input_to_string(
+            openai_request_body.get("input"), model=_model
+        )
+
+        # Map OpenAI-style params (dimensions, encoding_format) onto the
+        # Titan v2 schema (dimensions, embeddingTypes) via the embed config
+        # so this stays in sync with the synchronous /v1/embeddings path.
+        non_default_params = {
+            k: v for k, v in openai_request_body.items() if k not in ("model", "input")
+        }
+        titan_config = AmazonTitanV2Config()
+        inference_params = titan_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+        )
+        return dict(
+            titan_config._transform_request(
+                input=input_text, inference_params=inference_params
+            )
+        )
 
     def _map_openai_to_bedrock_params(
         self,
@@ -332,10 +602,19 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             # Determine provider from model name
             provider = self.get_bedrock_invoke_provider(model)
 
-            # Transform to Bedrock modelInput format
-            model_input = self._map_openai_to_bedrock_params(
-                openai_request_body=openai_body, provider=provider
-            )
+            # Route to the embedding transformer when the OpenAI batch line
+            # targets /v1/embeddings; otherwise fall back to the existing
+            # chat-completion path. We branch here (rather than inside
+            # `_map_openai_to_bedrock_params`) so the chat helper keeps its
+            # narrow contract and the embedding helper can evolve independently.
+            if self._is_embedding_record(_openai_jsonl_content):
+                model_input = self._map_openai_embedding_to_bedrock_params(
+                    openai_request_body=openai_body
+                )
+            else:
+                model_input = self._map_openai_to_bedrock_params(
+                    openai_request_body=openai_body, provider=provider
+                )
 
             # Create Bedrock batch record
             record_id = _openai_jsonl_content.get(
@@ -532,10 +811,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if match1:
             # Pattern: https://s3.region.amazonaws.com/bucket/key
             region, bucket, key = match1.groups()
+            key = unquote(key)
             s3_uri = f"s3://{bucket}/{key}"
         elif match2:
             # Pattern: https://bucket.s3.region.amazonaws.com/key
             bucket, region, key = match2.groups()
+            key = unquote(key)
             s3_uri = f"s3://{bucket}/{key}"
         else:
             # Fallback: try to extract bucket and key from URL path
@@ -545,6 +826,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             path_parts = parsed.path.lstrip("/").split("/", 1)
             if len(path_parts) >= 2:
                 bucket, key = path_parts[0], path_parts[1]
+                key = unquote(key)
                 s3_uri = f"s3://{bucket}/{key}"
             else:
                 raise ValueError(f"Unable to parse S3 URL: {https_url}")
@@ -722,7 +1004,12 @@ class BedrockJsonlFilesTransformation:
         # Remove bedrock/ prefix if present
         if _model.startswith("bedrock/"):
             _model = _model[8:]
-        object_name = f"litellm-bedrock-files-{_model}-{uuid.uuid4()}.jsonl"
+        safe_model = sanitize_cloud_object_component(
+            _model.replace(":", "-"), fallback="model"
+        )
+        object_name = (
+            f"{BEDROCK_MANAGED_S3_BATCH_PREFIX}{safe_model}-{uuid.uuid4()}.jsonl"
+        )
         return object_name
 
     def _get_content_from_openai_file(self, openai_file_content: FileTypes) -> str:
