@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useState, useRef, useEffect } from "react";
 import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -9,6 +9,55 @@ import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
+import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
+
+function AgentControlPlaneView() {
+  const { agentPlatformUrl, agentPlatformPath } = usePluginMode();
+  const { accessToken } = useAuth();
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // Send auth token via postMessage after iframe loads — avoids exposing the
+  // token in the URL (browser history, server logs, Referer headers).
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || !accessToken || !agentPlatformUrl) return;
+    const send = () => {
+      iframe.contentWindow?.postMessage(
+        { type: "litellm-auth", token: accessToken },
+        agentPlatformUrl, // targetOrigin — only the configured plugin receives this
+      );
+    };
+    iframe.addEventListener("load", send);
+    return () => iframe.removeEventListener("load", send);
+  }, [accessToken, agentPlatformUrl]);
+
+  if (!agentPlatformUrl) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-gray-500">
+        <div className="text-center">
+          <p className="text-lg font-medium mb-2">Agent Control Plane</p>
+          <p className="text-sm">Configure agent platform URL in settings</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <iframe
+      ref={iframeRef}
+      src={`${agentPlatformUrl}${agentPlatformPath}`}
+      style={{
+        width: "100%",
+        height: "100%",
+        border: "none",
+        flex: 1,
+        minHeight: "calc(100vh - 56px)",
+      }}
+      title="Agent Control Plane"
+      allow="clipboard-read; clipboard-write"
+    />
+  );
+}
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -16,6 +65,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { accessToken } = useAuth();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const { mode } = usePluginMode();
 
   const page = legacyKeyForPathname(pathname) || searchParams.get("page") || "api-keys";
 
@@ -37,7 +87,13 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <div className="mt-2">
           <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
         </div>
-        <main className="flex-1">{children}</main>
+        {mode === "litellm-platform-plugin" ? (
+          <div className="flex-1 flex">
+            <AgentControlPlaneView />
+          </div>
+        ) : (
+          <main className="flex-1">{children}</main>
+        )}
       </div>
     </div>
   );
@@ -62,7 +118,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <LayoutContent>{children}</LayoutContent>
+      <PluginModeProvider>
+        <LayoutContent>{children}</LayoutContent>
+      </PluginModeProvider>
     </Suspense>
   );
 }
