@@ -9,18 +9,21 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
-from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestData
-from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+from litellm.llms.base_llm.ocr.transformation import (
+    BaseOCRConfig,
+    DocumentType,
+    OCRRequestData,
+)
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
-class VertexAIOCRConfig(MistralOCRConfig):
+class VertexAIOCRConfig(BaseOCRConfig):
     """
     Vertex AI Mistral OCR transformation configuration.
 
     Vertex AI uses Mistral's OCR API format through the Mistral publisher endpoint.
-    Inherits transformation logic from MistralOCRConfig since they use the same format.
+    Inherits the standard OCR transform logic from BaseOCRConfig since they use the same format.
 
     Reference: Vertex AI Mistral OCR documentation
 
