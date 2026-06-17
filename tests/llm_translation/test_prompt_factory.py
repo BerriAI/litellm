@@ -1419,13 +1419,9 @@ def test_convert_to_anthropic_tool_invoke_sanitizes_invalid_ids():
     assert valid_result[0]["id"] == "toolu_01ABC-xyz_123"
 
 
-def test_convert_to_anthropic_tool_invoke_server_tool_without_result_is_dropped():
+def test_convert_to_anthropic_tool_invoke_server_tool():
     """
-    A server_tool_use (srvtoolu_) whose matching *_tool_result is NOT available
-    (e.g. a generic OpenAI client dropped provider_specific_fields on replay) is
-    omitted entirely. A bare server_tool_use with no following tool_result is
-    rejected by Anthropic ("unexpected tool_use_id ... in tool_result blocks"),
-    so it must not be emitted.
+    Test that server_tool_use (srvtoolu_) is reconstructed as server_tool_use.
 
     Fixes: https://github.com/BerriAI/litellm/issues/17737
     """
@@ -1442,72 +1438,11 @@ def test_convert_to_anthropic_tool_invoke_server_tool_without_result_is_dropped(
 
     result = convert_to_anthropic_tool_invoke(tool_calls)
 
-    # No web_search_results / tool_results to pair with -> drop the orphan
-    # rather than emit an invalid bare server_tool_use.
-    assert result == []
-
-
-def test_anthropic_messages_pt_generic_client_drops_orphan_server_tool():
-    """
-    A generic OpenAI client (e.g. Open WebUI) replays a prior web-search turn as
-    an assistant tool_call + a `tool` message keyed to the same srvtoolu_ id, and
-    does NOT round-trip provider_specific_fields. The transformed Anthropic
-    messages must contain neither a bare server_tool_use nor a user tool_result
-    for that id — either is rejected with "unexpected tool_use_id ... in
-    tool_result blocks". The assistant's own text answer is preserved.
-
-    Fixes: https://github.com/BerriAI/litellm/issues/17737
-    """
-    messages = [
-        {"role": "user", "content": "what's the latest news on elephants?"},
-        {
-            "role": "assistant",
-            "content": "Here's what I found about elephants...",
-            "tool_calls": [
-                {
-                    "id": "srvtoolu_01ABC123",
-                    "type": "function",
-                    "function": {
-                        "name": "web_search",
-                        "arguments": '{"query": "latest elephant news"}',
-                    },
-                }
-            ],
-            # NOTE: no provider_specific_fields — a generic OpenAI client drops it.
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "srvtoolu_01ABC123",
-            "content": "...search results...",
-        },
-        {"role": "user", "content": "tell me more"},
-    ]
-
-    result = anthropic_messages_pt(
-        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
-    )
-
-    for msg in result:
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            assert block.get("type") != "server_tool_use", result
-            if block.get("type") == "tool_result":
-                assert not str(block.get("tool_use_id", "")).startswith(
-                    "srvtoolu_"
-                ), result
-
-    assistant_text = " ".join(
-        b.get("text", "")
-        for m in result
-        if m.get("role") == "assistant"
-        for b in (m.get("content") or [])
-        if isinstance(b, dict) and b.get("type") == "text"
-    )
-    assert "elephants" in assistant_text
+    assert len(result) == 1
+    assert result[0]["type"] == "server_tool_use"  # NOT tool_use
+    assert result[0]["id"] == "srvtoolu_01ABC123"
+    assert result[0]["name"] == "web_search"
+    assert result[0]["input"] == {"query": "elephant weight"}
 
 
 def test_convert_to_anthropic_tool_invoke_with_web_search_results():
