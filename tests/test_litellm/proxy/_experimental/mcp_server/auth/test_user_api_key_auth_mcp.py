@@ -677,6 +677,39 @@ class TestMCPOAuth2AuthFlow:
             assert auth_result.api_key == "Bearer sk-litellm-valid-key"
             mock_auth.assert_called_once()
 
+    async def test_authorization_consumed_by_litellm_auth_is_not_forwarded(self):
+        """
+        When Authorization successfully authenticates the caller to LiteLLM,
+        it must not be reused as an upstream OAuth2 token for MCP servers.
+        """
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/some_server",
+            "headers": [
+                (b"authorization", b"Bearer user-idp-jwt"),
+            ],
+        }
+
+        async def mock_user_api_key_auth(api_key, request):
+            return UserAPIKeyAuth(api_key=api_key, user_id="test-user")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            side_effect=mock_user_api_key_auth,
+        ):
+            (
+                auth_result,
+                _,
+                _,
+                _,
+                oauth2_headers,
+                _,
+            ) = await MCPRequestHandler.process_mcp_request(scope)
+
+            assert auth_result.user_id == "test-user"
+            assert oauth2_headers == {}
+
     async def test_non_auth_http_exception_still_raises(self):
         """
         If user_api_key_auth raises a non-401/403 HTTPException (e.g., 500),
