@@ -131,7 +131,9 @@ class TestBedrockMantleConfig:
                 ),
             )
 
-    def test_get_llm_provider_uses_aws_region_name_for_responses(self, monkeypatch):
+    def test_get_llm_provider_uses_aws_region_name_for_responses(
+        self, monkeypatch, local_cost_map
+    ):
         from litellm.types.router import GenericLiteLLMParams
 
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
@@ -143,7 +145,9 @@ class TestBedrockMantleConfig:
             litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
         )
         assert provider == "bedrock_mantle"
-        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+        # gpt-5.x carries use_openai_responses_path, so it is served on the
+        # /openai/v1 base per the AWS model card.
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/openai/v1"
 
     def test_default_api_base_fallback_to_us_east_1(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
@@ -157,6 +161,50 @@ class TestBedrockMantleConfig:
         custom_base = "https://bedrock-mantle.us-west-2.api.aws/v1"
         cfg = BedrockMantleChatConfig()
         api_base, _ = cfg._get_openai_compatible_provider_info(custom_base, None)
+        assert api_base == custom_base
+
+    def test_chat_base_for_gpt_oss_uses_v1(self, monkeypatch):
+        # gpt-oss carries no use_openai_responses_path flag, so it stays on the
+        # standard /v1 base; no regression for existing chat usage now that the
+        # segment is data-driven.
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-2")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(
+            None, None, model="openai.gpt-oss-120b"
+        )
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+
+    @pytest.mark.parametrize(
+        "model_id",
+        ["google.gemma-4-31b", "google.gemma-4-26b-a4b", "google.gemma-4-e2b"],
+    )
+    def test_chat_base_for_gemma_4_uses_openai_v1(
+        self, monkeypatch, local_cost_map, model_id
+    ):
+        # The chat-config bug the Gemma 4 cards exposed: gemma-4-* is served on the
+        # /openai/v1 base, not the hardcoded /v1. Driven by the price-map
+        # use_openai_responses_path flag (loaded by local_cost_map). Fails before
+        # the data-driven segment lands.
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-2")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(
+            None, None, model=model_id
+        )
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/openai/v1"
+
+    def test_chat_base_explicit_api_base_wins_over_derived(
+        self, monkeypatch, local_cost_map
+    ):
+        # An explicit api_base must not be overridden by the data-driven default,
+        # even for a model whose default differs (gemma-4 -> openai/v1).
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        custom_base = "https://bedrock-mantle.us-west-2.api.aws/v1"
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(
+            custom_base, None, model="google.gemma-4-31b"
+        )
         assert api_base == custom_base
 
     def test_api_key_from_env(self, monkeypatch):

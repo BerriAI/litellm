@@ -8403,6 +8403,28 @@ def _get_model_cost_entry_for_provider_config(
     return {}
 
 
+def _bedrock_mantle_supports_responses(model: str) -> bool:
+    """Whether a Bedrock Mantle model can serve the native Responses API.
+
+    Purely data-driven from the model's price-map capability signal -- either
+    /v1/responses in supported_endpoints, or mode=responses -- both overridable
+    via register_model and proxy model_info, so onboarding a model is a JSON
+    change, never a code change. There is deliberately NO model-name match here:
+    capability is per-model, not per-family (openai.gpt-oss-120b supports
+    Responses while openai.gpt-oss-safeguard-120b does not, despite sharing the
+    gpt-oss substring), so a substring gate would be wrong. An unmapped model
+    makes get_model_info raise; that is swallowed so the caller falls through to
+    chat-completions emulation rather than crashing.
+    """
+    entry = litellm.model_cost.get(f"bedrock_mantle/{model}", {})
+    if "/v1/responses" in (entry.get("supported_endpoints") or []):
+        return True
+    try:
+        return get_model_info(model, "bedrock_mantle").get("mode") == "responses"
+    except Exception:
+        return False
+
+
 class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
     # Stores tuples of (factory_function, needs_model_parameter)
@@ -9070,34 +9092,23 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
-            # Mantle serves Responses on two upstream paths. A model takes the
-            # /openai/v1/responses path when its price-map entry declares
-            # use_openai_responses_path (data-driven, so a non-gpt-named frontier
-            # model can be onboarded by JSON alone), or, as a fallback needing no
-            # price-map entry, when its name matches the openai.gpt- frontier
-            # convention (minus gpt-oss) -- this keeps a future gpt-6 routing
-            # correctly before its entry loads. Any other model declared
-            # mode=responses takes the standard /v1/responses path. Everything
-            # else returns None and keeps the chat-completions emulation (see
-            # responses/main.py "config is None").
-            if not model:
+            # Both decisions are data-driven from the model's price-map entry, with
+            # no model-name logic. Capability (can it serve Responses?) comes from
+            # _bedrock_mantle_supports_responses (supported_endpoints / mode);
+            # chat-only models (gpt-oss safeguard, nvidia, ...) return None and keep
+            # the chat-completions emulation (responses/main.py "config is None").
+            # The wire path comes from mantle_base_segment, which reads the
+            # use_openai_responses_path flag: gpt-5.x and gemma-4-* on
+            # /openai/v1/responses, everything else (incl. gpt-oss) on
+            # /v1/responses.
+            from litellm.llms.bedrock_mantle.common_utils import mantle_base_segment
+
+            if not model or not _bedrock_mantle_supports_responses(model):
                 return None
-            model_lower = model.lower()
-            entry = litellm.model_cost.get(f"bedrock_mantle/{model}", {})
-            on_openai_path = entry.get("use_openai_responses_path") is True
-            name_is_frontier = (
-                "openai.gpt-" in model_lower and "gpt-oss" not in model_lower
+            return litellm.BedrockMantleResponsesAPIConfig(
+                use_openai_path=mantle_base_segment(model, litellm.model_cost)
+                == "openai/v1"
             )
-            if on_openai_path or name_is_frontier:
-                return litellm.BedrockMantleResponsesAPIConfig(use_openai_path=True)
-            try:
-                if get_model_info(model, "bedrock_mantle").get("mode") == "responses":
-                    return litellm.BedrockMantleResponsesAPIConfig(
-                        use_openai_path=False
-                    )
-            except Exception:
-                pass
-            return None
         return None
 
     @staticmethod
