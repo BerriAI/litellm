@@ -6310,7 +6310,7 @@ def create_model_info_response(
     include_metadata: bool = False,
     fallback_type: Optional[str] = None,
     llm_router: Optional["Router"] = None,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """
     Create a standardized model info response.
 
@@ -6326,7 +6326,7 @@ def create_model_info_response(
     """
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    model_info: Dict[str, object] = {
+    model_info: dict[str, object] = {
         "id": model_id,
         "object": "model",
         "created": DEFAULT_MODEL_CREATED_AT_TIME,
