@@ -9445,6 +9445,12 @@ class ProviderConfigManager:
             )
 
             return get_fal_ai_image_generation_config(model)
+        elif LlmProviders.MUAPI == provider:
+            from litellm.llms.muapi.image_generation import (
+                get_muapi_image_generation_config,
+            )
+
+            return get_muapi_image_generation_config(model)
         elif LlmProviders.STABILITY == provider:
             from litellm.llms.stability.image_generation import (
                 get_stability_image_generation_config,
@@ -9514,6 +9520,10 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.MUAPI == provider:
+            from litellm.llms.muapi.videos.transformation import MuAPIVideoConfig
+
+            return MuAPIVideoConfig()
         return None
 
     @staticmethod

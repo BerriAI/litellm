@@ -606,6 +606,7 @@ aleph_alpha_models: Set = set()
 bedrock_models: Set = set()
 bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
 fal_ai_models: Set = set()
+muapi_models: Set = set()
 fireworks_ai_models: Set = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
@@ -829,6 +830,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             zai_models.add(key)
         elif value.get("litellm_provider") == "fal_ai":
             fal_ai_models.add(key)
+        elif value.get("litellm_provider") == "muapi":
+            muapi_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.add(key)
         elif value.get("litellm_provider") == "runwayml":
@@ -1021,6 +1024,7 @@ model_list = list(
     | xai_models
     | zai_models
     | fal_ai_models
+    | muapi_models
     | deepseek_models
     | modelscope_models
     | azure_ai_models
@@ -1119,6 +1123,7 @@ models_by_provider: dict = {
     "xai": xai_models,
     "zai": zai_models,
     "fal_ai": fal_ai_models,
+    "muapi": muapi_models,
     "deepseek": deepseek_models,
     "runwayml": runwayml_models,
     "mistral": mistral_chat_models,
