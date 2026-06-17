@@ -61,7 +61,9 @@ class LoggingCallbackManager:
             callback=callback, parent_list=litellm.service_callback
         )
 
-    def add_litellm_callback(self, callback: Union[CustomLogger, str, Callable]):
+    def add_litellm_callback(
+        self, callback: Union[CustomLogger, str, Callable]
+    ) -> None:
         """
         Add a callback to litellm.callbacks
 
@@ -73,7 +75,7 @@ class LoggingCallbackManager:
 
     def add_litellm_success_callback(
         self, callback: Union[CustomLogger, str, Callable]
-    ):
+    ) -> None:
         """
         Add a success callback to `litellm.success_callback`.
         Auto-routes async callbacks to litellm._async_success_callback.
