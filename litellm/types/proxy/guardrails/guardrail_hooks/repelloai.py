@@ -1,12 +1,12 @@
 from typing import List, Literal, Optional
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from .base import GuardrailConfigModel
 
 
-class RepelloAIGuardrailConfigModel(GuardrailConfigModel):
+class RepelloAIGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     """Config model for the RepelloAI Argus guardrail."""
 
     api_key: Optional[str] = Field(
@@ -52,7 +52,7 @@ class RepelloAIViolatedPolicy(TypedDict, total=False):
     policy_id: Optional[str]
     action_taken: Optional[str]
     scope: Optional[str]
-    details: Optional[dict]
+    details: Optional[dict[str, object]]
     masked_result: Optional[str]
 
 
@@ -62,4 +62,4 @@ class RepelloAIAnalyzeResponse(TypedDict, total=False):
     verdict: Optional[str]  # "blocked" | "flagged" | "passed"
     request_id: Optional[str]
     policies_violated: Optional[List[RepelloAIViolatedPolicy]]
-    policies_applied: Optional[List[dict]]
+    policies_applied: Optional[List[dict[str, object]]]
