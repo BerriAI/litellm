@@ -13,6 +13,8 @@ from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
     abbreviate_api_key,
     check_complete_credentials,
+    custom_auth_common_checks_warning,
+    warn_once_if_custom_auth_skips_common_checks,
     get_end_user_id_from_request_body,
     get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
@@ -23,6 +25,78 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route_template,
     is_request_body_safe,
 )
+
+
+class TestCustomAuthCommonChecksWarning:
+    """custom_auth_common_checks_warning only warns when custom auth is configured
+    and the common-checks opt-in is off, since that is the only state where
+    project/team enforcement silently does nothing."""
+
+    def test_warns_when_custom_auth_configured_and_checks_off(self):
+        warning = custom_auth_common_checks_warning(
+            custom_auth_configured=True,
+            run_common_checks=False,
+        )
+        assert warning is not None
+        assert "custom_auth_run_common_checks: true" in warning
+        assert "https://docs.litellm.ai/docs/proxy/custom_auth" in warning
+
+    def test_no_warning_when_common_checks_enabled(self):
+        assert (
+            custom_auth_common_checks_warning(
+                custom_auth_configured=True,
+                run_common_checks=True,
+            )
+            is None
+        )
+
+    def test_no_warning_when_custom_auth_not_configured(self):
+        assert (
+            custom_auth_common_checks_warning(
+                custom_auth_configured=False,
+                run_common_checks=False,
+            )
+            is None
+        )
+        assert (
+            custom_auth_common_checks_warning(
+                custom_auth_configured=False,
+                run_common_checks=True,
+            )
+            is None
+        )
+
+
+class TestWarnOnceIfCustomAuthSkipsCommonChecks:
+    """The startup warning must fire at most once per process, since load_config
+    re-runs on hot-reload / config refresh and would otherwise spam the log."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_sentinel(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.proxy.auth.auth_utils._custom_auth_common_checks_warning_emitted",
+            False,
+        )
+
+    def test_warns_only_once_across_repeated_calls(self):
+        logger = MagicMock()
+        for _ in range(3):
+            warn_once_if_custom_auth_skips_common_checks(
+                custom_auth_configured=True,
+                run_common_checks=False,
+                logger=logger,
+            )
+        assert logger.warning.call_count == 1
+        assert "custom_auth_run_common_checks" in logger.warning.call_args[0][0]
+
+    def test_does_not_warn_when_common_checks_enabled(self):
+        logger = MagicMock()
+        warn_once_if_custom_auth_skips_common_checks(
+            custom_auth_configured=True,
+            run_common_checks=True,
+            logger=logger,
+        )
+        assert logger.warning.call_count == 0
 
 
 class TestGetKeyModelRpmLimit:

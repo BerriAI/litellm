@@ -2,6 +2,7 @@ import os
 import re
 import sys
 from functools import lru_cache
+from logging import Logger
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple, Union
 
 from fastapi import HTTPException, Request, status
@@ -993,6 +994,45 @@ def get_project_model_tpm_limit(
     if user_api_key_dict.project_metadata:
         return user_api_key_dict.project_metadata.get("model_tpm_limit")
     return None
+
+
+def custom_auth_common_checks_warning(
+    *,
+    custom_auth_configured: bool,
+    run_common_checks: bool,
+) -> str | None:
+    if not custom_auth_configured or run_common_checks:
+        return None
+    return (
+        "custom_auth is configured but 'custom_auth_run_common_checks' is not set. "
+        "Problem: budgets, model-access allowlists, and per-model rate limits configured "
+        "on your DB team/project records will NOT be enforced for custom-auth requests "
+        "(rate limits set directly on the returned UserAPIKeyAuth still apply). "
+        "Fix: set 'general_settings.custom_auth_run_common_checks: true'. "
+        "Docs: https://docs.litellm.ai/docs/proxy/custom_auth"
+    )
+
+
+_custom_auth_common_checks_warning_emitted = False
+
+
+def warn_once_if_custom_auth_skips_common_checks(
+    *,
+    custom_auth_configured: bool,
+    run_common_checks: bool,
+    logger: Logger = verbose_proxy_logger,
+) -> None:
+    global _custom_auth_common_checks_warning_emitted
+    if _custom_auth_common_checks_warning_emitted:
+        return
+    message = custom_auth_common_checks_warning(
+        custom_auth_configured=custom_auth_configured,
+        run_common_checks=run_common_checks,
+    )
+    if message is None:
+        return
+    logger.warning(message)
+    _custom_auth_common_checks_warning_emitted = True
 
 
 def is_pass_through_provider_route(route: str) -> bool:
