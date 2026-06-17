@@ -286,6 +286,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 markers = [
     "asyncio: mark test as an asyncio test",
+    "integration: mark test as an integration test requiring real binaries/processes",
     "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",
     "no_parallel: mark test to run sequentially (not in parallel) - typically for memory measurement tests",
 ]

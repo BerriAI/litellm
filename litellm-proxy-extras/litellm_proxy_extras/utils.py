@@ -4,6 +4,8 @@ import random
 import re
 import shutil
 import subprocess
+import sys
+import sysconfig
 import tempfile
 import time
 from pathlib import Path
@@ -19,7 +21,15 @@ def str_to_bool(value: Optional[str]) -> bool:
 
 
 def _get_prisma_env() -> dict:
-    """Get environment variables for Prisma, handling offline mode if configured."""
+    """Get environment variables for Prisma, handling offline mode if configured.
+
+    Also injects the running interpreter's scripts directory (the venv ``bin/``
+    dir) to the front of PATH so the ``prisma-client-py`` console-script is
+    found by ``/bin/sh`` without needing to activate the venv. This fixes the
+    silent failure where ``prisma db push`` and ``prisma migrate deploy`` exit 0
+    but never create tables when invoked by absolute path outside an active venv
+    (Symptom 3 of issue #26097).
+    """
     prisma_env = os.environ.copy()
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
         # These env vars prevent Prisma from attempting downloads
@@ -27,6 +37,25 @@ def _get_prisma_env() -> dict:
         prisma_env["NPM_CONFIG_CACHE"] = os.getenv(
             "NPM_CONFIG_CACHE", "/app/.cache/npm"
         )
+
+    # Inject the venv scripts dir so prisma-client-py resolves without
+    # venv activation. Needed for db push and migrate deploy just as much
+    # as for db generate — all three shell out via /bin/sh which only finds
+    # the binary if it is on PATH.
+    scripts_dir = sysconfig.get_path("scripts")
+    if not scripts_dir:
+        scripts_dir = os.path.dirname(os.path.abspath(sys.executable))
+    if scripts_dir:
+        existing_path = prisma_env.get("PATH", "")
+        path_entries = existing_path.split(os.pathsep) if existing_path else []
+        if scripts_dir not in path_entries or path_entries[0] != scripts_dir:
+            # Remove any existing occurrence and place scripts_dir at index 0.
+            filtered = [p for p in path_entries if p != scripts_dir]
+            remaining = os.pathsep.join(filtered)
+            prisma_env["PATH"] = (
+                scripts_dir + os.pathsep + remaining if remaining else scripts_dir
+            )
+
     return prisma_env
 
 
@@ -924,6 +953,7 @@ class ProxyExtrasDBManager:
                         [_get_prisma_command(), "db", "push", "--accept-data-loss"],
                         timeout=60,
                         check=True,
+                        env=_get_prisma_env(),
                     )
                     return True
             except subprocess.TimeoutExpired:
