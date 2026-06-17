@@ -1,65 +1,71 @@
 import { modelCreateCall, Model } from "../networking";
 import NotificationManager from "../molecules/notifications_manager";
 
+interface AutoRouterFormValues {
+  auto_router_name: string;
+  auto_router_config?: unknown;
+  auto_router_default_model?: string;
+  auto_router_embedding_model?: string;
+  complexity_router_config?: unknown;
+  custom_embedding_model?: string;
+  model_access_group?: string[];
+  model_type?: string;
+  team_id?: string;
+}
+
+export const buildAutoRouterModelConfig = (values: AutoRouterFormValues): Model => {
+  if (values.model_type === "complexity_router") {
+    return {
+      model_name: values.auto_router_name,
+      litellm_params: {
+        model: "auto_router/complexity_router",
+        complexity_router_config: values.complexity_router_config,
+        complexity_router_default_model: values.auto_router_default_model,
+      },
+      model_info: {
+        ...(values.team_id ? { team_id: values.team_id } : {}),
+        ...(values.model_access_group?.length ? { access_groups: values.model_access_group } : {}),
+      },
+    };
+  }
+
+  const litellmParams: Record<string, unknown> = {
+    model: `auto_router/${values.auto_router_name}`,
+    auto_router_config: JSON.stringify(values.auto_router_config),
+    auto_router_default_model: values.auto_router_default_model,
+  };
+
+  if (values.auto_router_embedding_model && values.auto_router_embedding_model !== "custom") {
+    litellmParams.auto_router_embedding_model = values.auto_router_embedding_model;
+  } else if (values.custom_embedding_model) {
+    litellmParams.auto_router_embedding_model = values.custom_embedding_model;
+  }
+
+  return {
+    model_name: values.auto_router_name,
+    litellm_params: litellmParams,
+    model_info: {
+      ...(values.team_id ? { team_id: values.team_id } : {}),
+      ...(values.model_access_group?.length ? { access_groups: values.model_access_group } : {}),
+    },
+  };
+};
+
 export const handleAddAutoRouterSubmit = async (values: any, accessToken: string, form: any, callback?: () => void) => {
   try {
     console.log("=== AUTO ROUTER SUBMIT HANDLER CALLED ===");
     console.log("handling auto router submit for formValues:", values);
     console.log("Model type:", values.model_type);
 
-    let autoRouterConfig: any;
-
     if (values.model_type === "complexity_router") {
-      // Complexity Router configuration
       console.log("Creating complexity router configuration");
-
-      autoRouterConfig = {
-        model_name: values.auto_router_name,
-        litellm_params: {
-          // Use special prefix for complexity router
-          model: `auto_router/complexity_router`,
-          // Pass the complexity router config as a JSON object (not stringified)
-          complexity_router_config: values.complexity_router_config,
-          // Default model for fallback (use MEDIUM or first available tier)
-          complexity_router_default_model: values.auto_router_default_model,
-        },
-        model_info: {},
-      };
-
       console.log("Complexity router config:", values.complexity_router_config);
     } else {
-      // Semantic Router configuration (existing behavior)
       console.log("Creating semantic router configuration");
-
-      autoRouterConfig = {
-        model_name: values.auto_router_name,
-        litellm_params: {
-          model: `auto_router/${values.auto_router_name}`,
-          auto_router_config: JSON.stringify(values.auto_router_config), // Convert JSON object to string as expected by backend
-          auto_router_default_model: values.auto_router_default_model,
-        },
-        model_info: {},
-      };
-
-      // Add optional embedding model if provided
-      if (values.auto_router_embedding_model && values.auto_router_embedding_model !== "custom") {
-        autoRouterConfig.litellm_params.auto_router_embedding_model = values.auto_router_embedding_model;
-      } else if (values.custom_embedding_model) {
-        autoRouterConfig.litellm_params.auto_router_embedding_model = values.custom_embedding_model;
-      }
-
-      console.log("Semantic router config (stringified):", autoRouterConfig.litellm_params.auto_router_config);
+      console.log("Semantic router config (stringified):", JSON.stringify(values.auto_router_config));
     }
 
-    // Add team information if provided
-    if (values.team_id) {
-      autoRouterConfig.model_info.team_id = values.team_id;
-    }
-
-    // Add model access groups if provided
-    if (values.model_access_group && values.model_access_group.length > 0) {
-      autoRouterConfig.model_info.access_groups = values.model_access_group;
-    }
+    const autoRouterConfig = buildAutoRouterModelConfig(values);
 
     console.log("Auto router configuration to be created:", autoRouterConfig);
 
