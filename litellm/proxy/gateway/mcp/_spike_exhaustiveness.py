@@ -6,7 +6,7 @@ the bet HOLDS, with two non-obvious rules taken from the sibling v2 package `lit
 
 Two `match` shapes are exhaustiveness-checked and are the only ones we use:
 
-  (A) `match` over a closed `Enum`  -> what `resolve()` dispatches on (`oauth/types.py`).
+  (A) `match` over a closed `Enum`  -> what `resolve()` dispatches on (`outbound_credentials/types.py`).
   (B) `match self.tag` over an Expression `@tagged_union` whose `tag` is a `Literal`
       -> what `CredError` uses for its `summary`.
 
@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing_extensions import assert_never
 
-from .oauth.types import AuthSpecKind, CredError
+from .outbound_credentials.types import AuthSpecKind, CredError
 
 
 # (A) Enum dispatch — the load-bearing case (`resolve()` uses exactly this shape).

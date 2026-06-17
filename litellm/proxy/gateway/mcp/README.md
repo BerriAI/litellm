@@ -6,7 +6,7 @@ security code is v2-shaped from line one instead of rewritten when the full S0 c
 Phase 2. It imports nothing from v1; v1 will only ever reach it through a thin adapter built in
 Phase 1.
 
-Scope is deliberately small: the typed credential seam (`oauth/types.py`), the vendored `Result`
+Scope is deliberately small: the typed credential seam (`outbound_credentials/types.py`), the vendored `Result`
 (`result.py`), and the basedpyright match-exhaustiveness spike (`_spike_exhaustiveness.py`). No
 transport, registry, CI gate, semgrep rules, import-linter layers, LOC caps, or composition root;
 those land with the full S0 in Phase 2.

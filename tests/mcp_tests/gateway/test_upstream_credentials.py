@@ -8,15 +8,15 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from litellm.proxy.gateway.mcp.oauth.credential_store import (
+from litellm.proxy.gateway.mcp.outbound_credentials.credential_store import (
     CredentialKey,
     InMemoryCredentialStore,
 )
-from litellm.proxy.gateway.mcp.oauth.httpx_auth import (
+from litellm.proxy.gateway.mcp.outbound_credentials.httpx_auth import (
     NoOpAuth,
     StaticHeaderAuth,
 )
-from litellm.proxy.gateway.mcp.oauth.types import (
+from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     ApiKeyConfig,
     AuthSpecKind,
     NoneConfig,
@@ -26,7 +26,7 @@ from litellm.proxy.gateway.mcp.oauth.types import (
     SharedKey,
     Subject,
 )
-from litellm.proxy.gateway.mcp.oauth.upstream_credentials import (
+from litellm.proxy.gateway.mcp.outbound_credentials.upstream_credentials import (
     UpstreamCredentialProvider,
 )
 from litellm.proxy.gateway.mcp.result import Error, Ok
