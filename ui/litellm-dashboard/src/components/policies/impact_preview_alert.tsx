@@ -31,7 +31,7 @@ const ImpactPreviewAlert: React.FC<ImpactPreviewAlertProps> = ({ impactResult })
           </Text>
         ) : (
           <div>
-            <Text>
+            <Text data-testid="impact-summary">
               <Trans
                 i18nKey="policies.impactPreviewAlert.attachmentAffects"
                 values={{

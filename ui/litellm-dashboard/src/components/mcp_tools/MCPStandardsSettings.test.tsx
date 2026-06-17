@@ -21,9 +21,15 @@ const makeServer = (overrides: Partial<MCPServer> = {}): MCPServer => ({
 });
 
 describe("getFieldGroups", () => {
-  it("should contain four groups", () => {
+  it("should contain four groups with expected labels", () => {
     const groups = getFieldGroups(t);
     expect(groups).toHaveLength(4);
+    expect(groups.map((g: FieldGroup) => g.label)).toEqual([
+      "mcpTools.mcpStandardsSettings.groupDocumentation",
+      "mcpTools.mcpStandardsSettings.groupSource",
+      "mcpTools.mcpStandardsSettings.groupConnection",
+      "mcpTools.mcpStandardsSettings.groupSecurity",
+    ]);
   });
 });
 

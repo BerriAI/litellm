@@ -33,12 +33,12 @@ describe("ImpactPreviewAlert", () => {
   describe("when scope is specific", () => {
     it("should show the number of affected keys", () => {
       renderWithProviders(<ImpactPreviewAlert impactResult={specificImpact} />);
-      expect(screen.queryAllByText((_, node) => !!node?.textContent?.match(/3 keys/i)).length).toBeGreaterThan(0);
+      expect(screen.getByTestId("impact-summary").textContent).toMatch(/3 keys/i);
     });
 
     it("should show the number of affected teams", () => {
       renderWithProviders(<ImpactPreviewAlert impactResult={specificImpact} />);
-      expect(screen.queryAllByText((_, node) => !!node?.textContent?.match(/1 team\b/i)).length).toBeGreaterThan(0);
+      expect(screen.getByTestId("impact-summary").textContent).toMatch(/1 team\b/i);
     });
 
     it("should render sample key tags", () => {
@@ -66,7 +66,7 @@ describe("ImpactPreviewAlert", () => {
     it("should use singular 'key' when exactly one key is affected", () => {
       const oneKey = { affected_keys_count: 1, affected_teams_count: 0, sample_keys: ["sk-1"], sample_teams: [] };
       renderWithProviders(<ImpactPreviewAlert impactResult={oneKey} />);
-      expect(screen.queryAllByText((_, node) => !!node?.textContent?.match(/1 key\b/i)).length).toBeGreaterThan(0);
+      expect(screen.getByTestId("impact-summary").textContent).toMatch(/1 key\b/i);
     });
 
     it("should not show a key section when there are no sample keys", () => {
