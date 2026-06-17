@@ -2,7 +2,7 @@
 ## Common checks for /v1/models and `/model/info`
 import copy
 import fnmatch
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
