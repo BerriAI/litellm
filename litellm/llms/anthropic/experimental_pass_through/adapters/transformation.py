@@ -400,36 +400,6 @@ class LiteLLMAnthropicMessagesAdapter:
             new_user_content_list: List[
                 Union[ChatCompletionTextObject, ChatCompletionImageObject]
             ] = []
-            if m["role"] == "system":
-                content = m.get("content", "")
-                if isinstance(content, str):
-                    if content.strip():
-                        new_messages.append(
-                            ChatCompletionSystemMessage(role="system", content=content)
-                        )
-                elif isinstance(content, list):
-                    text_blocks: List[Dict[str, Any]] = []
-                    for b in content:
-                        if (
-                            isinstance(b, dict)
-                            and b.get("type") == "text"
-                            and (b.get("text") or "").strip()
-                        ):
-                            sys_text_block: Dict[str, Any] = {
-                                "type": "text",
-                                "text": b["text"],
-                            }
-                            self._add_cache_control_if_applicable(
-                                b, sys_text_block, model or ""
-                            )
-                            text_blocks.append(sys_text_block)
-                    if text_blocks:
-                        new_messages.append(
-                            ChatCompletionSystemMessage(
-                                role="system", content=text_blocks
-                            )
-                        )
-                continue
             ## USER MESSAGE ##
             if m["role"] == "user":
                 ## translate user message

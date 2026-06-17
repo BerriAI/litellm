@@ -4,7 +4,7 @@ This file contains common utils for anthropic calls.
 
 import copy
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -340,11 +340,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         for prefix in (
             "bedrock/converse/",
             "bedrock/invoke/",
-            "bedrock/mantle/",
             "bedrock/",
-            "converse/",
-            "invoke/",
-            "mantle/",
             "vertex_ai/",
         ):
             if model.startswith(prefix):
@@ -993,71 +989,6 @@ def _is_empty_text_block(block: Any) -> bool:
         return False
     text = block.get("text")
     return not isinstance(text, str) or not text.strip()
-
-
-def _system_content_to_blocks(content: Any) -> List[Dict[str, Any]]:
-    """Normalize a system message's content into a list of Anthropic text blocks.
-
-    Accepts a plain string or a list of content blocks. Empty/whitespace-only
-    text is dropped. cache_control on a block is preserved.
-    """
-    blocks: List[Dict[str, Any]] = []
-    if isinstance(content, str):
-        if content.strip():
-            blocks.append({"type": "text", "text": content})
-        return blocks
-    if isinstance(content, list):
-        for b in content:
-            if not isinstance(b, dict):
-                continue
-            if b.get("type") == "text" and (b.get("text") or "").strip():
-                new_block: Dict[str, Any] = {"type": "text", "text": b["text"]}
-                if "cache_control" in b:
-                    new_block["cache_control"] = copy.deepcopy(b["cache_control"])
-                blocks.append(new_block)
-    return blocks
-
-
-def normalize_system_messages_for_anthropic(
-    messages: List[Any],
-    model: str,
-) -> Tuple[List[Any], List[Dict[str, Any]]]:
-    """Normalize ``role: "system"`` entries inside the Anthropic messages array.
-
-    Anthropic (Claude Opus 4.8+) accepts ``{"role": "system"}`` entries inside
-    ``messages`` (mid-conversation system messages). Downstream Bedrock paths do
-    not all support that shape, so this normalizes it:
-
-    - A *leading* system entry (before the first user/assistant message) is
-      semantically the initial system prompt; it is always hoisted into the
-      top-level ``system`` field.
-    - A *mid-conversation* system entry is left in place only if the model
-      advertises ``supports_mid_conversation_system``; otherwise it is hoisted
-      out (demoted) so it still reaches the model via the top-level system field.
-
-    Illegally placed mid system is left untouched on the pass-through path so
-    Bedrock returns its precise 400 — we do not reorder messages.
-
-    Returns ``(new_messages, hoisted_system_blocks)``. The caller merges the
-    hoisted blocks into the top-level ``system``. Input is never mutated.
-    """
-    supports_mid = AnthropicModelInfo._supports_model_capability(
-        model, "supports_mid_conversation_system"
-    )
-    out: List[Any] = []
-    hoisted: List[Dict[str, Any]] = []
-    seen_conversation = False
-    for m in messages:
-        if isinstance(m, dict) and m.get("role") == "system":
-            is_leading = not seen_conversation
-            if is_leading or not supports_mid:
-                hoisted.extend(_system_content_to_blocks(m.get("content")))
-                continue
-            out.append(m)
-            continue
-        seen_conversation = True
-        out.append(m)
-    return out, hoisted
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:
