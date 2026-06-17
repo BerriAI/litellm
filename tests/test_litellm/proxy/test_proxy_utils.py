@@ -480,6 +480,67 @@ class TestPostCallFailureHookLLMExceptionAlerting:
         assert await self._alerted(Exception("upstream 503")) is True
 
 
+class TestPostCallFailureHookProxyExceptionLogging:
+    """A guardrail block raises a ProxyException; on an LLM route it must still
+    drive proxy-only failure logging (_handle_logging_proxy_only_error) so the
+    blocked request is recorded, exactly as the old HTTPException did. Before
+    LIT-3751 the classifier only matched HTTPException, so switching AIM to
+    ProxyException silently dropped the rejected prompt from failure logs."""
+
+    async def _logged(self, exc, *, request_route) -> bool:
+        from unittest.mock import AsyncMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        handle_mock = AsyncMock()
+        with (
+            patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()),
+            patch.object(
+                proxy_logging_obj,
+                "_handle_logging_proxy_only_error",
+                new=handle_mock,
+            ),
+        ):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data={},
+                original_exception=exc,
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="sk-test", request_route=request_route
+                ),
+            )
+        return handle_mock.await_count > 0
+
+    def _block(self):
+        from litellm.proxy._types import ProxyException
+
+        return ProxyException(
+            message="content blocked",
+            type="invalid_request_error",
+            param=None,
+            code=400,
+            openai_code="content_policy_violation",
+        )
+
+    @pytest.mark.asyncio
+    async def test_proxy_exception_on_llm_route_is_logged(self):
+        assert (
+            await self._logged(self._block(), request_route="/v1/chat/completions")
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_on_llm_route_is_not_logged(self):
+        # A raw provider/unknown exception is logged by the LLM call path, not here.
+        assert (
+            await self._logged(
+                Exception("upstream 503"), request_route="/v1/chat/completions"
+            )
+            is False
+        )
+
+
 class TestShouldUseSmtpSsl:
     def test_port_465_uses_ssl(self, monkeypatch):
         from litellm.proxy.utils import _should_use_smtp_ssl

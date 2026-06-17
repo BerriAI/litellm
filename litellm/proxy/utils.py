@@ -2192,6 +2192,7 @@ class ProxyLogging:
         e.g should only return True for:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
+            - ProxyException (guardrail blocks, budget / rate-limit errors)
         """
 
         #########################################################
@@ -2208,7 +2209,7 @@ class ProxyLogging:
         ):
             return False
 
-        return isinstance(original_exception, HTTPException) or (
+        return isinstance(original_exception, (HTTPException, ProxyException)) or (
             error_type == ProxyErrorTypes.auth_error
         )
 
