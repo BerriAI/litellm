@@ -1366,6 +1366,8 @@ class ProxyBaseLLMRequestProcessing:
                 llm_router=llm_router,
             )
 
+        self.data["start_time"] = datetime.now()
+
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.
         # Cache the result to avoid scanning litellm.callbacks twice.
@@ -1426,6 +1428,23 @@ class ProxyBaseLLMRequestProcessing:
             await _cancel_pending_gather_tasks(tasks)
 
         response = responses[1]
+
+        # GH#30566: overhead for non-chat-completions routes
+        _hidden_params = getattr(response, "_hidden_params", {}) or {}
+        if not _hidden_params.get("litellm_overhead_time_ms"):
+            end_time = datetime.now()
+            from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+                update_response_metadata,
+            )
+
+            update_response_metadata(
+                result=response,
+                logging_obj=self.data.get("litellm_logging_obj"),
+                model=self.data.get("model"),
+                kwargs=self.data,
+                start_time=self.data.get("start_time", end_time),
+                end_time=end_time,
+            )
 
         _exception_raised = False
         try:
