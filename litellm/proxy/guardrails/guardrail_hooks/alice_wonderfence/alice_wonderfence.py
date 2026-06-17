@@ -76,7 +76,7 @@ class WonderFenceGuardrail(CustomGuardrail):
             Union[GuardrailEventHooks, list[GuardrailEventHooks], Mode] | None
         ) = None,
         default_on: bool = True,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         """Initialize the Alice WonderFence guardrail.
 
