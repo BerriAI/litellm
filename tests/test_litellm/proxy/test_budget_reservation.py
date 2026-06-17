@@ -1438,9 +1438,13 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
 
 
 @pytest.mark.asyncio
-async def test_should_not_create_negative_counter_when_release_counter_is_missing(
+async def test_release_missing_counter_reseeds_from_db_instead_of_failing(
     spend_counter_state,
 ):
+    """A reconcile/release that finds the counter missing must NOT delete it and
+    raise (the old fail-open that left budgets unenforced after a Redis reload).
+    It reseeds from the authoritative DB; with no DB it leaves the counter
+    untouched and finalizes."""
     counter_cache, _ = spend_counter_state
     reservation = {
         "reserved_cost": 0.4,
@@ -1454,22 +1458,26 @@ async def test_should_not_create_negative_counter_when_release_counter_is_missin
         "finalized": False,
     }
 
-    with pytest.raises(RuntimeError, match="missing counter"):
-        await release_budget_reservation(reservation)
+    # must not raise
+    await release_budget_reservation(reservation)
 
+    # counter not driven negative / not corrupted; left absent (no DB to reseed)
     assert (
         counter_cache.in_memory_cache.get_cache(
             key="spend:key:key-budget-missing-release"
         )
         is None
     )
-    assert reservation["finalized"] is False
+    assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
-async def test_should_invalidate_counter_when_release_would_underflow(
-    spend_counter_state,
-):
+async def test_release_underflow_counter_reseeds_from_db(spend_counter_state):
+    """When the release delta would drive the counter negative (counter was
+    reset/reseeded mid-flight), reseed from the authoritative DB rather than
+    deleting and failing open."""
+    import litellm.proxy.proxy_server as ps
+
     counter_cache, _ = spend_counter_state
     await counter_cache.async_increment_cache(
         key="spend:key:key-budget-underflow-release",
@@ -1487,22 +1495,22 @@ async def test_should_invalidate_counter_when_release_would_underflow(
         "finalized": False,
     }
 
-    with pytest.raises(RuntimeError, match="negative"):
+    with patch.object(ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.25)):
         await release_budget_reservation(reservation)
 
-    assert (
-        counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-budget-underflow-release"
-        )
-        is None
-    )
-    assert reservation["finalized"] is False
+    # counter reseeded up to the authoritative DB value, not deleted or negated
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-underflow-release"
+    ) == pytest.approx(0.25)
+    assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
-async def test_should_invalidate_non_numeric_counter_during_release(
-    spend_counter_state,
-):
+async def test_release_non_numeric_counter_reseeds_from_db(spend_counter_state):
+    """A non-numeric counter value (corrupt/stale) during release is recovered by
+    reseeding from the DB, not by deleting the counter and raising."""
+    import litellm.proxy.proxy_server as ps
+
     counter_cache, _ = spend_counter_state
     counter_cache.in_memory_cache.set_cache(
         key="spend:key:key-budget-nonnumeric-release",
@@ -1520,16 +1528,13 @@ async def test_should_invalidate_non_numeric_counter_during_release(
         "finalized": False,
     }
 
-    with pytest.raises(RuntimeError, match="non-numeric"):
+    with patch.object(ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.5)):
         await release_budget_reservation(reservation)
 
-    assert (
-        counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-budget-nonnumeric-release"
-        )
-        is None
-    )
-    assert reservation["finalized"] is False
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-nonnumeric-release"
+    ) == pytest.approx(0.5)
+    assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
