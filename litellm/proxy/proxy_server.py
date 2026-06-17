@@ -15,7 +15,7 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
@@ -8344,10 +8344,7 @@ async def model_list(
 
         # Surface the public name for team-scoped rows by default. Operators
         # that need legacy internal routing keys can explicitly disable this.
-        if _should_use_team_public_model_name():
-            all_models = _translate_model_names_for_listing(
-                all_models, _get_team_model_deployments_for_listing(llm_router)
-            )
+        all_models = _translate_team_model_names_for_listing(all_models, llm_router)
 
         # Build response data with all proxy models
         model_data = []
@@ -8388,10 +8385,7 @@ async def model_list(
 
     # Surface the public name for team-scoped rows by default. Operators that
     # need legacy internal routing keys can explicitly disable this.
-    if _should_use_team_public_model_name():
-        all_models = _translate_model_names_for_listing(
-            all_models, _get_team_model_deployments_for_listing(llm_router)
-        )
+    all_models = _translate_team_model_names_for_listing(all_models, llm_router)
 
     # Build response data
     model_data = []
@@ -12602,23 +12596,9 @@ def _translate_model_name_for_response(model: dict) -> dict:
     return {**model, "model_name": team_public}
 
 
-def _should_use_team_public_model_name() -> bool:
-    settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
-    use_public_name = settings.get("use_team_public_model_name", True)
-    return use_public_name is not False
-
-
-def _get_team_model_deployments_for_listing(
-    llm_router: Router | None,
-) -> Sequence[Mapping[str, object]]:
-    if llm_router is None:
-        return ()
-    return cast(Sequence[Mapping[str, object]], llm_router.get_model_list() or ())
-
-
-def _translate_model_names_for_listing(
+def _translate_team_model_names_for_listing(
     model_names: list[str],
-    model_deployments: Sequence[Mapping[str, object]],
+    llm_router: Router | None,
 ) -> list[str]:
     """Swap internal team routing keys for their public names in list-style
     responses (e.g. `/v1/models`, `/models`).
@@ -12630,17 +12610,26 @@ def _translate_model_names_for_listing(
     unchanged (see issue #28382). Sibling deployments collapse to one public
     name, so the result is de-duplicated while preserving order.
     """
-    if not model_deployments:
+    settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
+    if settings.get("use_team_public_model_name", True) is False or llm_router is None:
         return model_names
+
+    router_model_list = llm_router.get_model_list()
+    if not isinstance(router_model_list, list):
+        return model_names
+
     internal_to_public: dict[str, str] = {}
-    for model in model_deployments:
-        model_info_raw = model.get("model_info")
+    for model in router_model_list:
+        if not isinstance(model, dict):
+            continue
+        model_dict = cast(dict[str, object], model)  # any-ok: checked
+        model_info_raw: object = model_dict.get("model_info")
         if not isinstance(model_info_raw, Mapping):
             continue
         model_info = cast(Mapping[str, object], model_info_raw)  # any-ok: checked
         team_id = model_info.get("team_id")
         team_public = model_info.get("team_public_model_name")
-        name = model.get("model_name")
+        name = model_dict.get("model_name")
         if (
             isinstance(team_id, str)
             and isinstance(team_public, str)
