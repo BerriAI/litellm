@@ -15,6 +15,7 @@ import threading
 import time
 import traceback
 import warnings
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
@@ -259,6 +260,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.auth_utils import (
     check_response_size_is_safe,
     is_request_body_safe,
+    warn_once_if_custom_auth_skips_common_checks,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
@@ -301,6 +303,7 @@ from litellm.proxy.common_utils.load_config_utils import (
     get_config_file_contents_from_gcs,
     get_file_contents_from_s3,
 )
+from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
@@ -857,10 +860,20 @@ async def proxy_startup_event(app: FastAPI):
 
         asyncio.create_task(_run_pw_migration())
 
+    ## use_redis_transaction_buffer: fall back to a standalone Redis (REDIS_* env)
+    ## when the proxy cache backend is not Redis ##
+    transaction_buffer_redis_cache = redis_usage_cache
+    if transaction_buffer_redis_cache is None:
+        transaction_buffer_redis_cache = (
+            ProxyStartupEvent._get_transaction_buffer_redis_cache(
+                general_settings=general_settings
+            )
+        )
+
     ProxyStartupEvent._initialize_startup_logging(
         llm_router=llm_router,
         proxy_logging_obj=proxy_logging_obj,
-        redis_usage_cache=redis_usage_cache,
+        redis_usage_cache=transaction_buffer_redis_cache,
     )
 
     ## V2 OTEL: publish the chosen V2 logger's TracerProvider as the OTel global.
@@ -902,7 +915,7 @@ async def proxy_startup_event(app: FastAPI):
     ## Validate use_redis_transaction_buffer requires Redis cache ##
     ProxyStartupEvent._validate_redis_transaction_buffer_config(
         general_settings=general_settings,
-        redis_usage_cache=redis_usage_cache,
+        redis_usage_cache=transaction_buffer_redis_cache,
     )
 
     ## SEMANTIC TOOL FILTER ##
@@ -4366,6 +4379,12 @@ class ProxyConfig:
                 user_custom_auth = get_instance_fn(
                     value=custom_auth, config_file_path=config_file_path
                 )
+            warn_once_if_custom_auth_skips_common_checks(
+                custom_auth_configured=custom_auth is not None,
+                run_common_checks=bool(
+                    general_settings.get("custom_auth_run_common_checks", False)
+                ),
+            )
 
             custom_key_generate = general_settings.get("custom_key_generate", None)
             if custom_key_generate is not None:
@@ -7027,10 +7046,33 @@ def _format_streaming_sse_chunk(chunk: Union[str, bytes]) -> Union[str, bytes]:
     return f"data: {chunk}\n\n"
 
 
+_SSE_FRAME_DELIMITERS = ("\r\n\r\n", "\n\n", "\r\r")
+_MAX_RAW_SSE_BUFFER_CHARS = 8 * 1024 * 1024
+
+
+def _pop_complete_sse_frame(buffer: str) -> tuple[str | None, str]:
+    delimiter_positions = [
+        (position, delimiter)
+        for delimiter in _SSE_FRAME_DELIMITERS
+        if (position := buffer.find(delimiter)) != -1
+    ]
+    if not delimiter_positions:
+        return None, buffer
+
+    position, delimiter = min(delimiter_positions, key=lambda item: item[0])
+    frame_end = position + len(delimiter)
+    return buffer[:frame_end], buffer[frame_end:]
+
+
 async def async_data_generator(
-    response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
+    response,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict,
+    request: Request | None = None,
 ):
     verbose_proxy_logger.debug("inside generator")
+    stream_completed = False
+    client_disconnected = False
     try:
         error_message: Optional[str] = None
         requested_model_from_client = _get_client_requested_model_for_streaming(
@@ -7052,6 +7094,8 @@ async def async_data_generator(
         # happened to ship a streaming-iterator override (the default).
         needs_iterator_wrap = proxy_logging_obj.needs_iterator_wrap()
         needs_per_chunk_hook = proxy_logging_obj.needs_per_chunk_streaming_hook()
+        is_raw_sse_stream = bool(request_data.get("_litellm_raw_sse_stream"))
+        raw_sse_buffer = ""
 
         if needs_iterator_wrap:
             stream_iterator = proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -7082,14 +7126,38 @@ async def async_data_generator(
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
             elif isinstance(chunk, bytes):
-                # Some upstream streaming iterators (e.g. AsyncGoogleGenAIGenerateContentStreamingIterator
-                # for /v1beta/.../streamGenerateContent) yield raw SSE bytes from Gemini.
-                # Decode to str so the f-string below does not emit a Python b'...' literal,
-                # and pass already-formatted SSE through unchanged to avoid double "data:" prefix.
                 chunk = chunk.decode("utf-8", errors="replace")
-                if chunk.startswith(("data:", "event:", ":")):
-                    yield chunk if chunk.endswith("\n\n") else chunk + "\n\n"
+                if is_raw_sse_stream:
+                    raw_sse_buffer += chunk
+                    while True:
+                        frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
+                        if frame is None:
+                            break
+                        yield frame
+                    if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
+                        raise ValueError(
+                            "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
+                        )
                     continue
+                if chunk.startswith(("data:", "event:", ":")):
+                    yield (
+                        chunk
+                        if chunk.endswith(_SSE_FRAME_DELIMITERS)
+                        else chunk + "\n\n"
+                    )
+                    continue
+            elif isinstance(chunk, str) and is_raw_sse_stream:
+                raw_sse_buffer += chunk
+                while True:
+                    frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
+                    if frame is None:
+                        break
+                    yield frame
+                if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
+                    raise ValueError(
+                        "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
+                    )
+                continue
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break
@@ -7099,11 +7167,19 @@ async def async_data_generator(
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 
+        stream_completed = True
         if not needs_iterator_wrap:
             # The iterator-wrap path fires deferred logging itself; fire it
             # here for the no-wrap fast path so non-callback deployments
             # still flush their post-stream logging.
             ProxyLogging._fire_deferred_stream_logging(request_data)
+
+        if raw_sse_buffer:
+            yield (
+                raw_sse_buffer
+                if raw_sse_buffer.endswith(_SSE_FRAME_DELIMITERS)
+                else raw_sse_buffer + "\n\n"
+            )
 
         if error_message is not None:
             yield error_message
@@ -7118,9 +7194,11 @@ async def async_data_generator(
         # it here. This is the outermost generator Starlette closes on
         # disconnect, so it fires reliably regardless of needs_iterator_wrap
         # (a nested iterator hook would only see GeneratorExit on GC).
-        proxy_logging_obj._release_max_parallel_requests_on_disconnect(
-            user_api_key_dict
-        )
+        if not stream_completed:
+            proxy_logging_obj._release_max_parallel_requests_on_disconnect(
+                user_api_key_dict
+            )
+            client_disconnected = True
         raise
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -7154,30 +7232,33 @@ async def async_data_generator(
             code=getattr(e, "status_code", 500),
         )
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
+        stream_completed = True
         yield f"data: {error_returned}\n\n"
     finally:
-        # Close the response stream to release the underlying HTTP connection
-        # back to the connection pool. This prevents pool exhaustion when
-        # clients disconnect mid-stream.
-        # Shield from cancellation so the close awaits can complete.
-        with anyio.CancelScope(shield=True):
-            if hasattr(response, "aclose"):
-                try:
-                    await response.aclose()
-                except BaseException as e:
-                    verbose_proxy_logger.debug(
-                        "async_data_generator: error closing response stream: %s",
-                        e,
-                    )
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=request,
+            request_data=request_data,
+            response=response,
+            stream_completed=stream_completed,
+            client_disconnected=client_disconnected,
+        )
 
 
 def select_data_generator(
-    response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
+    response,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict,
+    request: Request | None = None,
 ):
     return async_data_generator(
         response=response,
         user_api_key_dict=user_api_key_dict,
         request_data=request_data,
+        request=request,
     )
 
 
@@ -7255,14 +7336,47 @@ class ProxyStartupEvent:
         if _use_redis_transaction_buffer and redis_usage_cache is None:
             raise ValueError(
                 "`use_redis_transaction_buffer` is enabled in general_settings "
-                "but no Redis cache is configured. This will cause spend updates "
+                "but no Redis is configured. This will cause spend updates "
                 "to not be tracked. Add a Redis cache in litellm_settings:\n\n"
                 "litellm_settings:\n"
                 "  cache: true\n"
                 "  cache_params:\n"
                 "    type: redis\n"
-                "    url: os.environ/REDIS_URL\n"
+                "    url: os.environ/REDIS_URL\n\n"
+                "or set REDIS_* environment variables (e.g. REDIS_HOST, "
+                "REDIS_PORT, REDIS_PASSWORD, or REDIS_URL) to use a standalone "
+                "Redis for the transaction buffer."
             )
+
+    @staticmethod
+    def _get_transaction_buffer_redis_cache(
+        general_settings: dict,
+    ) -> RedisCache | None:
+        """
+        Builds a standalone Redis cache from REDIS_* environment variables so
+        use_redis_transaction_buffer can run when the proxy cache backend is not
+        Redis (e.g. disk, s3).
+
+        Returns None when the buffer is disabled, or when no Redis host or url
+        is set in the environment.
+        """
+        from litellm._redis import _redis_kwargs_from_environment
+        from litellm.secret_managers.main import str_to_bool
+
+        _use_redis_transaction_buffer: bool | str | None = general_settings.get(
+            "use_redis_transaction_buffer", False
+        )
+        if isinstance(_use_redis_transaction_buffer, str):
+            _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
+
+        if not _use_redis_transaction_buffer:
+            return None
+
+        redis_env_kwargs = _redis_kwargs_from_environment()
+        if "host" not in redis_env_kwargs and "url" not in redis_env_kwargs:
+            return None
+
+        return RedisCache(**redis_env_kwargs)
 
     @classmethod
     async def _initialize_semantic_tool_filter(
@@ -8269,6 +8383,8 @@ async def model_list(
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
+    settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
+
     from litellm.proxy.management_endpoints.common_utils import (
         _user_has_admin_privileges,
     )
@@ -8348,16 +8464,21 @@ async def model_list(
         if hidden_names:
             all_models = [m for m in all_models if m not in hidden_names]
 
-        # Build response data with all proxy models
+        # Surface the public team name by default; legacy internal keys via flag.
+        # The internal routing key drives the metadata/fallback lookup, while the
+        # public name is what the client sees as the model id.
         model_data = []
-        for model in all_models:
+        for response_id, lookup_id in TeamModelNameTranslator.listing_entries(
+            all_models, llm_router, settings
+        ):
             model_info = create_model_info_response(
-                model_id=model,
+                model_id=lookup_id,
                 provider="openai",
                 include_metadata=include_metadata or False,
                 fallback_type=fallback_type,
                 llm_router=llm_router,
             )
+            model_info["id"] = response_id
             model_data.append(model_info)
 
         return dict(
@@ -8385,16 +8506,21 @@ async def model_list(
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
 
-    # Build response data
+    # Surface the public team name by default; legacy internal keys via flag.
+    # The internal routing key drives the metadata/fallback lookup, while the
+    # public name is what the client sees as the model id.
     model_data = []
-    for model in all_models:
+    for response_id, lookup_id in TeamModelNameTranslator.listing_entries(
+        all_models, llm_router, settings
+    ):
         model_info = create_model_info_response(
-            model_id=model,
+            model_id=lookup_id,
             provider="openai",
             include_metadata=include_metadata or False,
             fallback_type=fallback_type,
             llm_router=llm_router,
         )
+        model_info["id"] = response_id
         model_data.append(model_info)
 
     return dict(
@@ -8416,6 +8542,8 @@ async def model_list(
 async def model_info(
     model_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    team_id: Optional[str] = None,
+    healthy_only: Optional[bool] = False,
 ):
     """
     Retrieve information about a specific model accessible to your API key.
@@ -8425,8 +8553,14 @@ async def model_info(
 
     Follows OpenAI API specification for individual model retrieval.
     https://platform.openai.com/docs/api-reference/models/retrieve
+
+    Query parameters mirror `/v1/models` so the same caller context (team
+    scoping, health filtering, paused deployments) drives both endpoints; the
+    listing's public id must resolve to the same internal deployment here.
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
+
+    settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
 
     from litellm.proxy.utils import (
         create_model_info_response,
@@ -8434,7 +8568,6 @@ async def model_info(
         validate_model_access,
     )
 
-    # Get available models for the user
     all_models = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
@@ -8442,21 +8575,43 @@ async def model_info(
         user_model=user_model,
         prisma_client=prisma_client,
         proxy_logging_obj=proxy_logging_obj,
-        team_id=None,
+        team_id=team_id,
         include_model_access_groups=False,
         only_model_access_groups=False,
         return_wildcard_routes=False,
         user_api_key_cache=user_api_key_cache,
     )
 
+    # Mirror /v1/models' visibility filter so first-occurrence resolution
+    # cannot land on a deployment the listing had hidden.
+    blocked_names = (
+        llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
+    )
+    unhealthy_names: set[str] = set()
+    if healthy_only and llm_router is not None:
+        unhealthy_names = await llm_router.async_get_fully_unhealthy_model_names()
+    hidden_names = blocked_names | unhealthy_names
+    if hidden_names:
+        all_models = [m for m in all_models if m not in hidden_names]
+
+    internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(
+        llm_router, settings
+    )
+    resolved_model_id = TeamModelNameTranslator.resolve_public_name(
+        model_id=model_id,
+        available_models=all_models,
+        llm_router=llm_router,
+        general_settings=settings,
+    )
+
     # Validate that the requested model is accessible
-    validate_model_access(model_id=model_id, available_models=all_models)
+    validate_model_access(model_id=resolved_model_id, available_models=all_models)
 
     # Get provider information from the router deployment
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
 
-    deployment = llm_router.get_deployment_by_model_group_name(model_id)
+    deployment = llm_router.get_deployment_by_model_group_name(resolved_model_id)
     if deployment is None:
         raise HTTPException(
             status_code=404,
@@ -8466,9 +8621,9 @@ async def model_info(
     # Use the actual litellm model from the deployment to get provider info
     _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
 
-    # Return the model information in the same format as the list endpoint
+    response_id = internal_to_public.get(resolved_model_id, model_id)
     return create_model_info_response(
-        model_id=model_id,
+        model_id=response_id,
         provider=provider,
         include_metadata=False,
         fallback_type=None,
@@ -8614,6 +8769,7 @@ async def chat_completion(
                 response=_streaming_response,
                 user_api_key_dict=user_api_key_dict,
                 request_data=_data,
+                request=request,
             )
 
             return StreamingResponse(
@@ -8648,6 +8804,7 @@ async def chat_completion(
                 response=_streaming_response,
                 user_api_key_dict=user_api_key_dict,
                 request_data=_data,
+                request=request,
             )
 
             return StreamingResponse(
@@ -8796,6 +8953,7 @@ async def completion(
                 response=_streaming_response,
                 user_api_key_dict=user_api_key_dict,
                 request_data=_data,
+                request=request,
             )
 
             return StreamingResponse(
@@ -8842,6 +9000,7 @@ async def completion(
                 response=_streaming_response,
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
+                request=request,
             )
 
             return StreamingResponse(
@@ -13314,6 +13473,7 @@ async def async_queue_request(
                     user_api_key_dict=user_api_key_dict,
                     response=response,
                     request_data=data,
+                    request=request,
                 ),
                 media_type="text/event-stream",
             )

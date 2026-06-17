@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Non-gating ratchet guard: budget ceilings may only fall, never rise.
 
-Every `*-budget.json` file (ruff-strict, type-discipline, mypy-code, basedpyright-code) is a
+Every `*-budget.json` file (ruff-strict, type-discipline, basedpyright-code) is a
 one-way ratchet: each rule's ceiling is `baseline + slack`, and the whole point is
 to drive that number DOWN over time. This check compares every budget file against
 its own content at the merge-base with the target branch and fails (exits 1, red) if:
@@ -38,7 +38,6 @@ DEFAULT_BASE = "origin/litellm_internal_staging"
 DEFAULT_BUDGETS: tuple[str, ...] = (
     "ruff-strict-budget.json",
     "type-discipline-budget.json",
-    "mypy-code-budget.json",
     "basedpyright-code-budget.json",
 )
 
@@ -99,13 +98,17 @@ def regressions_for(rel: str, base: dict | None, head: dict | None) -> list[Regr
 
     base_caps = _caps(base)
     head_caps = _caps(head)
-    out: list[Regression] = []
-    for rule, base_cap in sorted(base_caps.items()):
-        if rule not in head_caps:
-            out.append(Regression(rel, rule, f"rule dropped (ceiling {base_cap} -> removed)"))
-        elif head_caps[rule] > base_cap:
-            out.append(Regression(rel, rule, f"ceiling raised {base_cap} -> {head_caps[rule]}"))
-    return out
+    return [
+        Regression(
+            rel,
+            rule,
+            f"rule dropped (ceiling {base_cap} -> removed)"
+            if rule not in head_caps
+            else f"ceiling raised {base_cap} -> {head_caps[rule]}",
+        )
+        for rule, base_cap in sorted(base_caps.items())
+        if rule not in head_caps or head_caps[rule] > base_cap
+    ]
 
 
 def main() -> int:

@@ -48,7 +48,7 @@ def test_dropped_rule_is_a_regression():
 
 
 def test_new_rule_in_head_is_clean():
-    assert ratchet.regressions_for("b.json", {}, {"LIT009": _spec_of(5, 0)}) == []
+    assert ratchet.regressions_for("b.json", {}, {"new-rule": _spec_of(5, 0)}) == []
 
 
 def test_deleted_budget_file_is_a_regression():

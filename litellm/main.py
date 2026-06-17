@@ -7434,22 +7434,7 @@ def speech(
 
 async def ahealth_check(
     model_params: dict,
-    mode: Optional[
-        Literal[
-            "chat",
-            "completion",
-            "embedding",
-            "audio_speech",
-            "audio_transcription",
-            "image_generation",
-            "video_generation",
-            "batch",
-            "rerank",
-            "realtime",
-            "responses",
-            "ocr",
-        ]
-    ] = "chat",
+    mode: str | None = "chat",
     prompt: Optional[str] = None,
     input: Optional[List] = None,
 ):
