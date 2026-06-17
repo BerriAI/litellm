@@ -2203,7 +2203,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             inference_geo = _usage["inference_geo"]
         service_tier = cast(
             str | None,
-            _usage.get("service_tier"),  # any-ok: untyped usage dict
+            _usage.get("service_tier"),
         )
 
         iterations: list[Any] | None = _usage.get("iterations")
