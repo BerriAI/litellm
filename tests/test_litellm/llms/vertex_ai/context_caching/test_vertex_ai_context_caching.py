@@ -1917,3 +1917,57 @@ class TestVertexAIGlobalLocation:
 
         assert "generativelanguage.googleapis.com" in url
         assert "cachedContents" in url
+
+
+class TestContextCachingMultiRegionUrls:
+    """Regression coverage for #29571: multi-region vertex_location values
+    (`eu`, `us`) must resolve to the REP host (`aiplatform.{geo}.rep.googleapis.com`)
+    on the cachedContents endpoint, matching the inference path (already
+    fixed in #27293). Previously the URL was hardcoded to
+    `{location}-aiplatform.googleapis.com`, which doesn't exist for
+    multi-region locations and 404'd."""
+
+    def setup_method(self):
+        self.caching = ContextCachingEndpoints()
+
+    @pytest.mark.parametrize("location", ["eu", "us"])
+    def test_vertex_ai_multi_region_uses_rep_host(self, location):
+        _, url = self.caching._get_token_and_url_context_caching(
+            gemini_api_key=None,
+            custom_llm_provider="vertex_ai",
+            api_base=None,
+            vertex_project="my-project",
+            vertex_location=location,
+            vertex_auth_header="Bearer token",
+        )
+
+        assert url.startswith(f"https://aiplatform.{location}.rep.googleapis.com/")
+        assert f"/locations/{location}/cachedContents" in url
+        # Old broken host must no longer appear.
+        assert f"{location}-aiplatform.googleapis.com" not in url
+
+    def test_vertex_ai_regional_still_uses_regional_host(self):
+        _, url = self.caching._get_token_and_url_context_caching(
+            gemini_api_key=None,
+            custom_llm_provider="vertex_ai",
+            api_base=None,
+            vertex_project="my-project",
+            vertex_location="us-central1",
+            vertex_auth_header="Bearer token",
+        )
+
+        assert url.startswith("https://us-central1-aiplatform.googleapis.com/")
+        assert "/locations/us-central1/cachedContents" in url
+
+    def test_vertex_ai_global_still_uses_global_host(self):
+        _, url = self.caching._get_token_and_url_context_caching(
+            gemini_api_key=None,
+            custom_llm_provider="vertex_ai",
+            api_base=None,
+            vertex_project="my-project",
+            vertex_location="global",
+            vertex_auth_header="Bearer token",
+        )
+
+        assert url.startswith("https://aiplatform.googleapis.com/")
+        assert "/locations/global/cachedContents" in url

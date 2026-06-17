@@ -303,40 +303,54 @@ def _get_token_base_cost(
 
                     # Apply tiered pricing to cache costs
                     cache_creation_tiered_key = (
-                        f"cache_creation_input_token_cost_above_{threshold_str}_tokens"
+                        _get_service_tier_cost_key(
+                            f"cache_creation_input_token_cost_above_{threshold_str}_tokens",
+                            service_tier,
+                        )
+                        if service_tier
+                        else f"cache_creation_input_token_cost_above_{threshold_str}_tokens"
                     )
-                    cache_creation_1hr_tiered_key = f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
+                    cache_creation_1hr_tiered_key = (
+                        _get_service_tier_cost_key(
+                            f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens",
+                            service_tier,
+                        )
+                        if service_tier
+                        else f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
+                    )
                     cache_read_tiered_key = (
-                        f"cache_read_input_token_cost_above_{threshold_str}_tokens"
+                        _get_service_tier_cost_key(
+                            f"cache_read_input_token_cost_above_{threshold_str}_tokens",
+                            service_tier,
+                        )
+                        if service_tier
+                        else f"cache_read_input_token_cost_above_{threshold_str}_tokens"
                     )
 
-                    if cache_creation_tiered_key in model_info:
-                        cache_creation_cost = cast(
-                            float,
-                            _get_cost_per_unit(
-                                model_info,
-                                cache_creation_tiered_key,
-                                cache_creation_cost,
-                            ),
-                        )
+                    cache_creation_cost = cast(
+                        float,
+                        _get_cost_per_unit(
+                            model_info,
+                            cache_creation_tiered_key,
+                            cache_creation_cost,
+                        ),
+                    )
 
-                    if cache_creation_1hr_tiered_key in model_info:
-                        cache_creation_cost_above_1hr = cast(
-                            float,
-                            _get_cost_per_unit(
-                                model_info,
-                                cache_creation_1hr_tiered_key,
-                                cache_creation_cost_above_1hr,
-                            ),
-                        )
+                    cache_creation_cost_above_1hr = cast(
+                        float,
+                        _get_cost_per_unit(
+                            model_info,
+                            cache_creation_1hr_tiered_key,
+                            cache_creation_cost_above_1hr,
+                        ),
+                    )
 
-                    if cache_read_tiered_key in model_info:
-                        cache_read_cost = cast(
-                            float,
-                            _get_cost_per_unit(
-                                model_info, cache_read_tiered_key, cache_read_cost
-                            ),
-                        )
+                    cache_read_cost = cast(
+                        float,
+                        _get_cost_per_unit(
+                            model_info, cache_read_tiered_key, cache_read_cost
+                        ),
+                    )
 
                     break
             except (IndexError, ValueError):
@@ -683,7 +697,7 @@ def _get_regional_uplift_multiplier(
         return 1.0
 
 
-def generic_cost_per_token(  # noqa: PLR0915
+def generic_cost_per_token(
     model: str,
     usage: Usage,
     custom_llm_provider: str,
@@ -947,6 +961,43 @@ def calculate_image_response_cost_from_usage(
         custom_llm_provider=custom_llm_provider,
     )
     return prompt_cost + completion_cost
+
+
+def calculate_image_response_web_search_cost(
+    image_response: ImageResponse,
+    custom_llm_provider: str,
+    model_info: ModelInfo,
+) -> float:
+    """
+    Cost of Google Search grounding performed during image generation.
+
+    The grounding request count is carried on the image usage object by the
+    provider transformers; it is billed with the same per-request accounting
+    used for chat completions.
+    """
+    usage = image_response.usage
+    if usage is None:
+        return 0.0
+
+    web_search_requests = getattr(usage, "web_search_requests", None)
+    if not web_search_requests:
+        return 0.0
+
+    from litellm.llms import get_cost_for_web_search_request
+
+    synthetic_usage = Usage(
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            web_search_requests=web_search_requests
+        )
+    )
+    return (
+        get_cost_for_web_search_request(
+            custom_llm_provider=custom_llm_provider,
+            usage=synthetic_usage,
+            model_info=model_info,
+        )
+        or 0.0
+    )
 
 
 class CostCalculatorUtils:

@@ -1,6 +1,6 @@
 import datetime as real_datetime
-import json
 import os
+import smtplib
 import sys
 
 import pytest
@@ -15,7 +15,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from litellm.proxy.utils import get_custom_url, join_paths
 
@@ -555,3 +555,208 @@ def test_create_model_info_response_no_router_keeps_base_fields():
         "created": response["created"],
         "owned_by": "openai",
     }
+class TestPostCallFailureHookLLMExceptionAlerting:
+    """The llm_exceptions alert is for infra / LLM-API failures, not user
+    errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized
+    client errors must be excluded so a guardrail content-policy block never
+    pages on-call. ProxyException is such an error; before LIT-3751 only
+    HTTPException was excluded, so AIM blocks paged as if the LLM API failed."""
+
+    async def _alerted(self, exc) -> bool:
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from litellm.proxy._types import AlertType, UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = [AlertType.llm_exceptions]
+        alerting_handler = AsyncMock()
+        with (
+            patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()),
+            patch.object(proxy_logging_obj, "alerting_handler", new=alerting_handler),
+        ):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data={},
+                original_exception=exc,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        await asyncio.sleep(0)  # let the fire-and-forget alert task run
+        return alerting_handler.called
+
+    @pytest.mark.asyncio
+    async def test_proxy_exception_does_not_alert(self):
+        from litellm.proxy._types import ProxyException
+
+        exc = ProxyException(
+            message="content blocked",
+            type="invalid_request_error",
+            param=None,
+            code=400,
+            openai_code="content_policy_violation",
+        )
+        assert await self._alerted(exc) is False
+
+    @pytest.mark.asyncio
+    async def test_http_exception_does_not_alert(self):
+        assert (
+            await self._alerted(HTTPException(status_code=400, detail="blocked"))
+            is False
+        )
+
+    @pytest.mark.asyncio
+    async def test_genuine_llm_api_error_still_alerts(self):
+        assert await self._alerted(Exception("upstream 503")) is True
+
+
+class TestPostCallFailureHookProxyExceptionLogging:
+    """A guardrail block raises a ProxyException; on an LLM route it must still
+    drive proxy-only failure logging (_handle_logging_proxy_only_error) so the
+    blocked request is recorded, exactly as the old HTTPException did. Before
+    LIT-3751 the classifier only matched HTTPException, so switching AIM to
+    ProxyException silently dropped the rejected prompt from failure logs."""
+
+    async def _logged(self, exc, *, request_route) -> bool:
+        from unittest.mock import AsyncMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        handle_mock = AsyncMock()
+        with (
+            patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()),
+            patch.object(
+                proxy_logging_obj,
+                "_handle_logging_proxy_only_error",
+                new=handle_mock,
+            ),
+        ):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data={},
+                original_exception=exc,
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="sk-test", request_route=request_route
+                ),
+            )
+        return handle_mock.await_count > 0
+
+    def _block(self):
+        from litellm.proxy._types import ProxyException
+
+        return ProxyException(
+            message="content blocked",
+            type="invalid_request_error",
+            param=None,
+            code=400,
+            openai_code="content_policy_violation",
+        )
+
+    @pytest.mark.asyncio
+    async def test_proxy_exception_on_llm_route_is_logged(self):
+        assert (
+            await self._logged(self._block(), request_route="/v1/chat/completions")
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_on_llm_route_is_not_logged(self):
+        # A raw provider/unknown exception is logged by the LLM call path, not here.
+        assert (
+            await self._logged(
+                Exception("upstream 503"), request_route="/v1/chat/completions"
+            )
+            is False
+        )
+
+
+class TestShouldUseSmtpSsl:
+    def test_port_465_uses_ssl(self, monkeypatch):
+        from litellm.proxy.utils import _should_use_smtp_ssl
+
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+        assert _should_use_smtp_ssl(smtp_port=465) is True
+
+    def test_smtp_use_ssl_env_var_forces_ssl_on_any_port(self, monkeypatch):
+        from litellm.proxy.utils import _should_use_smtp_ssl
+
+        monkeypatch.setenv("SMTP_USE_SSL", "True")
+        assert _should_use_smtp_ssl(smtp_port=2465) is True
+
+    def test_port_587_uses_plain_smtp(self, monkeypatch):
+        from litellm.proxy.utils import _should_use_smtp_ssl
+
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+        assert _should_use_smtp_ssl(smtp_port=587) is False
+
+
+class TestCreateSmtpConnection:
+    def test_port_465_creates_smtp_ssl_with_verified_context(self, monkeypatch):
+        import ssl
+
+        from litellm.proxy.utils import _create_smtp_connection
+
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+        with (
+            patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
+            patch("smtplib.SMTP") as mock_smtp,
+        ):
+            result = _create_smtp_connection(
+                smtp_host="mail.example.com", smtp_port=465
+            )
+
+        mock_smtp.assert_not_called()
+        assert result is mock_smtp_ssl.return_value
+        _, kwargs = mock_smtp_ssl.call_args
+        assert kwargs["host"] == "mail.example.com"
+        assert kwargs["port"] == 465
+        context = kwargs["context"]
+        assert isinstance(context, ssl.SSLContext)
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+
+    def test_port_587_creates_plain_smtp(self, monkeypatch):
+        from litellm.proxy.utils import _create_smtp_connection
+
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+        with (
+            patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
+            patch("smtplib.SMTP") as mock_smtp,
+        ):
+            result = _create_smtp_connection(
+                smtp_host="mail.example.com", smtp_port=587
+            )
+
+        mock_smtp_ssl.assert_not_called()
+        assert result is mock_smtp.return_value
+        mock_smtp.assert_called_once_with(host="mail.example.com", port=587)
+
+
+class TestSendEmailStartTls:
+    @pytest.mark.asyncio
+    async def test_starttls_uses_verified_context(self, monkeypatch):
+        import ssl
+
+        from litellm.proxy.utils import send_email
+
+        monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+        monkeypatch.setenv("SMTP_PORT", "587")
+        monkeypatch.setenv("SMTP_SENDER_EMAIL", "sender@example.com")
+        monkeypatch.delenv("SMTP_TLS", raising=False)
+        monkeypatch.delenv("SMTP_USE_SSL", raising=False)
+
+        mock_server = MagicMock(spec=smtplib.SMTP)
+        with patch(
+            "litellm.proxy.utils._create_smtp_connection"
+        ) as mock_create_connection:
+            mock_create_connection.return_value.__enter__.return_value = mock_server
+            await send_email(
+                receiver_email="receiver@example.com",
+                subject="test",
+                html="<p>test</p>",
+            )
+
+        _, kwargs = mock_server.starttls.call_args
+        context = kwargs["context"]
+        assert isinstance(context, ssl.SSLContext)
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True

@@ -150,6 +150,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     ) -> dict:
         ## SETUP ##
         stream = optional_params.pop("stream", None)
+        optional_params.pop("stream_chunk_size", None)
         custom_prompt_dict: dict = litellm_params.pop("custom_prompt_dict", None) or {}
         hf_model_name = litellm_params.get("hf_model_name", None)
 
@@ -256,7 +257,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         return request_data
 
-    def transform_response(  # noqa: PLR0915
+    def transform_response(
         self,
         model: str,
         raw_response: httpx.Response,

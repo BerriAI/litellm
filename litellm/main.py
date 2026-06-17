@@ -86,6 +86,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_for_health_check,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -391,7 +392,7 @@ class AsyncCompletions:
 
 @tracer.wrap()
 @client
-async def acompletion(  # noqa: PLR0915
+async def acompletion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
@@ -1085,7 +1086,7 @@ def _build_custom_pricing_entry(
 
 @tracer.wrap()
 @client
-def completion(  # type: ignore # noqa: PLR0915
+def completion(  # type: ignore
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
@@ -1407,11 +1408,19 @@ def completion(  # type: ignore # noqa: PLR0915
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
+        _supplemental_provider_params = {
+            k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs
+        }
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             api_key=api_key,
+            litellm_params=(
+                GenericLiteLLMParams(**_supplemental_provider_params)
+                if _supplemental_provider_params
+                else None
+            ),
         )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
@@ -4869,7 +4878,7 @@ def embedding(
 
 
 @client
-def embedding(  # noqa: PLR0915
+def embedding(
     model,
     input=[],
     # Optional params
@@ -6116,7 +6125,7 @@ async def atext_completion(
 
 
 @client
-def text_completion(  # noqa: PLR0915
+def text_completion(
     prompt: Union[
         str, List[Union[str, List[Union[str, List[int]]]]]
     ],  # Required: The prompt(s) to generate completions for.
@@ -6655,7 +6664,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
 
 
 @client
-def transcription(  # noqa: PLR0915
+def transcription(
     model: str,
     file: FileTypes,
     ## OPTIONAL OPENAI PARAMS ##
@@ -6962,7 +6971,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
 
 
 @client
-def speech(  # noqa: PLR0915
+def speech(
     model: str,
     input: str,
     voice: Optional[Union[str, dict]] = None,
@@ -7563,7 +7572,7 @@ def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
     except Exception:
         pass
 
@@ -7653,7 +7662,7 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-def stream_chunk_builder(  # noqa: PLR0915
+def stream_chunk_builder(
     chunks: list,
     messages: Optional[list] = None,
     start_time=None,

@@ -24,6 +24,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
+    SpecialModelNames,
     UserAPIKeyAuth,
     WebhookEvent,
 )
@@ -166,7 +167,7 @@ async def test_endpoint(request: Request):
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def health_services_endpoint(  # noqa: PLR0915
+async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     service: services = fastapi.Query(description="Specify the service being hit."),
 ):
@@ -1074,8 +1075,26 @@ async def health_endpoint(
         # response but NOT in the background-cache /health response. This is
         # surfaced via the "warnings" field below so operators can fix the
         # missing model_info.id rather than guess at the discrepancy.
-        if len(user_api_key_dict.models) > 0:
-            allowed_models = set(user_api_key_dict.models)
+        # Keys granted SpecialModelNames.all_proxy_models carry the literal
+        # "all-proxy-models" entry, which matches no real model_name; treat
+        # them as unrestricted instead of filtering the list down to nothing.
+        # Keys granted SpecialModelNames.all_team_models inherit the parent
+        # team's allowlist (same semantics as get_key_models in
+        # model_checks.py). Without a team_id the sentinel cannot resolve and
+        # stays in the list, matching nothing; denied rather than
+        # unrestricted, mirroring _resolve_key_models_for_auth_check.
+        accessible_models = list(user_api_key_dict.models)
+        if (
+            SpecialModelNames.all_team_models.value in accessible_models
+            and user_api_key_dict.team_id is not None
+        ):
+            accessible_models = list(user_api_key_dict.team_models)
+        restrict_to_allowed_models = (
+            len(accessible_models) > 0
+            and SpecialModelNames.all_proxy_models.value not in accessible_models
+        )
+        if restrict_to_allowed_models:
+            allowed_models = set(accessible_models)
             _llm_model_list = [
                 m for m in _llm_model_list if m.get("model_name") in allowed_models
             ]
@@ -1087,7 +1106,7 @@ async def health_endpoint(
             # other healthy model would still report healthy_count > 0 and
             # the targeted-503 path would never fire.
             targeted_ids = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
-            if len(user_api_key_dict.models) > 0:
+            if restrict_to_allowed_models:
                 allowed_model_ids = {
                     (m.get("model_info") or {}).get("id")
                     for m in _llm_model_list
