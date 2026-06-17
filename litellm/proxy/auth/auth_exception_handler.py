@@ -1,7 +1,7 @@
 """
 Handles Authentication Errors
 """
-from litellm.proxy.utils import hash_token 
+from litellm.proxy.utils import _safe_hash_litellm_api_key
 
 from typing import TYPE_CHECKING, Any, Optional, Union
 
@@ -116,9 +116,8 @@ class UserAPIKeyAuthExceptionHandler:
             user_api_key_dict.parent_otel_span = parent_otel_span
             user_api_key_dict.request_route = route
             user_api_key_dict.api_key = (
-                user_api_key_dict.api_key or hash_token(api_key) if api_key else None
+                user_api_key_dict.api_key or (_safe_hash_litellm_api_key(api_key) if api_key else None)
             )
-
             # Stamp identity onto the request's server span now, before the request
             # is rejected; the OTEL failure hooks don't touch the server span, so
             # without this the failed trace would carry no team/key attributes.
