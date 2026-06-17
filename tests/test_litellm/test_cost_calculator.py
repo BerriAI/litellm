@@ -1324,6 +1324,20 @@ def test_token_tier_thresholds_sort_by_numeric_value():
     assert completion_cost == 11e-6
 
 
+def test_token_cost_threshold_parses_supported_formats():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        _get_token_cost_threshold,
+    )
+
+    assert (
+        _get_token_cost_threshold("input_cost_per_token_above_128k_tokens")
+        == 128_000
+    )
+    assert _get_token_cost_threshold("input_cost_per_token_above_128_tokens") == 128
+    assert _get_token_cost_threshold("input_cost_per_token_above_many_tokens") is None
+    assert _get_token_cost_threshold("input_cost_per_token") is None
+
+
 def test_gemini_25_explicit_caching_cost_direct_usage():
     """
     Test that Gemini 2.5 models correctly calculate costs with explicit caching.
