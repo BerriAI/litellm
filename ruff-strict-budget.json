@@ -1,0 +1,494 @@
+{
+  "ANN001": {
+    "baseline": 2865,
+    "slack": 50
+  },
+  "ANN002": {
+    "baseline": 64,
+    "slack": 5
+  },
+  "ANN003": {
+    "baseline": 759,
+    "slack": 30
+  },
+  "ANN201": {
+    "baseline": 1944,
+    "slack": 50
+  },
+  "ANN202": {
+    "baseline": 858,
+    "slack": 30
+  },
+  "ANN204": {
+    "baseline": 658,
+    "slack": 20
+  },
+  "ANN205": {
+    "baseline": 117,
+    "slack": 10
+  },
+  "ANN206": {
+    "baseline": 120,
+    "slack": 10
+  },
+  "ANN401": {
+    "baseline": 1886,
+    "slack": 50
+  },
+  "ASYNC230": {
+    "baseline": 11,
+    "slack": 3
+  },
+  "B004": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "B006": {
+    "baseline": 180,
+    "slack": 10
+  },
+  "B008": {
+    "baseline": 490,
+    "slack": 15
+  },
+  "B009": {
+    "baseline": 79,
+    "slack": 5
+  },
+  "B010": {
+    "baseline": 187,
+    "slack": 10
+  },
+  "B018": {
+    "baseline": 2,
+    "slack": 3
+  },
+  "B019": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "B021": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "B026": {
+    "baseline": 3,
+    "slack": 3
+  },
+  "B033": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "BLE001": {
+    "baseline": 2854,
+    "slack": 50
+  },
+  "C401": {
+    "baseline": 8,
+    "slack": 3
+  },
+  "C404": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "C405": {
+    "baseline": 20,
+    "slack": 3
+  },
+  "C408": {
+    "baseline": 11,
+    "slack": 3
+  },
+  "C414": {
+    "baseline": 4,
+    "slack": 3
+  },
+  "C419": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "C901": {
+    "baseline": 301,
+    "slack": 15
+  },
+  "D419": {
+    "baseline": 6,
+    "slack": 3
+  },
+  "DTZ001": {
+    "baseline": 2,
+    "slack": 3
+  },
+  "DTZ003": {
+    "baseline": 30,
+    "slack": 3
+  },
+  "DTZ005": {
+    "baseline": 229,
+    "slack": 15
+  },
+  "DTZ006": {
+    "baseline": 10,
+    "slack": 3
+  },
+  "DTZ007": {
+    "baseline": 20,
+    "slack": 3
+  },
+  "DTZ011": {
+    "baseline": 3,
+    "slack": 3
+  },
+  "EXE001": {
+    "baseline": 4,
+    "slack": 3
+  },
+  "EXE002": {
+    "baseline": 3,
+    "slack": 3
+  },
+  "F401": {
+    "baseline": 20,
+    "slack": 3
+  },
+  "FURB136": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "FURB168": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "FURB188": {
+    "baseline": 49,
+    "slack": 3
+  },
+  "I001": {
+    "baseline": 258,
+    "slack": 15
+  },
+  "LOG015": {
+    "baseline": 5,
+    "slack": 3
+  },
+  "N999": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "PERF102": {
+    "baseline": 27,
+    "slack": 3
+  },
+  "PERF401": {
+    "baseline": 136,
+    "slack": 10
+  },
+  "PERF402": {
+    "baseline": 6,
+    "slack": 3
+  },
+  "PERF403": {
+    "baseline": 69,
+    "slack": 5
+  },
+  "PIE790": {
+    "baseline": 263,
+    "slack": 15
+  },
+  "PIE800": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "PIE804": {
+    "baseline": 21,
+    "slack": 3
+  },
+  "PIE810": {
+    "baseline": 41,
+    "slack": 3
+  },
+  "PLC0206": {
+    "baseline": 28,
+    "slack": 3
+  },
+  "PLC0208": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "PLC0414": {
+    "baseline": 35,
+    "slack": 3
+  },
+  "PLR0124": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "PLR0206": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "PLR0402": {
+    "baseline": 6,
+    "slack": 3
+  },
+  "PLR0913": {
+    "baseline": 1813,
+    "slack": 50
+  },
+  "PLR1704": {
+    "baseline": 3,
+    "slack": 3
+  },
+  "PLR1711": {
+    "baseline": 31,
+    "slack": 3
+  },
+  "PLR1714": {
+    "baseline": 252,
+    "slack": 15
+  },
+  "PLR1730": {
+    "baseline": 7,
+    "slack": 3
+  },
+  "PLR2044": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "PLW0127": {
+    "baseline": 41,
+    "slack": 3
+  },
+  "PLW0133": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "PLW0602": {
+    "baseline": 215,
+    "slack": 15
+  },
+  "PLW0603": {
+    "baseline": 183,
+    "slack": 10
+  },
+  "PLW1508": {
+    "baseline": 188,
+    "slack": 10
+  },
+  "PLW1510": {
+    "baseline": 2,
+    "slack": 3
+  },
+  "PYI030": {
+    "baseline": 2,
+    "slack": 3
+  },
+  "PYI036": {
+    "baseline": 2,
+    "slack": 3
+  },
+  "PYI041": {
+    "baseline": 9,
+    "slack": 3
+  },
+  "PYI064": {
+    "baseline": 2,
+    "slack": 3
+  },
+  "RET501": {
+    "baseline": 35,
+    "slack": 3
+  },
+  "RET504": {
+    "baseline": 709,
+    "slack": 20
+  },
+  "RUF010": {
+    "baseline": 844,
+    "slack": 30
+  },
+  "RUF012": {
+    "baseline": 158,
+    "slack": 10
+  },
+  "RUF015": {
+    "baseline": 8,
+    "slack": 3
+  },
+  "RUF019": {
+    "baseline": 38,
+    "slack": 3
+  },
+  "RUF022": {
+    "baseline": 80,
+    "slack": 5
+  },
+  "RUF023": {
+    "baseline": 2,
+    "slack": 3
+  },
+  "RUF046": {
+    "baseline": 5,
+    "slack": 3
+  },
+  "RUF051": {
+    "baseline": 3,
+    "slack": 3
+  },
+  "RUF059": {
+    "baseline": 69,
+    "slack": 5
+  },
+  "RUF100": {
+    "baseline": 465,
+    "slack": 15
+  },
+  "S110": {
+    "baseline": 222,
+    "slack": 15
+  },
+  "S112": {
+    "baseline": 21,
+    "slack": 3
+  },
+  "SIM101": {
+    "baseline": 58,
+    "slack": 5
+  },
+  "SIM102": {
+    "baseline": 311,
+    "slack": 15
+  },
+  "SIM103": {
+    "baseline": 119,
+    "slack": 10
+  },
+  "SIM113": {
+    "baseline": 3,
+    "slack": 3
+  },
+  "SIM114": {
+    "baseline": 103,
+    "slack": 10
+  },
+  "SIM115": {
+    "baseline": 2,
+    "slack": 3
+  },
+  "SIM117": {
+    "baseline": 7,
+    "slack": 3
+  },
+  "SIM118": {
+    "baseline": 104,
+    "slack": 10
+  },
+  "SIM201": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "SIM210": {
+    "baseline": 9,
+    "slack": 3
+  },
+  "SIM211": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "SIM222": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "SIM401": {
+    "baseline": 9,
+    "slack": 3
+  },
+  "TC004": {
+    "baseline": 5,
+    "slack": 3
+  },
+  "TC005": {
+    "baseline": 6,
+    "slack": 3
+  },
+  "TID251": {
+    "baseline": 2664,
+    "slack": 50
+  },
+  "TRY002": {
+    "baseline": 528,
+    "slack": 20
+  },
+  "TRY004": {
+    "baseline": 93,
+    "slack": 5
+  },
+  "TRY201": {
+    "baseline": 409,
+    "slack": 15
+  },
+  "TRY203": {
+    "baseline": 113,
+    "slack": 10
+  },
+  "TRY300": {
+    "baseline": 853,
+    "slack": 30
+  },
+  "UP006": {
+    "baseline": 12941,
+    "slack": 100
+  },
+  "UP007": {
+    "baseline": 2520,
+    "slack": 50
+  },
+  "UP008": {
+    "baseline": 2,
+    "slack": 3
+  },
+  "UP012": {
+    "baseline": 4,
+    "slack": 3
+  },
+  "UP018": {
+    "baseline": 18,
+    "slack": 3
+  },
+  "UP024": {
+    "baseline": 12,
+    "slack": 3
+  },
+  "UP028": {
+    "baseline": 2,
+    "slack": 3
+  },
+  "UP031": {
+    "baseline": 2,
+    "slack": 3
+  },
+  "UP032": {
+    "baseline": 609,
+    "slack": 20
+  },
+  "UP034": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "UP035": {
+    "baseline": 2250,
+    "slack": 50
+  },
+  "UP036": {
+    "baseline": 1,
+    "slack": 3
+  },
+  "UP037": {
+    "baseline": 100,
+    "slack": 5
+  },
+  "UP045": {
+    "baseline": 18417,
+    "slack": 100
+  }
+}

@@ -99,7 +99,9 @@ export function useFilterLogic({
       result = result.filter((key) => (key.organization_id ?? key.org_id) === filters["Organization ID"]);
     }
 
-    setFilteredKeys(result);
+    setFilteredKeys((prev) =>
+      prev.length === result.length && prev.every((key, index) => key === result[index]) ? prev : result,
+    );
   }, [keys, filters]);
 
   // Fetch all data for filters when component mounts

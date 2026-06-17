@@ -45,6 +45,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
+    validate_managed_files_requirement,
 )
 from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
@@ -283,7 +284,7 @@ async def route_create_file(
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def create_file(  # noqa: PLR0915
+async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
@@ -345,6 +346,11 @@ async def create_file(  # noqa: PLR0915
         target_storage = file_params.target_storage
         target_model_names_list = file_params.target_model_names
         model_param = file_params.model
+
+        validate_managed_files_requirement(
+            target_model_names=target_model_names_list, model=model_param
+        )
+
         # Prepare the data for forwarding
 
         # Replace with:
@@ -583,7 +589,7 @@ async def create_file(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def get_file_content(  # noqa: PLR0915
+async def get_file_content(
     request: Request,
     fastapi_response: Response,
     file_id: str,

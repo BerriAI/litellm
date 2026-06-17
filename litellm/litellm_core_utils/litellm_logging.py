@@ -381,13 +381,14 @@ class Logging(LiteLLMLoggingBaseClass):
             List[Union[str, Callable, CustomLogger]]
         ] = dynamic_async_failure_callbacks
 
-        # Process dynamic callbacks
-        self.process_dynamic_callbacks()
-
         ## DYNAMIC LANGFUSE / GCS / logging callback KEYS ##
         self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
             self.initialize_standard_callback_dynamic_params(kwargs)
         )
+
+        # Process dynamic callbacks (after standard_callback_dynamic_params is initialized,
+        # so team-scoped credentials are available for callback initialization)
+        self.process_dynamic_callbacks()
         self.standard_built_in_tools_params: StandardBuiltInToolsParams = (
             self.initialize_standard_built_in_tools_params(kwargs)
         )
@@ -482,8 +483,21 @@ class Logging(LiteLLMLoggingBaseClass):
                 isinstance(callback, str)
                 and callback in litellm._known_custom_logger_compatible_callbacks
             ):
+                # For callbacks that support team-scoped credentials (e.g. datadog),
+                # pass only the relevant dynamic params as custom_logger_init_args.
+                _custom_logger_init_args: Optional[dict] = None
+                if callback == "datadog":
+                    _custom_logger_init_args = {
+                        k: v
+                        for k, v in self.standard_callback_dynamic_params.items()
+                        if k.startswith("dd_")
+                    }
+
                 callback_class = _init_custom_logger_compatible_class(
-                    callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                    callback,  # type: ignore[arg-type]
+                    internal_usage_cache=None,
+                    llm_router=None,  # type: ignore
+                    custom_logger_init_args=_custom_logger_init_args,
                 )
                 if callback_class is not None:
                     processed_list.append(callback_class)
@@ -972,7 +986,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self._get_masked_api_base(additional_args.get("api_base", ""))
         )
 
-    def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
+    def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
@@ -2105,7 +2119,7 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.async_success_handler(result=complete_streaming_response)
         return
 
-    def success_handler(  # noqa: PLR0915
+    def success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         verbose_logger.debug(
@@ -2570,7 +2584,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
             )
 
-    async def async_success_handler(  # noqa: PLR0915
+    async def async_success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         """
@@ -3022,7 +3036,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     kwargs=self.model_call_details,
                 )  # type: ignore
 
-    def failure_handler(  # noqa: PLR0915
+    def failure_handler(
         self, exception, traceback_exception, start_time=None, end_time=None
     ):
         verbose_logger.debug(
@@ -3739,7 +3753,7 @@ def _get_masked_values(
     }
 
 
-def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
+def set_callbacks(callback_list, function_id=None):
     """
     Globally sets the callback client
     """
@@ -3840,7 +3854,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     return None
 
 
-def _init_custom_logger_compatible_class(  # noqa: PLR0915
+def _init_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: Optional[DualCache],
     llm_router: Optional[
@@ -3941,6 +3955,24 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_prometheus_logger)
             return _prometheus_logger  # type: ignore
         elif logging_integration == "datadog":
+            # Check if team-scoped credentials are provided
+            _dd_api_key = custom_logger_init_args.get("dd_api_key")
+            _dd_site = custom_logger_init_args.get("dd_site")
+            _dd_agent_host = custom_logger_init_args.get("dd_agent_host")
+            _dd_agent_port = custom_logger_init_args.get("dd_agent_port")
+
+            if _dd_api_key or _dd_site or _dd_agent_host:
+                # Team-scoped credentials: use DynamicLoggingCache for per-credential isolation
+                from litellm.integrations.datadog.datadog_team_handler import (
+                    DataDogHandler,
+                )
+
+                return DataDogHandler.get_datadog_logger_for_request(
+                    standard_callback_dynamic_params=custom_logger_init_args,  # type: ignore
+                    in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+                )
+
+            # Global (env-var based): reuse cached instance
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLogger):
                     return callback  # type: ignore
@@ -4579,7 +4611,7 @@ def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list) -> None:
         )
 
 
-def get_custom_logger_compatible_class(  # noqa: PLR0915
+def get_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
     try:
@@ -5415,6 +5447,39 @@ class StandardLoggingPayloadSetup:
         )
 
     @staticmethod
+    def get_error_information_for_logging_payload(
+        metadata: dict,
+        original_exception: Exception | None,
+        error_str: str | None,
+    ) -> tuple[StandardLoggingPayloadErrorInformation, str | None]:
+        error_information = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
+        )
+        if not metadata.get("client_disconnected"):  # any-ok: untyped metadata
+            return error_information, error_str
+
+        client_disconnect_error = metadata.get(  # any-ok: untyped metadata
+            "error_information"
+        )
+        if isinstance(client_disconnect_error, dict):  # any-ok: untyped metadata
+            error_information = cast(
+                StandardLoggingPayloadErrorInformation,
+                client_disconnect_error,  # any-ok: untyped metadata
+            )
+        else:
+            error_information = cast(
+                StandardLoggingPayloadErrorInformation,
+                {  # any-ok: untyped metadata
+                    "error_code": "499",
+                    "error_message": "Client disconnected the request",
+                    "error_class": "ClientDisconnected",
+                },
+            )
+        if not error_str:
+            error_str = "Client disconnected the request"
+        return error_information, error_str
+
+    @staticmethod
     def get_response_time(
         start_time_float: float,
         end_time_float: float,
@@ -5741,8 +5806,12 @@ def get_standard_logging_object_payload(
             api_base=litellm_params.get("api_base"),
         )
 
-        error_information = StandardLoggingPayloadSetup.get_error_information(
-            original_exception=original_exception,
+        error_information, error_str = (
+            StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
+                metadata=metadata,  # any-ok: untyped metadata
+                original_exception=original_exception,
+                error_str=error_str,
+            )
         )
 
         ## get final response object ##
@@ -5861,7 +5930,7 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        print(json.dumps(payload, indent=4))  # noqa
+        print(json.dumps(payload, indent=4))  # noqa: T201
 
 
 def get_standard_logging_metadata(

@@ -33,7 +33,10 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
-from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+from litellm.llms.base_llm.base_model_iterator import (
+    BaseModelResponseIterator,
+    MockResponseIterator,
+)
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
@@ -814,6 +817,8 @@ class BaseLLMHTTPHandler:
             completion_stream = provider_config.get_model_response_iterator(
                 streaming_response=response.aiter_lines(), sync_stream=False
             )
+            if isinstance(completion_stream, BaseModelResponseIterator):
+                completion_stream.http_response = response
         # LOGGING
         logging_obj.post_call(
             input=messages,
@@ -5724,7 +5729,11 @@ class BaseLLMHTTPHandler:
         import websockets
         from websockets.asyncio.client import ClientConnection
 
-        litellm_params = GenericLiteLLMParams()
+        litellm_params = GenericLiteLLMParams(
+            api_base=api_base,
+            api_key=api_key,
+            **kwargs,
+        )
         headers = responses_api_provider_config.validate_environment(
             headers={},
             model=model,
@@ -5733,21 +5742,21 @@ class BaseLLMHTTPHandler:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        http_url = responses_api_provider_config.get_complete_url(
+        ws_url = responses_api_provider_config.get_websocket_url(
             api_base=api_base,
-            litellm_params={},
+            litellm_params=dict(litellm_params),
         )
-        ws_url = http_url.replace("https://", "wss://").replace("http://", "ws://")
-        # OpenAI's WebSocket responses endpoint requires ?model= in the URL,
-        # matching the Realtime API convention (wss://.../v1/realtime?model=...).
-        # Use urllib.parse so existing query params (e.g. api-version) are preserved.
-        _parsed = urlparse(ws_url)
-        _qs = parse_qs(_parsed.query)
-        if "model" not in _qs:
-            _qs["model"] = [model]
-            ws_url = urlunparse(
-                _parsed._replace(query=urlencode({k: v[0] for k, v in _qs.items()}))
-            )
+        # Some providers (e.g. OpenAI) require ?model= in the WebSocket URL.
+        # Providers that send the model in the request body (e.g. Azure) set
+        # model_in_websocket_url() to False to suppress this append.
+        if responses_api_provider_config.model_in_websocket_url():
+            _parsed = urlparse(ws_url)
+            _qs = parse_qs(_parsed.query)
+            if "model" not in _qs:
+                _qs["model"] = [model]
+                ws_url = urlunparse(
+                    _parsed._replace(query=urlencode({k: v[0] for k, v in _qs.items()}))
+                )
 
         try:
             ssl_context = get_shared_realtime_ssl_context()
@@ -5775,6 +5784,41 @@ class BaseLLMHTTPHandler:
                 _request_data: Dict[str, Any] = {}
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
+
+                _ws_guardrail_callbacks: list = []
+                _ws_output_guardrail_callbacks: list = []
+                try:
+                    import litellm as _litellm
+
+                    # Use duck-typing so any guardrail that exposes the PII
+                    # masking interface works, not just _OPTIONAL_PresidioPIIMasking.
+                    # This avoids a layering violation (SDK importing from proxy).
+                    _ws_guardrail_callbacks = [
+                        cb
+                        for cb in _litellm.callbacks
+                        if callable(getattr(cb, "check_pii", None))
+                        and callable(
+                            getattr(cb, "get_presidio_settings_from_request_data", None)
+                        )
+                        and callable(getattr(cb, "_unmask_pii_text", None))
+                        and getattr(cb, "output_parse_pii", False)
+                    ]
+                    _ws_output_guardrail_callbacks = [
+                        cb
+                        for cb in _litellm.callbacks
+                        if callable(getattr(cb, "check_pii", None))
+                        and callable(
+                            getattr(cb, "get_presidio_settings_from_request_data", None)
+                        )
+                        and getattr(cb, "apply_to_output", False)
+                    ]
+                except Exception as _guardrail_exc:
+                    verbose_logger.warning(
+                        "Responses WebSocket: failed to collect guardrail "
+                        "callbacks — PII masking will be skipped. Error: %s",
+                        _guardrail_exc,
+                    )
+
                 streaming = ResponsesWebSocketStreaming(
                     websocket=websocket,
                     backend_ws=cast(ClientConnection, backend_ws),
@@ -5782,6 +5826,9 @@ class BaseLLMHTTPHandler:
                     user_api_key_dict=user_api_key_dict,
                     request_data=_request_data,
                     first_message=first_message,
+                    guardrail_callbacks=_ws_guardrail_callbacks,
+                    output_guardrail_callbacks=_ws_output_guardrail_callbacks,
+                    authorized_model=model,
                 )
                 await streaming.bidirectional_forward()
 

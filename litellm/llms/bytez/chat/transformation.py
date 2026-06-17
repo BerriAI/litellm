@@ -191,7 +191,7 @@ class BytezChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        json = raw_response.json()  # noqa: F811
+        json = raw_response.json()
 
         error = json.get("error")
 

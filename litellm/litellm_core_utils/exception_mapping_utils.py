@@ -234,7 +234,7 @@ def extract_and_raise_litellm_exception(
                 )
 
 
-def exception_type(  # type: ignore  # noqa: PLR0915
+def exception_type(  # type: ignore
     model,
     original_exception,
     custom_llm_provider,
@@ -250,14 +250,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
     exception_mapping_worked = False
     exception_provider = custom_llm_provider
     if litellm.suppress_debug_info is False:
-        print()  # noqa
-        print(  # noqa
-            "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"  # noqa
-        )  # noqa
-        print(  # noqa
-            "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'."  # noqa
-        )  # noqa
-        print()  # noqa
+        print()  # noqa: T201
+        print(  # noqa: T201
+            "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
+        )
+        print(  # noqa: T201
+            "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'."
+        )
+        print()  # noqa: T201
 
     litellm_response_headers = _get_response_headers(
         original_exception=original_exception

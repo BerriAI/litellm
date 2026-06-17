@@ -133,7 +133,7 @@ proxy-runtime = [
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
     "azure-storage-file-datalake>=12.20.0,<13.0",
-    "pypdf>=6.10.2,<7.0; python_version < '3.14'",
+    "pypdf>=6.12.0,<7.0; python_version < '3.14'",
     "llm-sandbox>=0.3.39,<1.0",
     "detect-secrets>=1.5.0,<2.0",
 ]
@@ -149,6 +149,7 @@ dev = [
     "flake8==7.3.0",
     "black==26.3.1",
     "mypy==1.19.0",
+    "basedpyright==1.39.7",
     "pytest==9.0.3",
     "pytest-mock==3.15.1",
     "pytest-asyncio==1.3.0",
@@ -220,7 +221,6 @@ ci = [
     "blockbuster==1.5.26",
     "beautifulsoup4==4.14.3",
     "pylint==4.0.5",
-    "pyright==1.1.408",
     "langchain-mcp-adapters==0.2.1",
     "langchain-openai==1.1.14",
     "langgraph==1.0.10",
@@ -240,6 +240,10 @@ requires = ["uv_build==0.11.8"]
 build-backend = "uv_build"
 
 [tool.uv]
+constraint-dependencies = [
+    "tornado>=6.5.6",
+    "aiohttp>=3.13.5,<3.14",
+]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
 exclude-newer = "3 days"

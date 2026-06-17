@@ -73,6 +73,7 @@ from litellm.constants import (
     replicate_models,
     clarifai_models,
     huggingface_models,
+    modelscope_models,
     empower_models,
     together_ai_models,
     baseten_models,
@@ -362,6 +363,9 @@ enable_gemini_default_thinking_level_low: bool = (
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
+require_managed_files: bool = (
+    False  # proxy only - require target_model_names on POST /v1/files
+)
 enable_caching_on_provider_specific_optional_params: bool = (
     False  # feature-flag for caching on optional params - e.g. 'top_k'
 )
@@ -409,7 +413,7 @@ anthropic_beta_headers_url: str = os.getenv(
     "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
 )
-suppress_debug_info = False
+suppress_debug_info: bool = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 s3_audit_callback_params: Optional[Dict] = None
@@ -897,6 +901,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.add(key)
+        elif value.get("litellm_provider") == "modelscope":
+            modelscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
             moonshot_models.add(key)
         elif value.get("litellm_provider") == "publicai":
@@ -1016,6 +1022,7 @@ model_list = list(
     | zai_models
     | fal_ai_models
     | deepseek_models
+    | modelscope_models
     | azure_ai_models
     | voyage_models
     | infinity_models
@@ -1149,6 +1156,7 @@ models_by_provider: dict = {
     "elevenlabs": elevenlabs_models,
     "heroku": heroku_models,
     "dashscope": dashscope_models,
+    "modelscope": modelscope_models,
     "moonshot": moonshot_models,
     "publicai": publicai_models,
     "v0": v0_models,
@@ -1728,6 +1736,9 @@ if TYPE_CHECKING:
     from .llms.voyage.embedding.transformation_contextual import (
         VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig,
     )
+    from .llms.voyage.embedding.transformation_multimodal import (
+        VoyageMultimodalEmbeddingConfig as VoyageMultimodalEmbeddingConfig,
+    )
     from .llms.infinity.embedding.transformation import (
         InfinityEmbeddingConfig as InfinityEmbeddingConfig,
     )
@@ -1971,6 +1982,8 @@ if TYPE_CHECKING:
     )
     from .llms.dashscope.responses.transformation import (
         DashScopeResponsesAPIConfig as DashScopeResponsesAPIConfig,
+    from .llms.modelscope.chat.transformation import (
+        ModelScopeChatConfig as ModelScopeChatConfig,
     )
     from .llms.moonshot.chat.transformation import (
         MoonshotChatConfig as MoonshotChatConfig,

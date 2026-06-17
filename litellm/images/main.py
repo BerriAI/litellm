@@ -195,7 +195,7 @@ def image_generation(
 
 
 @client
-def image_generation(  # noqa: PLR0915
+def image_generation(
     prompt: str,
     model: Optional[str] = None,
     n: Optional[int] = None,
@@ -738,7 +738,7 @@ def image_variation(
 
 
 @client
-def image_edit(  # noqa: PLR0915
+def image_edit(
     image: Optional[Union[FileTypes, List[FileTypes]]] = None,
     prompt: Optional[str] = None,
     model: Optional[str] = None,

@@ -6,8 +6,20 @@ import { Page as PlaywrightPage, expect } from "@playwright/test";
  * Waits for the sidebar to be visible before returning.
  */
 export async function navigateToPage(page: PlaywrightPage, pageEnum: Page): Promise<void> {
-  await page.goto(`/ui?page=${pageEnum}`);
-  await page.waitForLoadState("networkidle");
+  // A fresh deep-link can race the auth bootstrap: the app briefly treats the
+  // session as anonymous, bounces through /ui/login, and lands back on the
+  // default page with the ?page= param dropped. Re-issue the navigation until
+  // the requested page sticks (auth is warm by the second load) so callers never
+  // assert against the default page.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.goto(`/ui?page=${pageEnum}`);
+    await page.waitForLoadState("networkidle");
+    const url = new URL(page.url());
+    const onLegacyRoot = url.pathname.replace(/\/+$/, "").endsWith("/ui");
+    if (!onLegacyRoot || url.searchParams.get("page") === pageEnum) {
+      break;
+    }
+  }
   // Dismiss the "Quick feedback" popup if it appears
   await dismissFeedbackPopup(page);
 }

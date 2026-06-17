@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import smtplib
+import ssl
 import sys
 import threading
 import time
@@ -190,7 +191,7 @@ def print_verbose(print_statement):
 
     verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
-        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa
+        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa: T201
 
 
 def _get_email_logger_class():
@@ -1170,6 +1171,8 @@ class ProxyLogging:
                     response=response, data=data, call_type=call_type
                 )
 
+            callback.mark_pre_call_hook_ran(data)
+
         except SensitiveDataRouteException:
             status = "intervened"
             raise
@@ -2085,7 +2088,7 @@ class ProxyLogging:
             litellm_call_id=request_data.get("litellm_call_id", ""), status="fail"
         )
         if AlertType.llm_exceptions in self.alert_types and not isinstance(
-            original_exception, HTTPException
+            original_exception, (HTTPException, ProxyException)
         ):
             """
             Just alert on LLM API exceptions. Do not alert on user errors
@@ -2189,6 +2192,7 @@ class ProxyLogging:
         e.g should only return True for:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
+            - ProxyException (guardrail blocks, budget / rate-limit errors)
         """
 
         #########################################################
@@ -2205,7 +2209,7 @@ class ProxyLogging:
         ):
             return False
 
-        return isinstance(original_exception, HTTPException) or (
+        return isinstance(original_exception, (HTTPException, ProxyException)) or (
             error_type == ProxyErrorTypes.auth_error
         )
 
@@ -3344,7 +3348,7 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     @log_db_metrics
-    async def get_data(  # noqa: PLR0915
+    async def get_data(
         self,
         token: Optional[Union[str, list]] = None,
         user_id: Optional[str] = None,
@@ -3427,6 +3431,7 @@ class PrismaClient:
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all" and team_id is not None:
                     response = await VerificationTokenRepository(self).table.find_many(
+                        take=limit,
                         where={"team_id": team_id},
                         include={"litellm_budget_table": True},
                     )
@@ -3692,7 +3697,10 @@ class PrismaClient:
                             db=self.db, hashed_token=hashed_token
                         )
                         if active_token_id:
-                            response = await self.get_data(
+                            # The recursive call returns a finished
+                            # LiteLLM_VerificationTokenView; the dict
+                            # normalization below would crash subscripting it.
+                            deprecated_response = await self.get_data(
                                 token=active_token_id,
                                 table_name="combined_view",
                                 query_type="find_unique",
@@ -3700,10 +3708,11 @@ class PrismaClient:
                                 proxy_logging_obj=proxy_logging_obj,
                                 check_deprecated=False,
                             )
-                            if response is not None:
+                            if deprecated_response is not None:
                                 verbose_proxy_logger.debug(
                                     "Deprecated key used during grace period"
                                 )
+                            return deprecated_response
 
                     if response is not None:
                         if response["team_models"] is None:
@@ -3783,7 +3792,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def insert_data(  # noqa: PLR0915
+    async def insert_data(
         self,
         data: dict,
         table_name: Literal[
@@ -3933,7 +3942,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def update_data(  # noqa: PLR0915
+    async def update_data(
         self,
         token: Optional[str] = None,
         data: dict = {},
@@ -5173,6 +5182,23 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
     return
 
 
+def _should_use_smtp_ssl(smtp_port: int) -> bool:
+    """
+    Port 465 expects an immediate TLS handshake (implicit SSL), so a plain
+    smtplib.SMTP connection hangs waiting for an SMTP banner. Use SMTP_SSL
+    there, or when SMTP_USE_SSL is explicitly enabled.
+    """
+    return os.getenv("SMTP_USE_SSL", "False") == "True" or smtp_port == 465
+
+
+def _create_smtp_connection(smtp_host: str, smtp_port: int) -> smtplib.SMTP:
+    if _should_use_smtp_ssl(smtp_port=smtp_port):
+        return smtplib.SMTP_SSL(
+            host=smtp_host, port=smtp_port, context=ssl.create_default_context()
+        )
+    return smtplib.SMTP(host=smtp_host, port=smtp_port)
+
+
 async def send_email(
     receiver_email: Optional[str] = None,
     subject: Optional[str] = None,
@@ -5218,13 +5244,13 @@ async def send_email(
     email_message.attach(MIMEText(html, "html"))
 
     try:
-        # Establish a secure connection with the SMTP server
-        with smtplib.SMTP(
-            host=smtp_host,
-            port=smtp_port,
+        using_ssl = _should_use_smtp_ssl(smtp_port=smtp_port)
+        with _create_smtp_connection(
+            smtp_host=smtp_host,
+            smtp_port=smtp_port,
         ) as server:
-            if os.getenv("SMTP_TLS", "True") != "False":
-                server.starttls()
+            if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
+                server.starttls(context=ssl.create_default_context())
 
             # Login to your email account only if smtp_username and smtp_password are provided
             if smtp_username and smtp_password:
@@ -5492,7 +5518,7 @@ class ProxyUpdateSpend:
         return False
 
 
-async def update_spend(  # noqa: PLR0915
+async def update_spend(
     prisma_client: PrismaClient,
     db_writer_client: Optional[AsyncHTTPHandler],
     proxy_logging_obj: ProxyLogging,
@@ -6308,6 +6334,28 @@ def create_model_info_response(
         "created": DEFAULT_MODEL_CREATED_AT_TIME,
         "owned_by": provider,
     }
+
+    # Surface context-window limits for OpenAI-compatible discovery clients.
+    # Only emitted when known, so wildcard routes and limitless backends stay clean.
+    # Limits are best-effort enrichment, so a single malformed deployment degrades
+    # to the base response rather than 500-ing the whole listing.
+    if llm_router is not None:
+        try:
+            model_group_info = llm_router.get_model_group_info(model_id)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "create_model_info_response: get_model_group_info failed for %s: %s",
+                model_id,
+                e,
+            )
+            model_group_info = None
+        if model_group_info is not None:
+            if model_group_info.max_input_tokens is not None:
+                model_info["max_input_tokens"] = int(model_group_info.max_input_tokens)
+            if model_group_info.max_output_tokens is not None:
+                model_info["max_output_tokens"] = int(
+                    model_group_info.max_output_tokens
+                )
 
     # Add metadata if requested
     if include_metadata:

@@ -1,3 +1,5 @@
+import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useUserModels } from "@/app/(dashboard)/hooks/models/useModels";
 import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ChevronDownIcon, ChevronRightIcon, RefreshIcon } from "@heroicons/react/outline";
@@ -23,6 +25,7 @@ import {
   TextInput,
 } from "@tremor/react";
 import { Form, Input, Modal, Select as Select2, Tooltip } from "antd";
+import { useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
@@ -37,15 +40,10 @@ import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 
 interface OrganizationsTableProps {
-  organizations: Organization[];
   userRole: string;
-  userModels: string[];
   accessToken: string | null;
   lastRefreshed?: string;
   handleRefreshClick?: () => void;
-  currentOrg?: any;
-  guardrailsList?: string[];
-  setOrganizations: (organizations: Organization[]) => void;
   premiumUser: boolean;
 }
 
@@ -60,15 +58,10 @@ export const fetchOrganizations = async (
 };
 
 const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
-  organizations,
   userRole,
-  userModels,
   accessToken,
   lastRefreshed,
   handleRefreshClick,
-  currentOrg,
-  guardrailsList = [],
-  setOrganizations,
   premiumUser,
 }) => {
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
@@ -87,21 +80,14 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     sort_order: "desc",
   });
 
+  const queryClient = useQueryClient();
+  const { data: organizations = [] } = useOrganizations({ org_id: filters.org_id, org_alias: filters.org_alias });
+  const { data: userModels = [] } = useUserModels();
+
+  const refetchOrganizations = () => queryClient.invalidateQueries({ queryKey: organizationKeys.lists() });
+
   const handleFilterChange = (key: keyof FilterState, value: string) => {
-    const newFilters = { ...filters, [key]: value };
-    setFilters(newFilters);
-    // Call organizationListCall with the new filters
-    if (accessToken) {
-      organizationListCall(accessToken, newFilters.org_id || null, newFilters.org_alias || null)
-        .then((response) => {
-          if (response) {
-            setOrganizations(response);
-          }
-        })
-        .catch((error) => {
-          console.error("Error fetching organizations:", error);
-        });
-    }
+    setFilters((previousFilters) => ({ ...previousFilters, [key]: value }));
   };
 
   const handleFilterReset = () => {
@@ -111,18 +97,6 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
       sort_by: "created_at",
       sort_order: "desc",
     });
-    // Reset organizations list
-    if (accessToken) {
-      organizationListCall(accessToken, null, null)
-        .then((response) => {
-          if (response) {
-            setOrganizations(response);
-          }
-        })
-        .catch((error) => {
-          console.error("Error fetching organizations:", error);
-        });
-    }
   };
 
   const handleDelete = (orgId: string | null) => {
@@ -142,8 +116,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
 
       setIsDeleteModalOpen(false);
       setOrgToDelete(null);
-      // Refresh organizations list
-      await fetchOrganizations(accessToken, setOrganizations, filters.org_id || null, filters.org_alias || null);
+      await refetchOrganizations();
     } catch (error) {
       console.error("Error deleting organization:", error);
     } finally {
@@ -189,8 +162,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
       NotificationsManager.success("Organization created successfully");
       setIsOrgModalVisible(false);
       form.resetFields();
-      // Refresh organizations list
-      fetchOrganizations(accessToken, setOrganizations, filters.org_id || null, filters.org_alias || null);
+      await refetchOrganizations();
     } catch (error) {
       console.error("Error creating organization:", error);
     }

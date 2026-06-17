@@ -471,7 +471,7 @@ def _should_convert_tool_call_to_json_mode(
     return False
 
 
-def convert_to_model_response_object(  # noqa: PLR0915
+def convert_to_model_response_object(
     response_object: Optional[dict] = None,
     model_response_object: Optional[
         Union[
