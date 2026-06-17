@@ -1161,6 +1161,72 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_retrieve_model_by_internal_name_returns_public_id(monkeypatch):
+    """Regression: retrieving by the internal routing key must echo the SAME
+    public id `/v1/models` advertises for that deployment, not the path. Otherwise
+    a client iterating the listing's id and then retrieving each one would observe
+    a different id depending on which alias they queried by."""
+    import litellm
+    import litellm.proxy.utils as proxy_utils
+
+    router = _public_named_router(_team_row())
+    deployment = MagicMock()
+    deployment.litellm_params.model = "azure/gpt-5.2-low-rpm-testing"
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        AsyncMock(return_value=["model_name_team-abc-123_4a6b8"]),
+    )
+    monkeypatch.setattr(
+        litellm, "get_llm_provider", lambda model: (model, "openai", None, None)
+    )
+
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", team_models=[])
+    resp = await ps.model_info(
+        model_id="model_name_team-abc-123_4a6b8", user_api_key_dict=key
+    )
+
+    assert resp["id"] == "team-claude-sonnet"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_model_by_internal_name_keeps_internal_id_when_flag_disabled(
+    monkeypatch,
+):
+    """With `use_team_public_model_name=false`, retrieve must keep the internal
+    routing key as the response id, mirroring `/v1/models`' legacy output."""
+    import litellm
+    import litellm.proxy.utils as proxy_utils
+
+    router = _public_named_router(_team_row())
+    deployment = MagicMock()
+    deployment.litellm_params.model = "azure/gpt-5.2-low-rpm-testing"
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        AsyncMock(return_value=["model_name_team-abc-123_4a6b8"]),
+    )
+    monkeypatch.setattr(
+        litellm, "get_llm_provider", lambda model: (model, "openai", None, None)
+    )
+
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", team_models=[])
+    resp = await ps.model_info(
+        model_id="model_name_team-abc-123_4a6b8", user_api_key_dict=key
+    )
+
+    assert resp["id"] == "model_name_team-abc-123_4a6b8"
+
+
+@pytest.mark.asyncio
 async def test_retrieve_model_by_inaccessible_public_name_404s(monkeypatch):
     """A caller without access to a team model still gets 404 when retrieving by
     its public name; resolution never crosses the access boundary."""

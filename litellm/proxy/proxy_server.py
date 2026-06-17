@@ -8589,6 +8589,9 @@ async def model_info(
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
 
+    internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(
+        llm_router, settings
+    )
     resolved_model_id = TeamModelNameTranslator.resolve_public_name(
         model_id=model_id,
         available_models=all_models,
@@ -8613,9 +8616,9 @@ async def model_info(
     # Use the actual litellm model from the deployment to get provider info
     _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
 
-    # Return the model information in the same format as the list endpoint
+    response_id = internal_to_public.get(resolved_model_id, model_id)
     return create_model_info_response(
-        model_id=model_id,
+        model_id=response_id,
         provider=provider,
         include_metadata=False,
         fallback_type=None,
