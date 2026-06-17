@@ -7,9 +7,12 @@ Tests are pure unit tests — no Redis server required.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import redis.asyncio as async_redis
 
-from litellm._redis import get_redis_async_client, get_redis_connection_pool
+from litellm._redis import (
+    _coerce_redis_kwargs_types,
+    get_redis_async_client,
+    get_redis_connection_pool,
+)
 
 
 def test_url_config_uses_passed_pool():
@@ -60,16 +63,14 @@ def test_max_connections_url_config_string_value(monkeypatch):
     assert pool.max_connections == 25
 
 
-def test_max_connections_url_config_invalid_value():
-    """Invalid max_connections should be silently ignored, falling back
-    to the pool default (50 for BlockingConnectionPool)."""
-    with patch("litellm._redis._get_redis_client_logic") as mock_logic:
-        mock_logic.return_value = {
-            "url": "redis://localhost:6379/0",
-            "max_connections": "not_a_number",
-        }
+def test_max_connections_url_config_invalid_value(monkeypatch):
+    """Invalid max_connections from an env var should be silently dropped,
+    falling back to the pool default (50 for BlockingConnectionPool)."""
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.delenv("REDIS_HOST", raising=False)
+    monkeypatch.setenv("REDIS_MAX_CONNECTIONS", "not_a_number")
 
-        pool = get_redis_connection_pool()
+    pool = get_redis_connection_pool()
 
     # BlockingConnectionPool default is 50
     assert pool.max_connections == 50
@@ -128,3 +129,56 @@ async def test_disconnect_idempotent():
 
     await cache.disconnect()
     await cache.disconnect()  # should not raise
+
+
+def test_coerce_redis_kwargs_types_int():
+    """String values for int-typed Redis params are coerced to int."""
+    result = _coerce_redis_kwargs_types({"health_check_interval": "30", "port": "6380", "db": "1"})
+    assert result["health_check_interval"] == 30
+    assert isinstance(result["health_check_interval"], int)
+    assert result["port"] == 6380
+    assert result["db"] == 1
+
+
+def test_coerce_redis_kwargs_types_bool():
+    """String values for bool-typed Redis params are coerced to bool."""
+    result = _coerce_redis_kwargs_types({"ssl": "true", "decode_responses": "false"})
+    assert result["ssl"] is True
+    assert result["decode_responses"] is False
+
+
+def test_coerce_redis_kwargs_types_none_default_numeric():
+    """String values for known None-default numeric params are coerced."""
+    result = _coerce_redis_kwargs_types({"max_connections": "20", "socket_timeout": "5.5"})
+    assert result["max_connections"] == 20
+    assert isinstance(result["max_connections"], int)
+    assert result["socket_timeout"] == 5.5
+    assert isinstance(result["socket_timeout"], float)
+
+
+def test_coerce_redis_kwargs_types_invalid_drops_key():
+    """A string that cannot be coerced to the expected numeric type is dropped."""
+    result = _coerce_redis_kwargs_types({"health_check_interval": "not_a_number"})
+    assert "health_check_interval" not in result
+
+
+def test_coerce_redis_kwargs_types_non_string_unchanged():
+    """Non-string values pass through without modification."""
+    result = _coerce_redis_kwargs_types({"health_check_interval": 30, "ssl": True})
+    assert result["health_check_interval"] == 30
+    assert result["ssl"] is True
+
+
+def test_health_check_interval_from_env_is_int(monkeypatch):
+    """REDIS_HEALTH_CHECK_INTERVAL set as string env var must produce an int
+    on the Redis connection, so Redis can do float + int arithmetic for health checks."""
+    monkeypatch.setenv("REDIS_HOST", "localhost")
+    monkeypatch.setenv("REDIS_HEALTH_CHECK_INTERVAL", "30")
+
+    with patch("litellm._redis.get_redis_client"):
+        pool = get_redis_connection_pool()
+
+    assert pool is not None
+    interval = pool.connection_kwargs.get("health_check_interval")
+    assert interval == 30
+    assert isinstance(interval, int), f"Expected int, got {type(interval)}: {interval!r}"
