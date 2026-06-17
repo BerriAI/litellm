@@ -655,15 +655,6 @@ def cost_per_token(
         )
 
         return dashscope_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "volcengine":
-        # Volcengine (Doubao) models share Dashscope's tiered-pricing structure
-        from litellm.llms.dashscope.cost_calculator import (
-            cost_per_token as tiered_cost_per_token,
-        )
-
-        return tiered_cost_per_token(
-            model=model, usage=usage_block, custom_llm_provider="volcengine"
-        )
     elif custom_llm_provider == "azure_ai":
         return azure_ai_cost_per_token(
             model=model,
