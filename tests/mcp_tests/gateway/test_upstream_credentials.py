@@ -8,6 +8,10 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from litellm.proxy.gateway.mcp.oauth.credential_store import (
+    CredentialKey,
+    InMemoryCredentialStore,
+)
 from litellm.proxy.gateway.mcp.oauth.httpx_auth import (
     NoOpAuth,
     StaticHeaderAuth,
@@ -17,7 +21,9 @@ from litellm.proxy.gateway.mcp.oauth.types import (
     AuthSpecKind,
     NoneConfig,
     PassthroughConfig,
+    PerUserKey,
     ServerSpec,
+    SharedKey,
     Subject,
 )
 from litellm.proxy.gateway.mcp.oauth.upstream_credentials import (
@@ -25,7 +31,7 @@ from litellm.proxy.gateway.mcp.oauth.upstream_credentials import (
 )
 from litellm.proxy.gateway.mcp.result import Error, Ok
 
-PROVIDER = UpstreamCredentialProvider()
+PROVIDER = UpstreamCredentialProvider(InMemoryCredentialStore())
 SUBJECT = Subject(tenant_id="t1", subject_id="u1")
 
 
@@ -39,7 +45,7 @@ def _applied_headers(auth: httpx.Auth) -> httpx.Headers:
 
 
 def test_auth_spec_kind_is_derived_from_config():
-    spec = _spec(ApiKeyConfig(value="k"))
+    spec = _spec(ApiKeyConfig(key_source=SharedKey(value="k")))
     assert spec.auth_spec_kind is AuthSpecKind.api_key
 
 
@@ -72,10 +78,40 @@ def test_none_attaches_no_credential():
     ],
 )
 def test_api_key_emits_the_right_scheme(scheme: str, expected: str):
-    result = PROVIDER.resolve(SUBJECT, _spec(ApiKeyConfig(value="k", scheme=scheme)))  # type: ignore[arg-type]
+    config = ApiKeyConfig(scheme=scheme, key_source=SharedKey(value="k"))  # type: ignore[arg-type]
+    result = PROVIDER.resolve(SUBJECT, _spec(config))
     assert isinstance(result, Ok)
     assert isinstance(result.ok, StaticHeaderAuth)
     assert _applied_headers(result.ok)["Authorization"] == expected
+
+
+def test_api_key_per_user_pulls_the_subject_credential():
+    store = InMemoryCredentialStore(
+        {CredentialKey(tenant_id="t1", subject_id="u1", server_id="s1"): "user-secret"}
+    )
+    provider = UpstreamCredentialProvider(store)
+    result = provider.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=PerUserKey())))
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"] == "Bearer user-secret"
+
+
+def test_api_key_per_user_missing_credential_fails_closed():
+    # Empty store -> the per-user arm fails closed rather than sending no/garbage auth.
+    result = PROVIDER.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=PerUserKey())))
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+def test_api_key_per_user_isolated_by_subject():
+    # The stored key belongs to (t1,u1,s1); a different subject must not receive it.
+    store = InMemoryCredentialStore(
+        {CredentialKey(tenant_id="t1", subject_id="u1", server_id="s1"): "u1-secret"}
+    )
+    provider = UpstreamCredentialProvider(store)
+    other = Subject(tenant_id="t1", subject_id="u2")
+    result = provider.resolve(other, _spec(ApiKeyConfig(key_source=PerUserKey())))
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
 
 
 def test_passthrough_forwards_the_inbound_token():
@@ -95,7 +131,7 @@ def test_self_contained_arms_never_read_the_inbound_token():
     # The #30559 guard: none/api_key must produce the identical credential whether or not a
     # caller bearer is present, proving they never forward the gateway-bound token.
     with_token = Subject(tenant_id="t1", subject_id="u1", inbound_token="leak-me")
-    for config in (NoneConfig(), ApiKeyConfig(value="k")):
+    for config in (NoneConfig(), ApiKeyConfig(key_source=SharedKey(value="k"))):
         without = PROVIDER.resolve(SUBJECT, _spec(config))
         present = PROVIDER.resolve(with_token, _spec(config))
         assert isinstance(without, Ok) and isinstance(present, Ok)

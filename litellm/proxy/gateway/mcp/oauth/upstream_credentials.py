@@ -9,9 +9,10 @@ own fully-typed config with every field guaranteed present — no `None`-checks.
 wildcard-free with an `assert_never` tail, so adding a mode without an arm fails the type
 gate, and a bypassed gate fails loudly at runtime instead of returning `None`.
 
-Self-contained modes (`none`, `passthrough`, `api_key`) are implemented. The OAuth-flow and
-signing modes are typed stubs that fail closed until their collaborators (token store, OAuth
-providers, RFC 8693 exchanger, SigV4 signer) are injected.
+Implemented: `none`, `passthrough`, and `api_key` (shared from config, or per-user / BYOK
+pulled from the injected `CredentialStore`). The OAuth-flow and signing modes are typed
+stubs that fail closed until their collaborators (token store, OAuth providers, RFC 8693
+exchanger, SigV4 signer) are injected.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import httpx
 from typing_extensions import assert_never
 
 from ..result import Error, Ok, Result
+from .credential_store import CredentialKey, CredentialStore
 from .httpx_auth import NoOpAuth, StaticHeaderAuth
 from .types import (
     ApiKeyConfig,
@@ -30,7 +32,9 @@ from .types import (
     CredError,
     NoneConfig,
     PassthroughConfig,
+    PerUserKey,
     ServerSpec,
+    SharedKey,
     Subject,
     TokenExchangeConfig,
 )
@@ -38,6 +42,9 @@ from .types import (
 
 class UpstreamCredentialProvider:
     """Produces the one `httpx.Auth` for a `(subject, upstream)` pair, per declared mode."""
+
+    def __init__(self, credential_store: CredentialStore) -> None:
+        self._credential_store = credential_store
 
     def resolve(
         self, subject: Subject, server: ServerSpec
@@ -59,7 +66,7 @@ class UpstreamCredentialProvider:
                 return self._aws_sigv4(subject, server, config)
         assert_never(server.config)
 
-    # --- self-contained arms (no injected collaborator) -----------------------------------
+    # --- implemented arms -----------------------------------------------------------------
     def _none(
         self, subject: Subject, server: ServerSpec, config: NoneConfig
     ) -> Result[httpx.Auth, CredError]:
@@ -68,7 +75,25 @@ class UpstreamCredentialProvider:
     def _api_key(
         self, subject: Subject, server: ServerSpec, config: ApiKeyConfig
     ) -> Result[httpx.Auth, CredError]:
-        return Ok(StaticHeaderAuth(config.header_value()))
+        match config.key_source:
+            case SharedKey() as source:
+                return Ok(StaticHeaderAuth(config.header_for(source.value)))
+            case PerUserKey():
+                value = self._credential_store.get(
+                    CredentialKey(
+                        tenant_id=subject.tenant_id,
+                        subject_id=subject.subject_id,
+                        server_id=server.server_id,
+                    )
+                )
+                if value is None:
+                    return Error(
+                        CredError.of_unauthorized(
+                            "api_key: no per-user credential for this subject"
+                        )
+                    )
+                return Ok(StaticHeaderAuth(config.header_for(value)))
+        assert_never(config.key_source)
 
     def _passthrough(
         self, subject: Subject, server: ServerSpec, config: PassthroughConfig

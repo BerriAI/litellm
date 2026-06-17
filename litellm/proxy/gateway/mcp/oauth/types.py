@@ -147,27 +147,47 @@ class TokenExchangeConfig(BaseModel):
     subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
 
 
+class SharedKey(BaseModel):
+    """A fixed key configured on the server, identical for every caller."""
+
+    model_config = ConfigDict(frozen=True)
+    source: Literal["shared"] = "shared"
+    value: str
+
+
+class PerUserKey(BaseModel):
+    """A key seeded per-user (per-user env var or BYOK). The value is not static; it is
+    pulled from the credential store at resolve time, keyed by the subject."""
+
+    model_config = ConfigDict(frozen=True)
+    source: Literal["per_user"] = "per_user"
+
+
+ApiKeySource = Annotated[SharedKey | PerUserKey, Field(discriminator="source")]
+
+
 class ApiKeyConfig(BaseModel):
-    """A fixed credential injected as a header. BYOK = the same arm, key seeded per-user."""
+    """A fixed credential injected as a header. The value is shared (in config) or seeded
+    per-user (pulled from the store); `scheme` is how it is written into the header."""
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.api_key] = AuthSpecKind.api_key
-    value: str
     scheme: ApiKeyScheme = "bearer"
+    key_source: ApiKeySource
 
-    def header_value(self) -> str:
+    def header_for(self, value: str) -> str:
         # Reconstructs v1's per-scheme Authorization prefixes (mcp_server_manager.py:877-884).
         match self.scheme:
             case "bearer":
-                return f"Bearer {self.value}"
+                return f"Bearer {value}"
             case "apikey":
-                return f"ApiKey {self.value}"
+                return f"ApiKey {value}"
             case "basic":
-                return f"Basic {self.value}"
+                return f"Basic {value}"
             case "token":
-                return f"token {self.value}"
+                return f"token {value}"
             case "raw":
-                return self.value
+                return value
         assert_never(self.scheme)
 
 
