@@ -14,12 +14,36 @@ Run these tests:
 """
 
 import asyncio
+import builtins
 import os
+import sys
+import types
 import urllib.parse
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+def test_init_rds_client_does_not_import_secret_manager(monkeypatch):
+    from litellm.proxy.auth.rds_iam_token import init_rds_client
+
+    fake_boto3 = types.SimpleNamespace(
+        session=types.SimpleNamespace(Config=MagicMock()),
+        client=MagicMock(return_value="rds-client"),
+    )
+    real_import = builtins.__import__
+
+    def fail_on_secret_manager_import(name, *args, **kwargs):
+        if name == "litellm.secret_managers.main":
+            raise AssertionError("rds_iam_token must not import secret_managers.main")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setattr(builtins, "__import__", fail_on_secret_manager_import)
+
+    assert init_rds_client() == "rds-client"
 
 
 class TestPrismaWrapperTokenRefresh:
