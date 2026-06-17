@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 import sysconfig
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Optional
 
 import click
 
@@ -36,7 +36,7 @@ except ImportError:
 _get_prisma_command: Optional[Callable[[], str]] = (
     _imported_prisma_command  # any-ok: untyped optional import from litellm-proxy-extras
 )
-_get_prisma_env: Optional[Callable[[], Dict[str, str]]] = (
+_get_prisma_env: Optional[Callable[[], dict[str, str]]] = (
     _imported_prisma_env  # any-ok: untyped optional import from litellm-proxy-extras
 )
 
@@ -60,7 +60,7 @@ def _get_venv_scripts_dir() -> str:
     return scripts_dir
 
 
-def _get_generate_env() -> Dict[str, str]:
+def _get_generate_env() -> dict[str, str]:
     """Build the subprocess env for ``db generate``.
 
     Delegates to the shared ``_get_prisma_env()`` which now injects the venv
@@ -118,7 +118,7 @@ def db_generate() -> None:
         raise SystemExit(1)
 
     click.echo(f"Generating Prisma client from {schema_path} ...")
-    command: List[str] = [
+    command: list[str] = [
         _get_prisma_command(),
         "generate",
         "--schema",
