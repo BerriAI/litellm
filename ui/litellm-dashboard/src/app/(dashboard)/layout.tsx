@@ -11,8 +11,16 @@ import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 
+// Wrapper so PluginModeProvider receives the live accessToken from auth context,
+// which means plugin data refreshes on login/logout without stale cookie reads.
+function PluginModeProviderWithAuth({ children }: { children: React.ReactNode }) {
+  const { accessToken } = useAuth();
+  return <PluginModeProvider accessToken={accessToken}>{children}</PluginModeProvider>;
+}
+
 function AgentControlPlaneView() {
-  const { agentPlatformUrl, agentPlatformPath } = usePluginMode();
+  const { activePlugin, agentPlatformPath } = usePluginMode();
+  const agentPlatformUrl = activePlugin?.url ?? "";
   const { accessToken } = useAuth();
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -87,7 +95,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <div className="mt-2">
           <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
         </div>
-        {mode === "litellm-platform-plugin" ? (
+        {mode !== "ai-gateway" ? (
           <div className="flex-1 flex">
             <AgentControlPlaneView />
           </div>
@@ -118,9 +126,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <PluginModeProvider>
+      <PluginModeProviderWithAuth>
         <LayoutContent>{children}</LayoutContent>
-      </PluginModeProvider>
+      </PluginModeProviderWithAuth>
     </Suspense>
   );
 }

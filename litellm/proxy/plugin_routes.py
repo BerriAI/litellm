@@ -20,6 +20,19 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
 router = APIRouter()
 
+# Headers that must never be forwarded to plugin backends
+_HOP_BY_HOP = {
+    "host",
+    "connection",
+    "transfer-encoding",
+    "te",
+    "trailers",
+    "upgrade",
+    # Strip the caller's litellm credential — plugin auth uses plugin_key only
+    "authorization",
+    "x-api-key",
+}
+
 # In-memory plugin registry — populated from general_settings at startup
 _plugin_registry: dict = {}
 
@@ -72,7 +85,11 @@ async def plugin_proxy(
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> Response:
-    """Authenticated reverse-proxy to a registered plugin backend."""
+    """Authenticated reverse-proxy to a registered plugin backend.
+
+    The caller's litellm credential is stripped and replaced with the
+    plugin's own plugin_key so plugins never receive a live litellm API key.
+    """
     plugin = _plugin_registry.get(plugin_name)
     if not plugin:
         return Response(
@@ -87,19 +104,15 @@ async def plugin_proxy(
 
     body = await request.body()
 
+    # Strip caller credentials and hop-by-hop headers from forwarded request
     forward_headers = {
-        k: v
-        for k, v in request.headers.items()
-        if k.lower()
-        not in {
-            "host",
-            "connection",
-            "transfer-encoding",
-            "te",
-            "trailers",
-            "upgrade",
-        }
+        k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP
     }
+
+    # Inject plugin's own credential as upstream auth (if configured)
+    plugin_key = plugin.get("plugin_key")
+    if plugin_key:
+        forward_headers["authorization"] = f"Bearer {plugin_key}"
 
     handler = get_async_httpx_client(llm_provider=None)
     try:

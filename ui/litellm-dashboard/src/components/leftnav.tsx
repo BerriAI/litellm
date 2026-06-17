@@ -414,7 +414,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
-  const { mode, setMode, setAgentPlatformPath } = usePluginMode();
+  const { mode, setMode, setAgentPlatformPath, plugins, activePlugin } = usePluginMode();
 
   // Check if user is an org_admin
   const isOrgAdmin = useMemo(() => {
@@ -656,9 +656,10 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const selectedMenuKey = findMenuItemKey(defaultSelectedKey);
 
+  // Build mode options dynamically — only show plugins that are actually registered
   const modeOptions = [
     { value: "ai-gateway" as PluginMode, label: "AI Gateway" },
-    { value: "litellm-platform-plugin" as PluginMode, label: "Agent Control Plane" },
+    ...plugins.map((p) => ({ value: p.name as PluginMode, label: p.display_name })),
   ];
 
   return (
@@ -685,7 +686,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         >
           {collapsed ? (
             <div
-              title={mode === "ai-gateway" ? "AI Gateway" : "Agent Control Plane"}
+              title={mode === "ai-gateway" ? "AI Gateway" : activePlugin?.display_name ?? mode}
               style={{
                 display: "flex",
                 justifyContent: "center",
@@ -694,7 +695,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 borderRadius: "6px",
                 background: "#f5f5f5",
               }}
-              onClick={() => setMode(mode === "ai-gateway" ? "litellm-platform-plugin" : "ai-gateway")}
+              onClick={() => setMode(mode === "ai-gateway" ? plugins[0]?.name ?? "ai-gateway" : "ai-gateway")}
             >
               <SwapOutlined style={{ fontSize: 16, color: "#6b7280" }} />
             </div>
