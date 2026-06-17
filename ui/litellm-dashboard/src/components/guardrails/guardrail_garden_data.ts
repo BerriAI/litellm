@@ -408,6 +408,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Security", "Policy", "Grounding", "RAG"],
     providerKey: "Xecguard",
   },
+  {
+    id: "thirdlaw",
+    name: "ThirdLaw",
+    description:
+      "ThirdLaw guardrail for content filtering and moderation.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}thirdlaw.svg`,
+    tags: ["Security", "Content Filtering", "Moderation", "Guardrail"],
+    providerKey: "ThirdLaw",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];
