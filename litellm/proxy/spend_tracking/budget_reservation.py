@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -193,6 +194,32 @@ async def release_budget_reservation(budget_reservation: Optional[dict]) -> None
         budget_reservation=budget_reservation,
         actual_cost=0.0,
     )
+
+
+async def release_budget_reservation_on_cancel(
+    budget_reservation: Optional[dict],
+) -> None:
+    """Release a still-open reservation when the request is cancelled mid-flight.
+
+    A client disconnect or timeout cancels the request task, which surfaces as
+    CancelledError / GeneratorExit rather than a normal exception, so neither the
+    success cost callback nor the failure hook runs and the pre-call reservation
+    is never given back. Left alone it pins the spend counter above real spend
+    and 429s subsequent requests until the counter's TTL expires.
+
+    asyncio.shield keeps the release running to completion even though the
+    surrounding task is being cancelled. The `finalized` guard makes this a no-op
+    when success/failure handling already reconciled, so calling it on every
+    cancellation path is safe.
+    """
+    if not budget_reservation or budget_reservation.get("finalized") is True:
+        return
+    try:
+        await asyncio.shield(
+            release_budget_reservation(budget_reservation=budget_reservation)
+        )
+    except (asyncio.CancelledError, Exception):
+        pass
 
 
 async def invalidate_budget_reservation_counters(
