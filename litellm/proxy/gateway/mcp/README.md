@@ -41,7 +41,7 @@ error. That is the property we want, so the gate is load-bearing rather than dec
 Run the gate (passes clean, 0 errors):
 
 ```
-basedpyright --project litellm/proxy/_experimental/mcp_server/v2/pyrightconfig.json
+basedpyright --project litellm/proxy/gateway/mcp/pyrightconfig.json
 ```
 
 Now prove the gate actually bites. Delete any one arm from `label_enum` in

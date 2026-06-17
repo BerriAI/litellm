@@ -8,11 +8,11 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from litellm.proxy._experimental.mcp_server.v2.oauth.httpx_auth import (
+from litellm.proxy.gateway.mcp.oauth.httpx_auth import (
     NoOpAuth,
     StaticHeaderAuth,
 )
-from litellm.proxy._experimental.mcp_server.v2.oauth.types import (
+from litellm.proxy.gateway.mcp.oauth.types import (
     ApiKeyConfig,
     AuthSpecKind,
     NoneConfig,
@@ -20,10 +20,10 @@ from litellm.proxy._experimental.mcp_server.v2.oauth.types import (
     ServerSpec,
     Subject,
 )
-from litellm.proxy._experimental.mcp_server.v2.oauth.upstream_credentials import (
+from litellm.proxy.gateway.mcp.oauth.upstream_credentials import (
     UpstreamCredentialProvider,
 )
-from litellm.proxy._experimental.mcp_server.v2.result import Error, Ok
+from litellm.proxy.gateway.mcp.result import Error, Ok
 
 PROVIDER = UpstreamCredentialProvider()
 SUBJECT = Subject(tenant_id="t1", subject_id="u1")
