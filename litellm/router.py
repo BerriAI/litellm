@@ -2869,19 +2869,24 @@ class Router:
         aiter = response.__aiter__()
 
         try:
-            if ttft_timeout is not None:
+            if ttft_timeout is not None or stream_idle_timeout is not None:
                 loop = asyncio.get_running_loop()
-                deadline = loop.time() + ttft_timeout
+                deadline = (
+                    loop.time() + ttft_timeout if ttft_timeout is not None else None
+                )
                 first_token_received = False
 
                 while not first_token_received:
-                    remaining = deadline - loop.time()
                     try:
-                        if remaining <= 0:
-                            raise asyncio.TimeoutError
-                        chunk = await asyncio.wait_for(
-                            aiter.__anext__(), timeout=remaining
-                        )
+                        if deadline is None:
+                            chunk = await aiter.__anext__()
+                        else:
+                            remaining = deadline - loop.time()
+                            if remaining <= 0:
+                                raise asyncio.TimeoutError
+                            chunk = await asyncio.wait_for(
+                                aiter.__anext__(), timeout=remaining
+                            )
                     except asyncio.TimeoutError:
                         verbose_router_logger.warning(
                             f"ttft_timeout={ttft_timeout}s exceeded for model={response.model}: "

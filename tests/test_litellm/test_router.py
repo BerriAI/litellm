@@ -5127,6 +5127,47 @@ async def test_router_stream_idle_timeout_completes_when_not_stalled():
 
 
 @pytest.mark.asyncio
+async def test_router_stream_idle_timeout_does_not_fire_before_first_token():
+    """When stream_idle_timeout is set without ttft_timeout, a slow first token must NOT be
+    treated as a mid-stream stall: the idle clock only governs gaps after content has started.
+    A first token slower than stream_idle_timeout, followed by prompt chunks, must succeed."""
+    import asyncio
+    from unittest.mock import patch
+
+    from litellm import ModelResponse
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        stream_idle_timeout=0.05,
+    )
+
+    async def _slow_first_token():
+        await asyncio.sleep(0.2)  # first token far slower than stream_idle_timeout
+        yield _make_chunk("Hello")
+        yield _make_chunk(" world")
+        yield _make_chunk("", finish_reason="stop")
+
+    fake_stream = _fake_stream(_slow_first_token)
+    reconstructed = MagicMock(spec=ModelResponse)
+
+    with patch("litellm.main.stream_chunk_builder", return_value=reconstructed):
+        result = await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=None,
+            stream_idle_timeout=0.05,
+        )
+
+    assert result is reconstructed
+    fake_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_router_ttft_and_idle_timeout_both_active():
     """When both ttft_timeout and stream_idle_timeout are set, both phases are enforced."""
     import asyncio
