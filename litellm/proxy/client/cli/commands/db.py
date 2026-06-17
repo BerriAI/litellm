@@ -7,11 +7,16 @@ import sysconfig
 
 import click
 
-# Import Prisma helpers from litellm-proxy-extras at module level.
-# These are optional dependencies; the ImportError is handled at call time.
+# The Prisma schema ships inside the litellm package itself (litellm/proxy/
+# schema.prisma); PrismaManager resolves that directory. This is the same
+# schema `db push` operates on, so `db generate` stays consistent with it.
+from litellm.proxy.db.prisma_client import PrismaManager
+
+# The prisma *binary* discovery and PATH-injection helpers live in
+# litellm-proxy-extras. These are optional dependencies; the ImportError is
+# handled at call time so `litellm` works without the proxy extras installed.
 try:
     from litellm_proxy_extras.utils import (
-        ProxyExtrasDBManager,
         _get_prisma_command,
         _get_prisma_env,
     )
@@ -19,7 +24,6 @@ try:
     _PROXY_EXTRAS_AVAILABLE = True
 except ImportError:
     _PROXY_EXTRAS_AVAILABLE = False
-    ProxyExtrasDBManager = None  # type: ignore[assignment]
     _get_prisma_command = None  # type: ignore[assignment]
     _get_prisma_env = None  # type: ignore[assignment]
 
@@ -64,14 +68,14 @@ def db() -> None:
 
 @db.command(name="generate")
 def db_generate() -> None:
-    """Generate the Prisma client using the schema bundled with litellm-proxy-extras.
+    """Generate the Prisma client using litellm's bundled schema.
 
     Runs: prisma generate --schema <path_to_schema.prisma>
 
-    I resolve the schema path from the installed litellm-proxy-extras package,
-    so you never need to know internal site-packages paths. This fixes the gap
-    where `migrate deploy` and `db push` already use the bundled schema but
-    there was no equivalent for the generate step.
+    The schema is resolved from the litellm package (litellm/proxy/schema.prisma)
+    via PrismaManager, which is the same schema `db push` operates on. This keeps
+    generate consistent with the existing push path and closes the gap where there
+    was no out-of-the-box `generate` step after a plain pip install.
     """
     if not _PROXY_EXTRAS_AVAILABLE:
         click.echo(
@@ -81,7 +85,7 @@ def db_generate() -> None:
         )
         raise SystemExit(1)
 
-    prisma_dir = ProxyExtrasDBManager._get_prisma_dir()
+    prisma_dir = PrismaManager._get_prisma_dir()
     schema_path = os.path.join(prisma_dir, "schema.prisma")
 
     if not os.path.exists(schema_path):

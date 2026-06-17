@@ -36,7 +36,7 @@ def test_db_generate_success(cli_runner):
     mock_run = MagicMock(return_value=MagicMock(returncode=0))
     with (
         patch(
-            "litellm.proxy.client.cli.commands.db.ProxyExtrasDBManager._get_prisma_dir",
+            "litellm.proxy.client.cli.commands.db.PrismaManager._get_prisma_dir",
             return_value="/fake/prisma/dir",
         ),
         patch("litellm.proxy.client.cli.commands.db._get_prisma_command", return_value="prisma"),
@@ -60,8 +60,8 @@ def test_db_generate_schema_path_uses_get_prisma_dir(cli_runner):
     mock_run = MagicMock(return_value=MagicMock(returncode=0))
     with (
         patch(
-            "litellm.proxy.client.cli.commands.db.ProxyExtrasDBManager._get_prisma_dir",
-            return_value="/custom/extras/dir",
+            "litellm.proxy.client.cli.commands.db.PrismaManager._get_prisma_dir",
+            return_value="/custom/litellm/proxy/dir",
         ),
         patch("litellm.proxy.client.cli.commands.db._get_prisma_command", return_value="prisma"),
         patch("litellm.proxy.client.cli.commands.db._get_prisma_env", return_value=None),
@@ -73,14 +73,14 @@ def test_db_generate_schema_path_uses_get_prisma_dir(cli_runner):
     assert result.exit_code == 0, result.output
     call_args = mock_run.call_args[0][0]
     schema_arg = call_args[call_args.index("--schema") + 1]
-    assert schema_arg == "/custom/extras/dir/schema.prisma"
+    assert schema_arg == "/custom/litellm/proxy/dir/schema.prisma"
 
 
 def test_db_generate_prisma_failure(cli_runner):
     mock_run = MagicMock(side_effect=subprocess.CalledProcessError(1, "prisma"))
     with (
         patch(
-            "litellm.proxy.client.cli.commands.db.ProxyExtrasDBManager._get_prisma_dir",
+            "litellm.proxy.client.cli.commands.db.PrismaManager._get_prisma_dir",
             return_value="/fake/prisma/dir",
         ),
         patch("litellm.proxy.client.cli.commands.db._get_prisma_command", return_value="prisma"),
@@ -97,7 +97,7 @@ def test_db_generate_prisma_failure(cli_runner):
 def test_db_generate_schema_missing(cli_runner):
     with (
         patch(
-            "litellm.proxy.client.cli.commands.db.ProxyExtrasDBManager._get_prisma_dir",
+            "litellm.proxy.client.cli.commands.db.PrismaManager._get_prisma_dir",
             return_value="/fake/prisma/dir",
         ),
         patch("litellm.proxy.client.cli.commands.db._get_prisma_command", return_value="prisma"),
@@ -166,7 +166,7 @@ def test_db_generate_env_includes_scripts_dir_on_path(cli_runner):
 
     with (
         patch(
-            "litellm.proxy.client.cli.commands.db.ProxyExtrasDBManager._get_prisma_dir",
+            "litellm.proxy.client.cli.commands.db.PrismaManager._get_prisma_dir",
             return_value="/fake/prisma/dir",
         ),
         patch(
@@ -213,7 +213,7 @@ def test_db_generate_env_does_not_duplicate_scripts_dir(cli_runner):
 
     with (
         patch(
-            "litellm.proxy.client.cli.commands.db.ProxyExtrasDBManager._get_prisma_dir",
+            "litellm.proxy.client.cli.commands.db.PrismaManager._get_prisma_dir",
             return_value="/fake/prisma/dir",
         ),
         patch(
