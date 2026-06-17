@@ -882,12 +882,19 @@ async def proxy_startup_event(app: FastAPI):
 
             from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
             from litellm.integrations.otel.logger import (
+                OpenTelemetryV2,
                 publish_global_otel_v2_provider,
             )
 
+            registered = (
+                open_telemetry_logger
+                if isinstance(open_telemetry_logger, OpenTelemetryV2)
+                else None
+            )
             publish_global_otel_v2_provider(
                 _in_memory_loggers,  # any-ok: pre-existing untyped List[Any] global
                 _otel_trace.set_tracer_provider,
+                registered=registered,
             )
     except Exception as e:
         verbose_proxy_logger.debug("Skipping OTel V2 provider setup: %s", e)

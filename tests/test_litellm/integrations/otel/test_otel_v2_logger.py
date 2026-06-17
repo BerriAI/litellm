@@ -1083,6 +1083,36 @@ def test_select_global_otel_v2_logger_reuses_existing_preset_logger():
     assert chosen is preset_logger
 
 
+def test_select_global_otel_v2_logger_prefers_registered_owner_over_list_scan():
+    """Selection reuses the canonical owner the factory registered, not whatever
+    the ``in_memory_loggers`` scan happens to reach first.
+
+    The factory designates one logger as ``proxy_server.open_telemetry_logger`` the
+    moment it builds the first one, and every other v2 path (guardrail, seed,
+    phase spans) routes through that owner. With two presets configured, the list
+    scan's "first ``OpenTelemetryV2``" is order-dependent and could disagree with
+    that owner, publishing one backend's provider as the global while the rest of
+    the v2 code emits through another. Passing the registered owner pins the global
+    provider to the same logger the rest of the code already uses.
+    """
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    owner = OpenTelemetryV2(
+        config=cfg,
+        callback_name="arize",
+        tracer_provider=providers.build_tracer_provider(cfg),
+    )
+    other = OpenTelemetryV2(
+        config=cfg,
+        callback_name="langfuse_otel",
+        tracer_provider=providers.build_tracer_provider(cfg),
+    )
+
+    chosen = select_global_otel_v2_logger([other, owner], registered=owner)
+    assert chosen is owner
+
+
 def test_select_global_otel_v2_logger_builds_one_when_none_registered():
     """With no logger registered, selection builds exactly one generic logger so
     the proxy still publishes a provider; it must not return ``None``."""

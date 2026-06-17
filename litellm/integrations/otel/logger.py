@@ -548,19 +548,28 @@ class OpenTelemetryV2(CustomLogger):
 
 def select_global_otel_v2_logger(
     in_memory_loggers: Sequence[object],
+    registered: "OpenTelemetryV2 | None" = None,
 ) -> "OpenTelemetryV2":
     """The single ``OpenTelemetryV2`` whose provider should become the OTel global.
 
-    The callback factory registers every logger it builds in ``in_memory_loggers``,
-    including the one a preset (arize, langfuse, …) folds the ``OTEL_*`` base
-    exporter and its own exporter into. Reuse that logger so the FastAPI server
-    span and the gen-ai spans share one provider and one trace, exporting to every
-    configured backend. Only when no logger was configured is a generic one built
-    from ``OTEL_*``. Selecting from ``in_memory_loggers`` (not ``service_callback``,
-    which a preset logger does not always reach) is what stops a second generic
-    logger from owning the global provider and orphaning the gen-ai spans onto a
-    different backend than the server span.
+    The callback factory designates one logger as canonical the moment it builds
+    the first one (``_init_otel_logger_on_litellm_proxy`` sets
+    ``proxy_server.open_telemetry_logger``), and every other v2 entry point —
+    guardrail, identity seeding, phase spans — already routes through that same
+    ``registered`` owner. Reuse it here too so the global provider has one source
+    of truth instead of a second, independently-derived guess; this is the logger
+    a preset (arize, langfuse, …) folds the ``OTEL_*`` base exporter and its own
+    exporter into, so the FastAPI server span and the gen-ai spans share one
+    provider and one trace.
+
+    Fall back to ``in_memory_loggers`` for the SDK path, where no proxy global is
+    set (selecting from there, not ``service_callback``, which a preset logger does
+    not always reach), and build a generic logger from ``OTEL_*`` only when none was
+    configured at all. Each fallback still avoids the second generic logger that
+    orphaned the gen-ai spans onto a different backend than the server span.
     """
+    if registered is not None:
+        return registered
     existing = next(
         (cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2)), None
     )
@@ -570,17 +579,21 @@ def select_global_otel_v2_logger(
 def publish_global_otel_v2_provider(
     in_memory_loggers: Sequence[object],
     set_global_provider: Callable[[TracerProvider], None],
+    registered: "OpenTelemetryV2 | None" = None,
 ) -> "OpenTelemetryV2":
     """Select the single v2 logger and publish its provider as the OTel global.
 
     The proxy calls this once at startup, after callbacks are initialized, so the
-    preset logger already exists and is reused (see
-    :func:`select_global_otel_v2_logger`). ``set_global_provider`` is injected (the
-    proxy passes ``opentelemetry.trace.set_tracer_provider``) so the publish step
-    is unit-testable without mutating real global OTel state. Returns the logger
-    whose provider was published.
+    preset logger already exists; it passes ``registered`` (the canonical owner the
+    factory designated as ``proxy_server.open_telemetry_logger``) so the global
+    provider reuses the same logger the rest of the v2 code emits through (see
+    :func:`select_global_otel_v2_logger`). Both ``registered`` and
+    ``set_global_provider`` (the proxy passes
+    ``opentelemetry.trace.set_tracer_provider``) are injected so the publish step is
+    unit-testable without reading or mutating real global OTel state. Returns the
+    logger whose provider was published.
     """
-    logger = select_global_otel_v2_logger(in_memory_loggers)
+    logger = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
     set_global_provider(logger._tracer_provider)
     return logger
 
