@@ -9,17 +9,20 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
-from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestData
-from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+from litellm.llms.base_llm.ocr.transformation import (
+    BaseOCRConfig,
+    DocumentType,
+    OCRRequestData,
+)
 from litellm.secret_managers.main import get_secret_str
 
 
-class AzureAIOCRConfig(MistralOCRConfig):
+class AzureAIOCRConfig(BaseOCRConfig):
     """
     Azure AI OCR transformation configuration.
 
     Azure AI uses Mistral's OCR API but with a different endpoint format.
-    Inherits transformation logic from MistralOCRConfig since they use the same format.
+    Inherits the standard OCR transform logic from BaseOCRConfig since they use the same format.
 
     Reference: Azure AI Foundry OCR documentation
 
