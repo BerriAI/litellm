@@ -206,6 +206,37 @@ class ProxyInitializationHelpers:
         return uvicorn_args
 
     @staticmethod
+    def _apply_uvicorn_max_requests_jitter(
+        uvicorn_args: dict,
+        max_requests_before_restart: Optional[int],
+        jitter: int,
+    ) -> None:
+        """
+        Stagger uvicorn worker restarts via limit_max_requests_jitter (uvicorn>=0.41.0).
+        """
+        import inspect
+
+        import uvicorn
+
+        if max_requests_before_restart is None:
+            print(
+                "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
+                "has no effect without --max_requests_before_restart\033[0m\n"
+            )
+            return
+        if (
+            "limit_max_requests_jitter"
+            in inspect.signature(uvicorn.Config.__init__).parameters
+        ):
+            uvicorn_args["limit_max_requests_jitter"] = jitter
+        else:
+            print(
+                f"\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
+                f"requires uvicorn>=0.41.0, but installed uvicorn=={uvicorn.__version__}. "
+                f"Ignoring the flag.\033[0m"
+            )
+
+    @staticmethod
     def _get_reload_options(config_path: Optional[str]) -> dict:
         """Build uvicorn reload kwargs so --reload also reacts to .env and YAML edits."""
         cwd = os.path.abspath(os.getcwd())
@@ -387,6 +418,7 @@ class ProxyInitializationHelpers:
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
         max_requests_before_restart: Optional[int] = None,
+        max_requests_before_restart_jitter: Optional[int] = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -467,6 +499,16 @@ class ProxyInitializationHelpers:
         # Optional: recycle workers after N requests to mitigate memory growth
         if max_requests_before_restart is not None:
             gunicorn_options["max_requests"] = max_requests_before_restart
+        if max_requests_before_restart_jitter is not None:
+            if max_requests_before_restart is None:
+                print(
+                    "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
+                    "has no effect without --max_requests_before_restart\033[0m\n"
+                )
+            else:
+                gunicorn_options["max_requests_jitter"] = (
+                    max_requests_before_restart_jitter
+                )
 
         # Clean up prometheus .db files when a worker exits (prevents ghost gauge values)
         if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
@@ -792,6 +834,18 @@ class ProxyInitializationHelpers:
     envvar="MAX_REQUESTS_BEFORE_RESTART",
 )
 @click.option(
+    "--max_requests_before_restart_jitter",
+    default=None,
+    type=int,
+    help=(
+        "Stagger worker restarts by adding a random amount in [0, jitter] to "
+        "--max_requests_before_restart so workers do not recycle at the same time "
+        "(uvicorn: limit_max_requests_jitter, requires uvicorn>=0.41.0; gunicorn: max_requests_jitter). "
+        "Has no effect without --max_requests_before_restart."
+    ),
+    envvar="MAX_REQUESTS_BEFORE_RESTART_JITTER",
+)
+@click.option(
     "--enforce_prisma_migration_check",
     is_flag=True,
     default=False,
@@ -858,6 +912,7 @@ def run_server(
     keepalive_timeout,
     timeout_worker_healthcheck,
     max_requests_before_restart,
+    max_requests_before_restart_jitter: Optional[int],
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
     reload: bool,
@@ -1260,6 +1315,12 @@ def run_server(
         if max_requests_before_restart is not None:
             uvicorn_args["limit_max_requests"] = max_requests_before_restart
         if run_gunicorn is False and run_hypercorn is False and run_granian is False:
+            if max_requests_before_restart_jitter is not None:
+                ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
+                    uvicorn_args=uvicorn_args,
+                    max_requests_before_restart=max_requests_before_restart,
+                    jitter=max_requests_before_restart_jitter,
+                )
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(
                     f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
@@ -1287,6 +1348,7 @@ def run_server(
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
                 max_requests_before_restart=max_requests_before_restart,
+                max_requests_before_restart_jitter=max_requests_before_restart_jitter,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers._init_hypercorn_server(
