@@ -716,13 +716,13 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     ]
 
 
-def test_translate_model_names_for_listing_swaps_and_dedupes():
+def test_translate_team_model_names_for_listing_swaps_and_dedupes(monkeypatch):
     """Internal team routing keys -> public name; sibling deployments sharing a
     public name collapse to one entry (order preserved); globals untouched."""
-    from litellm.proxy.proxy_server import _translate_model_names_for_listing
+    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
 
     router = MagicMock()
-    router.model_list = [
+    router.get_model_list.return_value = [
         {
             "model_name": "model_name_teamX_uuidA",
             "model_info": {
@@ -739,34 +739,54 @@ def test_translate_model_names_for_listing_swaps_and_dedupes():
         },
         {"model_name": "gpt-4o", "model_info": {"db_model": False}},
     ]
+    monkeypatch.setattr(ps, "general_settings", {})
 
-    out = _translate_model_names_for_listing(
+    out = _translate_team_model_names_for_listing(
         ["model_name_teamX_uuidA", "model_name_teamX_uuidB", "gpt-4o"],
-        router.model_list,
+        router,
     )
     assert out == ["tushar-gpt-4.1", "gpt-4o"]
 
 
-def test_translate_model_names_for_listing_leaves_unmapped_names():
+def test_translate_team_model_names_for_listing_leaves_unmapped_names(monkeypatch):
     """Names with no team mapping (globals, access-group keys) pass through."""
-    from litellm.proxy.proxy_server import _translate_model_names_for_listing
+    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
 
     router = MagicMock()
-    router.model_list = [{"model_name": "gpt-4o", "model_info": {"db_model": False}}]
-    assert _translate_model_names_for_listing(
-        ["gpt-4o", "beta-group"], router.model_list
+    router.get_model_list.return_value = [
+        {"model_name": "gpt-4o", "model_info": {"db_model": False}}
+    ]
+    monkeypatch.setattr(ps, "general_settings", {})
+
+    assert _translate_team_model_names_for_listing(
+        ["gpt-4o", "beta-group"], router
     ) == ["gpt-4o", "beta-group"]
 
 
-def test_translate_model_names_for_listing_none_router():
+def test_translate_team_model_names_for_listing_none_router(monkeypatch):
     """No router -> return the input list unchanged."""
-    from litellm.proxy.proxy_server import _translate_model_names_for_listing
+    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
 
-    assert _translate_model_names_for_listing(["a", "b"], ()) == ["a", "b"]
+    monkeypatch.setattr(ps, "general_settings", {})
+    assert _translate_team_model_names_for_listing(["a", "b"], None) == ["a", "b"]
 
 
-def test_get_team_model_deployments_for_listing_none_router():
-    """No router -> no deployment metadata to translate against."""
-    from litellm.proxy.proxy_server import _get_team_model_deployments_for_listing
+def test_translate_team_model_names_for_listing_respects_legacy_flag(monkeypatch):
+    """Operators can keep returning the legacy internal routing key."""
+    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
 
-    assert _get_team_model_deployments_for_listing(None) == ()
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {
+            "model_name": "model_name_teamX_uuidA",
+            "model_info": {
+                "team_id": "teamX",
+                "team_public_model_name": "tushar-gpt-4.1",
+            },
+        }
+    ]
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
+
+    assert _translate_team_model_names_for_listing(
+        ["model_name_teamX_uuidA"], router
+    ) == ["model_name_teamX_uuidA"]
