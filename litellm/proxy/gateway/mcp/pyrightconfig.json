@@ -1,0 +1,10 @@
+{
+    "include": ["."],
+    "typeCheckingMode": "strict",
+    "pythonVersion": "3.10",
+    "venvPath": "../../../..",
+    "venv": ".venv",
+    "reportMissingTypeStubs": false,
+    "reportUnknownMemberType": true,
+    "reportMatchNotExhaustive": true
+}
