@@ -23,21 +23,32 @@ function AgentControlPlaneView() {
   const agentPlatformUrl = activePlugin?.url ?? "";
   const { accessToken } = useAuth();
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [encryptedToken, setEncryptedToken] = useState<string | null>(null);
 
-  // Send auth token via postMessage after iframe loads — avoids exposing the
-  // token in the URL (browser history, server logs, Referer headers).
+  // Fetch an encrypted copy of the token from the proxy.
+  // The proxy encrypts it with LITELLM_SALT_KEY; the plugin decrypts with the
+  // same key.  The raw litellm credential never leaves the proxy in plaintext.
+  useEffect(() => {
+    if (!accessToken) return;
+    fetch("/api/plugins/auth-token", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => setEncryptedToken(data?.encrypted_token ?? null))
+      .catch(() => {});
+  }, [accessToken]);
+
+  // Deliver the encrypted token to the iframe via postMessage.
+  // targetOrigin is the configured plugin URL — no other origin receives it.
   useEffect(() => {
     const iframe = iframeRef.current;
-    if (!iframe || !accessToken || !agentPlatformUrl) return;
+    if (!iframe || !encryptedToken || !agentPlatformUrl) return;
     const send = () => {
-      iframe.contentWindow?.postMessage(
-        { type: "litellm-auth", token: accessToken },
-        agentPlatformUrl, // targetOrigin — only the configured plugin receives this
-      );
+      iframe.contentWindow?.postMessage({ type: "litellm-auth", encrypted_token: encryptedToken }, agentPlatformUrl);
     };
     iframe.addEventListener("load", send);
     return () => iframe.removeEventListener("load", send);
-  }, [accessToken, agentPlatformUrl]);
+  }, [encryptedToken, agentPlatformUrl]);
 
   if (!agentPlatformUrl) {
     return (

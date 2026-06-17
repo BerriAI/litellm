@@ -10,9 +10,21 @@ Config (in litellm config.yaml general_settings):
       url: "http://localhost:3210"
       display_name: "My Plugin"
       plugin_key: "sk-..."   # optional: plugin's own auth key
+
+Plugin iframe auth:
+  The UI calls GET /api/plugins/auth-token to receive the caller's token
+  encrypted with the shared LITELLM_SALT_KEY.  The plugin decrypts it with
+  the same key — so the raw litellm credential never appears in plaintext
+  outside the proxy process, and a postMessage intercept yields only
+  useless ciphertext.
 """
 
-from fastapi import APIRouter, Depends, Request, Response
+import base64
+import hashlib
+import os
+
+from cryptography.fernet import Fernet, InvalidToken
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -37,6 +49,37 @@ _HOP_BY_HOP = {
 _plugin_registry: dict = {}
 
 
+# ---------------------------------------------------------------------------
+# Key derivation — deterministic, so plugin and proxy agree without sharing
+# raw key material beyond LITELLM_SALT_KEY.
+# ---------------------------------------------------------------------------
+def _fernet() -> Fernet:
+    """Build a Fernet cipher keyed from LITELLM_SALT_KEY.
+
+    SHA-256 stretches the salt into a 32-byte key, which is then
+    base64url-encoded as Fernet requires.
+    """
+    salt = os.getenv("LITELLM_SALT_KEY", "")
+    key = base64.urlsafe_b64encode(hashlib.sha256(salt.encode()).digest())
+    return Fernet(key)
+
+
+def encrypt_token(token: str) -> str:
+    """Encrypt a token for safe delivery to a plugin iframe."""
+    return _fernet().encrypt(token.encode()).decode()
+
+
+def decrypt_token(ciphertext: str) -> str:
+    """Decrypt a token received from the proxy.  Raises ValueError on failure."""
+    try:
+        return _fernet().decrypt(ciphertext.encode()).decode()
+    except (InvalidToken, Exception) as exc:
+        raise ValueError("Invalid or tampered plugin auth token") from exc
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
 def register_plugins_from_config(general_settings: dict) -> None:
     """Replace the plugin registry from general_settings.
 
@@ -50,6 +93,9 @@ def register_plugins_from_config(general_settings: dict) -> None:
             _plugin_registry[name] = plugin
 
 
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 @router.get("/api/plugins", tags=["plugins"])
 async def list_plugins(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -71,6 +117,29 @@ async def list_plugins(
             entry["plugin_key"] = plugin["plugin_key"]
         result.append(entry)
     return result
+
+
+@router.get("/api/plugins/auth-token", tags=["plugins"])
+async def plugin_auth_token(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> dict:
+    """Return an encrypted copy of the caller's token for plugin iframe auth.
+
+    The token is encrypted with a key derived from LITELLM_SALT_KEY.
+    The plugin decrypts it with the same shared key — the raw litellm
+    credential never appears in plaintext outside the proxy process.
+
+    Requires LITELLM_SALT_KEY to be set; returns 503 otherwise.
+    """
+    if not os.getenv("LITELLM_SALT_KEY"):
+        raise HTTPException(
+            status_code=503,
+            detail="LITELLM_SALT_KEY is not configured; plugin iframe auth unavailable.",
+        )
+    token = getattr(user_api_key_dict, "api_key", None)
+    if not token:
+        raise HTTPException(status_code=401, detail="No token available to encrypt.")
+    return {"encrypted_token": encrypt_token(token)}
 
 
 @router.api_route(
