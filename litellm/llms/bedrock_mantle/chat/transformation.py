@@ -31,7 +31,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
     Transformation config for Amazon Bedrock Mantle OpenAI-compatible API.
     """
 
-    def __init__(self, aws_signer: Optional[BaseAWSLLM] = None):
+    def __init__(self, aws_signer: BaseAWSLLM | None = None):
         super().__init__()
         self._aws_signer = aws_signer or BaseAWSLLM()
 
