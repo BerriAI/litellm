@@ -59,7 +59,6 @@ class ThirdlawGuardrail(GenericGuardrailAPI):
             params={"timeout": self.guardrail_timeout},
         )
 
-    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
