@@ -213,6 +213,15 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
+# When True (default — preserves historical behavior), the Router appends
+# internal config names (model_group, fallback model groups, deployment
+# timeouts, fallback failure details) onto exception messages and surfaces
+# them to clients via ProxyException.message. Set to False if you do NOT
+# want the proxy's internal model_name / fallback wiring visible to clients.
+# Deprecation: planned to flip to False (redact by default) in a future
+# major release; opt in early with `litellm.expose_router_debug_in_errors
+# = False`.
+expose_router_debug_in_errors: bool = True
 filter_invalid_headers: Optional[bool] = False
 add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
