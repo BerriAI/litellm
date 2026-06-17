@@ -5172,35 +5172,65 @@ class StandardLoggingPayloadSetup:
         Like get_usage_from_response_obj but returns a plain dict, skipping
         the Pydantic Usage construction on the hot path.
         """
-        _empty: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        _empty: dict = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
         if combined_usage_object is not None:
-            d = combined_usage_object.model_dump()
-            d["cache_read_input_tokens"] = combined_usage_object._cache_read_input_tokens
-            d["cache_creation_input_tokens"] = combined_usage_object._cache_creation_input_tokens
-            return d
+            return StandardLoggingPayloadSetup._inject_cache_tokens(
+                combined_usage_object.model_dump(), combined_usage_object
+            )
         if not response_obj:
             return _empty
         _raw = response_obj.get("usage", None)
         if _raw is None:
             return _empty
         if isinstance(_raw, ResponseAPIUsage):
-            return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
                 _raw
-            ).model_dump()
+            )
+            return StandardLoggingPayloadSetup._inject_cache_tokens(
+                usage.model_dump(), usage
+            )
         if isinstance(_raw, dict):
             if ResponseAPILoggingUtils._is_response_api_usage(_raw):
-                return (
-                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                        _raw
-                    ).model_dump()
+                usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    _raw
+                )
+                return StandardLoggingPayloadSetup._inject_cache_tokens(
+                    usage.model_dump(), usage
                 )
             return _raw
         if isinstance(_raw, Usage):
-            d = _raw.model_dump()
-            d["cache_read_input_tokens"] = _raw._cache_read_input_tokens
-            d["cache_creation_input_tokens"] = _raw._cache_creation_input_tokens
-            return d
+            return StandardLoggingPayloadSetup._inject_cache_tokens(
+                _raw.model_dump(), _raw
+            )
         return _empty
+
+    @staticmethod
+    def _inject_cache_tokens(d: dict, usage: Usage) -> dict:
+        """Inject cache token counts into a usage dict produced by model_dump().
+
+        Pydantic PrivateAttr fields are excluded from model_dump(), so
+        _cache_read_input_tokens and _cache_creation_input_tokens must be
+        read directly from the Usage instance.
+
+        cache_read_input_tokens sources (in priority order):
+          1. usage._cache_read_input_tokens — set by Anthropic and Bedrock
+          2. prompt_tokens_details.cached_tokens — set by OpenAI, Gemini, DeepSeek
+
+        cache_creation_input_tokens: Anthropic and Bedrock only via private attr.
+        """
+        ptd = d.get("prompt_tokens_details") or {}
+        ptd_cached = (ptd.get("cached_tokens") or 0) if isinstance(ptd, dict) else 0
+        d["cache_read_input_tokens"] = (
+            getattr(usage, "_cache_read_input_tokens", 0) or ptd_cached
+        )
+        d["cache_creation_input_tokens"] = getattr(usage, "_cache_creation_input_tokens", 0) or 0
+        return d
 
     @staticmethod
     def get_model_cost_information(

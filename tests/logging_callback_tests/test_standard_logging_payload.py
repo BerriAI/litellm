@@ -1101,3 +1101,56 @@ def test_merge_litellm_metadata_bedrock_passthrough_scenario():
 
     # Verify total number of fields (9 user fields + 4 model fields = 13)
     assert len(result) == 13
+
+
+# --- cache token tests ---
+
+def _make_usage(cache_read: int = 0, cache_creation: int = 0, ptd_cached: int = 0) -> Usage:
+    from litellm.types.utils import PromptTokensDetailsWrapper
+    u = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    u._cache_read_input_tokens = cache_read
+    u._cache_creation_input_tokens = cache_creation
+    if ptd_cached:
+        u.prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=ptd_cached)
+    return u
+
+
+def test_get_usage_as_dict_cache_tokens_from_private_attrs():
+    usage = _make_usage(cache_read=1000, cache_creation=500)
+    d = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj=None, combined_usage_object=usage
+    )
+    assert d["cache_read_input_tokens"] == 1000
+    assert d["cache_creation_input_tokens"] == 500
+
+
+def test_get_usage_as_dict_cache_read_falls_back_to_prompt_tokens_details():
+    # OpenAI / Gemini / DeepSeek set ptd.cached_tokens but not the private attr
+    usage = _make_usage(cache_read=0, cache_creation=0, ptd_cached=800)
+    d = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj=None, combined_usage_object=usage
+    )
+    assert d["cache_read_input_tokens"] == 800
+    assert d["cache_creation_input_tokens"] == 0
+
+
+def test_get_usage_as_dict_private_attr_wins_over_ptd():
+    # When both are set, private attr takes priority
+    usage = _make_usage(cache_read=600, cache_creation=200, ptd_cached=800)
+    d = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj=None, combined_usage_object=usage
+    )
+    assert d["cache_read_input_tokens"] == 600
+
+
+def test_get_usage_as_dict_empty_when_no_usage():
+    d = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=None)
+    assert d["cache_read_input_tokens"] == 0
+    assert d["cache_creation_input_tokens"] == 0
+
+
+def test_get_usage_as_dict_from_response_obj():
+    usage = _make_usage(cache_read=300, cache_creation=100)
+    d = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={"usage": usage})
+    assert d["cache_read_input_tokens"] == 300
+    assert d["cache_creation_input_tokens"] == 100
