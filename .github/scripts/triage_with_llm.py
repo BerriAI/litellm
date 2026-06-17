@@ -355,9 +355,7 @@ def was_closed_by_agent_shin(
     )
     if marker_seconds is None:
         return False
-    close_age_seconds = (
-        dt.datetime.now(dt.timezone.utc) - closed_at
-    ).total_seconds()
+    close_age_seconds = (dt.datetime.now(dt.timezone.utc) - closed_at).total_seconds()
     return marker_seconds <= close_age_seconds + AGENT_SHIN_CLOSE_MARKER_SKEW_SECONDS
 
 

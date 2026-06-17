@@ -371,9 +371,7 @@ class TestWasClosedByAgentShin:
     def test_should_return_true_when_bot_closed_and_close_comment_present(
         self, triage_module, monkeypatch
     ):
-        self._stub_close_event(
-            triage_module, monkeypatch, actor="github-actions[bot]"
-        )
+        self._stub_close_event(triage_module, monkeypatch, actor="github-actions[bot]")
         self._stub_close_marker_present(triage_module, monkeypatch, present=True)
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is True
 
@@ -384,9 +382,7 @@ class TestWasClosedByAgentShin:
         # stale/duplicate sweep closing under that identity must NOT let
         # @agent-shin reconsider reopen the item: without an Agent Shin close
         # comment the guard fails closed.
-        self._stub_close_event(
-            triage_module, monkeypatch, actor="github-actions[bot]"
-        )
+        self._stub_close_event(triage_module, monkeypatch, actor="github-actions[bot]")
         self._stub_close_marker_present(triage_module, monkeypatch, present=False)
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
 
@@ -404,9 +400,7 @@ class TestWasClosedByAgentShin:
         # If the events API returns nothing (network blip, repo permission
         # quirk), the guard must fail-closed: refuse to reopen rather than
         # assume the bot did it.
-        self._stub_close_event(
-            triage_module, monkeypatch, actor=None, closed_at=None
-        )
+        self._stub_close_event(triage_module, monkeypatch, actor=None, closed_at=None)
         self._stub_close_marker_present(triage_module, monkeypatch, present=True)
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
 
@@ -457,9 +451,7 @@ class TestWasClosedByAgentShin:
         self._stub_close_event(triage_module, monkeypatch, actor="my-bot")
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is True
         # Default "github-actions[bot]" should NOT match when env is set.
-        self._stub_close_event(
-            triage_module, monkeypatch, actor="github-actions[bot]"
-        )
+        self._stub_close_event(triage_module, monkeypatch, actor="github-actions[bot]")
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
 
 
