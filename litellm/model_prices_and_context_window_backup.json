@@ -10912,13 +10912,13 @@
         "supports_tool_choice": true
     },
     "command-r7b-12-2024": {
-        "input_cost_per_token": 1.5e-07,
+        "input_cost_per_token": 3.75e-08,
         "litellm_provider": "cohere_chat",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 3.75e-08,
+        "output_cost_per_token": 1.5e-07,
         "source": "https://docs.cohere.com/v2/docs/command-r7b",
         "supports_function_calling": true,
         "supports_tool_choice": true
