@@ -8453,14 +8453,23 @@ async def model_info(
         user_api_key_cache=user_api_key_cache,
     )
 
+    # Resolve a public team model name (as advertised by /v1/models) back to the
+    # internal routing key, then validate and look up by it. Keeps the public
+    # name in the response so listing and retrieve agree on the same id.
+    resolved_model_id = _resolve_team_public_model_name(
+        model_id=model_id,
+        available_models=all_models,
+        llm_router=llm_router,
+    )
+
     # Validate that the requested model is accessible
-    validate_model_access(model_id=model_id, available_models=all_models)
+    validate_model_access(model_id=resolved_model_id, available_models=all_models)
 
     # Get provider information from the router deployment
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
 
-    deployment = llm_router.get_deployment_by_model_group_name(model_id)
+    deployment = llm_router.get_deployment_by_model_group_name(resolved_model_id)
     if deployment is None:
         raise HTTPException(
             status_code=404,
@@ -12598,6 +12607,51 @@ def _translate_model_name_for_response(model: dict) -> dict:
     return {**model, "model_name": team_public}
 
 
+def _team_internal_public_pair(model: object) -> tuple[str, str] | None:
+    """`(internal_routing_key, public_name)` for a team-scoped (BYOK) row, else None."""
+    if not isinstance(model, dict):
+        return None
+    model_dict = cast(dict[str, object], model)  # any-ok: checked
+    model_info_raw: object = model_dict.get("model_info")
+    if not isinstance(model_info_raw, Mapping):
+        return None
+    model_info = cast(Mapping[str, object], model_info_raw)  # any-ok: checked
+    team_id = model_info.get("team_id")
+    team_public = model_info.get("team_public_model_name")
+    name = model_dict.get("model_name")
+    if (
+        isinstance(team_id, str)
+        and isinstance(team_public, str)
+        and isinstance(name, str)
+        and name.startswith(f"model_name_{team_id}_")
+    ):
+        return name, team_public
+    return None
+
+
+def _get_team_internal_to_public_model_map(
+    llm_router: Router | None,
+) -> dict[str, str]:
+    """Internal team routing key (`model_name_{team_id}_{uuid}`) -> public
+    `team_public_model_name`, for team-scoped (BYOK) deployments.
+
+    Empty when the operator pins the legacy internal names via
+    `general_settings.use_team_public_model_name: false`, the router is absent,
+    or the model list is malformed.
+    """
+    settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
+    if settings.get("use_team_public_model_name", True) is False or llm_router is None:
+        return {}
+    router_model_list = llm_router.get_model_list()
+    if not isinstance(router_model_list, list):
+        return {}
+    return dict(
+        pair
+        for pair in (_team_internal_public_pair(m) for m in router_model_list)
+        if pair is not None
+    )
+
+
 def _translate_team_model_names_for_listing(
     model_names: list[str],
     llm_router: Router | None,
@@ -12612,44 +12666,38 @@ def _translate_team_model_names_for_listing(
     unchanged (see issue #28382). Sibling deployments collapse to one public
     name, so the result is de-duplicated while preserving order.
     """
-    settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
-    if settings.get("use_team_public_model_name", True) is False or llm_router is None:
-        return model_names
-
-    router_model_list = llm_router.get_model_list()
-    if not isinstance(router_model_list, list):
-        return model_names
-
-    internal_to_public: dict[str, str] = {}
-    for model in router_model_list:
-        if not isinstance(model, dict):
-            continue
-        model_dict = cast(dict[str, object], model)  # any-ok: checked
-        model_info_raw: object = model_dict.get("model_info")
-        if not isinstance(model_info_raw, Mapping):
-            continue
-        model_info = cast(Mapping[str, object], model_info_raw)  # any-ok: checked
-        team_id = model_info.get("team_id")
-        team_public = model_info.get("team_public_model_name")
-        name = model_dict.get("model_name")
-        if (
-            isinstance(team_id, str)
-            and isinstance(team_public, str)
-            and isinstance(name, str)
-            and name.startswith(f"model_name_{team_id}_")
-        ):
-            internal_to_public[name] = team_public
+    internal_to_public = _get_team_internal_to_public_model_map(llm_router)
     if not internal_to_public:
         return model_names
-    translated_names: list[str] = []
-    seen_names: set[str] = set()
-    for model_name in model_names:
-        translated_name = internal_to_public.get(model_name, model_name)
-        if translated_name in seen_names:
-            continue
-        seen_names.add(translated_name)
-        translated_names.append(translated_name)
-    return translated_names
+    deduped: dict[str, None] = {internal_to_public.get(n, n): None for n in model_names}
+    return list(deduped)
+
+
+def _resolve_team_public_model_name(
+    model_id: str,
+    available_models: list[str],
+    llm_router: Router | None,
+) -> str:
+    """Resolve a public team model name (as advertised by `/v1/models`) back to
+    the internal routing key the router indexes by, so `GET /v1/models/{id}`
+    accepts the same name the listing returns.
+
+    Resolution is restricted to `available_models` (the caller's accessible set)
+    so colliding public names across teams never resolve across an access
+    boundary. Returns `model_id` unchanged when it is not an accessible public
+    team name (already-internal names and globals pass through).
+    """
+    internal_to_public = _get_team_internal_to_public_model_map(llm_router)
+    if not internal_to_public:
+        return model_id
+    return next(
+        (
+            internal
+            for internal in available_models
+            if internal_to_public.get(internal) == model_id
+        ),
+        model_id,
+    )
 
 
 def _get_proxy_model_info(model: dict) -> dict:
