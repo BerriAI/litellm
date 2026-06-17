@@ -26,6 +26,7 @@ from typing import (
     AsyncGenerator,
     Callable,
     Dict,
+    FrozenSet,
     Generator,
     List,
     Literal,
@@ -230,6 +231,54 @@ else:
 
 class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
+
+
+# Credential, endpoint, and project-targeting fields owned by the
+# deployment's server-side config. The completion merges apply request
+# kwargs after litellm_params, so these are stripped from request kwargs
+# first to keep the deployment config authoritative. The clientside keys
+# (api_key/api_base/base_url) are intentionally excluded; they flow through
+# the allow_client_side_credentials opt-in instead.
+_DEPLOYMENT_OWNED_CREDENTIAL_KWARGS: FrozenSet[str] = frozenset(
+    {
+        "api_version",
+        "vertex_project",
+        "vertex_location",
+        "vertex_credentials",
+        "vertex_ai_credentials",
+        "region_name",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_region_name",
+        "aws_bedrock_runtime_endpoint",
+        "aws_bedrock_project_id",
+        "aws_sts_endpoint",
+        "aws_web_identity_token",
+        "aws_role_name",
+        "watsonx_region_name",
+        "base_model",
+        "s3_endpoint_url",
+        "sagemaker_base_url",
+        "deployment_url",
+        "oci_signer",
+        "oci_user",
+        "oci_fingerprint",
+        "oci_tenancy",
+        "oci_key",
+        "oci_key_file",
+    }
+)
+
+
+def _strip_deployment_owned_credential_kwargs(kwargs: dict) -> None:
+    """Drop caller-supplied credential/endpoint/project kwargs in place.
+
+    Run before merging request ``kwargs`` over deployment ``litellm_params``
+    so user input cannot override the server-pinned credential fields.
+    """
+    for key in _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS:
+        kwargs.pop(key, None)
 
 
 class Router:
@@ -1925,6 +1974,7 @@ class Router:
             if not self.has_model_id(model):
                 self.routing_strategy_pre_call_checks(deployment=deployment)
 
+            _strip_deployment_owned_credential_kwargs(kwargs)
             input_kwargs = {
                 **litellm_params,
                 "messages": messages,
@@ -2964,6 +3014,7 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
+            _strip_deployment_owned_credential_kwargs(kwargs)
             input_kwargs = {
                 **litellm_params,
                 "messages": messages,

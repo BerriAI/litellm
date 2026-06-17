@@ -96,7 +96,9 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
     # admin's value in ``litellm_params`` and have it forwarded to the
     # redirected upstream.
     if "api_base" in request_kwargs or "base_url" in request_kwargs:
-        for field in _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE:
+        # api_key is also cleared so a client base-url override does not reuse
+        # the deployment's key
+        for field in (*_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE, "api_key"):
             litellm_params.pop(field, None)
             if field in request_kwargs:
                 litellm_params[field] = request_kwargs[field]

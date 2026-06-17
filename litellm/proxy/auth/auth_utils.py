@@ -259,6 +259,21 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "aws_web_identity_token",
     "aws_role_name",
     "vertex_credentials",
+    "vertex_ai_credentials",
+    "vertex_project",
+    "vertex_location",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "base_model",
+    "oci_signer",
+    "oci_user",
+    "oci_fingerprint",
+    "oci_tenancy",
+    "oci_key",
+    "oci_key_file",
+    # SDK-only field; also rejected outright in is_request_body_safe
+    "model_list",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
     # ``extra_body``) and resolves it through ``get_secret`` before
@@ -365,6 +380,13 @@ def is_request_body_safe(
     ``litellm_embedding_config.api_base`` (VERIA-6) without exposing a
     recursion-depth DoS surface.
     """
+    # model_list is an SDK-only field with no proxy API meaning; reject it
+    # outright so caller-supplied deployments are not used by the proxy
+    if "model_list" in request_body:
+        raise ValueError(
+            "Rejected Request: model_list is not allowed in the request body."
+        )
+
     _check_banned_params(request_body, general_settings, llm_router, model)
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
@@ -374,7 +396,27 @@ def is_request_body_safe(
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model)
+    # tool entries can carry routing fields, so apply the same check to each
+    # tool dict and its nested function object
+    for tool in _iter_request_tools(request_body.get("tools")):
+        _check_banned_params(tool, general_settings, llm_router, model)
+        function = tool.get("function")
+        if isinstance(function, dict):
+            _check_banned_params(function, general_settings, llm_router, model)
     return True
+
+
+def _iter_request_tools(tools: Any) -> Tuple[Dict[str, Any], ...]:
+    """Return the dict entries of a request ``tools`` array.
+
+    The OpenAI ``tools`` field is a list of objects; provider-specific tools
+    (advisor, web search, etc.) carry routing fields at the top level of each
+    entry. Non-dict entries are skipped rather than raising so a malformed
+    array still reaches the normal request validation downstream.
+    """
+    if not isinstance(tools, (list, tuple)):
+        return ()
+    return tuple(tool for tool in tools if isinstance(tool, dict))
 
 
 def _coerce_metadata_to_dict(value: Any) -> Optional[Dict[str, Any]]:
