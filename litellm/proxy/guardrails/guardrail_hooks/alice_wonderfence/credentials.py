@@ -18,9 +18,21 @@ The stash bridges pre_call resolution into post_call where request metadata is
 gone — see ``stash_resolved`` for the full rationale.
 """
 
-from typing import TYPE_CHECKING, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
 
 from .exceptions import WonderFenceMissingSecrets
+
+
+def _nonempty_str(value: Any) -> Optional[str]:
+    """Return ``value`` only if it is a non-empty/non-blank string, else None.
+
+    Credential sources (request body, key/team metadata, config default) are
+    only honored when they carry a real string. A truthy non-string override
+    (list, dict, number) must not pass through to the SDK, where it would raise
+    a type error that ``fail_open`` could swallow into a skipped scan.
+    """
+    return value if isinstance(value, str) and value.strip() else None
+
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -83,22 +95,25 @@ def resolve_api_key(
     metadata = get_metadata(request_data)
 
     key_metadata = metadata.get("user_api_key_metadata") or {}
-    if isinstance(key_metadata, dict) and key_metadata.get("alice_wonderfence_api_key"):
-        return key_metadata["alice_wonderfence_api_key"]
+    if isinstance(key_metadata, dict):
+        val = _nonempty_str(key_metadata.get("alice_wonderfence_api_key"))
+        if val:
+            return val
 
     team_metadata = metadata.get("user_api_key_team_metadata") or {}
-    if isinstance(team_metadata, dict) and team_metadata.get(
-        "alice_wonderfence_api_key"
-    ):
-        return team_metadata["alice_wonderfence_api_key"]
+    if isinstance(team_metadata, dict):
+        val = _nonempty_str(team_metadata.get("alice_wonderfence_api_key"))
+        if val:
+            return val
 
     if allow_request_metadata_override:
-        req_api_key = metadata.get("alice_wonderfence_api_key")
-        if req_api_key:
-            return req_api_key
+        val = _nonempty_str(metadata.get("alice_wonderfence_api_key"))
+        if val:
+            return val
 
-    if default_api_key:
-        return default_api_key
+    val = _nonempty_str(default_api_key)
+    if val:
+        return val
 
     raise WonderFenceMissingSecrets(
         "No alice_wonderfence_api_key found in API-key metadata, team "
@@ -117,19 +132,21 @@ def resolve_app_id(request_data: dict, allow_request_metadata_override: bool) ->
     metadata = get_metadata(request_data)
 
     key_metadata = metadata.get("user_api_key_metadata") or {}
-    if isinstance(key_metadata, dict) and key_metadata.get("alice_wonderfence_app_id"):
-        return key_metadata["alice_wonderfence_app_id"]
+    if isinstance(key_metadata, dict):
+        val = _nonempty_str(key_metadata.get("alice_wonderfence_app_id"))
+        if val:
+            return val
 
     team_metadata = metadata.get("user_api_key_team_metadata") or {}
-    if isinstance(team_metadata, dict) and team_metadata.get(
-        "alice_wonderfence_app_id"
-    ):
-        return team_metadata["alice_wonderfence_app_id"]
+    if isinstance(team_metadata, dict):
+        val = _nonempty_str(team_metadata.get("alice_wonderfence_app_id"))
+        if val:
+            return val
 
     if allow_request_metadata_override:
-        req_app_id = metadata.get("alice_wonderfence_app_id")
-        if req_app_id:
-            return req_app_id
+        val = _nonempty_str(metadata.get("alice_wonderfence_app_id"))
+        if val:
+            return val
 
     raise WonderFenceMissingSecrets(
         "No alice_wonderfence_app_id found in API-key metadata, team "

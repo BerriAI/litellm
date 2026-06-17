@@ -692,3 +692,26 @@ def test_build_analysis_context_falls_back_to_slash_split(monkeypatch, make_guar
     kwargs = AnalysisContext.call_args.kwargs
     assert kwargs["provider"] == "myorg"
     assert kwargs["model_name"] == "custom-llm"
+
+
+@pytest.mark.asyncio
+async def test_malformed_override_does_not_fail_open(make_guardrail, make_request_data):
+    """A non-string request-metadata app_id override must not slip through under
+    fail_open: it resolves to a config error (500), not a swallowed exception
+    that skips scanning. The SDK is never called with a malformed value."""
+    guardrail, client = make_guardrail(
+        fail_open=True, allow_request_metadata_override=True
+    )
+    guardrail._client_cache["default-api-key"] = client
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=make_request_data(
+                metadata={"alice_wonderfence_app_id": ["not", "a", "string"]}
+            ),
+            input_type="request",
+        )
+    assert exc.value.status_code == 500
+    assert "alice_wonderfence_app_id" in exc.value.detail["exception"]
+    client.evaluate_prompt.assert_not_awaited()

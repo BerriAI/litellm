@@ -348,3 +348,45 @@ def test_stashed_api_key_not_present_in_model_call_details(make_logging_obj):
 def test_recover_returns_none_when_nothing_stashed(make_logging_obj):
     obj = make_logging_obj()
     assert recover_resolved(obj, "guard-1") is None
+
+
+# --------------- malformed (non-string) credential overrides ---------------
+
+
+def test_resolve_api_key_ignores_non_string_request_override():
+    """A truthy non-string request override must not be returned (it would reach
+    the SDK and raise, which fail_open could swallow); fall back to default."""
+    data = _data(metadata={"alice_wonderfence_api_key": ["not", "a", "string"]})
+    assert (
+        resolve_api_key(
+            data, default_api_key="default", allow_request_metadata_override=True
+        )
+        == "default"
+    )
+
+
+def test_resolve_app_id_non_string_request_override_raises():
+    data = _data(metadata={"alice_wonderfence_app_id": {"bad": 1}})
+    with pytest.raises(WonderFenceMissingSecrets):
+        resolve_app_id(data, allow_request_metadata_override=True)
+
+
+def test_resolve_api_key_ignores_blank_string_override():
+    data = _data(metadata={"alice_wonderfence_api_key": "   "})
+    assert (
+        resolve_api_key(
+            data, default_api_key="default", allow_request_metadata_override=True
+        )
+        == "default"
+    )
+
+
+def test_resolve_app_id_non_string_key_metadata_falls_through():
+    """A non-string admin value is also rejected rather than passed to the SDK."""
+    data = _data(
+        metadata={
+            "user_api_key_metadata": {"alice_wonderfence_app_id": 12345},
+            "user_api_key_team_metadata": {"alice_wonderfence_app_id": "team-app"},
+        }
+    )
+    assert resolve_app_id(data, allow_request_metadata_override=False) == "team-app"
