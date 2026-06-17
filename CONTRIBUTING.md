@@ -155,7 +155,7 @@ Individual linting commands:
 make format-check       # Check Black formatting
 make lint-ruff          # Run Ruff linting
 make lint-mypy          # Run MyPy type checking
-make lint-any           # Fail on Any-typed values on changed lines
+make lint-any           # Fail if a changed file exceeds its Any-typed value budget (baseline + ~25%)
 make check-circular-imports    # Check for circular imports
 make check-import-safety       # Check import safety
 ```

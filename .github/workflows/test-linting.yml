@@ -144,7 +144,7 @@ jobs:
           restore-keys: |
             any-mypy-cache-${{ runner.os }}-py3.12-
 
-      - name: Check Any discipline on changed lines
+      - name: Check Any discipline per-file budget
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
