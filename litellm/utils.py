@@ -3878,6 +3878,7 @@ class PreProcessNonDefaultParams:
                 k.startswith("vertex_")
                 and custom_llm_provider != "vertex_ai"
                 and custom_llm_provider != "vertex_ai_beta"
+                and custom_llm_provider != "gdc"
             ):  # allow dynamically setting vertex ai init logic
                 continue
             passed_params[k] = v
