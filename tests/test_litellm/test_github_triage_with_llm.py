@@ -1482,7 +1482,7 @@ class TestTriageOrchestration:
         assert result["action"] == "warned-grace"
         assert posted["n"] == 42
         # Pin the user-facing language pieces the user explicitly asked for.
-        assert "1 day" in posted["body"]
+        assert "2 hours" in posted["body"]
         assert "@agent-shin reconsider" in posted["body"]
         assert "@greptileai" in posted["body"]
         assert "even after the PR is closed" in posted["body"]
@@ -1557,27 +1557,21 @@ class TestTriageOrchestration:
             judge=lambda p: json.dumps(verdict),
         )
         assert result["action"] == "would-warn-grace"
-        assert "1 day" in result["comment"]
+        assert "2 hours" in result["comment"]
 
-    # ---- IMMEDIATE_CLOSE_LOGINS bypass (e.g. SwiftWinds) -----------------
-
-    def test_should_skip_grace_for_swiftwinds_login(self, triage_module, monkeypatch):
-        # SwiftWinds is in `IMMEDIATE_CLOSE_LOGINS` for dogfooding.
-        # Even though no grace warning has been posted, the bypass must
-        # take the close path immediately.
+    def test_should_warn_grace_for_swiftwinds_not_close_instantly(
+        self, triage_module, monkeypatch
+    ):
+        # Regression: SwiftWinds (the dogfood account) used to be in a
+        # now-removed `IMMEDIATE_CLOSE_LOGINS` bypass that skipped the grace
+        # window and closed on first detection. It must follow the SAME
+        # grace path as every other author: warn first, close only after the
+        # window elapses. A re-added instant-close bypass would call
+        # close_pr here and fail the test.
         pr = self._make_pr(body="just a sentence.", user={"login": "SwiftWinds"})
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
-        # The grace check must NOT be consulted at all for an immediate
-        # login — pin that here.
-        monkeypatch.setattr(
-            triage_module,
-            "seconds_since_last_grace_warning",
-            lambda *a, **kw: pytest.fail(
-                "grace check must not run for immediate-close login"
-            ),
-        )
+        self._stub_grace_no_warning(triage_module, monkeypatch)
         posted = {}
-        closed = {}
         monkeypatch.setattr(
             triage_module,
             "post_comment",
@@ -1586,7 +1580,9 @@ class TestTriageOrchestration:
         monkeypatch.setattr(
             triage_module,
             "close_pr",
-            lambda repo, n: closed.update({"n": n}),
+            lambda *a, **kw: pytest.fail(
+                "SwiftWinds must not close on first detection; it gets the grace window"
+            ),
         )
 
         verdict = {
@@ -1602,148 +1598,20 @@ class TestTriageOrchestration:
             model="m",
             judge=lambda p: json.dumps(verdict),
         )
-        assert result["action"] == "closed"
-        assert result["immediate_close"] is True
-        assert closed["n"] == 99
-        # The close comment is the standard one (no warning was needed).
-        assert "Agent Shin" in posted["body"]
-
-    def test_should_close_swiftwinds_even_when_close_flag_false(
-        self, triage_module, monkeypatch
-    ):
-        # The `IMMEDIATE_CLOSE_LOGINS` bypass intentionally overrides the
-        # workflow-level dry-run gating. The user explicitly asked to
-        # "turn on full (non dry run) mode with SwiftWinds" because their
-        # personal account has no push permissions to litellm and is the
-        # perfect testing target. With `close=False` (workflow stripped
-        # --close on pull_request_target), the script must STILL post +
-        # close for SwiftWinds.
-        pr = self._make_pr(body="just a sentence.", user={"login": "SwiftWinds"})
-        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
-        posted = {}
-        closed = {}
-        monkeypatch.setattr(
-            triage_module,
-            "post_comment",
-            lambda repo, n, body: posted.update({"n": n, "body": body}),
-        )
-        monkeypatch.setattr(
-            triage_module,
-            "close_pr",
-            lambda repo, n: closed.update({"n": n}),
-        )
-
-        verdict = {
-            "verdict": "fail",
-            "missing": ["QA proof"],
-            "explanation": "thin",
-        }
-        result = triage_module.triage(
-            repo="o/r",
-            kind="pr",
-            number=99,
-            close=False,
-            model="m",
-            judge=lambda p: json.dumps(verdict),
-        )
-        assert result["action"] == "closed"
-        assert closed["n"] == 99
-
-    def test_should_match_immediate_close_login_case_insensitively(
-        self, triage_module, monkeypatch
-    ):
-        # GitHub returns the original casing of a login. The bypass must
-        # work regardless of the exact case the API returns.
-        for login in ("SwiftWinds", "swiftwinds", "SWIFTWINDS"):
-            pr = self._make_pr(body="thin", user={"login": login})
-            monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
-            monkeypatch.setattr(
-                triage_module,
-                "post_comment",
-                lambda *a, **kw: None,
-            )
-            monkeypatch.setattr(
-                triage_module,
-                "close_pr",
-                lambda *a, **kw: None,
-            )
-            verdict = {
-                "verdict": "fail",
-                "missing": ["QA proof"],
-                "explanation": "thin",
-            }
-            result = triage_module.triage(
-                repo="o/r",
-                kind="pr",
-                number=1,
-                close=False,
-                model="m",
-                judge=lambda p: json.dumps(verdict),
-            )
-            assert result["action"] == "closed", login
-            assert result.get("immediate_close") is True, login
-
-    def test_should_not_treat_random_external_login_as_immediate_close(
-        self, triage_module, monkeypatch
-    ):
-        # Sanity check — the immediate-close bypass must NOT fire for an
-        # allowlisted account that isn't in IMMEDIATE_CLOSE_LOGINS; it still
-        # goes through the normal grace path.
-        pr = self._make_pr(body="thin", user={"login": "mateo-berri"})
-        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
-        self._stub_grace_no_warning(triage_module, monkeypatch)
-        posted = {}
-        monkeypatch.setattr(
-            triage_module,
-            "post_comment",
-            lambda repo, n, body: posted.update({"body": body}),
-        )
-        monkeypatch.setattr(
-            triage_module,
-            "close_pr",
-            lambda *a, **kw: pytest.fail("must not close non-immediate login"),
-        )
-
-        verdict = {
-            "verdict": "fail",
-            "missing": ["QA proof"],
-            "explanation": "thin",
-        }
-        result = triage_module.triage(
-            repo="o/r",
-            kind="pr",
-            number=1,
-            close=True,
-            model="m",
-            judge=lambda p: json.dumps(verdict),
-        )
         assert result["action"] == "warned-grace"
-
-
-class TestImmediateCloseLoginsConstant:
-    """SwiftWinds is the dogfood account the user explicitly named — pin
-    its presence so a future cleanup that removes the constant or
-    forgets to keep the entry doesn't silently break the test path."""
-
-    def test_should_include_swiftwinds(self, triage_module):
-        assert "swiftwinds" in triage_module.IMMEDIATE_CLOSE_LOGINS
-
-    def test_should_be_lowercase_for_case_insensitive_match(self, triage_module):
-        for login in triage_module.IMMEDIATE_CLOSE_LOGINS:
-            assert login == login.lower(), login
+        assert "2 hours" in posted["body"]
 
 
 class TestGraceWarningCommentText:
     """Pin the user-facing promises in the grace warning so a future
     refactor can't silently drop them."""
 
-    def test_pr_grace_warning_should_state_one_day_grace(self, triage_module):
+    def test_pr_grace_warning_should_state_grace_window(self, triage_module):
         body = triage_module.format_grace_warning_pr_comment(
             {"verdict": "fail", "missing": ["QA proof"], "explanation": "thin"}
         )
-        # The user explicitly asked: "specify in the comment" that there
-        # is a 1-day grace.
-        assert "1 day" in body
+        # The user explicitly asked: "specify in the comment" the grace window.
+        assert "2 hours" in body
 
     def test_pr_grace_warning_should_mention_reconsider_during_grace(
         self, triage_module
@@ -1777,7 +1645,7 @@ class TestGraceWarningCommentText:
             {"verdict": "fail", "missing": [], "explanation": ""}
         )
         assert triage_module.GRACE_COMMENT_MARKER in body
-        assert "1 day" in body
+        assert "2 hours" in body
         # OSS authors can't reopen a bot-closed issue, so recovery is
         # `@agent-shin reconsider` (the bot reopens), like the PR path.
         assert "@agent-shin reconsider" in body

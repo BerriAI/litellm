@@ -53,7 +53,6 @@ from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
     GRACE_COMMENT_MARKER,
     GRACE_PERIOD_SECONDS,
     GREPTILE_BOT_LOGINS,
-    IMMEDIATE_CLOSE_LOGINS,
     SCORE_PATTERN,
     extract_greptile_score,
     gh,
@@ -88,16 +87,9 @@ RECONSIDER_RATE_LIMIT_SECONDS = 600
 # posted on the first low-quality detection — used on subsequent triage
 # runs to detect that a warning was already posted and measure how long
 # ago it was posted) and `GRACE_PERIOD_SECONDS` (length of the grace
-# period between the warning and the actual auto-close, 24 hours) are
+# period between the warning and the actual auto-close, 2 hours) are
 # imported from `agent_shin_shared` so the daily Greptile sweep and the
 # LLM judge agree on the same marker and duration.
-#
-# `IMMEDIATE_CLOSE_LOGINS` (case-insensitive logins that bypass BOTH the
-# grace period AND the dry-run / `AGENT_SHIN_ENABLED` workflow gating —
-# every Agent Shin verdict against a PR/issue from one of these accounts
-# is treated as a real run with immediate close on fail) is shared too.
-# Useful for dogfooding the bot from an external account that has no
-# push permissions to the repo. Callers compare via `login.lower() in ...`.
 
 # --- Review-gate ("ready for review" label lifecycle) configuration ----------
 # The review gate keeps a single label in sync with whether a PR currently
@@ -802,7 +794,7 @@ def format_issue_close_comment(verdict: dict) -> str:
 
 def format_grace_warning_pr_comment(verdict: dict) -> str:
     """Comment posted on the FIRST low-quality detection — gives the
-    contributor a 1-day grace window to fix the PR before the next
+    contributor a 2-hour grace window to fix the PR before the next
     triage run actually closes it.
 
     This is the "before-close" warning. On the second triage run, if the
@@ -829,7 +821,7 @@ def format_grace_warning_pr_comment(verdict: dict) -> str:
         "\n"
         f"> {explanation}\n"
         "\n"
-        "If the description isn't updated in the next **1 day**, I'll auto-close this PR. "
+        "If the description isn't updated in the next **2 hours**, I'll auto-close this PR. "
         "That's **not** us saying we don't care about the change; we want the open-PR list to "
         "mirror what a maintainer can act on *right now*, so contributors don't get lost in a "
         'backlog. A closed PR is a soft "park this for later," not a rejection. Take your '
@@ -841,7 +833,7 @@ def format_grace_warning_pr_comment(verdict: dict) -> str:
         "[what counts as QA proof](https://docs.litellm.ai/blog/agent-shin-triage#the-rubric-for-pull-requests) "
         "for the full rubric (a linked issue alone isn't enough; it covers context, not proof).\n"
         "\n"
-        "**If the PR does get auto-closed in 24 hours, you still have easy recovery paths:**\n"
+        "**If the PR does get auto-closed in 2 hours, you still have easy recovery paths:**\n"
         "\n"
         "- Comment `@agent-shin reconsider` after updating the description. I'll re-evaluate "
         "and reopen the PR if it now passes.\n"
@@ -877,7 +869,7 @@ def format_grace_warning_issue_comment(verdict: dict) -> str:
         "\n"
         f"> {explanation}\n"
         "\n"
-        "If the issue isn't updated in the next **1 day**, I'll auto-close it. That's **not** us "
+        "If the issue isn't updated in the next **2 hours**, I'll auto-close it. That's **not** us "
         "saying the bug isn't real or the request isn't useful; we want the open-issue list "
         "to mirror what a maintainer can act on *right now*, so reports like yours don't get "
         'buried in a backlog. A closed issue is a soft "park this for later," not a '
@@ -896,7 +888,7 @@ def format_grace_warning_issue_comment(verdict: dict) -> str:
         "- For **feature requests**: a concrete description of what should change, plus a use "
         "case and example (config / API call / UI flow).\n"
         "\n"
-        "**If the issue does get auto-closed in 24 hours**, comment `@agent-shin reconsider` "
+        "**If the issue does get auto-closed in 2 hours**, comment `@agent-shin reconsider` "
         "and I'll re-evaluate. If it now meets the bar, I'll reopen the issue.\n"
         "\n"
         "Internal BerriAI contributors: this rubric doesn't apply to you; ping a maintainer.\n"
@@ -1518,53 +1510,41 @@ def triage(
     # (manual re-trigger, or the daily `close_low_quality_prs.py` cron
     # finding the same PR in its own pass), if `GRACE_PERIOD_SECONDS` has
     # elapsed since the warning AND the PR still fails the rubric, close.
-    #
-    # `IMMEDIATE_CLOSE_LOGINS` (e.g. test/dogfood accounts like SwiftWinds)
-    # bypass the grace period entirely — every fail is treated as a real
-    # close run. This is intentional: those accounts exist specifically to
-    # exercise the bot end-to-end, and waiting a day per iteration kills
-    # the feedback loop.
-    is_immediate = login.lower() in IMMEDIATE_CLOSE_LOGINS
-
-    if not is_immediate:
-        grace_age = seconds_since_last_grace_warning(repo, number)
-        if grace_age is None:
-            warning_body = (
-                format_grace_warning_pr_comment(verdict)
-                if kind == "pr"
-                else format_grace_warning_issue_comment(verdict)
-            )
-            if not close:
-                return {
-                    **base_result,
-                    "action": "would-warn-grace",
-                    "verdict": verdict,
-                    "comment": warning_body,
-                }
-            post_comment(repo, number, warning_body)
+    grace_age = seconds_since_last_grace_warning(repo, number)
+    if grace_age is None:
+        warning_body = (
+            format_grace_warning_pr_comment(verdict)
+            if kind == "pr"
+            else format_grace_warning_issue_comment(verdict)
+        )
+        if not close:
             return {
                 **base_result,
-                "action": "warned-grace",
+                "action": "would-warn-grace",
                 "verdict": verdict,
                 "comment": warning_body,
             }
-        if grace_age < GRACE_PERIOD_SECONDS:
-            return {
-                **base_result,
-                "action": "skip-in-grace-period",
-                "verdict": verdict,
-                "grace_age_seconds": grace_age,
-                "grace_period_seconds": GRACE_PERIOD_SECONDS,
-            }
+        post_comment(repo, number, warning_body)
+        return {
+            **base_result,
+            "action": "warned-grace",
+            "verdict": verdict,
+            "comment": warning_body,
+        }
+    if grace_age < GRACE_PERIOD_SECONDS:
+        return {
+            **base_result,
+            "action": "skip-in-grace-period",
+            "verdict": verdict,
+            "grace_age_seconds": grace_age,
+            "grace_period_seconds": GRACE_PERIOD_SECONDS,
+        }
 
-    # Either the grace window has elapsed or this author bypasses grace —
-    # proceed to the actual close path. `--close` still gates the
-    # destructive write for the regular-author path so a local operator
-    # can preview a "would close after grace" verdict; immediate-close
-    # accounts (`is_immediate`) ignore `--close` so a workflow that
-    # forces dry-run for the global population can still take real
-    # action on those test accounts.
-    if not close and not is_immediate:
+    # The grace window has elapsed. `--close` still gates the destructive
+    # write so a dry-run preview never posts or closes — the workflow only
+    # passes `--close` when `AGENT_SHIN_ENABLED=true`, which keeps the bot
+    # inert by default.
+    if not close:
         return {**base_result, "action": "would-close", "verdict": verdict}
 
     comment_body = (
@@ -1583,7 +1563,6 @@ def triage(
         "action": "closed",
         "verdict": verdict,
         "comment": comment_body,
-        "immediate_close": is_immediate,
     }
 
 

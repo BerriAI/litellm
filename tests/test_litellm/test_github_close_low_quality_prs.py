@@ -176,7 +176,7 @@ class TestEvaluatePr:
         # `min_age_days=0` means no age filter — a freshly-opened PR is
         # eligible the moment Greptile scores it below threshold. The
         # first detection still goes through the warn-grace step rather
-        # than closing immediately, giving the contributor 24 hours to
+        # than closing immediately, giving the contributor 2 hours to
         # respond before the next run actually closes the PR.
         monkeypatch.setattr(
             closer_module,
@@ -321,7 +321,7 @@ class TestEvaluatePr:
         old_warning = {
             "user": {"login": "github-actions[bot]"},
             "body": (
-                "you have 1 day to fix this\n\n" + closer_module.GRACE_COMMENT_MARKER
+                "you have 2 hours to fix this\n\n" + closer_module.GRACE_COMMENT_MARKER
             ),
             "created_at": (
                 _now - dt.timedelta(seconds=closer_module.GRACE_PERIOD_SECONDS + 60)
@@ -355,7 +355,7 @@ class TestEvaluatePr:
     def test_should_skip_when_grace_warning_within_window(
         self, closer_module, _now, monkeypatch
     ):
-        # Within the 24-hour grace window the closer must NOT close the
+        # Within the 2-hour grace window the closer must NOT close the
         # PR even if the score is still low. The warning is only an hour
         # old; give the contributor time to push fixes before destruction.
         recent_warning = {
@@ -384,12 +384,13 @@ class TestEvaluatePr:
         assert action == "skip-in-grace-period"
         assert score == 2
 
-    def test_should_close_immediately_for_swiftwinds_login(
+    def test_should_warn_grace_for_swiftwinds_not_close_immediately(
         self, closer_module, _now, monkeypatch
     ):
-        # SwiftWinds is in `IMMEDIATE_CLOSE_LOGINS` for dogfooding the bot
-        # from an external account. Skip grace; close on first detection
-        # so the iteration loop is fast.
+        # Regression: SwiftWinds (the dogfood account) used to be in a
+        # now-removed `IMMEDIATE_CLOSE_LOGINS` bypass that closed on first
+        # detection. It must now follow the SAME grace path as every other
+        # external author: warn first, close only after the window elapses.
         monkeypatch.setattr(
             closer_module,
             "fetch_pr_comments",
@@ -403,30 +404,8 @@ class TestEvaluatePr:
             repo=None,
             optout_labels=set(),
         )
-        assert action == "close"
+        assert action == "warn-grace"
         assert score == 1
-
-    def test_should_close_immediately_for_swiftwinds_login_case_insensitive(
-        self, closer_module, _now, monkeypatch
-    ):
-        # GitHub login matching is case-insensitive on GitHub's side; the
-        # API returns the original casing. Make sure the bypass fires
-        # regardless of how the login was registered.
-        monkeypatch.setattr(
-            closer_module,
-            "fetch_pr_comments",
-            lambda *a, **kw: [_greptile_comment("Confidence Score: 1/5")],
-        )
-        for login in ("SwiftWinds", "swiftwinds", "SWIFTWINDS"):
-            action, _, _ = closer_module.evaluate_pr(
-                self._make_pr(created_days_ago=0, author_login=login),
-                now=_now,
-                min_age_days=0,
-                min_score=4,
-                repo=None,
-                optout_labels=set(),
-            )
-            assert action == "close", login
 
     def test_should_skip_internal_authors(self, closer_module, _now, monkeypatch):
         # Override the fixture for this one test.
@@ -584,30 +563,17 @@ class TestSecondsSinceLastGraceWarning:
         assert age == 3600.0
 
 
-class TestImmediateCloseLoginsConstant:
-    """SwiftWinds is the dogfood account the user explicitly named — pin
-    its presence so a future cleanup that removes the constant or
-    forgets to keep the entry doesn't silently break the test path."""
-
-    def test_should_include_swiftwinds(self, closer_module):
-        assert "swiftwinds" in closer_module.IMMEDIATE_CLOSE_LOGINS
-
-    def test_should_be_lowercase_for_case_insensitive_match(self, closer_module):
-        for login in closer_module.IMMEDIATE_CLOSE_LOGINS:
-            assert login == login.lower(), login
-
-
 class TestGraceWarningCommentText:
     """Pin the user-facing language in the grace warning comment so the
-    `1 day grace` and `@greptileai still works after close` promises
+    grace-window and `@greptileai still works after close` promises
     don't get accidentally dropped in a future refactor.
     """
 
-    def test_should_state_one_day_grace_period(self, closer_module):
+    def test_should_state_grace_window(self, closer_module):
         body = closer_module.format_grace_warning_comment(score=2, threshold=4)
         # The user's PR explicitly said "specify in the comment" — pin
-        # that the literal "1 day" appears in the comment.
-        assert "1 day" in body
+        # that the grace window appears in the comment.
+        assert "2 hours" in body
 
     def test_should_mention_agent_shin_reconsider(self, closer_module):
         body = closer_module.format_grace_warning_comment(score=2, threshold=4)
@@ -825,3 +791,57 @@ class TestEvaluatePrAllowlist:
         assert closer_module.ALLOWLIST_LOGINS == frozenset(
             {"mateo-berri", "swiftwinds"}
         )
+
+
+class TestDryRunGateOnClose:
+    """Regression: the daily sweep is dry-run unless `--close` is passed
+    (the workflow only adds it when `AGENT_SHIN_ENABLED=true`). A closeable
+    PR (low score, grace window elapsed) must be DETECTED and reported as
+    "would close", but the dry run must never make a real GitHub mutation,
+    so merging Agent Shin stays inert by default."""
+
+    def _closeable_pr(self) -> dict:
+        return {
+            "number": 7,
+            "title": "thin PR",
+            "createdAt": "2026-05-10T00:00:00Z",
+            "isDraft": False,
+            "labels": [],
+            "author": {"login": "SwiftWinds"},
+            "url": "https://example.com/pr/7",
+        }
+
+    def test_dry_run_sweep_detects_but_does_not_close(
+        self, closer_module, monkeypatch, capsys
+    ):
+        aged_out_warning = {
+            "user": {"login": "github-actions[bot]"},
+            "body": "warned\n\n" + closer_module.GRACE_COMMENT_MARKER,
+            # Far enough in the past that it's aged out regardless of
+            # GRACE_PERIOD_SECONDS, since main() pins `now` to real time.
+            "created_at": "2020-01-01T00:00:00Z",
+        }
+        monkeypatch.setattr(
+            closer_module, "fetch_open_prs", lambda repo: [self._closeable_pr()]
+        )
+        monkeypatch.setattr(
+            closer_module,
+            "fetch_pr_comments",
+            lambda *a, **kw: [
+                _greptile_comment("Confidence Score: 1/5"),
+                aged_out_warning,
+            ],
+        )
+        # Any real GitHub mutation during a dry run is the bug under test.
+        monkeypatch.setattr(
+            closer_module,
+            "gh",
+            lambda *a, **kw: pytest.fail(f"dry run must not call gh: {a}"),
+        )
+        monkeypatch.setattr(sys, "argv", ["close_low_quality_prs.py"])
+
+        rc = closer_module.main()
+
+        assert rc == 0
+        # The PR is detected as closeable, just not acted on.
+        assert "Total would close: 1" in capsys.readouterr().out

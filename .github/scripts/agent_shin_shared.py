@@ -7,18 +7,16 @@ agree on the same notions of:
   * What counts as a Greptile-authored review comment
     (``GREPTILE_BOT_LOGINS``) and how to extract a confidence score from
     its body (``SCORE_PATTERN`` / :func:`extract_greptile_score`).
-  * How long the 1-day grace window is (``GRACE_PERIOD_SECONDS``) and
+  * How long the 2-hour grace window is (``GRACE_PERIOD_SECONDS``) and
     the HTML marker stamped into a grace-warning comment so the *other*
     script can see "Agent Shin already warned" and behave accordingly
     (``GRACE_COMMENT_MARKER``).
-  * Who Agent Shin is on GitHub (``AGENT_SHIN_DEFAULT_BOT_LOGIN``) and
-    which login(s) bypass the grace window entirely
-    (``IMMEDIATE_CLOSE_LOGINS``).
+  * Who Agent Shin is on GitHub (``AGENT_SHIN_DEFAULT_BOT_LOGIN``).
   * How GitHub-style ISO-8601 timestamps round-trip into timezone-aware
     :class:`datetime.datetime` (:func:`parse_iso8601`).
 
 Keeping these in one module means a future change (new Greptile output
-format, a longer grace window, a new dogfood account) is a single edit
+format, a longer grace window, a new allowlisted account) is a single edit
 instead of two — the original split version had to call out in comments
 that the two copies "must stay in sync" precisely because nothing
 enforced it.
@@ -42,7 +40,10 @@ SCORE_PATTERN = re.compile(
 
 GRACE_COMMENT_MARKER = "<!-- agent-shin:grace-warning -->"
 
-GRACE_PERIOD_SECONDS = 86400
+# 2 hours between the grace warning and the auto-close. Short enough to
+# dogfood the "fix it before it closes" loop in one sitting; bump back up
+# (e.g. 86400 for a day) for the public rollout.
+GRACE_PERIOD_SECONDS = 7200
 
 AGENT_SHIN_DEFAULT_BOT_LOGIN = "github-actions[bot]"
 
@@ -57,8 +58,6 @@ def _logins(*names: str) -> frozenset[str]:
     """
     return frozenset(name.lower() for name in names)
 
-
-IMMEDIATE_CLOSE_LOGINS = _logins("SwiftWinds")
 
 # Dogfood rollout gate. While this set is non-empty, Agent Shin acts ONLY on
 # PRs/issues authored by these logins and skips everyone else. For an

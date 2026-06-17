@@ -53,7 +53,6 @@ from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
     GRACE_COMMENT_MARKER,
     GRACE_PERIOD_SECONDS,
     GREPTILE_BOT_LOGINS,
-    IMMEDIATE_CLOSE_LOGINS,
     SCORE_PATTERN,
     extract_greptile_score,
     gh,
@@ -81,17 +80,9 @@ DEFAULT_OPTOUT_LABELS = ("do not close", "keep open", "wip")
 # `GRACE_COMMENT_MARKER` (HTML marker appended to grace-period warning
 # comments — used by either script to recognize that a warning was
 # already posted) and `GRACE_PERIOD_SECONDS` (length of the grace
-# period between the warning and the actual auto-close, 24 hours) are
+# period between the warning and the actual auto-close, 2 hours) are
 # imported from `agent_shin_shared` so the Agent Shin LLM judge and
 # this daily Greptile sweep agree on the same marker and duration.
-#
-# `IMMEDIATE_CLOSE_LOGINS` (case-insensitive logins that bypass BOTH
-# the grace period AND the dry-run gating; useful for dogfooding the
-# bot from external test accounts) is imported too. Author-matching
-# against the bot login (`AGENT_SHIN_DEFAULT_BOT_LOGIN` plus the
-# `AGENT_SHIN_BOT_LOGIN` env override) now happens inside
-# `seconds_since_latest_marker_comment` itself, so this script no
-# longer needs to reach for the constant directly.
 
 
 def fetch_open_prs(repo: str | None) -> list[dict]:
@@ -198,11 +189,11 @@ def seconds_since_last_grace_warning(
 
 def format_grace_warning_comment(score: int, threshold: int) -> str:
     """Comment posted on the FIRST low-Greptile-score detection — gives
-    the contributor a 1-day grace window before the auto-close fires on
+    the contributor a 2-hour grace window before the auto-close fires on
     the next daily cron run.
 
     Mirrors `format_grace_warning_pr_comment` in
-    `triage_with_llm.py` in spirit (1-day grace + escape hatches), but
+    `triage_with_llm.py` in spirit (2-hour grace + escape hatches), but
     framed around Greptile's confidence score instead of the LLM judge's
     rubric since the close trigger here is the Greptile signal.
     """
@@ -213,7 +204,7 @@ def format_grace_warning_comment(score: int, threshold: int) -> str:
         "Heads up: Greptile's most recent review scored this PR "
         f"**{score}/5**, below our merge bar of **{threshold}/5**.\n"
         "\n"
-        "If the score isn't lifted in the next **1 day**, I'll auto-close this PR. That's "
+        "If the score isn't lifted in the next **2 hours**, I'll auto-close this PR. That's "
         "**not** us saying the change isn't worthwhile. We want the open-PR list to mirror "
         "what a maintainer can act on *right now*, so contributors like you don't get lost in "
         "a backlog. Take your time; everything below still works after the close.\n"
@@ -223,7 +214,7 @@ def format_grace_warning_comment(score: int, threshold: int) -> str:
         f"the new score is **{threshold}/5 or higher**, the PR stays open and no further "
         "action is needed on your side.\n"
         "\n"
-        "**If the PR does get auto-closed in 24 hours, you still have an easy recovery path:**\n"
+        "**If the PR does get auto-closed in 2 hours, you still have an easy recovery path:**\n"
         "\n"
         "- Comment `@greptileai` to request a fresh review. **This still works even after "
         f"the PR is closed**, and a score of {threshold}/5 or higher is one of the signals "
@@ -242,7 +233,7 @@ def post_grace_warning(
     repo: str | None,
     dry_run: bool,
 ) -> None:
-    """Post the 1-day grace-period warning comment on `pr`.
+    """Post the 2-hour grace-period warning comment on `pr`.
 
     The warning carries `GRACE_COMMENT_MARKER` so subsequent runs can
     detect that the contributor has already been told about the
@@ -273,7 +264,6 @@ def close_pr(
     repo: str | None,
     dry_run: bool,
     label: str | None,
-    grace_period_elapsed: bool = True,
 ) -> None:
     """Post the explanatory comment and close the PR."""
     pr_number = pr["number"]
@@ -288,13 +278,8 @@ def close_pr(
 
     score_sentence = (
         f"Greptile's most recent review scored this PR **{score}/5**, below "
-        f"our merge bar of **{threshold}/5**, and the 1-day grace period since "
+        f"our merge bar of **{threshold}/5**, and the 2-hour grace period since "
         "the warning has elapsed.\n\n"
-        if grace_period_elapsed
-        else (
-            f"Greptile's most recent review scored this PR **{score}/5**, "
-            f"below our merge bar of **{threshold}/5**.\n\n"
-        )
     )
     comment_body = (
         f"Closing as part of automated PR triage.\n\n"
@@ -358,10 +343,6 @@ def evaluate_pr(
     than `GRACE_PERIOD_SECONDS` old AND the PR still fails, the action is
     `skip-in-grace-period`. Once the warning ages out and the rubric is
     still failing, the action is `close`.
-
-    Grace is bypassed for `IMMEDIATE_CLOSE_LOGINS` (test/dogfood
-    accounts), which always go straight to `close` on the first failing
-    run so the bot is dogfoodable end-to-end without a 24h delay.
     """
     if has_optout_label(pr, optout_labels):
         return ("skip-optout-label", None, None)
@@ -393,9 +374,6 @@ def evaluate_pr(
     score, _ = extraction
     if score >= min_score:
         return ("skip-score-ok", score, age_days)
-
-    if login in IMMEDIATE_CLOSE_LOGINS:
-        return ("close", score, age_days)
 
     grace_age = seconds_since_last_grace_warning(comments, now=now)
     if grace_age is None:
@@ -506,15 +484,6 @@ def main() -> int:
             )
             summary[action] = summary.get(action, 0) + 1
 
-            # Per-PR dry-run override: `IMMEDIATE_CLOSE_LOGINS` accounts (e.g.
-            # SwiftWinds) always run in real-close mode regardless of the
-            # global `--close` flag. Lets a maintainer dogfood the bot from
-            # an external account while the rest of the open-PR queue stays
-            # on the safe dry-run default.
-            author_login = ((pr.get("author") or {}).get("login") or "").lower()
-            is_immediate = author_login in IMMEDIATE_CLOSE_LOGINS
-            pr_dry_run = dry_run and not is_immediate
-
             if action == "warn-grace":
                 assert score is not None
                 print(
@@ -526,9 +495,9 @@ def main() -> int:
                     score=score,
                     threshold=args.min_score,
                     repo=args.repo,
-                    dry_run=pr_dry_run,
+                    dry_run=dry_run,
                 )
-                if not pr_dry_run:
+                if not dry_run:
                     warned += 1
                     if args.limit is not None and (warned + closed) >= args.limit:
                         print(
@@ -545,7 +514,6 @@ def main() -> int:
             print(
                 f"#{pr['number']}: \"{pr['title']}\" "
                 f"(age={age_days}d, greptile={score}/5) -> close"
-                + (" [immediate-close login]" if is_immediate else "")
             )
             close_pr(
                 pr,
@@ -553,12 +521,11 @@ def main() -> int:
                 threshold=args.min_score,
                 age_days=age_days,
                 repo=args.repo,
-                dry_run=pr_dry_run,
+                dry_run=dry_run,
                 label=args.close_label,
-                grace_period_elapsed=not is_immediate,
             )
 
-            if not pr_dry_run:
+            if not dry_run:
                 closed += 1
                 if args.limit is not None and (warned + closed) >= args.limit:
                     print(
@@ -577,15 +544,8 @@ def main() -> int:
     print("\n=== Summary ===")
     for key, value in summary.items():
         print(f"  {key:28s} {value}")
-    # `IMMEDIATE_CLOSE_LOGINS` PRs are closed even in global dry-run mode, so
-    # report actual closures alongside the dry-run "would close" count to avoid
-    # misleading operators into thinking no writes occurred.
-    would_close = summary["close"] - closed
     if dry_run:
-        if closed:
-            print(f"\nTotal closed: {closed}; would close: {would_close}")
-        else:
-            print(f"\nTotal would close: {would_close}")
+        print(f"\nTotal would close: {summary['close']}")
     else:
         print(f"\nTotal closed: {closed}")
     print(

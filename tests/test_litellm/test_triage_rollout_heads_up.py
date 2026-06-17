@@ -174,7 +174,7 @@ class TestHeadsUpCommentBody:
         assert "Monday, June 1, 2026" in body  # cutoff readable
         assert "09:00 UTC" in body  # deadline is timezone-explicit
         assert "we'll close it" in body  # hard deadline, not a passive notice
-        assert "24-hour lifetime" in body  # post-rollout steady state
+        assert "2-hour lifetime" in body  # post-rollout steady state
         assert "Greptile" in body and "3/5" in body  # specific shortfall
         assert "QA proof" in body  # missing piece surfaced
         assert "PR *description*" in body  # description-only note
