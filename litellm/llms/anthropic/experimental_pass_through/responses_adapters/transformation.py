@@ -51,7 +51,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return source.get("url")
         return None
 
-    def translate_messages_to_responses_input(  # noqa: PLR0915
+    def translate_messages_to_responses_input(
         self,
         messages: List[
             Union[

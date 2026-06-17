@@ -933,7 +933,7 @@ def _check_team_budget_update_authority(
     response_model=LiteLLM_TeamTable,
 )
 @management_endpoint_wrapper
-async def new_team(  # noqa: PLR0915
+async def new_team(
     data: NewTeamRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1637,7 +1637,7 @@ def validate_team_org_change(
     "/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
 @management_endpoint_wrapper
-async def update_team(  # noqa: PLR0915
+async def update_team(
     data: UpdateTeamRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -3577,6 +3577,9 @@ async def team_info(
     team_id: str = fastapi.Query(
         default=None, description="Team ID in the request parameters"
     ),
+    key_limit: Optional[int] = fastapi.Query(
+        default=None, description="Limit the number of keys returned", gt=0
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -3632,6 +3635,7 @@ async def team_info(
             table_name="key",
             query_type="find_all",
             expires=datetime.now(),
+            limit=key_limit,
         )
 
         if keys is None:
@@ -3647,7 +3651,7 @@ async def team_info(
         ## REMOVE HASHED TOKEN INFO before returning ##
         for key in keys:
             try:
-                key = key.model_dump()  # noqa
+                key = key.model_dump()
             except Exception:
                 # if using pydantic v1
                 key = key.dict()
@@ -4244,6 +4248,14 @@ async def _enforce_list_team_v2_access(
                 status_code=403,
                 detail={"error": "You can only view teams within your organizations."},
             )
+        # When the caller is an org admin querying their own teams (or no
+        # specific user), null out user_id so that
+        # _build_team_list_where_conditions scopes only by organization_id
+        # — org admins should see all teams in their orgs, not just teams
+        # they are a direct member of.  Keep user_id when the org admin
+        # explicitly queries a *different* user's teams.
+        if user_id is None or user_id == user_api_key_dict.user_id:
+            user_id = None
         verbose_proxy_logger.debug(
             "list_team_v2: org admin access for user=%s, org_ids=%s, user_id_filter=%s",
             user_api_key_dict.user_id,

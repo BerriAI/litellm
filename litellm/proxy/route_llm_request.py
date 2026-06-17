@@ -264,7 +264,7 @@ async def add_shared_session_to_data(data: dict) -> None:
             pass
 
 
-async def route_request(  # noqa: PLR0915 - Complex routing function, refactoring tracked separately
+async def route_request(
     data: dict,
     llm_router: Optional[LitellmRouter],
     user_model: Optional[str],

@@ -473,7 +473,7 @@ class BedrockLLM(BaseAWSLLM):
                     prompt += f"{message['content']}"
         return prompt, chat_history  # type: ignore
 
-    def process_response(  # noqa: PLR0915
+    def process_response(
         self,
         model: str,
         response: httpx.Response,
@@ -765,7 +765,7 @@ class BedrockLLM(BaseAWSLLM):
 
         return model_response
 
-    def completion(  # noqa: PLR0915
+    def completion(
         self,
         model: str,
         messages: list,
