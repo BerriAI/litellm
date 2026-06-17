@@ -1583,3 +1583,379 @@ async def test_list__exception_calls_failure_hook(list_harness):
         ].args[0]
         == "provider boom"
     )
+
+
+# =========================================================================== #
+#                                                                             #
+#   POST /v1/batches/{batch_id}/cancel  -  cancel_batch routing-contract tests #
+#                                                                             #
+#   Three branches, first match wins:                                         #
+#     1. model-encoded batch id -> litellm.acancel_batch via model creds       #
+#     2. unified batch id       -> llm_router.acancel_batch (model+batch_id    #
+#                                  parsed out of the unified id)               #
+#     3. fallback               -> litellm.acancel_batch via env-var provider  #
+#   Every branch then writes state back via update_batch_in_database(          #
+#   operation="cancel"). There is NO ManagedObjectTable read short-circuit     #
+#   here (unlike retrieve).                                                    #
+#                                                                             #
+#   These tests pin CURRENT behavior so a refactor can't silently change it.  #
+#   Two current-behavior quirks are locked deliberately and noted inline:     #
+#     - SCENARIO 1 forwards the DEPLOYMENT model from creds, not the decoded   #
+#       model (retrieve overrides it; cancel does not).                        #
+#     - SCENARIO 3 rebuilds a CancelBatchRequest and forwards only            #
+#       {custom_llm_provider, batch_id}, dropping enrichment keys.            #
+# =========================================================================== #
+
+
+@dataclass
+class CancelHarness:
+    data: Dict[str, Any]
+    pre_call: AsyncMock
+    add_data: AsyncMock
+    get_headers: MagicMock
+    provider_from_headers: MagicMock
+    provider_from_query: MagicMock
+    litellm_acancel: AsyncMock
+    router: MagicMock
+    logging: MagicMock
+    creds_resolver: MagicMock
+    update_batch_in_db: AsyncMock
+
+    @property
+    def router_acancel(self) -> AsyncMock:
+        return self.router.acancel_batch
+
+    def acancel_kwargs(self) -> Dict[str, Any]:
+        assert self.litellm_acancel.call_count == 1
+        return dict(self.litellm_acancel.call_args.kwargs)
+
+    def router_kwargs(self) -> Dict[str, Any]:
+        assert self.router_acancel.call_count == 1
+        return dict(self.router_acancel.call_args.kwargs)
+
+
+@pytest.fixture
+def cancel_harness():
+    data_holder: Dict[str, Any] = {"data": {}}
+    logging = MagicMock(spec=ProxyLogging)
+    logging.post_call_success_hook = AsyncMock(side_effect=lambda **kw: kw["response"])
+    logging.post_call_failure_hook = AsyncMock()
+    logging.update_request_status = AsyncMock()
+    logging.get_proxy_hook = MagicMock(return_value=None)
+
+    router = MagicMock(spec=Router)
+    router.acancel_batch = AsyncMock(return_value=make_batch())
+    router.get_deployment_credentials_with_provider = MagicMock(
+        side_effect=_creds_lookup
+    )
+
+    pre_call = AsyncMock(side_effect=lambda **kw: (data_holder["data"], MagicMock()))
+    # add_litellm_data_to_request is a passthrough that returns the data it got.
+    add_data = AsyncMock(side_effect=lambda **kw: kw["data"])
+    get_headers = MagicMock(return_value={})
+    provider_from_headers = MagicMock(return_value=None)
+    provider_from_query = MagicMock(return_value=None)
+    litellm_acancel = AsyncMock(return_value=make_batch())
+    update_batch_in_db = AsyncMock(return_value=None)
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "common_processing_pre_call_logic",
+                pre_call,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                ProxyBaseLLMRequestProcessing, "get_custom_headers", get_headers
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                endpoints,
+                "get_custom_llm_provider_from_request_headers",
+                provider_from_headers,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                endpoints,
+                "get_custom_llm_provider_from_request_query",
+                provider_from_query,
+            )
+        )
+        stack.enter_context(
+            patch.object(endpoints, "update_batch_in_database", update_batch_in_db)
+        )
+        stack.enter_context(patch.object(litellm, "acancel_batch", litellm_acancel))
+        stack.enter_context(
+            patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", False)
+        )
+        stack.enter_context(patch.object(proxy_server, "llm_router", router))
+        stack.enter_context(patch.object(proxy_server, "proxy_logging_obj", logging))
+        stack.enter_context(patch.object(proxy_server, "general_settings", {}))
+        stack.enter_context(patch.object(proxy_server, "proxy_config", MagicMock()))
+        stack.enter_context(patch.object(proxy_server, "version", "test-version"))
+        stack.enter_context(patch.object(proxy_server, "prisma_client", MagicMock()))
+        stack.enter_context(
+            patch.object(proxy_server, "add_litellm_data_to_request", add_data)
+        )
+
+        yield CancelHarness(
+            data=data_holder,
+            pre_call=pre_call,
+            add_data=add_data,
+            get_headers=get_headers,
+            provider_from_headers=provider_from_headers,
+            provider_from_query=provider_from_query,
+            litellm_acancel=litellm_acancel,
+            router=router,
+            logging=logging,
+            creds_resolver=router.get_deployment_credentials_with_provider,
+            update_batch_in_db=update_batch_in_db,
+        )
+
+
+async def call_cancel(
+    harness: CancelHarness,
+    batch_id: str,
+    *,
+    provider: Optional[str] = None,
+    user: Optional[UserAPIKeyAuth] = None,
+    headers: Optional[Dict[str, str]] = None,
+    query: Optional[Dict[str, str]] = None,
+    data_extra: Optional[Dict[str, Any]] = None,
+):
+    harness.data["data"] = {"batch_id": batch_id, **(data_extra or {})}
+    return await endpoints.cancel_batch(
+        request=FakeRequest(headers=headers, query=query),
+        batch_id=batch_id,
+        fastapi_response=Response(),
+        provider=provider,
+        user_api_key_dict=user or UserAPIKeyAuth(api_key="sk-test"),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# SCENARIO 1 - model-encoded batch id -> litellm.acancel_batch via model creds.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_cancel__model_encoded_id(cancel_harness):
+    resp = await call_cancel(cancel_harness, AZURE_BATCH_ID)
+
+    # DISPATCH - model-credential path via litellm; router untouched.
+    assert cancel_harness.litellm_acancel.call_count == 1
+    cancel_harness.router_acancel.assert_not_called()
+
+    # CREDENTIALS - resolved for the model decoded from the batch id.
+    cancel_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+
+    # SEAM PAYLOAD - exact dict. NOTE current behavior: `model` is the
+    # DEPLOYMENT name from creds, NOT the decoded model (cancel, unlike
+    # retrieve, does not override it). Locking this guards the difference.
+    assert cancel_harness.acancel_kwargs() == {
+        "custom_llm_provider": "azure",
+        "batch_id": "batch_orig123",  # decoded/stripped original id
+        "api_key": "sk-azure",
+        "api_base": "https://azure.test",
+        "model": "azure/gpt-4o-deployment",
+    }
+
+    # OUTPUT SHAPE - response id re-encoded with the DECODED model.
+    assert resp.id == encode_file_id_with_model(
+        "batch-provider-id", "azure/gpt-4o", id_type="batch"
+    )
+
+    # write-back tagged as a cancel.
+    assert cancel_harness.update_batch_in_db.call_count == 1
+    assert cancel_harness.update_batch_in_db.call_args.kwargs["operation"] == "cancel"
+
+
+@pytest.mark.asyncio
+async def test_cancel__model_encoded_id_forwards_deployment_model(cancel_harness):
+    """Pin the current contract: cancel forwards the creds' deployment model.
+    If someone adds a decoded-model override (as retrieve has), this flips and
+    must be reviewed."""
+    await call_cancel(cancel_harness, AZURE_BATCH_ID)
+
+    assert cancel_harness.acancel_kwargs()["model"] == "azure/gpt-4o-deployment"
+
+
+@pytest.mark.asyncio
+async def test_cancel__model_encoded_beats_unified(cancel_harness):
+    with patch.object(
+        endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID
+    ):
+        await call_cancel(cancel_harness, AZURE_BATCH_ID)
+
+    assert cancel_harness.litellm_acancel.call_count == 1
+    cancel_harness.router_acancel.assert_not_called()
+    cancel_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+
+
+# --------------------------------------------------------------------------- #
+# SCENARIO 2 - unified batch id -> llm_router.acancel_batch. model and batch_id
+# are parsed out of the unified id; hidden params stamped.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_cancel__unified_batch_id_routes_to_router(cancel_harness):
+    with patch.object(
+        endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID
+    ):
+        resp = await call_cancel(cancel_harness, "batch-unified-blob")
+
+    # DISPATCH - router fired, litellm did not, no creds lookup.
+    assert cancel_harness.router_acancel.call_count == 1
+    cancel_harness.litellm_acancel.assert_not_called()
+    cancel_harness.creds_resolver.assert_not_called()
+
+    # model + batch_id are extracted from the unified id and forwarded.
+    assert cancel_harness.router_kwargs() == {
+        "batch_id": "batch-raw-xyz",
+        "model": "gpt-4o-mini",
+    }
+
+    # hidden params: unified id passed through, model_id stamped from data.
+    assert resp._hidden_params["unified_batch_id"] == UNIFIED_BATCH_ID
+    assert resp._hidden_params["model_id"] == "gpt-4o-mini"
+
+    assert cancel_harness.update_batch_in_db.call_args.kwargs["operation"] == "cancel"
+
+
+@pytest.mark.asyncio
+async def test_cancel__unified_missing_model_id_400(cancel_harness):
+    # unified id with no model_id segment -> get_model_id returns None -> 400.
+    with patch.object(
+        endpoints,
+        "_is_base64_encoded_unified_file_id",
+        return_value="litellm_proxy;llm_batch_id:batch-xyz",
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await call_cancel(cancel_harness, "batch-unified-blob")
+
+    assert exc.value.code == "400"
+    cancel_harness.router_acancel.assert_not_called()
+    cancel_harness.litellm_acancel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel__unified_no_router_500(cancel_harness):
+    with patch.object(proxy_server, "llm_router", None), patch.object(
+        endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await call_cancel(cancel_harness, "batch-unified-blob")
+
+    assert exc.value.code == "500"
+
+
+# --------------------------------------------------------------------------- #
+# SCENARIO 3 - fallback to custom_llm_provider. Rebuilds a CancelBatchRequest
+# and forwards only {custom_llm_provider, batch_id}.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_cancel__fallback_default_openai(cancel_harness):
+    await call_cancel(cancel_harness, "batch-raw-xyz")
+
+    assert cancel_harness.litellm_acancel.call_count == 1
+    cancel_harness.router_acancel.assert_not_called()
+    cancel_harness.creds_resolver.assert_not_called()  # inverse-bug guard
+    # current behavior: enrichment keys dropped; only these two forwarded.
+    assert cancel_harness.acancel_kwargs() == {
+        "custom_llm_provider": "openai",
+        "batch_id": "batch-raw-xyz",
+    }
+    assert cancel_harness.update_batch_in_db.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel__fallback_provider_path_param(cancel_harness):
+    await call_cancel(cancel_harness, "batch-raw-xyz", provider="anthropic")
+
+    cancel_harness.creds_resolver.assert_not_called()
+    assert cancel_harness.acancel_kwargs()["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_cancel__fallback_provider_from_data_body(cancel_harness):
+    await call_cancel(
+        cancel_harness, "batch-raw-xyz", data_extra={"custom_llm_provider": "bedrock"}
+    )
+
+    assert cancel_harness.acancel_kwargs()["custom_llm_provider"] == "bedrock"
+
+
+@pytest.mark.asyncio
+async def test_cancel__fallback_provider_from_header(cancel_harness):
+    cancel_harness.provider_from_headers.return_value = "vertex_ai"
+
+    await call_cancel(cancel_harness, "batch-raw-xyz")
+
+    assert cancel_harness.acancel_kwargs()["custom_llm_provider"] == "vertex_ai"
+
+
+@pytest.mark.asyncio
+async def test_cancel__fallback_provider_from_query(cancel_harness):
+    cancel_harness.provider_from_query.return_value = "azure"
+
+    await call_cancel(cancel_harness, "batch-raw-xyz")
+
+    assert cancel_harness.acancel_kwargs()["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=ProxyException,
+    reason="cancel SCENARIO 3: `provider or data.pop('custom_llm_provider')` "
+    "short-circuits when provider (path param) is set, so a body "
+    "custom_llm_provider is left in data and forwarded twice -> duplicate-kwarg "
+    "TypeError. Intended: path param wins cleanly. Remove marker when fixed.",
+)
+@pytest.mark.asyncio
+async def test_cancel__fallback_provider_precedence_path_over_body(cancel_harness):
+    """Intended contract: provider path param beats a body custom_llm_provider.
+    CURRENTLY raises because the `or` short-circuit skips the data.pop, leaving
+    the body value to collide with the explicit kwarg."""
+    await call_cancel(
+        cancel_harness,
+        "batch-raw-xyz",
+        provider="anthropic",
+        data_extra={"custom_llm_provider": "bedrock"},
+    )
+
+    assert cancel_harness.acancel_kwargs()["custom_llm_provider"] == "anthropic"
+
+
+# --------------------------------------------------------------------------- #
+# Cross-cutting: enrichment route_type and failure-hook on provider error.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_cancel__uses_acancel_batch_route_type(cancel_harness):
+    await call_cancel(cancel_harness, "batch-raw-xyz")
+
+    assert cancel_harness.pre_call.call_args.kwargs["route_type"] == "acancel_batch"
+
+
+@pytest.mark.asyncio
+async def test_cancel__exception_calls_failure_hook(cancel_harness):
+    cancel_harness.litellm_acancel.side_effect = ValueError("provider boom")
+
+    with pytest.raises(Exception):
+        await call_cancel(cancel_harness, "batch-raw-xyz")
+
+    cancel_harness.logging.post_call_failure_hook.assert_called_once()
+    assert (
+        cancel_harness.logging.post_call_failure_hook.call_args.kwargs[
+            "original_exception"
+        ].args[0]
+        == "provider boom"
+    )
