@@ -125,3 +125,7 @@ crash.*.log
 # and should be committed.
 .vscode
 .pin_list.txt
+
+# Rust build output for plugin-arch POC
+poc/plugin_arch/core/target/
+poc/plugin_arch/core/Cargo.lock

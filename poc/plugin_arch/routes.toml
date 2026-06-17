@@ -1,0 +1,4 @@
+[[plugin]]
+name = "mistral_ocr"
+address = "http://127.0.0.1:8081"
+models = ["mistral-ocr-latest", "mistral-ocr-2505"]
