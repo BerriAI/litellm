@@ -755,7 +755,7 @@ def _build_user_info_response(
     response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
-async def user_info(  # noqa: PLR0915
+async def user_info(
     request: Request,
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
@@ -1082,7 +1082,7 @@ def _process_keys_for_user_info(
                 continue
 
             try:
-                _key: dict = key.model_dump()  # noqa
+                _key: dict = key.model_dump()
             except Exception:
                 # if using pydantic v1
                 _key = key.dict()

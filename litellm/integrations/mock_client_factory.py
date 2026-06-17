@@ -107,7 +107,7 @@ def _is_url_match(url, matchers: List[str]) -> bool:
         return False
 
 
-def create_mock_client_factory(config: MockClientConfig):  # noqa: PLR0915
+def create_mock_client_factory(config: MockClientConfig):
     """
     Factory function that creates mock client functions based on configuration.
 

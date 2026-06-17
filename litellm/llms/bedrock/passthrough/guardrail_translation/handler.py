@@ -226,7 +226,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         return _is_converse_endpoint(endpoint)
 
     @staticmethod
-    async def de_anonymize_event_stream(  # noqa: PLR0915
+    async def de_anonymize_event_stream(
         body_bytes: bytes,
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",

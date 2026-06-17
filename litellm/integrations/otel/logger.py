@@ -42,9 +42,10 @@ from litellm.integrations.otel.plumbing.metrics import (
     create_genai_metrics,
 )
 from litellm.integrations.otel.plumbing.providers import (
-    build_meter_provider,
     build_tracer_provider,
+    get_meter,
     get_tracer,
+    resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
 from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
@@ -127,17 +128,15 @@ class OpenTelemetryV2(CustomLogger):
     def _init_metrics(self, meter_provider: Any | None) -> "GenAIMetricRecorder | None":
         """Create the six GenAI histograms when metrics are enabled, else ``None``.
 
-        ``meter_provider`` is an explicit override (tests inject one); otherwise a
-        provider is built from the config's exporter selection.
+        ``meter_provider`` is an explicit override (tests inject one); otherwise the
+        provider is resolved from the OTel global so the operator's configured
+        readers/exporters receive the metrics, building and registering one only
+        when no global provider is set.
         """
         if not self.config.enable_metrics:
             return None
-        provider = (
-            meter_provider
-            if meter_provider is not None
-            else build_meter_provider(self.config)
-        )
-        meter = provider.get_meter(LITELLM_TRACER_NAME)
+        provider = resolve_meter_provider(self.config, meter_provider)
+        meter = get_meter(provider, LITELLM_TRACER_NAME)
         return GenAIMetricRecorder(create_genai_metrics(meter), self.callback_name)
 
     # ====================================================================== #

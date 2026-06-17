@@ -412,7 +412,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
                     )
 
-    async def async_pre_call_hook(  # noqa: PLR0915
+    async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,

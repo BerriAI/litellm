@@ -13,6 +13,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
@@ -161,6 +162,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS = (
     "secret_fields",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
+    PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 
 _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS = frozenset(
@@ -1315,7 +1317,7 @@ class LiteLLMProxyRequestSetup:
         )
 
 
-async def add_litellm_data_to_request(  # noqa: PLR0915
+async def add_litellm_data_to_request(
     data: dict,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,

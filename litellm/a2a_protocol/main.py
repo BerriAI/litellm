@@ -436,7 +436,7 @@ def _build_streaming_logging_obj(
     return logging_obj
 
 
-async def asend_message_streaming(  # noqa: PLR0915
+async def asend_message_streaming(
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendStreamingMessageRequest"] = None,
     api_base: Optional[str] = None,
