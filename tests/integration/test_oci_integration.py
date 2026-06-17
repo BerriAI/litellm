@@ -440,6 +440,42 @@ def test_cohere_tool_with_array_param(model, oci_params):
     assert resp.choices[0].finish_reason is not None
 
 
+@pytest.mark.parametrize("model", ["cohere.command-latest", "cohere.command-a-03-2025"])
+def test_cohere_tool_result_continuation(model, oci_params):
+    """The agentic continuation MLflow {{trace}} judges drive: the conversation
+    ends with a tool result. OCI rejects a populated `message` alongside tool
+    results and requires them in the top-level `toolResults` field, so this used
+    to 400/500. The model should now produce a final answer."""
+    import litellm
+
+    resp = litellm.completion(
+        model=f"oci/{model}",
+        messages=[
+            {"role": "user", "content": "How many spans are in the trace?"},
+            {
+                "role": "assistant",
+                "content": "I will look at the root span.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_span", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": '{"span_count": 47}',
+            },
+        ],
+        tools=[_TRACE_TOOL],
+        max_tokens=150,
+        **oci_params,
+    )
+    assert resp.choices[0].finish_reason is not None
+
+
 # ---------------------------------------------------------------------------
 # Reasoning-effort tests (reasoning models only)
 # ---------------------------------------------------------------------------
