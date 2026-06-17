@@ -1205,3 +1205,381 @@ async def test_retrieve__exception_calls_failure_hook(retrieve_harness):
         ].args[0]
         == "provider boom"
     )
+
+
+# =========================================================================== #
+#                                                                             #
+#   GET /v1/batches  -  list_batches routing-contract tests                    #
+#                                                                             #
+#   Branch order (first match wins):                                          #
+#     1. managed_files hook present  -> managed_files_obj.list_user_batches    #
+#     2. model from body/query/header -> litellm.alist_batches + id encode     #
+#     3. target_model_names (param or body) -> llm_router.alist_batches        #
+#     4. fallback -> litellm.alist_batches via env-var custom_llm_provider     #
+#                                                                             #
+#   llm_router is required; absence is a 500 before any branch runs.          #
+# =========================================================================== #
+
+
+class FakeListPage:
+    """Stand-in for the SyncCursorPage[Batch] that alist_batches returns. The
+    endpoint only touches `.data` (to encode ids) and `._hidden_params`."""
+
+    def __init__(self, data: Any):
+        self.data = data
+        self._hidden_params: Dict[str, Any] = {}
+
+
+@dataclass
+class ListHarness:
+    body: Dict[str, Any]
+    read_body: AsyncMock
+    pre_call: AsyncMock
+    get_headers: MagicMock
+    provider_from_headers: MagicMock
+    provider_from_query: MagicMock
+    litellm_alist: AsyncMock
+    router: MagicMock
+    logging: MagicMock
+    creds_resolver: MagicMock
+
+    @property
+    def router_alist(self) -> AsyncMock:
+        return self.router.alist_batches
+
+    def set_managed_files(self, page: Any) -> AsyncMock:
+        """Install a managed_files hook exposing list_user_batches -> page."""
+        hook = MagicMock()
+        hook.list_user_batches = AsyncMock(return_value=page)
+        self.logging.get_proxy_hook = MagicMock(return_value=hook)
+        return hook.list_user_batches
+
+    def alist_kwargs(self) -> Dict[str, Any]:
+        assert self.litellm_alist.call_count == 1
+        return dict(self.litellm_alist.call_args.kwargs)
+
+    def router_kwargs(self) -> Dict[str, Any]:
+        assert self.router_alist.call_count == 1
+        return dict(self.router_alist.call_args.kwargs)
+
+
+@pytest.fixture
+def list_harness():
+    body_holder: Dict[str, Any] = {"body": {}}
+    logging = MagicMock(spec=ProxyLogging)
+    logging.post_call_success_hook = AsyncMock(side_effect=lambda **kw: kw["response"])
+    logging.post_call_failure_hook = AsyncMock()
+    logging.update_request_status = AsyncMock()
+    # Default: no managed_files hook -> branches 2/3/4 are reachable.
+    logging.get_proxy_hook = MagicMock(return_value=None)
+
+    router = MagicMock(spec=Router)
+    router.alist_batches = AsyncMock(return_value=FakeListPage([]))
+    router.get_deployment_credentials_with_provider = MagicMock(
+        side_effect=_creds_lookup
+    )
+
+    read_body = AsyncMock(side_effect=lambda request: body_holder["body"])
+    pre_call = AsyncMock(side_effect=lambda **kw: (body_holder["body"], MagicMock()))
+    get_headers = MagicMock(return_value={})
+    provider_from_headers = MagicMock(return_value=None)
+    provider_from_query = MagicMock(return_value=None)
+    litellm_alist = AsyncMock(return_value=FakeListPage([]))
+
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(endpoints, "_read_request_body", read_body))
+        stack.enter_context(
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "common_processing_pre_call_logic",
+                pre_call,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                ProxyBaseLLMRequestProcessing, "get_custom_headers", get_headers
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                endpoints,
+                "get_custom_llm_provider_from_request_headers",
+                provider_from_headers,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                endpoints,
+                "get_custom_llm_provider_from_request_query",
+                provider_from_query,
+            )
+        )
+        stack.enter_context(patch.object(litellm, "alist_batches", litellm_alist))
+        stack.enter_context(patch.object(proxy_server, "llm_router", router))
+        stack.enter_context(patch.object(proxy_server, "proxy_logging_obj", logging))
+        stack.enter_context(patch.object(proxy_server, "general_settings", {}))
+        stack.enter_context(patch.object(proxy_server, "proxy_config", MagicMock()))
+        stack.enter_context(patch.object(proxy_server, "version", "test-version"))
+
+        yield ListHarness(
+            body=body_holder,
+            read_body=read_body,
+            pre_call=pre_call,
+            get_headers=get_headers,
+            provider_from_headers=provider_from_headers,
+            provider_from_query=provider_from_query,
+            litellm_alist=litellm_alist,
+            router=router,
+            logging=logging,
+            creds_resolver=router.get_deployment_credentials_with_provider,
+        )
+
+
+async def call_list(
+    harness: ListHarness,
+    *,
+    provider: Optional[str] = None,
+    limit: Optional[int] = None,
+    after: Optional[str] = None,
+    target_model_names: Optional[str] = None,
+    user: Optional[UserAPIKeyAuth] = None,
+    headers: Optional[Dict[str, str]] = None,
+    query: Optional[Dict[str, str]] = None,
+    body: Optional[Dict[str, Any]] = None,
+):
+    harness.body["body"] = body if body is not None else {}
+    return await endpoints.list_batches(
+        request=FakeRequest(headers=headers, query=query),
+        fastapi_response=Response(),
+        provider=provider,
+        limit=limit,
+        after=after,
+        user_api_key_dict=user or UserAPIKeyAuth(api_key="sk-test"),
+        target_model_names=target_model_names,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Branch 1 - ManagedObjectTable listing. This is the default production path
+# (the managed_files hook is registered) and wins over every other branch.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_list__managed_files_path(list_harness):
+    page = FakeListPage([make_batch(id="batch-1")])
+    list_user_batches = list_harness.set_managed_files(page)
+
+    user = UserAPIKeyAuth(api_key="sk-test")
+    resp = await call_list(
+        list_harness,
+        user=user,
+        limit=7,
+        after="batch-cursor",
+        provider="openai",
+        target_model_names="m1,m2",
+    )
+
+    # DISPATCH - managed-files seam fired, neither provider seam did.
+    list_user_batches.assert_called_once_with(
+        user_api_key_dict=user,
+        limit=7,
+        after="batch-cursor",
+        provider="openai",
+        target_model_names="m1,m2",
+        llm_router=list_harness.router,
+    )
+    list_harness.litellm_alist.assert_not_called()
+    list_harness.router_alist.assert_not_called()
+    assert resp is page
+
+
+@pytest.mark.asyncio
+async def test_list__managed_files_beats_model_param(list_harness):
+    """Branch 1 is checked before the model branch: a model in the body does not
+    divert away from managed-files listing."""
+    page = FakeListPage([])
+    list_user_batches = list_harness.set_managed_files(page)
+
+    await call_list(list_harness, body={"model": "azure/gpt-4o"})
+
+    list_user_batches.assert_called_once()
+    list_harness.litellm_alist.assert_not_called()
+    list_harness.router_alist.assert_not_called()
+    list_harness.creds_resolver.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# Branch 2 - model from body/query/header. CURRENTLY BROKEN: the endpoint
+# forwards custom_llm_provider both explicitly and via **data (it calls
+# data.update(credentials) but never pops custom_llm_provider the way
+# create/retrieve do through prepare_data_with_credentials), so every call
+# raises "multiple values for keyword argument 'custom_llm_provider'".
+#
+# The strict xfail below encodes the INTENDED contract (litellm seam fires,
+# creds resolved for the body model, response ids encoded). It xfails today on
+# the duplicate-kwarg TypeError; the day that branch is fixed it will XPASS and
+# strict-mode turns the green into a failure, forcing whoever fixes it to drop
+# the marker and adopt this as a live regression test.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=ProxyException,
+    reason="list_batches model branch passes custom_llm_provider twice "
+    "(explicit kwarg + **data after data.update(credentials)); remove when fixed",
+)
+@pytest.mark.asyncio
+async def test_list__model_from_body_routes_and_encodes(list_harness):
+    list_harness.litellm_alist.return_value = FakeListPage(
+        [make_batch(id="batch-1"), make_batch(id="batch-2")]
+    )
+
+    resp = await call_list(list_harness, body={"model": "azure/gpt-4o"})
+
+    assert list_harness.litellm_alist.call_count == 1
+    list_harness.router_alist.assert_not_called()
+    list_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    assert resp.data[0].id == encode_file_id_with_model(
+        "batch-1", "azure/gpt-4o", id_type="batch"
+    )
+    assert resp.data[1].id == encode_file_id_with_model(
+        "batch-2", "azure/gpt-4o", id_type="batch"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Branch 3 - target_model_names (function param or body) -> llm_router. Routes
+# to the FIRST model in the comma list; `model` is stripped from data first.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_list__target_model_names_param_routes_to_router(list_harness):
+    await call_list(list_harness, target_model_names="m1,m2", limit=3, after="cur")
+
+    assert list_harness.router_alist.call_count == 1
+    list_harness.litellm_alist.assert_not_called()
+    list_harness.creds_resolver.assert_not_called()
+    # first model only; after/limit forwarded; nothing else (param not in data).
+    assert list_harness.router_kwargs() == {
+        "model": "m1",
+        "after": "cur",
+        "limit": 3,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list__target_model_names_from_body(list_harness):
+    await call_list(list_harness, body={"target_model_names": "m1,m2"})
+
+    assert list_harness.router_alist.call_count == 1
+    list_harness.litellm_alist.assert_not_called()
+    kwargs = list_harness.router_kwargs()
+    assert kwargs["model"] == "m1"
+    # body-sourced target_model_names stays in the forwarded data.
+    assert kwargs["target_model_names"] == "m1,m2"
+
+
+@pytest.mark.asyncio
+async def test_list__target_model_names_takes_first_only(list_harness):
+    """Locks the current behavior: with multiple target models, only the first
+    is routed to (silently, unlike create which 400s on >1). A change here -
+    intentional or not - must update this test."""
+    await call_list(list_harness, target_model_names="alpha,beta,gamma")
+
+    assert list_harness.router_kwargs()["model"] == "alpha"
+
+
+# --------------------------------------------------------------------------- #
+# Branch 4 - fallback to custom_llm_provider (env-var creds). MUST NOT touch
+# the credential resolver or the router.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_list__fallback_default_openai(list_harness):
+    await call_list(list_harness)
+
+    assert list_harness.litellm_alist.call_count == 1
+    list_harness.router_alist.assert_not_called()
+    list_harness.creds_resolver.assert_not_called()  # inverse-bug guard
+    assert list_harness.alist_kwargs() == {
+        "custom_llm_provider": "openai",
+        "after": None,
+        "limit": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list__fallback_provider_path_param(list_harness):
+    await call_list(list_harness, provider="anthropic")
+
+    list_harness.creds_resolver.assert_not_called()
+    assert list_harness.alist_kwargs()["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_list__fallback_provider_from_header(list_harness):
+    list_harness.provider_from_headers.return_value = "bedrock"
+
+    await call_list(list_harness)
+
+    assert list_harness.alist_kwargs()["custom_llm_provider"] == "bedrock"
+
+
+@pytest.mark.asyncio
+async def test_list__fallback_provider_from_query(list_harness):
+    list_harness.provider_from_query.return_value = "vertex_ai"
+
+    await call_list(list_harness)
+
+    assert list_harness.alist_kwargs()["custom_llm_provider"] == "vertex_ai"
+
+
+@pytest.mark.asyncio
+async def test_list__fallback_after_and_limit_forwarded(list_harness):
+    await call_list(list_harness, after="cursor-9", limit=42)
+
+    kwargs = list_harness.alist_kwargs()
+    assert kwargs["after"] == "cursor-9"
+    assert kwargs["limit"] == 42
+
+
+# --------------------------------------------------------------------------- #
+# Cross-cutting: router requirement, route_type, failure hook.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_list__no_router_raises_500(list_harness):
+    with patch.object(proxy_server, "llm_router", None):
+        with pytest.raises(ProxyException) as exc:
+            await call_list(list_harness)
+
+    assert exc.value.code == "500"
+    list_harness.litellm_alist.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list__uses_alist_batches_route_type(list_harness):
+    await call_list(list_harness)
+
+    assert list_harness.pre_call.call_args.kwargs["route_type"] == "alist_batches"
+
+
+@pytest.mark.asyncio
+async def test_list__exception_calls_failure_hook(list_harness):
+    list_harness.litellm_alist.side_effect = ValueError("provider boom")
+
+    with pytest.raises(Exception):
+        await call_list(list_harness)
+
+    list_harness.logging.post_call_failure_hook.assert_called_once()
+    assert (
+        list_harness.logging.post_call_failure_hook.call_args.kwargs[
+            "original_exception"
+        ].args[0]
+        == "provider boom"
+    )
