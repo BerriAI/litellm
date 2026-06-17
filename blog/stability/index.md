@@ -1,6 +1,6 @@
 ---
 slug: stability
-title: "June Stability Update:We're Making Stability a First-Class Citizen at
+title: "June Stability Update: We're Making Stability a First-Class Citizen at
 LiteLLM"
 date: 2026-06-15T10:00:00
 authors:
