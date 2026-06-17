@@ -41,6 +41,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
 from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
     QostodianNexusConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.thirdlaw import (
+    ThirdlawGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
 )
@@ -107,6 +110,7 @@ class SupportedGuardrailIntegrations(Enum):
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
+    THIRDLAW = "thirdlaw"
 
 
 class Role(Enum):
@@ -857,6 +861,7 @@ class LitellmParams(
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
+    ThirdlawGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
