@@ -18,7 +18,9 @@ if TYPE_CHECKING:
 import litellm
 
 
-def _compute_cache_only_cost(model_info: "ModelInfo", usage: "Usage") -> float:
+def _compute_cache_only_cost(
+    model_info: "ModelInfo", usage: "Usage", service_tier: str | None = None
+) -> float:
     """
     Return only the cache-related portion of the prompt cost (cache read + cache write).
 
@@ -36,7 +38,9 @@ def _compute_cache_only_cost(model_info: "ModelInfo", usage: "Usage") -> float:
         cache_creation_cost,
         cache_creation_cost_above_1hr,
         cache_read_cost,
-    ) = _get_token_base_cost(model_info=model_info, usage=usage)
+    ) = _get_token_base_cost(
+        model_info=model_info, usage=usage, service_tier=service_tier
+    )
 
     cache_cost = float(prompt_tokens_details["cache_hit_tokens"]) * cache_read_cost
 
@@ -96,7 +100,9 @@ def cost_per_token(
             multiplier *= provider_specific_entry.get("fast", 1.0)
 
         if multiplier != 1.0:
-            cache_cost = _compute_cache_only_cost(model_info=model_info, usage=usage)
+            cache_cost = _compute_cache_only_cost(
+                model_info=model_info, usage=usage, service_tier=service_tier
+            )
             prompt_cost = (prompt_cost - cache_cost) * multiplier + cache_cost
             completion_cost *= multiplier
     except Exception:
