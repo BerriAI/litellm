@@ -388,6 +388,60 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
     }
 
 
+def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):
+    """Regression test for #30358.
+
+    A wildcard with a custom prefix (e.g. ``ollama_server1/*`` to distinguish multiple Ollama
+    instances) must not stack the provider's own prefix onto the expanded model ids. The expanded
+    ids should be ``ollama_server1/gemma3:1b`` rather than ``ollama_server1/ollama/gemma3:1b``.
+    """
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["ollama/gemma3:1b", "ollama/llama3:8b"],
+    )
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="ollama_server1/*",
+        litellm_params=LiteLLM_Params(
+            model="ollama_chat/*", custom_llm_provider="ollama_chat"
+        ),
+    )
+
+    assert result == ["ollama_server1/gemma3:1b", "ollama_server1/llama3:8b"]
+
+
+def test_wildcard_custom_prefix_keeps_org_segment_for_non_provider_first_segment(
+    monkeypatch,
+):
+    """Only a known provider prefix should be stripped before re-prefixing.
+
+    If ``get_provider_models`` returns ids whose first segment is an org rather than a litellm
+    provider (e.g. ``meta-llama/Llama-3-8B``), stripping the first slash segment would drop the
+    org and produce an uncallable id. The org segment must be preserved.
+    """
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["meta-llama/Llama-3-8B"],
+    )
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="my_hf/*",
+        litellm_params=LiteLLM_Params(model="huggingface/*", custom_llm_provider="huggingface"),
+    )
+
+    assert result == ["my_hf/meta-llama/Llama-3-8B"]
+
+
 def test_wildcard_credential_hydration_preserves_missing_credential_name(
     monkeypatch,
 ):

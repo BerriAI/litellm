@@ -5,7 +5,7 @@ Handles cost tracking and logging for OpenAI passthrough endpoints, specifically
 """
 
 from datetime import datetime
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import httpx
@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.openai import OpenAIConfig as OpenAIConfigType
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
     BasePassthroughLoggingHandler,
@@ -29,6 +30,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ImageResponse, LlmProviders, PassthroughCallTypes
 from litellm.utils import ModelResponse, TextCompletionResponse
 
@@ -237,7 +239,43 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             return 0.0
 
     @staticmethod
-    def openai_passthrough_handler(  # noqa: PLR0915
+    def _build_responses_api_response_and_cost(
+        model: str,
+        httpx_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str,
+    ) -> Tuple[ResponsesAPIResponse, float]:
+        """Transform a Responses API raw response into a ResponsesAPIResponse
+        and compute its cost.
+
+        The Responses API has a different on-the-wire shape from chat
+        completions (`output: [...]` instead of `choices: [...]`), so the
+        chat-completions `transform_response` raises KeyError 'choices' on
+        a Responses payload. Use the dedicated Responses-API transformer
+        (`OpenAIResponsesAPIConfig.transform_response_api_response`) here.
+
+        Returns (litellm_model_response, response_cost) — symmetric with the
+        chat-completions branch which produces the same two values inline,
+        and analogous to the image branches' `_calculate_image_*_cost` helpers
+        (which return cost only because the image-response object is trivial
+        to build inline; the Responses payload needs a real transformer).
+        """
+        responses_config = OpenAIResponsesAPIConfig()
+        litellm_model_response = responses_config.transform_response_api_response(
+            model=model,
+            raw_response=httpx_response,
+            logging_obj=logging_obj,
+        )
+        response_cost = litellm.completion_cost(
+            completion_response=litellm_model_response,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            call_type="responses",
+        )
+        return litellm_model_response, response_cost
+
+    @staticmethod
+    def openai_passthrough_handler(
         httpx_response: httpx.Response,
         response_body: dict,
         logging_obj: LiteLLMLoggingObj,
@@ -301,7 +339,12 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         try:
             response_cost = 0.0
             litellm_model_response: Optional[
-                Union[ModelResponse, TextCompletionResponse, ImageResponse]
+                Union[
+                    ModelResponse,
+                    TextCompletionResponse,
+                    ImageResponse,
+                    ResponsesAPIResponse,
+                ]
             ] = None
             handler_instance = OpenAIPassthroughLoggingHandler()
 
@@ -384,29 +427,18 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     litellm_model_response._hidden_params = {}
                 litellm_model_response._hidden_params["response_cost"] = response_cost
             elif is_responses:
-                # Handle responses API cost calculation
-                provider_config = handler_instance.get_provider_config(model=model)
-                existing_litellm_params = kwargs.get("litellm_params", {}) or {}
-                litellm_model_response = provider_config.transform_response(
-                    raw_response=httpx_response,
-                    model_response=litellm.ModelResponse(),
+                # Responses-API cost tracking — see
+                # `_build_responses_api_response_and_cost` for why this needs
+                # a dedicated transformer (the chat-completions transform
+                # crashes on the Responses payload shape).
+                (
+                    litellm_model_response,
+                    response_cost,
+                ) = OpenAIPassthroughLoggingHandler._build_responses_api_response_and_cost(
                     model=model,
-                    messages=request_body.get("messages", []),
+                    httpx_response=httpx_response,
                     logging_obj=logging_obj,
-                    optional_params=request_body.get("optional_params", {}),
-                    api_key="",
-                    request_data=request_body,
-                    encoding=litellm.encoding,
-                    json_mode=False,
-                    litellm_params=existing_litellm_params,
-                )
-
-                # Calculate cost using LiteLLM's cost calculator with responses call type
-                response_cost = litellm.completion_cost(
-                    completion_response=litellm_model_response,
-                    model=model,
                     custom_llm_provider=custom_llm_provider,
-                    call_type="responses",
                 )
 
             # Update kwargs with cost information

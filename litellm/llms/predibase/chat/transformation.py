@@ -129,7 +129,7 @@ class PredibaseConfig(BaseConfig):
                 optional_params["response_format"] = value
         return optional_params
 
-    def transform_response(  # noqa: PLR0915
+    def transform_response(
         self,
         model: str,
         raw_response: Response,

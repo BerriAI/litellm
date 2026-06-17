@@ -614,9 +614,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(  # noqa: PLR0915
-        self, value: List[dict], optional_params: dict
-    ) -> List[Tools]:
+    def _map_function(self, value: List[dict], optional_params: dict) -> List[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
@@ -1173,7 +1171,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["include_server_side_tool_invocations"] = True
                 return
 
-    def map_openai_params(  # noqa: PLR0915
+    def map_openai_params(
         self,
         non_default_params: Dict,
         optional_params: Dict,
@@ -1904,7 +1902,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
 
     @staticmethod
-    def _calculate_usage(  # noqa: PLR0915
+    def _calculate_usage(
         completion_response: Union[
             GenerateContentResponseBody, BidiGenerateContentServerMessage
         ],
@@ -2380,7 +2378,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return annotations
 
     @staticmethod
-    def _process_candidates(  # noqa: PLR0915
+    def _process_candidates(
         _candidates: List[Candidates],
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
@@ -2846,6 +2844,7 @@ async def make_call(
         sync_stream=False,
         logging_obj=logging_obj,
         response_headers=response.headers,
+        response=response,  # any-ok: untyped stream
     )
     # LOGGING
     logging_obj.post_call(
@@ -2889,6 +2888,7 @@ def make_sync_call(
         sync_stream=True,
         logging_obj=logging_obj,
         response_headers=response.headers,
+        response=response,  # any-ok: untyped stream
     )
 
     # LOGGING
@@ -3350,12 +3350,14 @@ class ModelResponseIterator:
         sync_stream: bool,
         logging_obj: LoggingClass,
         response_headers: Optional[Dict[str, str]] = None,
+        response: httpx.Response | None = None,
     ):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
         )
 
         self.streaming_response = streaming_response
+        self.response = response
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
         self.accumulated_json = ""
         self.sent_first_chunk = False
@@ -3422,14 +3424,18 @@ class ModelResponseIterator:
                     self.has_seen_tool_calls = True
                     break
 
-        # Handle final chunk with finishReason but no content.
-        # _process_candidates skips candidates without "content",
-        # so the finish_reason from the final chunk is lost.
+        # _process_candidates skips candidates without a "content" part, so a
+        # content-less chunk leaves choices empty and the downstream streaming
+        # handler hits IndexError on choices[0]. This covers the final chunk
+        # (finishReason, no content) and mid-stream metadata-only chunks
+        # (grounding/web-search/thought, no content and no finishReason — seen
+        # with web_search + reasoning) by emitting an empty-delta choice.
         if not model_response.choices and _candidates:
             from litellm.types.utils import Delta, StreamingChoices
 
             for candidate in _candidates:
                 finish_reason_str = candidate.get("finishReason")
+                mapped_finish_reason = None
                 if finish_reason_str is not None:
                     if self.has_seen_tool_calls:
                         mapped_finish_reason = "tool_calls"
@@ -3437,14 +3443,14 @@ class ModelResponseIterator:
                         mapped_finish_reason = VertexGeminiConfig._check_finish_reason(
                             None, finish_reason_str
                         )
-                    choice = StreamingChoices(
-                        finish_reason=mapped_finish_reason,
-                        index=candidate.get("index", 0),
-                        delta=Delta(content=None, role=None),
-                        logprobs=None,
-                        enhancements=None,
-                    )
-                    model_response.choices.append(choice)
+                choice = StreamingChoices(
+                    finish_reason=mapped_finish_reason,
+                    index=candidate.get("index", 0),
+                    delta=Delta(content=None, role=None),
+                    logprobs=None,
+                    enhancements=None,
+                )
+                model_response.choices.append(choice)
 
         # Also handle the case where the final chunk has empty
         # content (e.g. text:"") WITH finishReason. In this case
@@ -3653,3 +3659,47 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+
+    async def aclose(self) -> None:
+        iterator = getattr(  # any-ok: untyped stream
+            self,
+            "async_response_iterator",
+            self.streaming_response,  # any-ok: untyped stream
+        )
+        if iterator is not None and hasattr(  # any-ok: untyped stream
+            iterator, "aclose"  # any-ok: untyped stream
+        ):
+            try:
+                await iterator.aclose()  # any-ok: untyped stream
+            except Exception as e:  # noqa: BLE001
+                verbose_logger.debug(
+                    "ModelResponseIterator.aclose: error closing iterator: %s", e
+                )
+        if self.response is not None:
+            try:
+                await self.response.aclose()
+            except Exception as e:  # noqa: BLE001
+                verbose_logger.debug(
+                    "ModelResponseIterator.aclose: error closing response: %s", e
+                )
+
+    def close(self) -> None:
+        iterator = getattr(  # any-ok: untyped stream
+            self, "response_iterator", self.streaming_response  # any-ok: untyped stream
+        )
+        if iterator is not None and hasattr(  # any-ok: untyped stream
+            iterator, "close"  # any-ok: untyped stream
+        ):
+            try:
+                iterator.close()  # any-ok: untyped stream
+            except Exception as e:  # noqa: BLE001
+                verbose_logger.debug(
+                    "ModelResponseIterator.close: error closing iterator: %s", e
+                )
+        if self.response is not None:
+            try:
+                self.response.close()
+            except Exception as e:  # noqa: BLE001
+                verbose_logger.debug(
+                    "ModelResponseIterator.close: error closing response: %s", e
+                )

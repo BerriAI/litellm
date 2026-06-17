@@ -3,11 +3,13 @@ This file contains common utils for anthropic calls.
 """
 
 import copy
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
 import litellm
+from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
@@ -272,23 +274,68 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
     @staticmethod
-    def _supports_model_capability(model: str, key: str) -> bool:
-        """Check a boolean capability ``key`` in the model map.
+    def _supports_sampling_params(model: str) -> bool:
+        """Claude 4.7+ (Opus 4.7/4.8, Fable 5) removed sampling params: the API
+        rejects ``top_p``, ``top_k``, and any ``temperature`` other than 1 with
+        a 400 ("`temperature` is deprecated for this model").
 
-        Strips bedrock/vertex prefixes so a provider-routed Claude still
-        resolves to the Anthropic model-map entry.
-        """
-        from litellm.utils import _supports_factory
+        Driven by the ``supports_sampling_params`` flag in the model map; the
+        name check remains only as a fallback for provider-routed ids whose
+        map entries predate the flag."""
+        flag = AnthropicModelInfo._get_model_capability(
+            model, "supports_sampling_params"
+        )
+        if flag is not None:
+            return flag
+        model_lower = model.lower()
+        return not any(
+            v in model_lower
+            for v in (
+                "fable",
+                "opus-4-7",
+                "opus_4_7",
+                "opus-4.7",
+                "opus_4.7",
+                "opus-4-8",
+                "opus_4_8",
+                "opus-4.8",
+                "opus_4.8",
+            )
+        )
 
-        try:
-            if _supports_factory(
-                model=model,
-                custom_llm_provider="anthropic",
-                key=key,
-            ):
-                return True
-        except Exception:
-            pass
+    @staticmethod
+    def _apply_sampling_param(
+        optional_params: dict,
+        model: str,
+        param: str,
+        value: Any,
+        drop_params: bool,
+        output_key: str,
+    ) -> None:
+        """Forward ``temperature``/``top_p``/``top_k`` to
+        ``optional_params[output_key]`` unless the model removed sampling
+        params, in which case drop the param (with drop_params) or raise a
+        clean client-side 400."""
+        if AnthropicModelInfo._supports_sampling_params(model) or (
+            param == "temperature" and value == 1
+        ):
+            optional_params[output_key] = value
+        elif not (litellm.drop_params or drop_params):
+            supported_hint = (
+                "Only temperature=1 is supported. " if param == "temperature" else ""
+            )
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support {param}={value}. {supported_hint}"
+                    "To drop unsupported params, set `litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
+
+    @staticmethod
+    def _model_map_lookup_candidates(model: str) -> List[str]:
+        """Model-map keys to try for ``model``, stripping bedrock/vertex
+        prefixes so a provider-routed Claude still resolves to its entry."""
         candidates = [model]
         for prefix in (
             "bedrock/converse/",
@@ -311,15 +358,40 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 candidates.append(f"bedrock/{base}")
         except Exception:
             pass
+        return candidates
+
+    @staticmethod
+    def _get_model_capability(model: str, key: str) -> Optional[bool]:
+        """Read boolean capability ``key`` from the model map, or None when
+        no entry declares it."""
         try:
-            for cand in candidates:
-                if cand in litellm.model_cost and (
-                    litellm.model_cost[cand].get(key) is True
-                ):
-                    return True
+            for cand in AnthropicModelInfo._model_map_lookup_candidates(model):
+                value = litellm.model_cost.get(cand, {}).get(key)
+                if isinstance(value, bool):
+                    return value
         except Exception:
             pass
-        return False
+        return None
+
+    @staticmethod
+    def _supports_model_capability(model: str, key: str) -> bool:
+        """Check a boolean capability ``key`` in the model map.
+
+        Strips bedrock/vertex prefixes so a provider-routed Claude still
+        resolves to the Anthropic model-map entry.
+        """
+        from litellm.utils import _supports_factory
+
+        try:
+            if _supports_factory(
+                model=model,
+                custom_llm_provider="anthropic",
+                key=key,
+            ):
+                return True
+        except Exception:
+            pass
+        return AnthropicModelInfo._get_model_capability(model, key) is True
 
     @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:
@@ -1013,3 +1085,35 @@ def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:
 
     additional_headers = {**llm_response_headers, **openai_headers}
     return additional_headers
+
+
+def create_anthropic_model_list_response(model_ids: List[str]) -> dict:
+    """Build the Anthropic-native /v1/models envelope for Claude Code gateway discovery.
+
+    Claude Code 2.1.126+ queries the gateway root's /v1/models with an
+    anthropic-version header and only parses the Anthropic Models API shape
+    (type/display_name/created_at plus has_more/first_id/last_id). It keeps
+    models whose id starts with claude/anthropic, so the full list is returned
+    here and the client filters. display_name falls back to the id, which is
+    the stable label a gateway can offer for arbitrary upstream models.
+    """
+    created_at = (
+        datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    data = [
+        {
+            "type": "model",
+            "id": model_id,
+            "display_name": model_id,
+            "created_at": created_at,
+        }
+        for model_id in model_ids
+    ]
+    return {
+        "data": data,
+        "has_more": False,
+        "first_id": model_ids[0] if model_ids else None,
+        "last_id": model_ids[-1] if model_ids else None,
+    }

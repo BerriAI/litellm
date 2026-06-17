@@ -27,7 +27,7 @@ from litellm.types.utils import EmbeddingResponse, all_litellm_params
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
-from .dual_cache import DualCache  # noqa
+from .dual_cache import DualCache  # noqa: F401
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
@@ -41,7 +41,7 @@ def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
     except Exception:
         pass
 
@@ -691,6 +691,7 @@ class Cache:
         self,
         embedding_response: Any,
         model: Optional[str],
+        prompt_tokens: Optional[int] = None,
         prompt_tokens_details: Optional[dict] = None,
     ) -> CachedEmbedding:
         """
@@ -703,6 +704,7 @@ class Cache:
                     "index": embedding_response.get("index"),
                     "object": embedding_response.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_tokens_details": prompt_tokens_details,
                 }
             elif hasattr(embedding_response, "model_dump"):
@@ -712,6 +714,7 @@ class Cache:
                     "index": data.get("index"),
                     "object": data.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_tokens_details": prompt_tokens_details,
                 }
             else:
@@ -721,6 +724,7 @@ class Cache:
                     "index": data.get("index"),
                     "object": data.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
                     "prompt_tokens_details": prompt_tokens_details,
                 }
         except KeyError as e:
@@ -769,6 +773,29 @@ class Cache:
                 per_item[key] = value
         return per_item if per_item else None
 
+    def _get_per_item_prompt_tokens(
+        self,
+        result: EmbeddingResponse,
+        idx_in_result_data: int,
+    ) -> Optional[int]:
+        """
+        Extract the per-item prompt_tokens from a response for caching.
+
+        Single-item responses store the full usage.prompt_tokens. Multi-item
+        responses distribute it evenly (with remainder) so that summing all
+        per-item values on retrieval reconstructs the original total.
+        """
+        if result.usage is None or result.usage.prompt_tokens is None:
+            return None
+
+        total = result.usage.prompt_tokens
+        num_items = len(result.data)
+        if num_items <= 1:
+            return total
+
+        quotient, remainder = divmod(total, num_items)
+        return quotient + (1 if idx_in_result_data < remainder else 0)
+
     def add_embedding_response_to_cache(
         self,
         result: EmbeddingResponse,
@@ -780,7 +807,11 @@ class Cache:
         kwargs["cache_key"] = preset_cache_key
         embedding_response = result.data[idx_in_result_data]
 
-        # Extract per-item prompt_tokens_details from response usage
+        # Extract per-item prompt_tokens + details from response usage
+        prompt_tokens = self._get_per_item_prompt_tokens(
+            result=result,
+            idx_in_result_data=idx_in_result_data,
+        )
         prompt_tokens_details = self._get_per_item_prompt_tokens_details(
             result=result,
             idx_in_result_data=idx_in_result_data,
@@ -791,6 +822,7 @@ class Cache:
         embedding_dict: CachedEmbedding = self._convert_to_cached_embedding(
             embedding_response,
             model_name,
+            prompt_tokens=prompt_tokens,
             prompt_tokens_details=prompt_tokens_details,
         )
 

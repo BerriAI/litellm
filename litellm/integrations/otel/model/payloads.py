@@ -34,6 +34,7 @@ __all__ = [
     "RequestIdentity",
     "GuardrailSpanData",
     "LLMCallSpanData",
+    "LLMCost",
     "LLMRequestParams",
     "LLMUsage",
     "MCPToolCallSpanData",
@@ -89,6 +90,49 @@ class LLMUsage:
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class LLMCost:
+    """Per-component cost breakdown, from the StandardLoggingPayload
+    ``cost_breakdown`` (``litellm.types.utils.CostBreakdown``).
+
+    Each field is the USD cost of one component, or ``None`` when the source did
+    not report it — so the mapper omits absent components instead of emitting 0.
+    The final (post-discount/post-margin) total is carried separately on
+    ``LLMCallSpanData.response_cost``. Free-form ``additional_costs`` are not
+    surfaced here: span attributes are scalar and there is no agreed key shape
+    for them yet.
+    """
+
+    input: float | None = None
+    output: float | None = None
+    cache_read: float | None = None
+    cache_creation: float | None = None
+    tool_usage: float | None = None
+    original: float | None = None
+    discount_amount: float | None = None
+    discount_percent: float | None = None
+    margin_fixed_amount: float | None = None
+    margin_percent: float | None = None
+    margin_total_amount: float | None = None
+
+    @classmethod
+    def from_breakdown(cls, breakdown: Mapping[str, object] | None) -> "LLMCost":
+        b = breakdown or {}
+        return cls(
+            input=as_float(b.get("input_cost")),
+            output=as_float(b.get("output_cost")),
+            cache_read=as_float(b.get("cache_read_cost")),
+            cache_creation=as_float(b.get("cache_creation_cost")),
+            tool_usage=as_float(b.get("tool_usage_cost")),
+            original=as_float(b.get("original_cost")),
+            discount_amount=as_float(b.get("discount_amount")),
+            discount_percent=as_float(b.get("discount_percent")),
+            margin_fixed_amount=as_float(b.get("margin_fixed_amount")),
+            margin_percent=as_float(b.get("margin_percent")),
+            margin_total_amount=as_float(b.get("margin_total_amount")),
+        )
 
 
 @dataclass(frozen=True)
@@ -255,6 +299,7 @@ class LLMCallSpanData:
     server: ServerInfo | None
     identity: RequestIdentity
     is_streaming: bool | None = None
+    cost: LLMCost = field(default_factory=LLMCost)
     tools: tuple[ToolDefinition, ...] = ()
     # Raw messages and response, needed by vendor mappers (OpenInference,
     # Langfuse, Weave) that stamp message-level attributes. ``messages_in`` is
@@ -302,6 +347,9 @@ class LLMCallSpanData:
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
+            cost=LLMCost.from_breakdown(
+                cast("Mapping[str, object] | None", payload.get("cost_breakdown"))
+            ),
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
             is_streaming=as_bool(payload.get("stream")),

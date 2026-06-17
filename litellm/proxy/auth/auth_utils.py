@@ -271,6 +271,11 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     # tokens) to the attacker's host, or coerces the proxy into
     # authenticating against the attacker's host with admin secrets.
     "aws_bedrock_runtime_endpoint",
+    # Bedrock project/workspace association. Deployments pin this to
+    # enforce a data-retention policy, so a caller-supplied value would
+    # re-route the request's retention and accounting to any project
+    # reachable with the deployment's shared AWS credentials.
+    "aws_bedrock_project_id",
     # Provider-specific endpoint overrides that flow into the outbound
     # request via ``optional_params``. Same threat as ``api_base``:
     # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
@@ -1222,6 +1227,14 @@ _MODEL_ROUTING_BODY_TARGET_MODEL_ROUTE_MARKERS = (
     "/vector_stores",
 )
 _MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS = ("/evals",)
+# Realtime WebRTC routes carry the effective model inside the nested
+# ``session.model`` field (see realtime_endpoints.endpoints), so the model the
+# request will actually use is not present at the top level. Extract it here so
+# can_key_call_model() validates the real target model.
+_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS = (
+    "/realtime/client_secrets",
+    "/realtime/calls",
+)
 _MODEL_ROUTING_ID_FIELDS = (
     "file_id",
     "input_file_id",
@@ -1404,6 +1417,12 @@ def _extract_model_candidates_from_request(
     _append_model_candidates(candidates, body_model)
     if uses_body_target_model_sources or not body_model:
         _append_model_candidates(candidates, request_data.get("target_model_names"))
+    if _route_matches_any_marker(
+        route=route, markers=_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS
+    ):
+        session = request_data.get("session")
+        if isinstance(session, dict):
+            _append_model_candidates(candidates, session.get("model"))
     if uses_completion_model_sources and isinstance(
         request_data.get("completion"), dict
     ):

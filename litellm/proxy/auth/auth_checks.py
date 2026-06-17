@@ -519,7 +519,7 @@ MODEL_DISCOVERY_ROUTES = frozenset(
 )
 
 
-async def common_checks(  # noqa: PLR0915
+async def common_checks(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
@@ -3155,6 +3155,98 @@ async def can_key_call_model(
         raise
 
 
+async def can_key_call_resolved_model(
+    model: str,
+    llm_model_list: Optional[list],
+    valid_token: UserAPIKeyAuth,
+    llm_router: Optional[litellm.Router],
+) -> None:
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    skip_key_model_check = valid_token.config or (
+        isinstance(valid_token.models, list)
+        and SpecialModelNames.all_team_models.value in valid_token.models
+    )
+    if not skip_key_model_check:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=valid_token,
+            llm_router=llm_router,
+        )
+
+    team_object: Optional[LiteLLM_TeamTableCachedObj] = None
+    team_object_from_lookup = False
+    if valid_token.team_id is not None:
+        try:
+            team_object = await get_team_object(
+                team_id=valid_token.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=valid_token.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            team_object_from_lookup = True
+        except Exception:
+            team_object = LiteLLM_TeamTableCachedObj(
+                team_id=valid_token.team_id,
+                models=valid_token.team_models,
+                blocked=valid_token.team_blocked,
+                team_alias=valid_token.team_alias,
+                metadata=valid_token.team_metadata,
+                object_permission_id=valid_token.team_object_permission_id,
+                object_permission=valid_token.team_object_permission,
+            )
+
+    if team_object is not None:
+        try:
+            await can_team_access_model(
+                model=model,
+                team_object=team_object,
+                llm_router=llm_router,
+                team_model_aliases=valid_token.team_model_aliases,
+            )
+        except ProxyException as team_denial:
+            if team_denial.type != ProxyErrorTypes.team_model_access_denied:
+                raise
+            if not await _key_access_group_grants_model(
+                model=model,
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=llm_router,
+            ):
+                raise
+
+        if valid_token.user_id is not None and team_object_from_lookup:
+            await _check_team_member_model_access(
+                model=model,
+                team_object=team_object,
+                valid_token=valid_token,
+                llm_router=llm_router,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    if valid_token.project_id is not None:
+        project_object = await get_project_object(
+            project_id=valid_token.project_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if project_object is not None and len(project_object.models) > 0:
+            can_project_access_model(
+                model=model,
+                project_object=project_object,
+                llm_router=llm_router,
+            )
+
+
 def can_org_access_model(
     model: str,
     org_object: Optional[LiteLLM_OrganizationTable],
@@ -3516,10 +3608,13 @@ async def _virtual_key_max_budget_check(
     if valid_token.max_budget is not None:
         from litellm.proxy.proxy_server import get_current_spend
 
+        fallback_spend = valid_token.spend or 0.0
+        counter_key = f"spend:key:{valid_token.token}"
+
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend = await get_current_spend(
-            counter_key=f"spend:key:{valid_token.token}",
-            fallback_spend=valid_token.spend or 0.0,
+            counter_key=counter_key,
+            fallback_spend=fallback_spend,
         )
 
         ####################################

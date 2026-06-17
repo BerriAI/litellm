@@ -2409,6 +2409,8 @@ async def test_virtual_key_budget_check_fallback_no_counter():
         assert exc_info.value.current_cost == 15.0
 
 
+
+
 @pytest.mark.asyncio
 async def test_team_budget_check_reads_from_spend_counter():
     """Team budget check should use get_current_spend when counter exists."""

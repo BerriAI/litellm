@@ -38,17 +38,24 @@ Before contributing code to LiteLLM, you must sign our [Contributor License Agre
 git clone https://github.com/YOUR_USERNAME/litellm.git
 cd litellm
 
-# Create a new branch for your feature
-git checkout -b your-feature-branch
+# Create a new branch for your feature (see "Commit and Branch Conventions" below)
+git checkout -b feature/your-feature
 
 # Install development dependencies
 make install-dev
+
+# Install git hooks that enforce commit + branch conventions (one-time, opt-in)
+make install-hooks
 
 # Verify your setup works
 make help
 ```
 
 That's it! Your local development environment is ready.
+
+## Commit and Branch Conventions
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) and branches follow [Conventional Branches](https://conventional-branch.github.io/). Run `make install-hooks` once per clone to enable the local git hooks that enforce these — see the [contributor docs](https://docs.litellm.ai/docs/extras/contributing_code#commit-and-branch-conventions) for the full type list, examples, the protected-branch bypass list, and how to opt out.
 
 ### 2. Development Workflow
 
@@ -67,12 +74,12 @@ make lint
 # Run unit tests to ensure nothing is broken
 make test-unit
 
-# Commit your changes
+# Commit your changes (must follow Conventional Commits — see above)
 git add .
-git commit -m "Your descriptive commit message"
+git commit -m "feat(scope): your descriptive commit message"
 
-# Push and create a PR
-git push origin your-feature-branch
+# Push and create a PR (branch must follow Conventional Branches — see above)
+git push origin feature/your-feature
 ```
 
 ## Adding Testing
@@ -148,6 +155,7 @@ Individual linting commands:
 make format-check       # Check Black formatting
 make lint-ruff          # Run Ruff linting
 make lint-mypy          # Run MyPy type checking
+make lint-any           # Gate changed files against their per-file Any budget
 make check-circular-imports    # Check for circular imports
 make check-import-safety       # Check import safety
 ```

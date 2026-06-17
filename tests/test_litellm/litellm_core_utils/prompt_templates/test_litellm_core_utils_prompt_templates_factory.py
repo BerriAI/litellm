@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
+    _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
@@ -1802,6 +1803,130 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert text_block["text"] == "I found the time tool. How can I help you?"
 
 
+def test_convert_to_anthropic_tool_invoke_server_tool_dropped_without_result():
+    """
+    A server_tool_use (srvtoolu_) whose matching *_tool_result is not available
+    (a generic OpenAI client dropped provider_specific_fields on replay) must be
+    omitted: a bare server_tool_use with no following tool_result is rejected by
+    Anthropic. See https://github.com/BerriAI/litellm/issues/17737
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_invoke,
+    )
+
+    tool_calls = [
+        {
+            "id": "srvtoolu_01ABC123",
+            "type": "function",
+            "function": {"name": "web_search", "arguments": '{"query": "x"}'},
+        }
+    ]
+
+    # No web_search_results / tool_results -> drop the orphan rather than emit a
+    # bare server_tool_use.
+    assert convert_to_anthropic_tool_invoke(tool_calls) == []
+
+
+def test_convert_to_anthropic_tool_invoke_server_tool_paired_with_result():
+    """
+    When the matching *_tool_result IS available (provider_specific_fields was
+    preserved, e.g. the litellm SDK round-trip), the server_tool_use is emitted
+    immediately followed by its web_search_tool_result — the existing valid-pair
+    behavior is unchanged. See https://github.com/BerriAI/litellm/issues/17737
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_invoke,
+    )
+
+    tool_calls = [
+        {
+            "id": "srvtoolu_01ABC123",
+            "type": "function",
+            "function": {"name": "web_search", "arguments": '{"query": "x"}'},
+        }
+    ]
+    web_search_results = [
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01ABC123",
+            "content": [
+                {"type": "web_search_result", "url": "https://example.com", "title": "t"}
+            ],
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls, web_search_results=web_search_results
+    )
+
+    assert len(result) == 2
+    assert result[0]["type"] == "server_tool_use"
+    assert result[0]["id"] == "srvtoolu_01ABC123"
+    assert result[1]["type"] == "web_search_tool_result"
+    assert result[1]["tool_use_id"] == "srvtoolu_01ABC123"
+
+
+def test_anthropic_messages_pt_drops_orphan_server_tool_from_generic_client():
+    """
+    A generic OpenAI client (e.g. Open WebUI) replays a prior web-search turn as
+    an assistant tool_call + a `tool` message both keyed to the same srvtoolu_ id,
+    without round-tripping provider_specific_fields. The transformed Anthropic
+    messages must contain neither a bare server_tool_use nor a user tool_result
+    for that id (either is rejected with "unexpected tool_use_id ... in
+    tool_result blocks"). See https://github.com/BerriAI/litellm/issues/17737
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "latest news on elephants?"},
+        {
+            "role": "assistant",
+            "content": "Here's what I found about elephants...",
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01ABC123",
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": '{"query": "latest elephant news"}',
+                    },
+                }
+            ],
+            # no provider_specific_fields — a generic OpenAI client drops it
+        },
+        {"role": "tool", "tool_call_id": "srvtoolu_01ABC123", "content": "...results..."},
+        {"role": "user", "content": "tell me more"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    for msg in result:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            assert block.get("type") != "server_tool_use", result
+            if block.get("type") == "tool_result":
+                assert not str(block.get("tool_use_id", "")).startswith(
+                    "srvtoolu_"
+                ), result
+
+    assistant_text = " ".join(
+        b.get("text", "")
+        for m in result
+        if m.get("role") == "assistant"
+        for b in (m.get("content") or [])
+        if isinstance(b, dict) and b.get("type") == "text"
+    )
+    assert "elephants" in assistant_text
+
+
 def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     """
     Regression test for issue #19098: unpack_defs() causes OOM with nested tool schemas.
@@ -2807,6 +2932,93 @@ def test_bedrock_converse_messages_pt_document_deterministic_name():
     name1 = result1[0]["content"][0]["document"]["name"]
     name2 = result2[0]["content"][0]["document"]["name"]
     assert name1 == name2
+
+
+def test_bedrock_converse_messages_pt_renames_duplicate_document_names():
+    """
+    The same document in multiple turns must not produce duplicate names;
+    Bedrock rejects requests with "Messages can not contain duplicate
+    document names". The first occurrence keeps its hash-based name and
+    later occurrences get a deterministic positional suffix.
+    """
+    document_block = {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": "dGVzdA==",
+        },
+    }
+    messages = [
+        {
+            "role": "user",
+            "content": [document_block, {"type": "text", "text": "summarize this"}],
+        },
+        {"role": "assistant", "content": "It says test."},
+        {
+            "role": "user",
+            "content": [document_block, {"type": "text", "text": "summarize again"}],
+        },
+    ]
+
+    result1 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+    result2 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+
+    names1 = [
+        block["document"]["name"]
+        for message in result1
+        for block in message["content"]
+        if "document" in block
+    ]
+    names2 = [
+        block["document"]["name"]
+        for message in result2
+        for block in message["content"]
+        if "document" in block
+    ]
+
+    assert len(names1) == 2
+    assert len(set(names1)) == 2
+    assert names1[1] == f"{names1[0]}_2"
+    assert names1 == names2
+
+    single_turn = _bedrock_converse_messages_pt(
+        [messages[0]], "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+    assert names1[0] == single_turn[0]["content"][0]["document"]["name"]
+
+
+def test_rename_duplicate_bedrock_document_names_skips_organic_suffixes():
+    """
+    A renamed duplicate must not collide with a document whose organic name
+    already carries the would-be suffix (e.g. an existing ``report_2``),
+    regardless of whether that document appears before or after the rename.
+    """
+
+    def _contents(names):
+        return [
+            {
+                "role": "user",
+                "content": [{"document": {"name": name}} for name in names],
+            }
+        ]
+
+    def _names(contents):
+        return [block["document"]["name"] for block in contents[0]["content"]]
+
+    organic_first = _rename_duplicate_bedrock_document_names(
+        _contents(["report", "report_2", "report"])
+    )
+    assert _names(organic_first) == ["report", "report_2", "report_3"]
+
+    organic_last = _rename_duplicate_bedrock_document_names(
+        _contents(["report", "report", "report_2"])
+    )
+    assert _names(organic_last) == ["report", "report_3", "report_2"]
 
 
 def test_bedrock_converse_messages_pt_document_rejects_url_source():

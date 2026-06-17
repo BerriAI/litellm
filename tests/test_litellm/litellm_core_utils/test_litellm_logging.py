@@ -2116,6 +2116,88 @@ def test_get_error_information_error_code_priority():
     assert result["error_class"] == "NoCodeException"
 
 
+def test_get_error_information_prefers_message_attribute_over_str():
+    """
+    Regression for empty-error_message-in-spend-logs.
+
+    ProxyException sets `self.message` but does NOT call
+    `super().__init__(message)` nor define `__str__`, so `str(exc)`
+    returns the empty string. Before the fix, get_error_information
+    used `str(original_exception)` and silently stripped the
+    human-readable message from spend_logs.metadata.error_information,
+    making dashboard "LLM Failure" rows un-triagable.
+
+    Asserts the `.message` attribute is consulted first.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Simulate a ProxyException-shaped exception: .message set, but
+    # super().__init__() NOT called and no __str__ override.
+    class ProxyExceptionLike(Exception):
+        def __init__(self, message, code):
+            self.message = str(message)
+            self.code = str(code)
+            # NOTE: deliberately NOT calling super().__init__(message)
+
+    msg = "Authentication Error, Invalid proxy server token passed. key=..."
+    exc = ProxyExceptionLike(message=msg, code=401)
+
+    # Sanity check: this exception type's str() really is empty
+    assert str(exc) == "", (
+        "Test premise broken — bare-base Exception now returns message; "
+        "review whether ProxyException fix landed at the class level instead"
+    )
+
+    result = StandardLoggingPayloadSetup.get_error_information(exc)
+    assert (
+        result["error_message"] == msg
+    ), f"expected message from .message attribute, got {result['error_message']!r}"
+    assert result["error_code"] == "401"
+    assert result["error_class"] == "ProxyExceptionLike"
+
+
+def test_get_error_information_preserves_explicit_empty_message():
+    """
+    An exception that deliberately sets `.message = ""` must surface
+    the empty string verbatim, not fall through to `str(exc)`.
+
+    Regression for greptile P2 finding on PR #30381: a truthiness
+    check (`if message_attr:`) would silently mask an explicit empty
+    message and substitute `str(original_exception)` — which for
+    ProxyException-shaped objects is also empty, but for plain
+    `Exception("boom")` would inject the wrong string and corrupt
+    the error_information signal.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    class ProxyExceptionLike(Exception):
+        def __init__(self, message, code):
+            self.message = message
+            self.code = str(code)
+            super().__init__("unrelated-args-summary")
+
+    exc = ProxyExceptionLike(message="", code=500)
+    result = StandardLoggingPayloadSetup.get_error_information(exc)
+    assert result["error_message"] == "", (
+        "explicit empty .message must survive verbatim; got "
+        f"{result['error_message']!r}"
+    )
+
+
+def test_get_error_information_falls_back_to_str_when_no_message_attr():
+    """
+    Plain Exception (no `.message` attr) must still produce a useful
+    error_message via str(exc), preserving prior behavior for
+    non-litellm exception types.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    exc = ValueError("boom")
+    result = StandardLoggingPayloadSetup.get_error_information(exc)
+    assert result["error_message"] == "boom"
+    assert result["error_class"] == "ValueError"
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Tests for _get_assembled_streaming_response non-streaming early return
 # ──────────────────────────────────────────────────────────────────────
@@ -3115,6 +3197,71 @@ class TestFirstApiCallStartTimeSetOnce:
         assert user_meta == {}
 
 
+def test_get_error_information_for_logging_payload_ignores_spoofed_disconnect_without_flag():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    baseline = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=ValueError("provider failure"),
+    )
+    error_information, error_str = (
+        StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
+            metadata={
+                "error_information": {
+                    "error_code": "499",
+                    "error_message": "Client disconnected the request",
+                    "error_class": "ClientDisconnected",
+                }
+            },
+            original_exception=ValueError("provider failure"),
+            error_str="provider failure",
+        )
+    )
+    assert error_information == baseline
+    assert error_str == "provider failure"
+
+
+def test_get_error_information_for_logging_payload_client_disconnect():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    custom_error = {
+        "error_code": "499",
+        "error_message": "Client disconnected the request",
+        "error_class": "ClientDisconnected",
+    }
+    error_information, error_str = (
+        StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
+            metadata={"client_disconnected": True, "error_information": custom_error},
+            original_exception=None,
+            error_str=None,
+        )
+    )
+    assert error_information == custom_error
+    assert error_str == "Client disconnected the request"
+
+    error_information, error_str = (
+        StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
+            metadata={"client_disconnected": True},
+            original_exception=None,
+            error_str="existing error",
+        )
+    )
+    assert error_information["error_code"] == "499"
+    assert error_str == "existing error"
+
+    baseline = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=None,
+    )
+    error_information, error_str = (
+        StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
+            metadata={},
+            original_exception=None,
+            error_str=None,
+        )
+    )
+    assert error_information == baseline
+    assert error_str is None
+
+
 def test_get_error_information_proxy_exception_preserves_message():
     """ProxyException keeps its text in ``.message`` (str() was empty pre-fix),
     so error_information must still surface the message and code."""
@@ -3151,6 +3298,41 @@ def test_get_error_information_prefers_message_attribute_over_empty_str():
     assert info["error_code"] == "401"
 
 
+def _anthropic_messages_logging_obj():
+    return LitellmLogging(
+        model="openai/my-local",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="28595",
+        function_id="28595",
+    )
+
+
+def _responses_api_response_with_text(text="hello world"):
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    return ResponsesAPIResponse(
+        id="resp-28595",
+        created_at=1700000000,
+        output=[
+            ResponseOutputMessage(
+                id="msg-1",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[
+                    ResponseOutputText(annotations=[], text=text, type="output_text")
+                ],
+            )
+        ],
+        usage=ResponseAPIUsage(input_tokens=11, output_tokens=7, total_tokens=18),
+    )
+
+
 @pytest.mark.parametrize(
     "event_cls, event_type",
     [
@@ -3159,34 +3341,68 @@ def test_get_error_information_prefers_message_attribute_over_empty_str():
         ("ResponseFailedEvent", "response.failed"),
     ],
 )
-def test_handle_anthropic_messages_response_logging_with_terminal_responses_api_events(
+def test_handle_anthropic_messages_response_logging_translates_terminal_responses_api_event(
     event_cls, event_type
 ):
-    """Regression test for #28943: when anthropic_messages routes to OpenAI Responses
-    API and stream=True, success_handler receives a terminal ResponsesAPI event instead
-    of a ModelResponse. The handler must return the inner ResponsesAPIResponse rather
-    than crashing with AnthropicResponse.model_validate."""
+    """Regression for #28595 / #28943. When anthropic_messages routes to the OpenAI
+    Responses backend and stream=True, success_handler receives a terminal Responses
+    API event. The handler must translate it to a ModelResponse whose choices carry
+    the assistant text, so the proxy UI Logs tab (which reads response.choices[0])
+    renders the response content instead of "No response data available"."""
     import importlib
 
     openai_types = importlib.import_module("litellm.types.llms.openai")
     EventClass = getattr(openai_types, event_cls)
-    from litellm.types.llms.openai import ResponsesAPIResponse
 
-    logging_obj = LitellmLogging(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": "hello"}],
-        stream=True,
-        call_type="anthropic_messages",
-        start_time=time.time(),
-        litellm_call_id="test-rce-123",
-        function_id="test-fn",
-    )
-
-    inner_response = ResponsesAPIResponse(
-        id="resp_test", created_at=1700000000, output=[]
-    )
+    logging_obj = _anthropic_messages_logging_obj()
+    inner_response = _responses_api_response_with_text("hello world")
     event = EventClass(type=event_type, response=inner_response)
 
     result = logging_obj._handle_anthropic_messages_response_logging(result=event)
 
-    assert result is inner_response
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "hello world"  # type: ignore[union-attr]
+    assert result.usage.prompt_tokens == 11  # type: ignore[attr-defined]
+    assert result.usage.completion_tokens == 7  # type: ignore[attr-defined]
+
+
+def test_handle_anthropic_messages_response_logging_translates_bare_responses_api_response():
+    """Non-streaming bridge path: result is a bare ResponsesAPIResponse (no event wrap)."""
+    logging_obj = _anthropic_messages_logging_obj()
+    result = logging_obj._handle_anthropic_messages_response_logging(
+        result=_responses_api_response_with_text("hi there")
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "hi there"  # type: ignore[union-attr]
+    assert result.usage.total_tokens == 18  # type: ignore[attr-defined]
+
+
+def test_handle_anthropic_messages_response_logging_passes_model_response_through():
+    """Anthropic-native path already yields a ModelResponse; it must be returned unchanged."""
+    logging_obj = _anthropic_messages_logging_obj()
+    model_response = ModelResponse()
+    assert (
+        logging_obj._handle_anthropic_messages_response_logging(result=model_response)
+        is model_response
+    )
+
+
+def test_handle_anthropic_messages_response_logging_degrades_on_unparseable_responses_payload():
+    """If the Responses translation raises (eg. empty output on an incomplete response),
+    the row must still land: a minimal ModelResponse with model + usage is returned."""
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    logging_obj = _anthropic_messages_logging_obj()
+    empty = ResponsesAPIResponse(
+        id="resp-empty",
+        created_at=1700000000,
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=4, output_tokens=0, total_tokens=4),
+    )
+
+    result = logging_obj._handle_anthropic_messages_response_logging(result=empty)
+
+    assert isinstance(result, ModelResponse)
+    assert result.model == "openai/my-local"
+    assert result.usage.prompt_tokens == 4  # type: ignore[attr-defined]

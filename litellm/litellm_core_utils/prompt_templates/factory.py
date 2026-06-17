@@ -1475,7 +1475,7 @@ def convert_to_gemini_tool_call_invoke(
         )
 
 
-def convert_to_gemini_tool_call_result(  # noqa: PLR0915
+def convert_to_gemini_tool_call_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
     model: Optional[str] = None,
@@ -1967,27 +1967,35 @@ def convert_to_anthropic_tool_invoke(
         # Check if this is a server-side tool (web_search, tool_search, etc.)
         # Server tool IDs start with "srvtoolu_"
         if tool_id.startswith("srvtoolu_"):
-            # Create server_tool_use block instead of tool_use
-            _anthropic_server_tool_use: Dict[str, Any] = {
-                "type": "server_tool_use",
-                "id": tool_id,
-                "name": tool_name,
-                "input": tool_input,
-            }
-            anthropic_tool_invoke.append(_anthropic_server_tool_use)
-
-            # Add corresponding tool result if available.
-            # Check both web_search_results (web_search_tool_result / web_fetch_tool_result)
-            # and tool_results (bash_code_execution_tool_result, etc.)
+            # A server_tool_use block MUST be immediately followed by its matching
+            # *_tool_result block, or Anthropic rejects the request. The result is
+            # carried in provider_specific_fields (web_search_results / tool_results)
+            # — see PRs #17746 / #17798. A generic OpenAI client that does NOT
+            # round-trip provider_specific_fields (e.g. Open WebUI) drops it on
+            # replay, leaving no result to pair. In that case emit neither a bare
+            # server_tool_use here nor a user tool_result for the same id (see the
+            # tool/function handling in anthropic_messages_pt) — the server-side
+            # search already shaped the assistant's text answer, and replaying an
+            # unpaired server tool turn is exactly what triggers the 400
+            # ("unexpected tool_use_id ... in tool_result blocks").
             _all_tool_results: List[Any] = []
             if web_search_results:
                 _all_tool_results.extend(web_search_results)
             if tool_results:
                 _all_tool_results.extend(tool_results)
-            for result in _all_tool_results:
-                if result.get("tool_use_id") == tool_id:
-                    anthropic_tool_invoke.append(result)
-                    break
+            _matching_tool_result = next(
+                (r for r in _all_tool_results if r.get("tool_use_id") == tool_id),
+                None,
+            )
+            if _matching_tool_result is not None:
+                _anthropic_server_tool_use: Dict[str, Any] = {
+                    "type": "server_tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                }
+                anthropic_tool_invoke.append(_anthropic_server_tool_use)
+                anthropic_tool_invoke.append(_matching_tool_result)
         else:
             # Regular tool_use
             sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
@@ -2227,7 +2235,7 @@ def _sanitize_empty_text_content(
     return message
 
 
-def _add_missing_tool_results(  # noqa: PLR0915
+def _add_missing_tool_results(
     current_message: AllMessageValues,
     messages: List[AllMessageValues],
     current_index: int,
@@ -2484,7 +2492,7 @@ def sanitize_messages_for_tool_calling(
     return sanitized_messages
 
 
-def anthropic_messages_pt(  # noqa: PLR0915
+def anthropic_messages_pt(
     messages: List[AllMessageValues],
     model: str,
     llm_provider: str,
@@ -2673,12 +2681,22 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 user_message_types_block["role"] == "tool"
                 or user_message_types_block["role"] == "function"
             ):
-                # OpenAI's tool message content will always be a string
-                user_content.append(
-                    convert_to_anthropic_tool_result(
-                        user_message_types_block, force_base64=force_base64
+                # A generic OpenAI client (e.g. Open WebUI) emits a `tool` message
+                # for a server-side tool call (id starts with "srvtoolu_") to
+                # satisfy OpenAI's "every tool_call needs a tool result" rule.
+                # Anthropic rejects a user tool_result whose id maps to a
+                # server_tool_use (it is not a client tool_use), and the unpaired
+                # server_tool_use is already dropped in
+                # convert_to_anthropic_tool_invoke when its result didn't survive
+                # the round-trip — so skip the orphaned server-tool result here too.
+                _tc_id = user_message_types_block.get("tool_call_id")
+                if not (isinstance(_tc_id, str) and _tc_id.startswith("srvtoolu_")):
+                    # OpenAI's tool message content will always be a string
+                    user_content.append(
+                        convert_to_anthropic_tool_result(
+                            user_message_types_block, force_base64=force_base64
+                        )
                     )
-                )
 
             msg_i += 1
 
@@ -3278,7 +3296,7 @@ def convert_to_cohere_tool_invoke(tool_calls: list) -> List[ToolCallObject]:
     return cohere_tool_invoke
 
 
-def cohere_messages_pt_v2(  # noqa: PLR0915
+def cohere_messages_pt_v2(
     messages: List,
     model: str,
     llm_provider: str,
@@ -4290,6 +4308,49 @@ def _deduplicate_bedrock_tool_content(
     return _deduplicate_bedrock_content_blocks(tool_content, "toolResult")
 
 
+def _rename_duplicate_bedrock_document_names(
+    contents: List[BedrockMessageBlock],
+) -> List[BedrockMessageBlock]:
+    """
+    Rename duplicate document names across all messages in a Bedrock request.
+
+    Document names are derived from a content hash, so the same file appearing
+    in multiple conversation turns produces identical names and Bedrock rejects
+    the request with "Messages can not contain duplicate document names".  The
+    first occurrence keeps its original name so prompt-cache prefixes stay
+    stable; later occurrences get a deterministic positional suffix
+    (``_2``, ``_3``, ...), bumped further if the suffixed name already
+    belongs to another document (e.g. an organic name ending in ``_2``).
+    """
+    used_names: Set[str] = set()
+    for message in contents:
+        for block in message.get("content") or []:
+            document = block.get("document")
+            if isinstance(document, dict) and document.get("name"):
+                used_names.add(document["name"])
+
+    name_counts: Dict[str, int] = {}
+    for message in contents:
+        for block in message.get("content") or []:
+            document = block.get("document")
+            if not isinstance(document, dict):
+                continue
+            name = document.get("name")
+            if not name:
+                continue
+            count = name_counts.get(name, 0) + 1
+            name_counts[name] = count
+            if count > 1:
+                suffix = count
+                new_name = f"{name}_{suffix}"
+                while new_name in used_names:
+                    suffix += 1
+                    new_name = f"{name}_{suffix}"
+                used_names.add(new_name)
+                document["name"] = new_name
+    return contents
+
+
 def _sort_bedrock_assistant_content_blocks(
     blocks: List[BedrockContentBlock],
 ) -> List[BedrockContentBlock]:
@@ -4660,7 +4721,7 @@ class BedrockConverseMessagesProcessor:
         return messages
 
     @staticmethod
-    async def _bedrock_converse_messages_pt_async(  # noqa: PLR0915
+    async def _bedrock_converse_messages_pt_async(
         messages: List,
         model: str,
         llm_provider: str,
@@ -4697,6 +4758,12 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(
                                     guardContent={"text": {"text": element["text"]}}
                                 )
+                                _parts.append(_part)
+                            elif element["type"] in ("grounding_source", "query"):
+                                # Contextual grounding tags are guardrail metadata; the
+                                # model only needs the underlying text, so render them
+                                # as plain text on the generate path.
+                                _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
                                 format: Optional[str] = None
@@ -4938,7 +5005,7 @@ class BedrockConverseMessagesProcessor:
                     llm_provider=llm_provider,
                 )
 
-        return contents
+        return _rename_duplicate_bedrock_document_names(contents)
 
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
@@ -5084,7 +5151,7 @@ class BedrockConverseMessagesProcessor:
         return assistant_parts
 
 
-def _bedrock_converse_messages_pt(  # noqa: PLR0915
+def _bedrock_converse_messages_pt(
     messages: List,
     model: str,
     llm_provider: str,
@@ -5129,6 +5196,12 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockContentBlock(
                                 guardContent={"text": {"text": element["text"]}}
                             )
+                            _parts.append(_part)
+                        elif element["type"] in ("grounding_source", "query"):
+                            # Contextual grounding tags are guardrail metadata; the
+                            # model only needs the underlying text, so render them as
+                            # plain text on the generate path.
+                            _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "image_url":
                             format: Optional[str] = None
@@ -5360,7 +5433,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 llm_provider=llm_provider,
             )
 
-    return contents
+    return _rename_duplicate_bedrock_document_names(contents)
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
