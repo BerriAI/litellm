@@ -7827,6 +7827,10 @@ export interface paths {
          *
          *     Follows OpenAI API specification for individual model retrieval.
          *     https://platform.openai.com/docs/api-reference/models/retrieve
+         *
+         *     Query parameters mirror `/v1/models` so the same caller context (team
+         *     scoping, health filtering, paused deployments) drives both endpoints; the
+         *     listing's public id must resolve to the same internal deployment here.
          */
         get: operations["model_info_models__model_id__get"];
         put?: never;
@@ -16663,6 +16667,10 @@ export interface paths {
          *
          *     Follows OpenAI API specification for individual model retrieval.
          *     https://platform.openai.com/docs/api-reference/models/retrieve
+         *
+         *     Query parameters mirror `/v1/models` so the same caller context (team
+         *     scoping, health filtering, paused deployments) drives both endpoints; the
+         *     listing's public id must resolve to the same internal deployment here.
          */
         get: operations["model_info_v1_models__model_id__get"];
         put?: never;
@@ -22053,6 +22061,11 @@ export interface components {
              */
             alerting_threshold?: number | null;
             /**
+             * Allow Cli Sso Verification Uri Complete
+             * @description opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine
+             */
+            allow_cli_sso_verification_uri_complete?: boolean | null;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */
@@ -24993,6 +25006,8 @@ export interface components {
             aws_region_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Azure Ad Token */
+            azure_ad_token?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -25009,6 +25024,10 @@ export interface components {
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 200K Tokens Priority */
+            cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Priority */
+            cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -25057,6 +25076,10 @@ export interface components {
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
             input_cost_per_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Priority */
+            input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Priority */
+            input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -25130,6 +25153,10 @@ export interface components {
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
             output_cost_per_token_above_200k_tokens?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Priority */
+            output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Priority */
+            output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -31102,6 +31129,11 @@ export interface components {
             /** Auto Redirect To Sso */
             auto_redirect_to_sso: boolean;
             /**
+             * Hide Default Credentials Hint
+             * @default false
+             */
+            hide_default_credentials_hint: boolean;
+            /**
              * Is Control Plane
              * @default false
              */
@@ -32632,6 +32664,8 @@ export interface components {
             aws_region_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Azure Ad Token */
+            azure_ad_token?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -32648,6 +32682,10 @@ export interface components {
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 200K Tokens Priority */
+            cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Priority */
+            cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -32696,6 +32734,10 @@ export interface components {
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
             input_cost_per_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Priority */
+            input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Priority */
+            input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -32769,6 +32811,10 @@ export interface components {
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
             output_cost_per_token_above_200k_tokens?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Priority */
+            output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Priority */
+            output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -42918,7 +42964,10 @@ export interface operations {
     };
     model_info_models__model_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                team_id?: string | null;
+                healthy_only?: boolean | null;
+            };
             header?: never;
             path: {
                 model_id: string;
@@ -48137,6 +48186,7 @@ export interface operations {
                 key?: string | null;
                 existing_key?: string | null;
                 return_to?: string | null;
+                user_code?: string | null;
             };
             header?: never;
             path?: never;
@@ -53795,7 +53845,10 @@ export interface operations {
     };
     model_info_v1_models__model_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                team_id?: string | null;
+                healthy_only?: boolean | null;
+            };
             header?: never;
             path: {
                 model_id: string;

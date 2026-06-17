@@ -58,7 +58,7 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
 )
-async def create_batch(  # noqa: PLR0915
+async def create_batch(
     request: Request,
     fastapi_response: Response,
     provider: Optional[str] = None,
@@ -343,7 +343,7 @@ async def create_batch(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
 )
-async def retrieve_batch(  # noqa: PLR0915
+async def retrieve_batch(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
