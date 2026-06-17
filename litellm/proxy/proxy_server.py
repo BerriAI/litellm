@@ -12940,6 +12940,21 @@ async def model_info_v1(
     # use internal routing keys (model_name_{team_id}_{uuid}) and were omitted
     # when v1 resolved models only via public model_name strings.
     all_models: List[dict] = copy.deepcopy(llm_router.model_list)
+
+    # Aliases declared under router_settings.model_group_alias are not stored in
+    # llm_router.model_list, so listing model_list alone dropped them here even
+    # though /models exposes them (#5524). Expand non-hidden aliases so both
+    # endpoints agree. get_model_list_from_model_alias() already overrides
+    # model_name to the alias and skips hidden (dict-style `hidden: true`)
+    # entries; deep-copy so the downstream enrich/translate steps never mutate
+    # the shared router deployment records.
+    base_model_names = {model.get("model_name") for model in all_models}
+    all_models.extend(
+        copy.deepcopy(dict(alias_deployment))
+        for alias_deployment in llm_router.get_model_list_from_model_alias()
+        if alias_deployment.get("model_name") not in base_model_names
+    )
+
     allowed_model_names = _get_v1_model_info_allowed_model_names(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,

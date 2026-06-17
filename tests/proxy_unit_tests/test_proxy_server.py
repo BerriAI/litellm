@@ -2087,27 +2087,21 @@ async def test_gemini_pass_through_endpoint():
 
 @pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
-async def test_proxy_model_group_alias_checks(prisma_client, hidden):
+async def test_proxy_model_group_alias_checks(hidden):
     """
     Check if model group alias is returned on
 
     `/v1/models`
     `/v1/model/info`
     `/v1/model_group/info`
+
+    Runs without a DB connection: `prisma_client` is set to None so the
+    handlers exercise the in-memory router path only (see #30589).
     """
-    import json
-
-    from fastapi import HTTPException, Request, Response
-    from starlette.datastructures import URL
-
     from litellm.proxy.proxy_server import model_group_info, model_info_v1, model_list
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", None)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
-
-    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
     _model_list = [
         {
@@ -2122,9 +2116,6 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):
     )
     setattr(litellm.proxy.proxy_server, "llm_router", router)
     setattr(litellm.proxy.proxy_server, "llm_model_list", _model_list)
-
-    request = Request(scope={"type": "http", "method": "POST", "headers": {}})
-    request._url = URL(url="/v1/models")
 
     resp = await model_list(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
