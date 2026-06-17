@@ -37,6 +37,7 @@ def phoenix_preset(
                     kind=cfg.protocol if hasattr(cfg, "protocol") else "otlp_http",
                     endpoint=cfg.endpoint,
                     headers=headers,
+                    owner="arize_phoenix",
                 ),
             ],
             "mapper_names": ensure_mappers(base.mapper_names, "openinference"),

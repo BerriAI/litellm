@@ -18,6 +18,7 @@ def levo_preset(
                     kind="otlp_http",
                     endpoint=cfg.endpoint,
                     headers=cfg.otlp_auth_headers,
+                    owner="levo",
                 ),
             ],
         }

@@ -546,6 +546,27 @@ class OpenTelemetryV2(CustomLogger):
         return span
 
 
+def select_global_otel_v2_logger(
+    in_memory_loggers: "list[Any]",
+) -> "OpenTelemetryV2":
+    """The single ``OpenTelemetryV2`` whose provider should become the OTel global.
+
+    The callback factory registers every logger it builds in ``in_memory_loggers``,
+    including the one a preset (arize, langfuse, …) folds the ``OTEL_*`` base
+    exporter and its own exporter into. Reuse that logger so the FastAPI server
+    span and the gen-ai spans share one provider and one trace, exporting to every
+    configured backend. Only when no logger was configured is a generic one built
+    from ``OTEL_*``. Selecting from ``in_memory_loggers`` (not ``service_callback``,
+    which a preset logger does not always reach) is what stops a second generic
+    logger from owning the global provider and orphaning the gen-ai spans onto a
+    different backend than the server span.
+    """
+    existing = next(
+        (cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2)), None
+    )
+    return existing if existing is not None else OpenTelemetryV2()
+
+
 def _registered_v2_logger() -> "OpenTelemetryV2 | None":
     try:
         from litellm.proxy import proxy_server

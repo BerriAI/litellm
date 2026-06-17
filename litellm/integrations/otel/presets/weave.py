@@ -23,6 +23,7 @@ def weave_preset(
                     kind=weave_cfg.protocol or "otlp_http",
                     endpoint=weave_cfg.endpoint,
                     headers=weave_cfg.otlp_auth_headers,
+                    owner="weave_otel",
                 ),
             ],
             # Weave consumes OpenInference + a small Weave-specific overlay.

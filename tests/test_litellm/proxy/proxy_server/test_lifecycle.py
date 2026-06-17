@@ -504,3 +504,29 @@ async def test_proxy_startup_event_invalid_missing_app_arg_raises():
         # no arguments — the decorator preserves the missing-arg TypeError.
         async with proxy_startup_event():  # type: ignore[call-arg]
             pass
+
+
+def test_otel_global_provider_published_after_callback_init():
+    """The OTel V2 global-provider publish must run after callback
+    initialization in ``proxy_startup_event``.
+
+    Regression for the orphan span: a preset (arize, langfuse, …) builds its
+    single folded logger during ``_initialize_startup_logging``. Publishing the
+    global ``TracerProvider`` before that ran found no logger and built a second
+    generic one whose provider became the global, so the FastAPI server span and
+    the preset's gen-ai spans exported through different providers and the LLM
+    span was orphaned. The publish (``select_global_otel_v2_logger`` +
+    ``set_tracer_provider``) must therefore appear after
+    ``_initialize_startup_logging`` in the lifespan source.
+    """
+    wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
+    source = inspect.getsource(wrapped)
+    init_pos = source.find("_initialize_startup_logging(")
+    publish_pos = source.find("select_global_otel_v2_logger(")
+    assert init_pos != -1, "callback init call not found in proxy_startup_event"
+    assert publish_pos != -1, "OTEL global publish not found in proxy_startup_event"
+    assert init_pos < publish_pos, (
+        "OTEL global provider is published before callbacks are initialized; a "
+        "preset logger will not exist yet and a second generic logger will own "
+        "the global provider, orphaning gen-ai spans"
+    )

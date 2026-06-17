@@ -34,6 +34,7 @@ def arize_preset(
                     kind=arize_cfg.protocol or "otlp_grpc",
                     endpoint=arize_cfg.endpoint or "https://otlp.arize.com/v1",
                     headers=headers,
+                    owner="arize",
                 ),
             ],
             "mapper_names": ensure_mappers(base.mapper_names, "openinference"),

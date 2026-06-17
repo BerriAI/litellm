@@ -49,6 +49,15 @@ class ExporterSpec(BaseModel):
     )
     endpoint: str | None = None
     headers: str | None = None
+    owner: str | None = Field(
+        default=None,
+        description=(
+            "Callback name of the preset that contributed this exporter (e.g. "
+            "'arize'). Per-request dynamic OTLP credentials are applied only to "
+            "the exporter whose owner matches the credential source, so one "
+            "tenant's vendor key never lands on a different backend's exporter."
+        ),
+    )
     options: dict[str, str] | None = Field(
         default=None,
         description=(

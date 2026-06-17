@@ -1058,6 +1058,40 @@ def test_proxy_global_first_registered_wins(monkeypatch):
     assert second is not first
 
 
+def test_select_global_otel_v2_logger_reuses_existing_preset_logger():
+    """The global-provider selection must reuse the logger the callback factory
+    already built (e.g. an arize preset logger that folds the OTEL_* base exporter
+    and its own exporter into one logger), not mint a second generic one.
+
+    Regression for the orphan span: the startup publish used to search
+    ``service_callback`` (which a preset logger does not always reach), miss the
+    existing logger, and build a second generic ``OpenTelemetryV2`` whose provider
+    became the OTel global. The server span then exported through that generic
+    provider while the preset logger's gen-ai spans exported to the preset backend,
+    so on that backend the LLM span had no parent. Selecting from the loggers the
+    factory registered keeps one logger, one provider, one connected trace.
+    """
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+    preset_logger = OpenTelemetryV2(
+        config=cfg, callback_name="arize", tracer_provider=tp
+    )
+
+    chosen = select_global_otel_v2_logger([object(), preset_logger, object()])
+    assert chosen is preset_logger
+
+
+def test_select_global_otel_v2_logger_builds_one_when_none_registered():
+    """With no logger registered, selection builds exactly one generic logger so
+    the proxy still publishes a provider; it must not return ``None``."""
+    from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+    chosen = select_global_otel_v2_logger([])
+    assert isinstance(chosen, OpenTelemetryV2)
+
+
 def test_registers_into_litellm_service_callback(monkeypatch):
     """The logger must mutate ``litellm.service_callback`` in place. An empty
     list is falsy, so a ``getattr(..) or []`` would append to a throwaway local

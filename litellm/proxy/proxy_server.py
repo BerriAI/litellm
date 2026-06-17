@@ -837,37 +837,6 @@ async def proxy_startup_event(app: FastAPI):
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
 
-    ## V2 OTEL: now that config (and therefore the callbacks) is loaded, publish
-    ## the chosen V2 logger's TracerProvider as the OTel global. The FastAPI
-    ## instrumentation mounted at app-creation binds to the global provider, so
-    ## this is what makes server spans and gen-ai spans share one provider and
-    ## land in the same trace. Prefer an already-registered preset logger
-    ## (arize, langfuse, …) so server spans export to that backend too; otherwise
-    ## build a generic one from OTEL_* envs. ``set_tracer_provider`` only takes
-    ## effect once, so the first configured logger wins.
-    try:
-        from litellm.integrations.otel.model.config import is_otel_v2_enabled
-
-        if is_otel_v2_enabled():
-            from opentelemetry import trace as _otel_trace
-
-            from litellm.integrations.otel.logger import OpenTelemetryV2
-
-            _otel_v2_logger = (
-                next(
-                    (
-                        cb
-                        for cb in litellm.service_callback
-                        if isinstance(cb, OpenTelemetryV2)
-                    ),
-                    None,
-                )
-                or OpenTelemetryV2()
-            )
-            _otel_trace.set_tracer_provider(_otel_v2_logger._tracer_provider)
-    except Exception as e:
-        verbose_proxy_logger.debug("Skipping OTel V2 provider setup: %s", e)
-
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
@@ -893,6 +862,33 @@ async def proxy_startup_event(app: FastAPI):
         proxy_logging_obj=proxy_logging_obj,
         redis_usage_cache=redis_usage_cache,
     )
+
+    ## V2 OTEL: publish the chosen V2 logger's TracerProvider as the OTel global.
+    ## This MUST run after callback initialization above: a preset (arize, langfuse,
+    ## …) builds its logger there, folding the OTEL_* base exporter and its own
+    ## exporter into one logger. The FastAPI instrumentation mounted at app-creation
+    ## binds to the global provider, so reusing that one logger is what makes the
+    ## server span and the gen-ai spans share one provider and land in the same
+    ## trace, exporting to every configured backend. Running before callback init
+    ## (when no logger exists yet) would build a second, generic logger whose
+    ## provider became the global, orphaning the gen-ai spans onto a different
+    ## backend than the server span. A generic logger is built only when none was
+    ## configured.
+    try:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        if is_otel_v2_enabled():
+            from opentelemetry import trace as _otel_trace
+
+            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
+            from litellm.integrations.otel.logger import (
+                select_global_otel_v2_logger,
+            )
+
+            _otel_v2_logger = select_global_otel_v2_logger(_in_memory_loggers)
+            _otel_trace.set_tracer_provider(_otel_v2_logger._tracer_provider)
+    except Exception as e:
+        verbose_proxy_logger.debug("Skipping OTel V2 provider setup: %s", e)
 
     ## Validate use_redis_transaction_buffer requires Redis cache ##
     ProxyStartupEvent._validate_redis_transaction_buffer_config(

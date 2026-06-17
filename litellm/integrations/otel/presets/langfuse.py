@@ -23,6 +23,7 @@ def langfuse_preset(
                     kind=kind,
                     endpoint=cfg.endpoint,
                     headers=cfg.headers,
+                    owner="langfuse_otel",
                 ),
             ],
             "mapper_names": ensure_mappers(base.mapper_names, "langfuse"),

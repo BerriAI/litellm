@@ -59,6 +59,7 @@ def agentops_preset(
                     options=(
                         {"api_key": settings.api_key} if settings.api_key else None
                     ),
+                    owner="agentops",
                 ),
             ],
             "resource_attributes": {
