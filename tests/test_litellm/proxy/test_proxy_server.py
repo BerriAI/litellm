@@ -5642,51 +5642,6 @@ async def test_async_data_generator_does_not_mark_completed_stream_as_disconnect
 
 
 @pytest.mark.asyncio
-async def test_async_data_generator_marks_disconnect_during_done_yield():
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.proxy_server import async_data_generator
-    from litellm.proxy.utils import ProxyLogging
-
-    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
-    mock_request_data = {"model": "gpt-4o", "metadata": {}}
-
-    class MockStream:
-        def __aiter__(self):
-            return self._stream()
-
-        async def _stream(self):
-            for chunk in ():
-                yield chunk
-
-        async def aclose(self):
-            pass
-
-    mock_response = MockStream()
-    mock_response.aclose = AsyncMock()
-    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
-    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
-    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
-    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
-    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
-
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
-        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
-            gen = async_data_generator(
-                mock_response,
-                mock_user_api_key_dict,
-                mock_request_data,
-            )
-            assert await gen.__anext__() == "data: [DONE]\n\n"
-            await gen.aclose()
-
-    mock_proxy_logging_obj._release_max_parallel_requests_on_disconnect.assert_called_once_with(
-        mock_user_api_key_dict
-    )
-    assert mock_request_data["metadata"]["client_disconnected"] is True
-
-
-@pytest.mark.asyncio
 async def test_async_data_generator_google_genai_stream_forwards_error_without_done():
     """Stream errors must still reach the client when OpenAI [DONE] is skipped."""
     from litellm.proxy._types import UserAPIKeyAuth

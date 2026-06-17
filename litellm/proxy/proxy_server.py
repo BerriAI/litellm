@@ -7155,6 +7155,7 @@ async def async_data_generator(
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 
+        stream_completed = True
         if not needs_iterator_wrap:
             # The iterator-wrap path fires deferred logging itself; fire it
             # here for the no-wrap fast path so non-callback deployments
@@ -7174,7 +7175,6 @@ async def async_data_generator(
         if not request_data.get("_litellm_skip_openai_stream_done"):
             done_message = "[DONE]"
             yield f"data: {done_message}\n\n"
-        stream_completed = True
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
         # BaseException, so they bypass the success/failure logging callbacks
