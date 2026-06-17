@@ -1,30 +1,103 @@
 import json
-from typing import TYPE_CHECKING, Any, Optional, Union
+import os
+import sqlite3
+import time
+from contextlib import closing
+from typing import Callable, Optional, Tuple, Union
 
 from .base_cache import BaseCache
 
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
-else:
-    Span = Any
+def _encode(value: object) -> Tuple[Union[str, bytes], str]:
+    if isinstance(value, bytes):
+        return value, "b"
+    if isinstance(value, str):
+        return value, "s"
+    return json.dumps(value), "j"
+
+
+def _decode(stored: Union[str, bytes], mode: str) -> object:
+    if mode == "j":
+        decoded: object = json.loads(stored)
+        return decoded
+    return stored
+
+
+class _SqliteCache:
+    """Persistent key-value store backing DiskCache, on stdlib sqlite3.
+
+    Values are stored as JSON text (or raw text/bytes), never pickled, so the
+    read path cannot deserialize executable payloads. Exposes the small surface
+    DiskCache relies on: set/get/pop/clear with relative-seconds expiry.
+    """
+
+    def __init__(
+        self, directory: str, time_fn: Callable[[], float] = time.time
+    ) -> None:
+        self._time = time_fn
+        os.makedirs(directory, exist_ok=True)
+        self._path = os.path.join(directory, "cache.db")
+        with closing(self._connect()) as con, con:
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute(
+                "CREATE TABLE IF NOT EXISTS cache "
+                "(key TEXT PRIMARY KEY, value, mode TEXT NOT NULL, expire_time REAL)"
+            )
+
+    def _connect(self) -> sqlite3.Connection:
+        con = sqlite3.connect(self._path, timeout=60.0)
+        con.execute("PRAGMA busy_timeout=60000")
+        return con
+
+    def _live_value(
+        self, row: Optional[Tuple[Union[str, bytes], str, Optional[float]]]
+    ) -> object:
+        if row is None:
+            return None
+        stored, mode, expire_time = row
+        if expire_time is not None and expire_time <= self._time():
+            return None
+        return _decode(stored, mode)
+
+    def set(self, key: str, value: object, expire: Optional[float] = None) -> None:
+        encoded, mode = _encode(value)
+        expire_time = None if expire is None else self._time() + expire
+        with closing(self._connect()) as con, con:
+            con.execute(
+                "INSERT OR REPLACE INTO cache(key, value, mode, expire_time) "
+                "VALUES (?, ?, ?, ?)",
+                (key, encoded, mode, expire_time),
+            )
+
+    def get(self, key: str) -> object:
+        with closing(self._connect()) as con:
+            row = con.execute(
+                "SELECT value, mode, expire_time FROM cache WHERE key = ?", (key,)
+            ).fetchone()
+        return self._live_value(row)
+
+    def pop(self, key: str) -> object:
+        with closing(self._connect()) as con, con:
+            row = con.execute(
+                "SELECT value, mode, expire_time FROM cache WHERE key = ?", (key,)
+            ).fetchone()
+            con.execute("DELETE FROM cache WHERE key = ?", (key,))
+        return self._live_value(row)
+
+    def clear(self) -> None:
+        with closing(self._connect()) as con, con:
+            con.execute("DELETE FROM cache")
 
 
 class DiskCache(BaseCache):
-    def __init__(self, disk_cache_dir: Optional[str] = None):
-        try:
-            import diskcache as dc
-        except ModuleNotFoundError as e:
-            raise ModuleNotFoundError(
-                "Please install litellm with `litellm[caching]` to use disk caching."
-            ) from e
-
-        # if users don't provider one, use the default litellm cache
-        if disk_cache_dir is None:
-            self.disk_cache = dc.Cache(".litellm_cache")
-        else:
-            self.disk_cache = dc.Cache(disk_cache_dir)
+    def __init__(
+        self,
+        disk_cache_dir: Optional[str] = None,
+        time_fn: Callable[[], float] = time.time,
+    ) -> None:
+        self.disk_cache = _SqliteCache(
+            disk_cache_dir or ".litellm_cache", time_fn=time_fn
+        )
 
     def set_cache(self, key, value, **kwargs):
         if "ttl" in kwargs:
