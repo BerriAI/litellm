@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import sysconfig
+from typing import Callable, Dict, List, Optional
 
 import click
 
@@ -17,15 +18,27 @@ from litellm.proxy.db.prisma_client import PrismaManager
 # handled at call time so `litellm` works without the proxy extras installed.
 try:
     from litellm_proxy_extras.utils import (
-        _get_prisma_command,
-        _get_prisma_env,
+        _get_prisma_command as _imported_prisma_command,
+        _get_prisma_env as _imported_prisma_env,
     )
 
     _PROXY_EXTRAS_AVAILABLE = True
 except ImportError:
+    _imported_prisma_command = None
+    _imported_prisma_env = None
     _PROXY_EXTRAS_AVAILABLE = False
-    _get_prisma_command = None  # type: ignore[assignment]
-    _get_prisma_env = None  # type: ignore[assignment]
+
+# Bind to explicitly typed module-level names. litellm-proxy-extras ships no
+# py.typed marker, so its exports are untyped (Any) at this import boundary;
+# the annotations pin the signatures back down. These are the names the tests
+# patch. The `any-ok` markers acknowledge the unavoidable untyped third-party
+# boundary (the annotation is the concrete type the rest of the file relies on).
+_get_prisma_command: Optional[Callable[[], str]] = (
+    _imported_prisma_command  # any-ok: untyped optional import from litellm-proxy-extras
+)
+_get_prisma_env: Optional[Callable[[], Dict[str, str]]] = (
+    _imported_prisma_env  # any-ok: untyped optional import from litellm-proxy-extras
+)
 
 
 def _get_venv_scripts_dir() -> str:
@@ -47,14 +60,14 @@ def _get_venv_scripts_dir() -> str:
     return scripts_dir
 
 
-def _get_generate_env() -> dict:
+def _get_generate_env() -> Dict[str, str]:
     """Build the subprocess env for ``db generate``.
 
     Delegates to the shared ``_get_prisma_env()`` which now injects the venv
     scripts dir for all Prisma subprocesses (generate, db push, migrate deploy).
     Kept as a named wrapper for backward-compat with existing tests.
     """
-    if _get_prisma_env:
+    if _get_prisma_env is not None:
         result = _get_prisma_env()
         if result is not None:
             return result
@@ -96,10 +109,24 @@ def db_generate() -> None:
         )
         raise SystemExit(1)
 
+    if _get_prisma_command is None:
+        click.echo(
+            "Error: litellm-proxy-extras is not installed. "
+            "Run: pip install 'litellm[proxy]'",
+            err=True,
+        )
+        raise SystemExit(1)
+
     click.echo(f"Generating Prisma client from {schema_path} ...")
+    command: List[str] = [
+        _get_prisma_command(),
+        "generate",
+        "--schema",
+        schema_path,
+    ]
     try:
         subprocess.run(
-            [_get_prisma_command(), "generate", "--schema", schema_path],
+            command,
             check=True,
             env=_get_generate_env(),
         )
