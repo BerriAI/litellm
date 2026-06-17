@@ -39,7 +39,7 @@ spec:
     bearerTokenSecret:
       name: {{ if $.Values.masterkeySecretName }}{{ $.Values.masterkeySecretName }}{{ else }}{{ include "litellm.fullname" $ }}-masterkey{{ end }}
       key: {{ if $.Values.masterkeySecretKey }}{{ $.Values.masterkeySecretKey }}{{ else }}masterkey{{ end }}
-    {{- end }}``
+    {{- end }}
   {{- if .relabelings }}
     relabelings:
 {{- toYaml .relabelings | nindent 4 }}
