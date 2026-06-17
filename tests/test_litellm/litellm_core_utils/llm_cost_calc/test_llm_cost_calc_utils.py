@@ -1573,3 +1573,72 @@ def test_data_residency_composes_with_service_tier(_local_model_cost_map):
 
     assert priority_base_total > 0
     assert priority_eu_total == pytest.approx(priority_base_total * 1.10, rel=1e-9)
+
+
+def test_priority_service_tier_above_threshold_uses_priority_tier_rates_for_cached_tokens(
+    _local_model_cost_map,
+):
+    """Regression: for a model that publishes both service_tier and above_threshold rate
+    variants, a priority request over the threshold must bill cached tokens at
+    cache_read_input_token_cost_above_200k_tokens_priority (and analogously for
+    input/output above-threshold), not the standard above-threshold rate."""
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=200_000, text_tokens=50_000
+        ),
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=1_000),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gemini-3-pro-preview",
+        usage=usage,
+        custom_llm_provider="gemini",
+        service_tier="priority",
+    )
+
+    # gemini-3-pro-preview priority + above_200k rates from the pricing JSON:
+    #   input  7.2e-6, output 3.24e-5, cache_read 7.2e-7
+    expected_prompt = 50_000 * 7.2e-6 + 200_000 * 7.2e-7
+    expected_completion = 1_000 * 3.24e-5
+    assert prompt_cost == pytest.approx(expected_prompt, rel=1e-9)
+    assert completion_cost == pytest.approx(expected_completion, rel=1e-9)
+
+
+def test_priority_service_tier_above_threshold_falls_back_to_standard_for_cache_creation(
+    _local_model_cost_map,
+):
+    """Regression: priority requests against models that publish standard above-threshold
+    cache_creation rates but no priority variant must fall back to the standard
+    above-threshold rate, not the priority-base rate. vertex_ai/claude-sonnet-4-5
+    has cache_creation_input_token_cost_above_200k_tokens but no _priority sibling."""
+    usage = Usage(
+        prompt_tokens=350_000,
+        completion_tokens=1_000,
+        total_tokens=351_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=200_000,
+            cache_creation_tokens=100_000,
+            text_tokens=50_000,
+        ),
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=1_000),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="vertex_ai/claude-sonnet-4-5",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        service_tier="priority",
+    )
+
+    # vertex_ai/claude-sonnet-4-5 above_200k (no _priority variants):
+    #   input 6e-6, output 2.25e-5, cache_read 6e-7, cache_creation 7.5e-6
+    # text                  50_000  * 6e-6   = 0.30
+    # cache_read           200_000  * 6e-7   = 0.12
+    # cache_creation       100_000  * 7.5e-6 = 0.75
+    expected_prompt = 50_000 * 6e-6 + 200_000 * 6e-7 + 100_000 * 7.5e-6
+    expected_completion = 1_000 * 2.25e-5
+    assert prompt_cost == pytest.approx(expected_prompt, rel=1e-9)
+    assert completion_cost == pytest.approx(expected_completion, rel=1e-9)
