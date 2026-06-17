@@ -1128,6 +1128,7 @@ async def new_team(
             "tpm_limit",
             "rpm_limit",
             "team_member_permissions",
+            "models",
         ):
             if getattr(data, field, None) is None:
                 default_value = _get_default_team_param(field)

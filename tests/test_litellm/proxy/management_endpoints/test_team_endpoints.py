@@ -9313,3 +9313,106 @@ async def test_clear_team_member_budget_fields_no_budget_row_skips_update():
     mock_update_budget.assert_not_awaited()
     assert "team_member_budget" not in result
     assert "team_member_rpm_limit" not in result
+
+
+@pytest.mark.asyncio
+async def test_new_team_applies_default_team_params_models(monkeypatch):
+    """
+    Test that new_team() applies default_team_params.models to a newly created
+    team when the request does not specify models. See #30478.
+
+    Regression test for the bug where the hardcoded list of fields in
+    `new_team()` did not include "models", so default_team_params.models
+    was silently ignored for non-SSO team provisioning paths.
+    """
+    import litellm
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Configure a default models allowlist that should be applied to new teams.
+    default_models = ["gpt-4", "gpt-3.5-turbo"]
+    monkeypatch.setattr(
+        litellm, "default_team_params", {"models": default_models}
+    )
+
+    # Create a team request that does NOT specify models.
+    team_request = NewTeamRequest(team_alias="default-models-team")
+
+    # Sanity: request.models starts as None.
+    assert team_request.models is None
+
+    admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="proxy-admin-1",
+    )
+    dummy_request = MagicMock(spec=Request)
+
+    captured: dict = {}
+
+    async def fake_create(*args, **kwargs):
+        # Capture the data argument that new_team passes to prisma.
+        if args:
+            captured["data"] = args[0]
+        elif "data" in kwargs:
+            captured["data"] = kwargs["data"]
+        # Return a minimal stand-in for the created team record.
+        m = MagicMock()
+        m.team_id = "team-default-models-1"
+        m.team_alias = "default-models-team"
+        m.members_with_roles = []
+        m.metadata = None
+        m.default_team_member_models = None
+        m.model_dump.return_value = {
+            "team_id": "team-default-models-1",
+            "team_alias": "default-models-team",
+            "members_with_roles": [],
+        }
+        return m
+
+    fake_update = AsyncMock(side_effect=fake_create)
+    fake_model_create = AsyncMock(return_value=MagicMock(id="model-uuid"))
+    fake_membership_create = AsyncMock(
+        return_value=MagicMock(
+            model_dump=MagicMock(
+                return_value={
+                    "team_id": "team-default-models-1",
+                    "user_id": "proxy-admin-1",
+                    "budget_id": None,
+                }
+            )
+        )
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server._license_check") as mock_license,
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.proxy_server.create_audit_log_for_update",
+            new=AsyncMock(),
+        ),
+    ):
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.get_data = AsyncMock(return_value=None)
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+        mock_prisma.db.litellm_teamtable.create = fake_update
+        mock_prisma.db.litellm_teamtable.update = fake_update
+        mock_prisma.db.litellm_modeltable = MagicMock()
+        mock_prisma.db.litellm_modeltable.create = fake_model_create
+        mock_prisma.db.litellm_teammembership = MagicMock()
+        mock_prisma.db.litellm_teammembership.create = fake_membership_create
+
+        await new_team(
+            data=team_request,
+            http_request=dummy_request,
+            user_api_key_dict=admin_user,
+        )
+
+    # The request object's models field should now be set to the configured
+    # default. (new_team mutates `data` in place via setattr before persisting.)
+    assert team_request.models == default_models, (
+        f"Expected default_team_params.models to be applied; got {team_request.models!r}"
+    )
