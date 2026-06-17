@@ -149,3 +149,21 @@ async def test_async_iterator_preserves_multi_field_and_comment_events():
     frames = [frame async for frame in iterator]
 
     assert frames == [multi_field, comment]
+
+
+@pytest.mark.asyncio
+async def test_async_iterator_flushes_trailing_event_without_delimiter():
+    """A final event missing its trailing delimiter must still be emitted."""
+    tail = b'data: {"text":"last"}'
+    iterator = _build_iterator(_chunk_bytes(tail, 5), is_async=True)
+
+    frames = [frame async for frame in iterator]
+
+    assert frames == [tail]
+
+
+def test_sync_iterator_flushes_trailing_event_without_delimiter():
+    tail = b'data: {"text":"last"}'
+    iterator = _build_iterator(_chunk_bytes(tail, 5), is_async=False)
+
+    assert list(iterator) == [tail]
