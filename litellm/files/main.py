@@ -10,7 +10,8 @@ import contextvars
 import time
 import uuid as uuid_module
 from functools import partial
-from typing import Any,Coroutine, Dict, Literal, Optional, Union, cast
+from types import MappingProxyType
+from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 
 import httpx
 
@@ -53,7 +54,10 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
 )
 from litellm.types.router import *
-from litellm.types.utils import OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders
+from litellm.types.utils import (
+    OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
+    LlmProviders,
+)
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -73,11 +77,23 @@ def _should_sdk_support_streaming(
     Return whether file content streaming is supported for the provider.
     """
     return custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
+
+
 openai_files_instance = OpenAIFilesAPI()
 azure_files_instance = AzureOpenAIFilesAPI()
 vertex_ai_files_instance = VertexAIFilesHandler()
 bedrock_files_instance = BedrockFilesHandler()
 #################################################
+
+
+def _add_trusted_model_credentials_to_litellm_params(
+    litellm_params_dict: Dict[str, Any], kwargs: Dict[str, Any]
+) -> None:
+    trusted_model_credentials = kwargs.get("_litellm_internal_model_credentials")
+    if isinstance(trusted_model_credentials, type(MappingProxyType({}))):
+        litellm_params_dict["_litellm_internal_model_credentials"] = (
+            trusted_model_credentials
+        )
 
 
 @client
@@ -368,6 +384,10 @@ def file_retrieve(
             )
             if provider_config is not None:
                 litellm_params_dict = get_litellm_params(**kwargs)
+                _add_trusted_model_credentials_to_litellm_params(
+                    litellm_params_dict=litellm_params_dict,
+                    kwargs=kwargs,
+                )
                 litellm_params_dict["api_key"] = optional_params.api_key
                 litellm_params_dict["api_base"] = optional_params.api_base
 
@@ -492,6 +512,10 @@ def file_delete(
             pass
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_params_dict = get_litellm_params(**kwargs)
+        _add_trusted_model_credentials_to_litellm_params(
+            litellm_params_dict=litellm_params_dict,
+            kwargs=kwargs,
+        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
@@ -841,6 +865,10 @@ def file_content(
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_params_dict = get_litellm_params(**kwargs)
+        _add_trusted_model_credentials_to_litellm_params(
+            litellm_params_dict=litellm_params_dict,
+            kwargs=kwargs,
+        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         client = kwargs.get("client")
@@ -988,6 +1016,7 @@ def file_content(
                 vertex_location=vertex_ai_location,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "bedrock":
             response = bedrock_files_instance.file_content(
@@ -1094,6 +1123,7 @@ def file_content_streaming(
         )
 
     if asyncio.iscoroutine(response):
+
         async def _await_and_wrap() -> FileContentStreamingResult:
             return _wrap_streaming_result(await response)
 

@@ -179,7 +179,9 @@ class TestPerplexityEmbeddingConfig:
     def test_transform_embedding_response_base64_int8(self):
         """Test decoding base64_int8 embeddings to float arrays (Perplexity default)."""
         int8_values = [127, -128, 0, 64, -64]
-        b64_encoded = base64.b64encode(struct.pack(f"{len(int8_values)}b", *int8_values)).decode()
+        b64_encoded = base64.b64encode(
+            struct.pack(f"{len(int8_values)}b", *int8_values)
+        ).decode()
 
         mock_response_data = {
             "object": "list",

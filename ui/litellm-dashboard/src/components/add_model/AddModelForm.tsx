@@ -370,7 +370,9 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                 <Button data-testid="test-connect-btn" onClick={handleTestConnection} loading={isTestingConnection}>
                   Test Connect
                 </Button>
-                <Button data-testid="add-model-btn" htmlType="submit">Add Model</Button>
+                <Button data-testid="add-model-btn" htmlType="submit">
+                  Add Model
+                </Button>
               </div>
             </div>
           </>

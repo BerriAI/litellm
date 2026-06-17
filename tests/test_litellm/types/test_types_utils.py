@@ -1,13 +1,9 @@
-import asyncio
 import os
 import sys
-from typing import Optional
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
-import json
 
 from litellm.types.utils import HiddenParams
 
@@ -75,56 +71,98 @@ def test_usage_dump():
     assert new_usage.prompt_tokens_details.web_search_requests == 1
 
 
+def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
+    from litellm.types.utils import ServerToolUse, Usage
+
+    current_usage = Usage(
+        completion_tokens=1,
+        prompt_tokens=1,
+        total_tokens=2,
+        server_tool_use={"web_search_requests": 1},
+    )
+
+    assert isinstance(current_usage.server_tool_use, ServerToolUse)
+    assert current_usage.server_tool_use.web_search_requests == 1
+
+    new_usage = Usage(**current_usage.model_dump())
+    assert isinstance(new_usage.server_tool_use, ServerToolUse)
+    assert new_usage.server_tool_use.web_search_requests == 1
+
+
+def test_usage_converts_server_tool_use_dict():
+    from litellm.types.utils import ServerToolUse, Usage
+
+    usage = Usage(
+        completion_tokens=2,
+        prompt_tokens=1,
+        total_tokens=3,
+        server_tool_use={"web_search_requests": 4, "tool_search_requests": 1},
+    )
+
+    assert isinstance(usage.server_tool_use, ServerToolUse)
+    assert usage.server_tool_use.web_search_requests == 4
+    assert usage.server_tool_use["web_search_requests"] == 4
+    assert usage.server_tool_use.tool_search_requests == 1
+    with pytest.raises(KeyError):
+        usage.server_tool_use["unknown_metric"]
+
+    round_trip = Usage(**usage.model_dump())
+    assert isinstance(round_trip.server_tool_use, ServerToolUse)
+    assert round_trip.server_tool_use.web_search_requests == 4
+    assert round_trip.server_tool_use["web_search_requests"] == 4
+    assert round_trip.server_tool_use.tool_search_requests == 1
+
+
 def test_usage_completion_tokens_details_text_tokens():
     from litellm.types.utils import Usage
 
     # Test data from the reported issue
     usage_data = {
-        'completion_tokens': 77,
-        'prompt_tokens': 11937,
-        'total_tokens': 12014,
-        'completion_tokens_details': {
-            'accepted_prediction_tokens': None,
-            'audio_tokens': None,
-            'reasoning_tokens': 65,
-            'rejected_prediction_tokens': None,
-            'text_tokens': 12
+        "completion_tokens": 77,
+        "prompt_tokens": 11937,
+        "total_tokens": 12014,
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": None,
+            "audio_tokens": None,
+            "reasoning_tokens": 65,
+            "rejected_prediction_tokens": None,
+            "text_tokens": 12,
         },
-        'prompt_tokens_details': {
-            'audio_tokens': None,
-            'cached_tokens': None,
-            'text_tokens': 11937,
-            'image_tokens': None
-        }
+        "prompt_tokens_details": {
+            "audio_tokens": None,
+            "cached_tokens": None,
+            "text_tokens": 11937,
+            "image_tokens": None,
+        },
     }
 
     # Create Usage object
     u = Usage(**usage_data)
-    
+
     # Verify the object has the text_tokens field
-    assert hasattr(u.completion_tokens_details, 'text_tokens')
+    assert hasattr(u.completion_tokens_details, "text_tokens")
     assert u.completion_tokens_details.text_tokens == 12
-    
+
     # Get model_dump output
     dump_result = u.model_dump()
-    
+
     # Verify text_tokens is present in the model_dump output
-    assert 'completion_tokens_details' in dump_result
-    assert 'text_tokens' in dump_result['completion_tokens_details']
-    assert dump_result['completion_tokens_details']['text_tokens'] == 12
-    
+    assert "completion_tokens_details" in dump_result
+    assert "text_tokens" in dump_result["completion_tokens_details"]
+    assert dump_result["completion_tokens_details"]["text_tokens"] == 12
+
     # Verify the full completion_tokens_details structure
     expected_completion_details = {
-        'accepted_prediction_tokens': None,
-        'audio_tokens': None,
-        'reasoning_tokens': 65,
-        'rejected_prediction_tokens': None,
-        'text_tokens': 12,
-        'image_tokens': None,
-        'video_tokens': None
+        "accepted_prediction_tokens": None,
+        "audio_tokens": None,
+        "reasoning_tokens": 65,
+        "rejected_prediction_tokens": None,
+        "text_tokens": 12,
+        "image_tokens": None,
+        "video_tokens": None,
     }
-    assert dump_result['completion_tokens_details'] == expected_completion_details
-    
+    assert dump_result["completion_tokens_details"] == expected_completion_details
+
     # Verify round-trip serialization works
     new_usage = Usage(**dump_result)
     assert new_usage.completion_tokens_details.text_tokens == 12
@@ -257,7 +295,9 @@ class TestNativeFinishReason:
         )
         assert choice.finish_reason == "length"
         assert choice.provider_specific_fields["native_finish_reason"] == "max_tokens"
-        assert choice.provider_specific_fields["citations"] == [{"url": "http://example.com"}]
+        assert choice.provider_specific_fields["citations"] == [
+            {"url": "http://example.com"}
+        ]
 
     def test_gemini_safety_reason_exposed(self):
         from litellm.types.utils import Choices
@@ -279,6 +319,8 @@ class TestNativeFinishReason:
         choice = Choices(finish_reason="MAX_TOKENS")
         assert choice.finish_reason == "length"
         assert choice.provider_specific_fields["native_finish_reason"] == "MAX_TOKENS"
+
+
 def test_delta_maps_reasoning_to_reasoning_content():
     """
     Test that Delta maps 'reasoning' field to 'reasoning_content'.
@@ -291,7 +333,9 @@ def test_delta_maps_reasoning_to_reasoning_content():
     # When provider sends 'reasoning' (e.g., Cerebras gpt-oss streaming)
     delta = Delta(content=None, role="assistant", reasoning="thinking step by step")
     assert delta.reasoning_content == "thinking step by step"
-    assert not hasattr(delta, "reasoning"), "reasoning should not leak as an extra attribute"
+    assert not hasattr(
+        delta, "reasoning"
+    ), "reasoning should not leak as an extra attribute"
 
     # When provider sends 'reasoning_content' directly (e.g., NIM), it still works
     delta2 = Delta(content="hello", reasoning_content="direct reasoning")

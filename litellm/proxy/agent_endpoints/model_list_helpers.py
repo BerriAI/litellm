@@ -3,6 +3,7 @@ Helper functions for appending A2A agents to model lists.
 
 Used by proxy model endpoints to make agents appear in UI alongside models.
 """
+
 from typing import List
 
 from litellm._logging import verbose_proxy_logger

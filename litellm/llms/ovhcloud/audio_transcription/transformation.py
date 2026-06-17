@@ -156,5 +156,17 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         text = response_json.get("text") or response_json.get("transcript") or ""
         response = TranscriptionResponse(text=text)
 
+        # OVHCloud field migration (deadline: 2026-05-11):
+        # `duration` is replaced by `seconds` in STT responses.
+        # Prefer `seconds`, fall back to `duration`, normalize to `duration`
+        # so downstream consumers see a consistent key.
+        duration = (
+            response_json["seconds"]
+            if "seconds" in response_json and response_json["seconds"] is not None
+            else response_json.get("duration")
+        )
+        if duration is not None:
+            response_json["duration"] = duration
+
         response._hidden_params = response_json
         return response

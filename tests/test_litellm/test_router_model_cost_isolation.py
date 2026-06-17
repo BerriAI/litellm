@@ -7,8 +7,10 @@ and one has explicit zero-cost pricing in model_info, the other deployment
 should still use the built-in pricing.
 """
 
+import copy
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -18,6 +20,17 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.utils import _invalidate_model_cost_lowercase_map
+
+
+def _restore_model_cost_entries(original_entries):
+    for key, value in original_entries.items():
+        if value is None:
+            litellm.model_cost.pop(key, None)
+        else:
+            litellm.model_cost[key] = value
+    _invalidate_model_cost_lowercase_map()
 
 
 def test_should_not_pollute_shared_key_with_zero_cost_pricing():
@@ -34,8 +47,12 @@ def test_should_not_pollute_shared_key_with_zero_cost_pricing():
     builtin_output_cost = builtin_info["output_cost_per_token"]
 
     # Sanity: built-in pricing should be non-zero for this model
-    assert builtin_input_cost > 0, "Test requires a model with non-zero built-in pricing"
-    assert builtin_output_cost > 0, "Test requires a model with non-zero built-in pricing"
+    assert (
+        builtin_input_cost > 0
+    ), "Test requires a model with non-zero built-in pricing"
+    assert (
+        builtin_output_cost > 0
+    ), "Test requires a model with non-zero built-in pricing"
 
     router = Router(
         model_list=[
@@ -262,3 +279,261 @@ def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
         f"Order should not matter. Expected {builtin_output_cost}, "
         f"got {info_std_2['output_cost_per_token']}"
     )
+
+
+def test_responses_prefix_stripped_alias_registered_for_model_list():
+    """
+    Register ``litellm.model_cost`` under the backend key with ``responses/`` and
+    under the stripped key (``responses_api_bridge_check`` removes that segment).
+    """
+    uid = "responses-strip-alias-test-a1b2c3d4"
+    Router(
+        model_list=[
+            {
+                "model_name": "azure-responses-strip-test",
+                "litellm_params": {
+                    "model": "responses/gpt-strip-test-a1b2c3d4",
+                    "custom_llm_provider": "azure",
+                    "api_key": "fake-key-strip",
+                },
+                "model_info": {
+                    "id": uid,
+                    "supports_native_streaming": True,
+                },
+            }
+        ],
+    )
+    assert "azure/responses/gpt-strip-test-a1b2c3d4" in litellm.model_cost
+    assert "azure/gpt-strip-test-a1b2c3d4" in litellm.model_cost
+    assert (
+        litellm.model_cost["azure/gpt-strip-test-a1b2c3d4"].get(
+            "supports_native_streaming"
+        )
+        is True
+    )
+
+
+def test_responses_prefix_stripped_alias_registered_for_add_deployment():
+    """Dynamic ``add_deployment`` must mirror ``_create_deployment`` registration."""
+    uid = "add-dep-responses-strip-e5f6a7b8"
+    router = Router(model_list=[])
+    deployment = Deployment(
+        model_name="dyn-responses-strip",
+        litellm_params=LiteLLM_Params(
+            model="responses/gpt-add-strip-e5f6a7b8",
+            custom_llm_provider="azure",
+            api_key="fake-key-add",
+        ),
+        model_info=ModelInfo(id=uid, supports_native_streaming=True),
+    )
+    router.add_deployment(deployment=deployment)
+    assert "azure/responses/gpt-add-strip-e5f6a7b8" in litellm.model_cost
+    assert "azure/gpt-add-strip-e5f6a7b8" in litellm.model_cost
+    assert (
+        litellm.model_cost["azure/gpt-add-strip-e5f6a7b8"].get(
+            "supports_native_streaming"
+        )
+        is True
+    )
+
+
+def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
+    """
+    ChatGPT aliases that share the same backend model should not be able to
+    downgrade the shared backend key from responses -> chat during router setup.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    backend_model = "chatgpt/gpt-5.4"
+    model_keys = {
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+        "chatgpt-shared-mode-base": copy.deepcopy(
+            litellm.model_cost.get("chatgpt-shared-mode-base")
+        ),
+        "chatgpt-shared-mode-alias": copy.deepcopy(
+            litellm.model_cost.get("chatgpt-shared-mode-alias")
+        ),
+    }
+
+    try:
+        backend_entry = copy.deepcopy(model_keys[backend_model]) or {}
+        backend_entry["litellm_provider"] = "chatgpt"
+        backend_entry["mode"] = "responses"
+        litellm.model_cost[backend_model] = backend_entry
+        _invalidate_model_cost_lowercase_map()
+
+        router = Router(model_list=[])
+        with patch.object(
+            Router, "_add_deployment", lambda self, deployment: deployment
+        ):
+            router._create_deployment(
+                deployment_info={},
+                _model_name="chatgpt/gpt-5.4",
+                _litellm_params={
+                    "model": "gpt-5.4",
+                    "custom_llm_provider": "chatgpt",
+                },
+                _model_info={
+                    "id": "chatgpt-shared-mode-base",
+                    "mode": "responses",
+                },
+            )
+            router._create_deployment(
+                deployment_info={},
+                _model_name="chatgpt/gpt-5.4-medium",
+                _litellm_params={
+                    "model": "gpt-5.4",
+                    "custom_llm_provider": "chatgpt",
+                },
+                _model_info={
+                    "id": "chatgpt-shared-mode-alias",
+                    "mode": "chat",
+                },
+            )
+
+        assert litellm.model_cost[backend_model]["mode"] == "responses"
+        assert "mode" in litellm.model_cost[backend_model]
+
+        bridge_model_info, bridge_model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="chatgpt",
+        )
+        assert bridge_model == "gpt-5.4"
+        assert bridge_model_info["mode"] == "responses"
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_partial_custom_pricing_inherits_builtin_cache_pricing():
+    """A deployment that overrides only input/output cost on a cache-supporting
+    model must still bill cache_read and cache_creation tokens. Before the
+    fix the deploy-id entry was registered with the user's two fields and
+    nothing else, so the cost calculator silently billed cache tokens at 0.
+    Regression for the prompt-caching cost dropout reported by the customer.
+    """
+    backend_model = "anthropic/claude-sonnet-4-5-20250929"
+    deploy_id = "claude-deploy-partial-pricing"
+
+    builtin_info = litellm.get_model_info(model=backend_model)
+    builtin_cache_create = builtin_info["cache_creation_input_token_cost"]
+    builtin_cache_read = builtin_info["cache_read_input_token_cost"]
+    assert builtin_cache_create is not None and builtin_cache_create > 0
+    assert builtin_cache_read is not None and builtin_cache_read > 0
+
+    model_keys = {
+        deploy_id: litellm.model_cost.get(deploy_id),
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "claude-custom",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key",
+                    },
+                    "model_info": {
+                        "id": deploy_id,
+                        "input_cost_per_token": 0.000003,
+                        "output_cost_per_token": 0.000015,
+                    },
+                }
+            ],
+        )
+
+        entry = litellm.model_cost[deploy_id]
+        assert entry["input_cost_per_token"] == 0.000003
+        assert entry["output_cost_per_token"] == 0.000015
+        assert entry.get("cache_creation_input_token_cost") == builtin_cache_create
+        assert entry.get("cache_read_input_token_cost") == builtin_cache_read
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_partial_pricing_does_not_overwrite_explicit_cache_fields():
+    """When the user explicitly sets cache_*_input_token_cost on a deployment,
+    those values must not be replaced by the built-in fallback.
+    """
+    backend_model = "anthropic/claude-sonnet-4-5-20250929"
+    deploy_id = "claude-deploy-explicit-cache"
+
+    explicit_cache_create = 0.00001
+    explicit_cache_read = 0.0000005
+    builtin_info = litellm.get_model_info(model=backend_model)
+    assert builtin_info["cache_creation_input_token_cost"] != explicit_cache_create
+    assert builtin_info["cache_read_input_token_cost"] != explicit_cache_read
+
+    model_keys = {
+        deploy_id: litellm.model_cost.get(deploy_id),
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "claude-custom-explicit",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key",
+                    },
+                    "model_info": {
+                        "id": deploy_id,
+                        "input_cost_per_token": 0.000003,
+                        "output_cost_per_token": 0.000015,
+                        "cache_creation_input_token_cost": explicit_cache_create,
+                        "cache_read_input_token_cost": explicit_cache_read,
+                    },
+                }
+            ],
+        )
+
+        entry = litellm.model_cost[deploy_id]
+        assert entry.get("cache_creation_input_token_cost") == explicit_cache_create
+        assert entry.get("cache_read_input_token_cost") == explicit_cache_read
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_inherit_builtin_cache_pricing_fills_only_missing_fields():
+    """Direct unit test of the helper: missing cache fields are filled from the
+    backend model's built-in entry, while an explicitly set cache field and the
+    user's input/output pricing are left untouched.
+    """
+    backend_model = "anthropic/claude-sonnet-4-5-20250929"
+    builtin_info = litellm.get_model_info(model=backend_model)
+    builtin_cache_create = builtin_info["cache_creation_input_token_cost"]
+    builtin_cache_read = builtin_info["cache_read_input_token_cost"]
+    assert builtin_cache_create is not None and builtin_cache_create > 0
+    assert builtin_cache_read is not None and builtin_cache_read > 0
+
+    explicit_cache_read = builtin_cache_read + 1
+    model_info = {
+        "input_cost_per_token": 0.000003,
+        "cache_read_input_token_cost": explicit_cache_read,
+    }
+
+    Router._inherit_builtin_cache_pricing(
+        model_info=model_info,
+        backend_model=backend_model,
+        custom_llm_provider="anthropic",
+    )
+
+    assert model_info["input_cost_per_token"] == 0.000003
+    assert model_info["cache_read_input_token_cost"] == explicit_cache_read
+    assert model_info["cache_creation_input_token_cost"] == builtin_cache_create
+
+
+def test_inherit_builtin_cache_pricing_noop_for_unknown_backend():
+    """No canonical entry for the backend model means the helper leaves the
+    passed-in dict unchanged rather than raising.
+    """
+    model_info = {"input_cost_per_token": 0.000003}
+
+    Router._inherit_builtin_cache_pricing(
+        model_info=model_info,
+        backend_model="this-backend-model-does-not-exist-x9y8z7",
+        custom_llm_provider=None,
+    )
+
+    assert model_info == {"input_cost_per_token": 0.000003}

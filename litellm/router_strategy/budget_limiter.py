@@ -10,11 +10,11 @@ This means you can use this with weighted-pick, lowest-latency, simple-shuffle, 
 Example:
 ```
 openai:
-	budget_limit: 0.000000000001
-	time_period: 1d
+        budget_limit: 0.000000000001
+        time_period: 1d
 anthropic:
-	budget_limit: 100
-	time_period: 7d
+        budget_limit: 100
+        time_period: 7d
 ```
 """
 
@@ -29,6 +29,9 @@ from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.router_utils.cooldown_callbacks import (
     _get_prometheus_logger_from_callbacks,
 )
@@ -93,16 +96,14 @@ class RouterBudgetLimiting(CustomLogger):
         self,
         dual_cache: DualCache,
         provider_budget_config: Optional[dict],
-        model_list: Optional[
-            Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
-        ] = None,
+        model_list: Optional[List[Union[DeploymentTypedDict, Dict[str, Any]]]] = None,
     ):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
-        self.provider_budget_config: Optional[
-            GenericBudgetConfigType
-        ] = provider_budget_config
+        self.provider_budget_config: Optional[GenericBudgetConfigType] = (
+            provider_budget_config
+        )
         self.deployment_budget_config: Optional[GenericBudgetConfigType] = None
         self.tag_budget_config: Optional[GenericBudgetConfigType] = None
         self._init_provider_budgets()
@@ -175,7 +176,10 @@ class RouterBudgetLimiting(CustomLogger):
                 spend_map=spend_map,
                 potential_deployments=potential_deployments,
                 request_tags=_get_tags_from_request_kwargs(
-                    request_kwargs=request_kwargs
+                    request_kwargs=request_kwargs,
+                    metadata_variable_name=get_metadata_variable_name_from_kwargs(
+                        request_kwargs or {}
+                    ),
                 ),
             )
 
@@ -304,6 +308,16 @@ class RouterBudgetLimiting(CustomLogger):
         deployment_configs: Dict[str, GenericBudgetInfo] = {}
         deployment_providers: List[Optional[str]] = []
 
+        # Resolve tags once before the loop (loop-invariant)
+        _request_tags: List[str] = []
+        if self.tag_budget_config:
+            _request_tags = _get_tags_from_request_kwargs(
+                request_kwargs=request_kwargs,
+                metadata_variable_name=get_metadata_variable_name_from_kwargs(
+                    request_kwargs or {}
+                ),
+            )
+
         for deployment in healthy_deployments:
             # Check provider budgets
             if self.provider_budget_config:
@@ -330,17 +344,14 @@ class RouterBudgetLimiting(CustomLogger):
                         cache_keys.append(
                             f"deployment_spend:{model_id}:{budget_config.budget_duration}"
                         )
-            # Check tag budgets
-            if self.tag_budget_config:
-                request_tags = _get_tags_from_request_kwargs(
-                    request_kwargs=request_kwargs
+
+        # Check tag budgets (outside loop — tags are per-request, not per-deployment)
+        for _tag in _request_tags:
+            _tag_budget_config = self._get_budget_config_for_tag(_tag)
+            if _tag_budget_config:
+                cache_keys.append(
+                    f"tag_spend:{_tag}:{_tag_budget_config.budget_duration}"
                 )
-                for _tag in request_tags:
-                    _tag_budget_config = self._get_budget_config_for_tag(_tag)
-                    if _tag_budget_config:
-                        cache_keys.append(
-                            f"tag_spend:{_tag}:{_tag_budget_config.budget_duration}"
-                        )
         return (
             cache_keys,
             provider_configs,
@@ -419,6 +430,9 @@ class RouterBudgetLimiting(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
+        # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
+        if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
+            return
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object", None
         )
@@ -459,7 +473,10 @@ class RouterBudgetLimiting(CustomLogger):
                 response_cost=response_cost,
             )
 
-        request_tags = _get_tags_from_request_kwargs(kwargs)
+        request_tags = _get_tags_from_request_kwargs(
+            kwargs,
+            metadata_variable_name=get_metadata_variable_name_from_kwargs(kwargs or {}),
+        )
         if len(request_tags) > 0:
             for _tag in request_tags:
                 _tag_budget_config = self._get_budget_config_for_tag(_tag)
@@ -838,9 +855,7 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _init_deployment_budgets(
         self,
-        model_list: Optional[
-            Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
-        ] = None,
+        model_list: Optional[List[Union[DeploymentTypedDict, Dict[str, Any]]]] = None,
     ):
         if model_list is None:
             return
@@ -870,6 +885,22 @@ class RouterBudgetLimiting(CustomLogger):
         verbose_router_logger.debug(
             f"Initialized Deployment Budget Config: {self.deployment_budget_config}"
         )
+
+    def register_deployment_budget(
+        self,
+        deployment: Union[Dict[str, Any], DeploymentTypedDict],
+    ) -> None:
+        """
+        Register or refresh deployment-level budget config for a runtime-added deployment.
+        """
+        self._init_deployment_budgets(model_list=[deployment])
+
+    def unregister_deployment_budget(self, model_id: str) -> None:
+        if self.deployment_budget_config is None:
+            return
+        self.deployment_budget_config.pop(model_id, None)
+        if len(self.deployment_budget_config) == 0:
+            self.deployment_budget_config = None
 
     def _init_tag_budgets(self):
         if litellm.tag_budget_config is None:

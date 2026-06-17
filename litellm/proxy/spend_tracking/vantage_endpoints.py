@@ -1,8 +1,8 @@
 import json
 
-import litellm
 from fastapi import APIRouter, Depends, HTTPException
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
@@ -11,6 +11,8 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.types.proxy.vantage_endpoints import (
     VantageDryRunRequest,
     VantageExportRequest,
@@ -59,7 +61,7 @@ async def _set_vantage_settings(api_key: str, integration_token: str, base_url: 
         "base_url": base_url,
     }
 
-    await prisma_client.db.litellm_config.upsert(
+    await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": VANTAGE_SETTINGS_PARAM_NAME},
         data={
             "create": {
@@ -81,7 +83,7 @@ async def _get_vantage_settings():
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    vantage_config = await prisma_client.db.litellm_config.find_first(
+    vantage_config = await ConfigRepository(prisma_client).table.find_first(
         where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
     )
     if vantage_config is None or vantage_config.param_value is None:
@@ -140,9 +142,10 @@ async def get_vantage_settings(
     View current Vantage settings.
 
     Returns the current Vantage configuration with the API key masked for security.
-    Only admin users can view Vantage settings.
+    Only admin users (Proxy Admin or Admin Viewer) can view Vantage settings.
     """
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Admin Viewer follows the read-parity rule.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -263,7 +266,7 @@ async def is_vantage_setup_in_db() -> bool:
         if prisma_client is None:
             return False
 
-        vantage_config = await prisma_client.db.litellm_config.find_first(
+        vantage_config = await ConfigRepository(prisma_client).table.find_first(
             where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
         )
 
@@ -551,7 +554,7 @@ async def delete_vantage_settings(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        vantage_config = await prisma_client.db.litellm_config.find_first(
+        vantage_config = await ConfigRepository(prisma_client).table.find_first(
             where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
         )
 
@@ -561,7 +564,7 @@ async def delete_vantage_settings(
                 detail={"error": "Vantage settings not found"},
             )
 
-        await prisma_client.db.litellm_config.delete(
+        await ConfigRepository(prisma_client).table.delete(
             where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
         )
 

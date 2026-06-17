@@ -175,14 +175,18 @@ class TestResolveAuthResolution:
     def test_per_request_header(self):
         server = self._make_server()
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header="Bearer xxx", mcp_server_auth_headers=None, oauth2_headers=None
+            server,
+            mcp_auth_header="Bearer xxx",
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
         )
         assert result == "per-request-header"
 
     def test_server_specific_header(self):
         server = self._make_server(alias="atlas")
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header=None,
+            server,
+            mcp_auth_header=None,
             mcp_server_auth_headers={"atlas": {"Authorization": "Bearer xxx"}},
             oauth2_headers=None,
         )
@@ -191,21 +195,29 @@ class TestResolveAuthResolution:
     def test_m2m(self):
         server = self._make_server(has_client_credentials=True)
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header=None, mcp_server_auth_headers=None, oauth2_headers=None
+            server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
         )
         assert result == "m2m-client-credentials"
 
     def test_static_token(self):
         server = self._make_server(authentication_token="static-tok")
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header=None, mcp_server_auth_headers=None, oauth2_headers=None
+            server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
         )
         assert result == "static-token"
 
     def test_oauth2_passthrough(self):
         server = self._make_server(auth_type="oauth2")
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header=None, mcp_server_auth_headers=None,
+            server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
             oauth2_headers={"Authorization": "Bearer eyJ..."},
         )
         assert result == "oauth2-passthrough"
@@ -213,7 +225,10 @@ class TestResolveAuthResolution:
     def test_no_auth(self):
         server = self._make_server()
         result = MCPDebug.resolve_auth_resolution(
-            server, mcp_auth_header=None, mcp_server_auth_headers=None, oauth2_headers=None
+            server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
         )
         assert result == "no-auth"
 

@@ -9,7 +9,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
+import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
@@ -28,6 +28,7 @@ import TeamDropdown from "../common_components/team_dropdown";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
+import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -169,9 +170,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const { data: tagsData } = useTags();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const disableCustomApiKeys = Boolean(uiSettingsData?.values?.disable_custom_api_keys);
-  const tagOptions = tagsData
-    ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name }))
-    : [];
+  const tagOptions = tagsData ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name })) : [];
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -201,6 +200,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -218,6 +218,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedAgentId(null);
     setSelectedOrganizationId(null);
     setSelectedProjectId(null);
+    setBudgetLimits([]);
   };
 
   const handleCancel = () => {
@@ -236,6 +237,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedAgentId(null);
     setSelectedOrganizationId(null);
     setSelectedProjectId(null);
+    setBudgetLimits([]);
   };
 
   useEffect(() => {
@@ -434,6 +436,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       // Update the formValues with the final metadata
       formValues.metadata = JSON.stringify(metadata);
 
+      // disable_global_guardrails is premium-gated server-side; only send it when enabled
+      // so non-premium key creation isn't blocked by that gate.
+      if (!formValues.disable_global_guardrails) {
+        delete formValues.disable_global_guardrails;
+      }
+
       // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission format
       if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
         formValues.object_permission = {
@@ -519,6 +527,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         }
       }
 
+      // Add multi-window budget limits (filter out incomplete entries)
+      const validWindows = budgetLimits.filter(
+        (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
+      );
+      if (validWindows.length > 0) {
+        formValues.budget_limits = validWindows;
+      }
+
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
@@ -540,6 +556,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       setSoftBudget(response["soft_budget"]);
       NotificationsManager.success("Virtual Key Created");
       form.resetFields();
+      setBudgetLimits([]);
       localStorage.removeItem("userData" + userID);
     } catch (error) {
       console.log("error in create key:", error);
@@ -967,28 +984,28 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     }
                   }}
                 >
-                  <Option value="default" label="Default">
-                    <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>Default</div>
-                      <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call AI APIs + Management routes
-                      </div>
-                    </div>
-                  </Option>
                   <Option value="llm_api" label="AI APIs">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>AI APIs</div>
-                      <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                      <Typography.Text strong>AI APIs</Typography.Text>
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
                         Can call only AI API routes (chat/completions, embeddings, etc.)
-                      </div>
+                      </Typography.Paragraph>
                     </div>
                   </Option>
                   <Option value="management" label="Management">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>Management</div>
-                      <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                      <Typography.Text strong>Management</Typography.Text>
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
                         Can call only management routes (user/team/key management)
-                      </div>
+                      </Typography.Paragraph>
+                    </div>
+                  </Option>
+                  <Option value="default" label="Full Access">
+                    <div style={{ padding: "4px 0" }}>
+                      <Typography.Text strong>Full Access</Typography.Text>
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
+                        Can call all routes (AI APIs, Management, and read-only)
+                      </Typography.Paragraph>
                     </div>
                   </Option>
                 </Select>
@@ -1044,6 +1061,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                   >
                     <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Budget Windows{" "}
+                        <Tooltip title="Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                  >
+                    <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
                   </Form.Item>
                   <Form.Item
                     className="mt-4"

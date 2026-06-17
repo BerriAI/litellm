@@ -30,6 +30,10 @@ from litellm.types.utils import Usage, ModelResponse
 from abc import ABC, abstractmethod
 from openai import OpenAI
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+from tests._live_test_helpers import _skip_live_prompt_caching_test  # noqa: E402
+
 
 def _usage_format_tests(usage: litellm.Usage):
     """
@@ -401,7 +405,7 @@ class BaseLLMChatTest(ABC):
             {
                 "type": "file",
                 "file": {
-                    "file_id": "https://upload.wikimedia.org/wikipedia/commons/2/20/Re_example.pdf"
+                    "file_id": "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0/tests/llm_translation/fixtures/dummy.pdf"
                 },
             },
         ]
@@ -853,7 +857,11 @@ class BaseLLMChatTest(ABC):
     @pytest.mark.parametrize(
         "image_url",
         [
-            "http://img1.etsystatic.com/260/0/7813604/il_fullxfull.4226713999_q86e.jpg",
+            # In-repo logo served via jsdelivr (sha-pinned, immutable).
+            # Bedrock fetches the URL and base64-embeds it in the
+            # Converse request body; using a multi-MB hosted product
+            # photo here previously bloated cassettes to ~60 MB each.
+            "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0/ui/litellm-dashboard/public/assets/logos/litellm_logo.jpg",
             "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
         ],
     )
@@ -956,6 +964,7 @@ class BaseLLMChatTest(ABC):
 
     @pytest.mark.flaky(retries=4, delay=1)
     def test_prompt_caching(self):
+        _skip_live_prompt_caching_test()
         print("test_prompt_caching")
         litellm.set_verbose = True
         from litellm.utils import supports_prompt_caching
@@ -1063,7 +1072,7 @@ class BaseLLMChatTest(ABC):
         # Use local PDF file instead of external URL to avoid flaky tests
         test_dir = os.path.dirname(__file__)
         pdf_path = os.path.join(test_dir, "fixtures", "dummy.pdf")
-        
+
         with open(pdf_path, "rb") as f:
             file_data = f.read()
 

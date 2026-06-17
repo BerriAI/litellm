@@ -4,7 +4,7 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
-from unittest.mock import MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -32,6 +32,35 @@ def test_initialize_from_proxy_config():
     assert LlmProviders.BEDROCK.value in logger.enabled_providers
     assert LlmProviders.VERTEX_AI.value in logger.enabled_providers
     assert logger.search_tool_name == "my-search"
+
+
+def test_initialize_from_proxy_config_ignores_non_dict_callback_specific_params():
+    """Regression (#29590): a non-dict value under
+    callback_settings.websearch_interception must not crash initialization.
+
+    Forwarding callback_settings as callback_specific_params activates this
+    branch; without the isinstance(dict) guard a non-dict value reached
+    from_config_yaml(...).get(...) and raised AttributeError at proxy startup.
+    The value is ignored and the logger falls back to defaults.
+    """
+    logger = WebSearchInterceptionLogger.initialize_from_proxy_config(
+        litellm_settings={},
+        callback_specific_params={"websearch_interception": True},
+    )
+
+    assert logger.search_tool_name is None
+
+
+def test_initialize_from_proxy_config_honors_dict_callback_specific_params():
+    """A valid dict under callback_settings.websearch_interception is applied."""
+    logger = WebSearchInterceptionLogger.initialize_from_proxy_config(
+        litellm_settings={},
+        callback_specific_params={
+            "websearch_interception": {"search_tool_name": "ws-tool"}
+        },
+    )
+
+    assert logger.search_tool_name == "ws-tool"
 
 
 @pytest.mark.asyncio
@@ -70,6 +99,61 @@ async def test_async_should_run_agentic_loop():
 
 
 @pytest.mark.asyncio
+async def test_async_build_agentic_loop_plan_returns_request_patch():
+    """Callback should return a typed patch for base handler reruns."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+    logger._execute_search = AsyncMock(  # type: ignore
+        return_value="Title: LiteLLM\nURL: docs\nSnippet: test"
+    )
+
+    tools_dict = {
+        "tool_calls": [
+            {
+                "id": "toolu_123",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {"query": "what is litellm"},
+            }
+        ],
+        "response_format": "anthropic",
+    }
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}
+    }
+    kwargs = {
+        "temperature": 0.2,
+        "_websearch_interception_converted_stream": True,
+        "litellm_logging_obj": object(),
+    }
+
+    plan = await logger.async_build_agentic_loop_plan(
+        tools=tools_dict,
+        model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "search LiteLLM"}],
+        response=None,
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "tools": [{"name": "litellm_web_search"}],
+        },
+        logging_obj=logging_obj,
+        stream=False,
+        kwargs=kwargs,
+    )
+
+    assert plan.run_agentic_loop is True
+    assert plan.request_patch is not None
+    assert plan.request_patch.model == "bedrock/invoke/claude-3-5-sonnet"
+    assert plan.request_patch.max_tokens == 1024
+    assert plan.request_patch.messages is not None
+    assert len(plan.request_patch.messages) == 3
+    assert "_websearch_interception_converted_stream" not in plan.request_patch.kwargs
+    assert "litellm_logging_obj" not in plan.request_patch.kwargs
+    assert plan.request_patch.kwargs["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
 async def test_internal_flags_filtered_from_followup_kwargs():
     """Test that internal _websearch_interception flags are filtered from follow-up request kwargs.
 
@@ -89,8 +173,9 @@ async def test_internal_flags_filtered_from_followup_kwargs():
 
     # Apply the same filtering logic used in _execute_agentic_loop
     kwargs_for_followup = {
-        k: v for k, v in kwargs_with_internal_flags.items()
-        if not k.startswith('_websearch_interception')
+        k: v
+        for k, v in kwargs_with_internal_flags.items()
+        if not k.startswith("_websearch_interception")
     }
 
     # Verify internal flags are filtered out
@@ -130,12 +215,14 @@ async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
     assert result is not None
     # The web_search tool should be converted to litellm_web_search (OpenAI format)
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # The non-web-search tool should be preserved
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "other_tool"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "other_tool"
         for t in result["tools"]
     )
 
@@ -173,7 +260,8 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
     assert result["custom_llm_provider"] == "openai"
     # Tools should be converted
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
 
@@ -234,7 +322,8 @@ async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
 
     assert result is not None
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
@@ -267,7 +356,8 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     # Should NOT be None — the hook should derive "openai" from "openai/gpt-4o-mini"
     assert result is not None
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved

@@ -64,9 +64,9 @@ class TestSearXNGSearchRequestTransformation:
                 optional_params={"country": country},
             )
             params = result["_searxng_params"]
-            assert params["language"] == expected_language, (
-                f"country={country} should map to language={expected_language}"
-            )
+            assert (
+                params["language"] == expected_language
+            ), f"country={country} should map to language={expected_language}"
 
     def test_max_results_ignored(self):
         """Test that max_results is accepted but doesn't add extra params."""
@@ -85,7 +85,11 @@ class TestSearXNGSearchRequestTransformation:
         """Test that SearXNG-specific params are passed through as-is."""
         result = self.config.transform_search_request(
             query="test",
-            optional_params={"categories": "general,news", "engines": "google,bing", "time_range": "month"},
+            optional_params={
+                "categories": "general,news",
+                "engines": "google,bing",
+                "time_range": "month",
+            },
         )
 
         params = result["_searxng_params"]
@@ -204,22 +208,24 @@ class TestSearXNGSearchResponseTransformation:
 
     def test_response_with_results(self):
         """Test transforming a typical SearXNG response with results."""
-        raw = self._make_mock_response({
-            "results": [
-                {
-                    "title": "AI News Article",
-                    "url": "https://example.com/ai-news",
-                    "content": "Latest developments in artificial intelligence.",
-                    "publishedDate": "2025-01-15",
-                },
-                {
-                    "title": "ML Research Paper",
-                    "url": "https://example.com/ml-paper",
-                    "content": "New machine learning research findings.",
-                    "pubdate": "2025-01-10",
-                },
-            ]
-        })
+        raw = self._make_mock_response(
+            {
+                "results": [
+                    {
+                        "title": "AI News Article",
+                        "url": "https://example.com/ai-news",
+                        "content": "Latest developments in artificial intelligence.",
+                        "publishedDate": "2025-01-15",
+                    },
+                    {
+                        "title": "ML Research Paper",
+                        "url": "https://example.com/ml-paper",
+                        "content": "New machine learning research findings.",
+                        "pubdate": "2025-01-10",
+                    },
+                ]
+            }
+        )
 
         response = self.config.transform_search_response(
             raw_response=raw, logging_obj=self.logging_obj
@@ -263,14 +269,16 @@ class TestSearXNGSearchResponseTransformation:
 
     def test_response_missing_optional_fields(self):
         """Test transforming results with missing optional fields."""
-        raw = self._make_mock_response({
-            "results": [
-                {
-                    "title": "Minimal Result",
-                    "url": "https://example.com",
-                }
-            ]
-        })
+        raw = self._make_mock_response(
+            {
+                "results": [
+                    {
+                        "title": "Minimal Result",
+                        "url": "https://example.com",
+                    }
+                ]
+            }
+        )
 
         response = self.config.transform_search_response(
             raw_response=raw, logging_obj=self.logging_obj
@@ -305,9 +313,7 @@ class TestSearXNGSearchHeaders:
 
     def test_headers_with_api_key(self):
         """Test that headers include Authorization when API key is provided."""
-        headers = self.config.validate_environment(
-            headers={}, api_key="test-key-123"
-        )
+        headers = self.config.validate_environment(headers={}, api_key="test-key-123")
 
         assert headers["Content-Type"] == "application/json"
         assert headers["Authorization"] == "Bearer test-key-123"

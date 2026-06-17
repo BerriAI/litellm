@@ -325,14 +325,14 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
             chunk1.choices[0].delta = MagicMock()
             chunk1.choices[0].delta.content = "Hello "
             chunk1.choices[0].finish_reason = None
-            
+
             chunk2 = MagicMock()
             chunk2.model = "gpt-4"
             chunk2.choices = [MagicMock()]
             chunk2.choices[0].delta = MagicMock()
             chunk2.choices[0].delta.content = "world"
             chunk2.choices[0].finish_reason = None
-            
+
             # Last chunk with finish_reason
             chunk3 = MagicMock()
             chunk3.model = "gpt-4"
@@ -340,7 +340,7 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
             chunk3.choices[0].delta = MagicMock()
             chunk3.choices[0].delta.content = "!"
             chunk3.choices[0].finish_reason = "stop"
-            
+
             for chunk in [chunk1, chunk2, chunk3]:
                 yield chunk
 
@@ -350,9 +350,12 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
         mock_model_response.choices[0].message = MagicMock()
         mock_model_response.choices[0].message.content = "Hello world!"
 
-        with patch.object(guardrail, "async_make_request", return_value=mock_response), patch(
-            "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
-            return_value=mock_model_response,
+        with (
+            patch.object(guardrail, "async_make_request", return_value=mock_response),
+            patch(
+                "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+                return_value=mock_model_response,
+            ),
         ):
             user_api_key_dict = UserAPIKeyAuth(
                 api_key="test", request_route="/chat/completions"
@@ -365,7 +368,9 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
 
             # Test streaming hook with safe content via UnifiedLLMGuardrails
             result_chunks = []
-            async for chunk in unified_guardrail.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in unified_guardrail.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=mock_stream(),
                 request_data=request_data,
@@ -431,7 +436,7 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
             chunk1.choices[0].delta = MagicMock()
             chunk1.choices[0].delta.content = "This is "
             chunk1.choices[0].finish_reason = None
-            
+
             # Last chunk - with finish_reason to signal end of stream
             chunk2 = MagicMock()
             chunk2.model = "gpt-4"
@@ -439,13 +444,14 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
             chunk2.choices[0].delta = MagicMock()
             chunk2.choices[0].delta.content = "harmful content"
             chunk2.choices[0].finish_reason = "stop"
-            
+
             for chunk in [chunk1, chunk2]:
                 yield chunk
 
         # Mock for stream_chunk_builder - use real litellm types so isinstance checks pass
         from litellm.types.utils import ModelResponse
         import litellm
+
         mock_model_response = ModelResponse(
             id="mock-response",
             model="gpt-4",
@@ -461,9 +467,12 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
             ],
         )
 
-        with patch.object(guardrail, "async_make_request", return_value=mock_response), patch(
-            "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
-            return_value=mock_model_response,
+        with (
+            patch.object(guardrail, "async_make_request", return_value=mock_response),
+            patch(
+                "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+                return_value=mock_model_response,
+            ),
         ):
             user_api_key_dict = UserAPIKeyAuth(
                 api_key="test", request_route="/chat/completions"
@@ -479,7 +488,9 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
 
             with pytest.raises(HTTPException) as exc_info:
                 result_chunks = []
-                async for chunk in unified_guardrail.async_post_call_streaming_iterator_hook(
+                async for (
+                    chunk
+                ) in unified_guardrail.async_post_call_streaming_iterator_hook(
                     user_api_key_dict=user_api_key_dict,
                     response=mock_stream(),
                     request_data=request_data,
@@ -534,9 +545,7 @@ async def test_openai_moderation_guardrail_logs_full_response_safe_content():
 
         with patch.object(guardrail, "async_make_request", return_value=mock_response):
             inputs = GenericGuardrailAPIInputs(
-                structured_messages=[
-                    {"role": "user", "content": "Hello, how are you?"}
-                ]
+                structured_messages=[{"role": "user", "content": "Hello, how are you?"}]
             )
             request_data = {"metadata": {}}
 
@@ -609,9 +618,7 @@ async def test_openai_moderation_guardrail_logs_full_response_harmful_content():
 
         with patch.object(guardrail, "async_make_request", return_value=mock_response):
             inputs = GenericGuardrailAPIInputs(
-                structured_messages=[
-                    {"role": "user", "content": "Hateful content"}
-                ]
+                structured_messages=[{"role": "user", "content": "Hateful content"}]
             )
             request_data = {"metadata": {}}
 
@@ -697,9 +704,7 @@ async def test_openai_moderation_post_call_request_data_passthrough():
             choices=[
                 litellm.Choices(
                     index=0,
-                    message=litellm.Message(
-                        role="assistant", content="Hello world"
-                    ),
+                    message=litellm.Message(role="assistant", content="Hello world"),
                     finish_reason="stop",
                 )
             ],
@@ -815,3 +820,63 @@ def test_openai_moderation_process_error_metadata_none_edge_case():
 
         # Internal key cleaned up
         assert "_openai_moderation_response" not in request_data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_guardrail_streaming_defaults():
+    """Defaults match the unified dispatcher: sampled in-stream, every 5th chunk."""
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(guardrail_name="test")
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 5
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_guardrail_streaming_overrides():
+    """Constructor-level overrides for the two streaming flags are stored on self."""
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test",
+            streaming_end_of_stream_only=False,
+            streaming_sampling_rate=3,
+        )
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 3
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_initialize_guardrail_forwards_streaming_flags():
+    """initialize_guardrail forwards streaming knobs from litellm_params (extra='allow')."""
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.openai import (
+        initialize_guardrail as openai_initialize_guardrail,
+    )
+    from litellm.types.guardrails import (
+        Guardrail,
+        LitellmParams,
+        SupportedGuardrailIntegrations,
+    )
+
+    litellm.logging_callback_manager._reset_all_callbacks()
+    try:
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            litellm_params = LitellmParams(
+                guardrail=SupportedGuardrailIntegrations.OPENAI_MODERATION,
+                api_key="test-key",
+                model="omni-moderation-latest",
+                mode="post_call",
+                streaming_end_of_stream_only=False,
+                streaming_sampling_rate=2,
+            )
+            guardrail = openai_initialize_guardrail(
+                litellm_params=litellm_params,
+                guardrail=Guardrail(
+                    guardrail_name="test-openai-moderation",
+                    litellm_params=litellm_params,
+                ),
+            )
+
+            assert guardrail.streaming_end_of_stream_only is False
+            assert guardrail.streaming_sampling_rate == 2
+    finally:
+        litellm.logging_callback_manager._reset_all_callbacks()

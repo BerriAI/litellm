@@ -140,7 +140,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
 
         self.fallback_on_error = fallback_on_error
-        self.timeout = timeout
+        # Coerce defensively. The dashboard UI persists this field as a JSON
+        # string, and Pydantic extras (the path that splats model_dump into
+        # this handler) preserve whatever type the user supplied. A string
+        # value would otherwise reach httpx, which raises TypeError on its
+        # internal '<=' comparison and surfaces as a misleading api_error.
+        self.timeout = float(timeout) if timeout is not None else 10.0
 
         # Tri-state: None = not set (default-on for Anthropic), True = explicit on, False = explicit off
         self.experimental_use_latest_role_message_only: Optional[bool] = kwargs.get(
@@ -256,7 +261,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
         return ""
 
-    async def _call_panw_api(  # noqa: PLR0915
+    async def _call_panw_api(
         self,
         content: str = "",
         is_response: bool = False,
@@ -295,10 +300,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         panw_metadata = {
             "app_user": (
-                metadata.get("app_user") or metadata.get("user") or "litellm_user"
-            )
-            if metadata
-            else "litellm_user",
+                (metadata.get("app_user") or metadata.get("user") or "litellm_user")
+                if metadata
+                else "litellm_user"
+            ),
             "ai_model": metadata.get("model", "unknown") if metadata else "unknown",
             "app_name": app_name_value,
             "source": "litellm_builtin_guardrail",
@@ -1088,9 +1093,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 guardrail_provider=self._PROVIDER_NAME,
                 guardrail_json_response=scan_result,
                 request_data=data,
-                guardrail_status="success"
-                if scan_result.get("action") == "allow"
-                else "guardrail_intervened",
+                guardrail_status=(
+                    "success"
+                    if scan_result.get("action") == "allow"
+                    else "guardrail_intervened"
+                ),
                 start_time=start_time.timestamp(),
                 end_time=end_time.timestamp(),
                 duration=(end_time - start_time).total_seconds(),
@@ -1226,9 +1233,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 guardrail_provider=self._PROVIDER_NAME,
                 guardrail_json_response=scan_result,
                 request_data=data,
-                guardrail_status="success"
-                if scan_result.get("action") == "allow"
-                else "guardrail_intervened",
+                guardrail_status=(
+                    "success"
+                    if scan_result.get("action") == "allow"
+                    else "guardrail_intervened"
+                ),
                 start_time=start_time.timestamp(),
                 end_time=end_time.timestamp(),
                 duration=(end_time - start_time).total_seconds(),
@@ -1449,9 +1458,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     guardrail_provider=self._PROVIDER_NAME,
                     guardrail_json_response=scan_result,
                     request_data=request_data,
-                    guardrail_status="success"
-                    if scan_result.get("action") == "allow"
-                    else "guardrail_intervened",
+                    guardrail_status=(
+                        "success"
+                        if scan_result.get("action") == "allow"
+                        else "guardrail_intervened"
+                    ),
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=(end_time - start_time).total_seconds(),
@@ -1751,7 +1762,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return rd.get("name") if ("arguments" in rd or "mcp_arguments" in rd) else None
 
     @log_guardrail_information
-    async def apply_guardrail(  # noqa: PLR0915
+    async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,

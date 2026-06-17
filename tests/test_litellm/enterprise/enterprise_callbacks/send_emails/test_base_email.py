@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from enterprise.litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
     BaseEmailLogger,
 )
 
@@ -29,6 +29,7 @@ def no_invitation_wait(monkeypatch):
         return None
 
     monkeypatch.setattr(BaseEmailLogger, "_wait_for_invitation_creation", _noop)
+
 
 @pytest.fixture
 def base_email_logger():
@@ -283,7 +284,10 @@ async def test_send_key_created_email_without_key(
         mock_send_email.assert_called_once()
         call_args = mock_send_email.call_args[1]
         assert "sk-secret-key-456" not in call_args["html_body"]
-        assert "[Key hidden for security - retrieve from dashboard]" in call_args["html_body"]
+        assert (
+            "[Key hidden for security - retrieve from dashboard]"
+            in call_args["html_body"]
+        )
 
 
 @pytest.mark.asyncio
@@ -317,7 +321,10 @@ async def test_send_key_rotated_email_without_key(
         mock_send_email.assert_called_once()
         call_args = mock_send_email.call_args[1]
         assert "sk-secret-rotated-789" not in call_args["html_body"]
-        assert "[Key hidden for security - retrieve from dashboard]" in call_args["html_body"]
+        assert (
+            "[Key hidden for security - retrieve from dashboard]"
+            in call_args["html_body"]
+        )
 
 
 @pytest.mark.asyncio
@@ -371,52 +378,52 @@ async def test_get_invitation_link_creates_new_when_none_exist(base_email_logger
     """Test that _get_invitation_link creates a new invitation when none exist"""
     # Mock prisma client with no existing invitation rows
     mock_prisma = mock.MagicMock()
-    
+
     # Mock find_many to return empty list (no existing invitations)
     async def mock_find_many_empty(*args, **kwargs):
         return []
-    
+
     mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_empty
-    
+
     # Mock the create_invitation_for_user function
     mock_created_invitation = mock.MagicMock()
     mock_created_invitation.id = "new-invitation-id"
-    
+
     with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with mock.patch(
             "litellm.proxy.management_helpers.user_invitation.create_invitation_for_user",
-            return_value=mock_created_invitation
+            return_value=mock_created_invitation,
         ) as mock_create_invitation:
             # Execute
             result = await base_email_logger._get_invitation_link(
                 user_id="test-user", base_url="http://test.com"
             )
-            
+
             # Verify that create_invitation_for_user was called
             mock_create_invitation.assert_called_once()
             call_args = mock_create_invitation.call_args[1]
             assert call_args["data"].user_id == "test-user"
             assert call_args["user_api_key_dict"].user_id == "test-user"
-            
+
             # Verify the returned link uses the new invitation ID
             assert result == "http://test.com/ui?invitation_id=new-invitation-id"
 
 
-@pytest.mark.asyncio 
+@pytest.mark.asyncio
 async def test_get_invitation_link_uses_existing_when_available(base_email_logger):
     """Test that _get_invitation_link uses existing invitation when available"""
     # Mock prisma client with existing invitation row
     mock_invitation_row = mock.MagicMock()
     mock_invitation_row.id = "existing-invitation-id"
-    
+
     mock_prisma = mock.MagicMock()
-    
+
     # Mock find_many to return existing invitation
     async def mock_find_many_existing(*args, **kwargs):
         return [mock_invitation_row]
-    
+
     mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_existing
-    
+
     with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with mock.patch(
             "litellm.proxy.management_helpers.user_invitation.create_invitation_for_user"
@@ -425,10 +432,10 @@ async def test_get_invitation_link_uses_existing_when_available(base_email_logge
             result = await base_email_logger._get_invitation_link(
                 user_id="test-user", base_url="http://test.com"
             )
-            
+
             # Verify that create_invitation_for_user was NOT called
             mock_create_invitation.assert_not_called()
-            
+
             # Verify the returned link uses the existing invitation ID
             assert result == "http://test.com/ui?invitation_id=existing-invitation-id"
 
@@ -438,33 +445,33 @@ async def test_get_invitation_link_creates_new_when_list_is_none(base_email_logg
     """Test that _get_invitation_link creates a new invitation when invitation_rows is None"""
     # Mock prisma client to return None
     mock_prisma = mock.MagicMock()
-    
+
     # Mock find_many to return None
     async def mock_find_many_none(*args, **kwargs):
         return None
-    
+
     mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_none
-    
+
     # Mock the create_invitation_for_user function
     mock_created_invitation = mock.MagicMock()
     mock_created_invitation.id = "new-invitation-from-none"
-    
+
     with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with mock.patch(
             "litellm.proxy.management_helpers.user_invitation.create_invitation_for_user",
-            return_value=mock_created_invitation
+            return_value=mock_created_invitation,
         ) as mock_create_invitation:
             # Execute
             result = await base_email_logger._get_invitation_link(
                 user_id="test-user", base_url="http://test.com"
             )
-            
+
             # Verify that create_invitation_for_user was called
             mock_create_invitation.assert_called_once()
             call_args = mock_create_invitation.call_args[1]
             assert call_args["data"].user_id == "test-user"
             assert call_args["user_api_key_dict"].user_id == "test-user"
-            
+
             # Verify the returned link uses the new invitation ID
             assert result == "http://test.com/ui?invitation_id=new-invitation-from-none"
 
@@ -495,11 +502,13 @@ async def test_get_email_params_user_invitation(
                 user_email="test@example.com",
             )
 
-            assert result.logo_url == "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+            assert (
+                result.logo_url
+                == "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+            )
             assert result.support_contact == "support@berri.ai"
             assert result.base_url == "http://test.com/ui?invitation_id=test-id"
             assert result.recipient_email == "test@example.com"
-
 
 
 @pytest.fixture
@@ -513,37 +522,39 @@ def mock_env_vars(monkeypatch):
     monkeypatch.setenv("PROXY_BASE_URL", "http://test.com")
     monkeypatch.setenv("PROXY_API_URL", "https://test.com")
 
+
 @pytest.mark.asyncio
 async def test_get_email_params_custom_templates_premium_user(mock_env_vars):
     """Test that _get_email_params returns correct values with custom templates for premium users"""
     # Mock premium_user as True
     with patch("litellm.proxy.proxy_server.premium_user", True):
         email_logger = BaseEmailLogger()
-        
+
         # Test invitation email params
         invitation_params = await email_logger._get_email_params(
             email_event=EmailEvent.new_user_invitation,
             user_id="testid",
             user_email="test@example.com",
-            event_message="New User Invitation"
+            event_message="New User Invitation",
         )
-        
+
         assert invitation_params.subject == "Welcome to Test Company!"
         assert invitation_params.signature == "Best regards,\nTest Company Team"
         assert invitation_params.logo_url == "https://test-company.com/logo.png"
         assert invitation_params.support_contact == "support@test-company.com"
         assert invitation_params.base_url == "http://test.com"
-        
+
         # Test key created email params
         key_params = await email_logger._get_email_params(
             email_event=EmailEvent.virtual_key_created,
             user_id="testid",
             user_email="test@example.com",
-            event_message="API Key Created"
+            event_message="API Key Created",
         )
-        
+
         assert key_params.subject == "Your Test Company API Key"
         assert key_params.signature == "Best regards,\nTest Company Team"
+
 
 @pytest.mark.asyncio
 async def test_get_email_params_non_premium_user(mock_env_vars):
@@ -551,30 +562,33 @@ async def test_get_email_params_non_premium_user(mock_env_vars):
     # Mock premium_user as False
     with patch("litellm.proxy.proxy_server.premium_user", False):
         email_logger = BaseEmailLogger()
-        
+
         # Test invitation email params
         email_params = await email_logger._get_email_params(
             email_event=EmailEvent.new_user_invitation,
             user_email="test@example.com",
-            event_message="New User Invitation"
+            event_message="New User Invitation",
         )
-        
+
         # Should use default values even though custom values are set in env
         assert email_params.subject == "LiteLLM: New User Invitation"
         assert email_params.signature == EMAIL_FOOTER
-        assert email_params.logo_url == "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+        assert (
+            email_params.logo_url
+            == "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+        )
         assert email_params.support_contact == "support@berri.ai"
 
-        
         # Test key created email params
         key_params = await email_logger._get_email_params(
             email_event=EmailEvent.virtual_key_created,
             user_email="test@example.com",
-            event_message="API Key Created"
+            event_message="API Key Created",
         )
-        
+
         assert key_params.subject == "LiteLLM: API Key Created"
         assert key_params.signature == EMAIL_FOOTER
+
 
 @pytest.mark.asyncio
 async def test_get_email_params_default_templates(monkeypatch):
@@ -583,28 +597,28 @@ async def test_get_email_params_default_templates(monkeypatch):
     monkeypatch.delenv("EMAIL_SUBJECT_INVITATION", raising=False)
     monkeypatch.delenv("EMAIL_SUBJECT_KEY_CREATED", raising=False)
     monkeypatch.delenv("EMAIL_SIGNATURE", raising=False)
-    
+
     # Mock premium_user as True (shouldn't matter since no custom values are set)
     with patch("litellm.proxy.proxy_server.premium_user", True):
         email_logger = BaseEmailLogger()
-        
+
         # Test invitation email params with default template
         invitation_params = await email_logger._get_email_params(
             email_event=EmailEvent.new_user_invitation,
             user_email="test@example.com",
-            event_message="New User Invitation"
+            event_message="New User Invitation",
         )
-        
+
         assert invitation_params.subject == "LiteLLM: New User Invitation"
         assert invitation_params.signature == EMAIL_FOOTER
-        
+
         # Test key created email params with default template
         key_params = await email_logger._get_email_params(
             email_event=EmailEvent.virtual_key_created,
             user_email="test@example.com",
-            event_message="API Key Created"
+            event_message="API Key Created",
         )
-        
+
         assert key_params.subject == "LiteLLM: API Key Created"
         assert key_params.signature == EMAIL_FOOTER
 
@@ -639,7 +653,10 @@ async def test_send_soft_budget_alert_email(
         call_args = mock_send_email.call_args[1]
         assert call_args["from_email"] == BaseEmailLogger.DEFAULT_LITELLM_EMAIL
         assert call_args["to_email"] == ["test@example.com"]
-        assert call_args["subject"] == "LiteLLM: Soft Budget Crossed - Total Soft Budget: $100.0"
+        assert (
+            call_args["subject"]
+            == "LiteLLM: Soft Budget Crossed - Total Soft Budget: $100.0"
+        )
         assert "$100.0" in call_args["html_body"]  # soft_budget
         assert "$105.0" in call_args["html_body"]  # spend
         assert "$200.0" in call_args["html_body"]  # max_budget
@@ -673,13 +690,13 @@ async def test_send_soft_budget_alert_email_no_max_budget(
         call_args = mock_send_email.call_args[1]
         assert "$100.0" in call_args["html_body"]  # soft_budget
         assert "$105.0" in call_args["html_body"]  # spend
-        assert "Maximum Budget" not in call_args["html_body"]  # max_budget should not be shown
+        assert (
+            "Maximum Budget" not in call_args["html_body"]
+        )  # max_budget should not be shown
 
 
 @pytest.mark.asyncio
-async def test_budget_alerts_soft_budget_crossed(
-    base_email_logger, mock_send_email
-):
+async def test_budget_alerts_soft_budget_crossed(base_email_logger, mock_send_email):
     """Test that budget_alerts sends email when soft budget is crossed"""
     user_info = CallInfo(
         user_id="test_user",
@@ -708,11 +725,14 @@ async def test_budget_alerts_soft_budget_crossed(
         mock_send_email.assert_called_once()
         call_args = mock_send_email.call_args[1]
         assert call_args["to_email"] == ["test@example.com"]
-        
+
         # Verify cache was set to prevent duplicate alerts
         mock_cache.async_set_cache.assert_called_once()
         cache_call_args = mock_cache.async_set_cache.call_args[1]
-        assert cache_call_args["key"] == "email_budget_alerts:soft_budget_crossed:test_user"
+        assert (
+            cache_call_args["key"]
+            == "email_budget_alerts:soft_budget_crossed:test_user"
+        )
         assert cache_call_args["value"] == "SENT"
         assert cache_call_args["ttl"] == EMAIL_BUDGET_ALERT_TTL
 
@@ -766,9 +786,7 @@ async def test_budget_alerts_soft_budget_duplicate_prevention(
 
 
 @pytest.mark.asyncio
-async def test_budget_alerts_no_budgets(
-    base_email_logger, mock_send_email
-):
+async def test_budget_alerts_no_budgets(base_email_logger, mock_send_email):
     """Test that budget_alerts returns early when no budgets are set"""
     user_info = CallInfo(
         user_id="test_user",
@@ -817,7 +835,10 @@ async def test_budget_alerts_uses_token_for_cache_key(
         # Verify cache key uses token instead of user_id
         mock_cache.async_set_cache.assert_called_once()
         cache_call_args = mock_cache.async_set_cache.call_args[1]
-        assert cache_call_args["key"] == "email_budget_alerts:soft_budget_crossed:hashed_token_123"
+        assert (
+            cache_call_args["key"]
+            == "email_budget_alerts:soft_budget_crossed:hashed_token_123"
+        )
 
 
 @pytest.mark.asyncio
@@ -838,7 +859,9 @@ async def test_get_email_params_soft_budget_crossed(
         )
 
         # Should use default subject template for soft_budget_crossed
-        assert result.subject == "LiteLLM: Soft Budget Crossed - Total Soft Budget: $100.0"
+        assert (
+            result.subject == "LiteLLM: Soft Budget Crossed - Total Soft Budget: $100.0"
+        )
         assert result.recipient_email == "test@example.com"
         assert result.base_url == "http://test.com"
 
@@ -867,15 +890,225 @@ async def test_budget_alerts_max_budget_alert_crossed(
             "PROXY_BASE_URL": "http://test.com",
         },
     ):
-        await base_email_logger.budget_alerts(type="max_budget_alert", user_info=user_info)
+        await base_email_logger.budget_alerts(
+            type="max_budget_alert", user_info=user_info
+        )
 
         mock_send_email.assert_called_once()
         call_args = mock_send_email.call_args[1]
         assert call_args["to_email"] == ["test@example.com"]
         assert "Max Budget Alert" in call_args["subject"]
-        
+
         mock_cache.async_set_cache.assert_called_once()
         cache_call_args = mock_cache.async_set_cache.call_args[1]
-        assert cache_call_args["key"] == "email_budget_alerts:max_budget_alert:test_user"
+        assert (
+            cache_call_args["key"] == "email_budget_alerts:max_budget_alert:test_user"
+        )
         assert cache_call_args["value"] == "SENT"
         assert cache_call_args["ttl"] == EMAIL_BUDGET_ALERT_TTL
+
+
+@pytest.mark.asyncio
+async def test_multi_threshold_sends_crossed_thresholds(
+    base_email_logger, mock_send_email
+):
+    """Test that multi-threshold path sends emails for all crossed thresholds"""
+    user_info = CallInfo(
+        token="hashed_key_1",
+        user_id="test_user",
+        user_email="owner@co.com",
+        spend=80.0,
+        max_budget=100.0,
+        event_group=Litellm_EntityType.KEY,
+        max_budget_alert_emails={
+            "50": ["finance@co.com"],
+            "75": ["finance@co.com", "bu_lead@co.com"],
+            "100": ["cto@co.com"],
+        },
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(
+            type="max_budget_alert", user_info=user_info
+        )
+
+        # spend=80 crosses 50% ($50) and 75% ($75), but not 100% ($100)
+        assert mock_send_email.call_count == 2
+
+        # Check cache keys include threshold percentage
+        cache_keys = [c[1]["key"] for c in mock_cache.async_set_cache.call_args_list]
+        assert "email_budget_alerts:max_budget_alert:50:hashed_key_1" in cache_keys
+        assert "email_budget_alerts:max_budget_alert:75:hashed_key_1" in cache_keys
+
+
+@pytest.mark.asyncio
+async def test_multi_threshold_dedup_cache_prevents_resend(
+    base_email_logger, mock_send_email
+):
+    """Test that cached thresholds are not re-sent"""
+    user_info = CallInfo(
+        token="hashed_key_1",
+        user_id="test_user",
+        user_email="owner@co.com",
+        spend=80.0,
+        max_budget=100.0,
+        event_group=Litellm_EntityType.KEY,
+        max_budget_alert_emails={
+            "50": ["finance@co.com"],
+            "75": ["finance@co.com"],
+        },
+    )
+
+    # Simulate 50% already sent (cached), 75% not yet sent
+    async def cache_get(key):
+        if "50:" in key:
+            return "SENT"
+        return None
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(side_effect=cache_get)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(
+            type="max_budget_alert", user_info=user_info
+        )
+
+        # Only 75% should fire
+        assert mock_send_email.call_count == 1
+        cache_key = mock_cache.async_set_cache.call_args[1]["key"]
+        assert "75:" in cache_key
+
+
+@pytest.mark.asyncio
+async def test_multi_threshold_owner_email_auto_included(
+    base_email_logger, mock_send_email
+):
+    """Test that the owner email is auto-appended and deduplicated"""
+    user_info = CallInfo(
+        token="hashed_key_1",
+        user_id="test_user",
+        user_email="owner@co.com",
+        spend=60.0,
+        max_budget=100.0,
+        event_group=Litellm_EntityType.KEY,
+        max_budget_alert_emails={
+            "50": ["finance@co.com", "owner@co.com"],  # owner already in list
+        },
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(
+            type="max_budget_alert", user_info=user_info
+        )
+
+        mock_send_email.assert_called_once()
+        to_emails = mock_send_email.call_args[1]["to_email"]
+        # owner@co.com should appear exactly once (deduplicated)
+        assert sorted(to_emails) == ["finance@co.com", "owner@co.com"]
+
+
+@pytest.mark.asyncio
+async def test_multi_threshold_malformed_keys_skipped(
+    base_email_logger, mock_send_email
+):
+    """Test that non-numeric threshold keys are skipped"""
+    user_info = CallInfo(
+        token="hashed_key_1",
+        user_id="test_user",
+        user_email="owner@co.com",
+        spend=60.0,
+        max_budget=100.0,
+        event_group=Litellm_EntityType.KEY,
+        max_budget_alert_emails={
+            "fifty": ["finance@co.com"],  # invalid
+            "50": ["finance@co.com"],  # valid, crossed
+        },
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(
+            type="max_budget_alert", user_info=user_info
+        )
+
+        # Only the valid "50" threshold should fire
+        assert mock_send_email.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_threshold_empty_emails_only_owner(
+    base_email_logger, mock_send_email
+):
+    """Test that empty email list for a threshold sends only to owner"""
+    user_info = CallInfo(
+        token="hashed_key_1",
+        user_id="test_user",
+        user_email="owner@co.com",
+        spend=60.0,
+        max_budget=100.0,
+        event_group=Litellm_EntityType.KEY,
+        max_budget_alert_emails={
+            "50": [],  # empty list
+        },
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(
+            type="max_budget_alert", user_info=user_info
+        )
+
+        mock_send_email.assert_called_once()
+        to_emails = mock_send_email.call_args[1]["to_email"]
+        assert to_emails == ["owner@co.com"]
+
+
+@pytest.mark.asyncio
+async def test_no_map_preserves_old_single_threshold(
+    base_email_logger, mock_send_email
+):
+    """Test that without max_budget_alert_emails, the old 80% single-threshold path works"""
+    user_info = CallInfo(
+        user_id="test_user",
+        user_email="test@example.com",
+        spend=165.0,
+        max_budget=200.0,
+        event_group=Litellm_EntityType.USER,
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(
+            type="max_budget_alert", user_info=user_info
+        )
+
+        mock_send_email.assert_called_once()
+        call_args = mock_send_email.call_args[1]
+        assert call_args["to_email"] == ["test@example.com"]
+        # Old path cache key has no threshold percentage
+        cache_key = mock_cache.async_set_cache.call_args[1]["key"]
+        assert cache_key == "email_budget_alerts:max_budget_alert:test_user"

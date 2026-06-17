@@ -253,10 +253,57 @@ export default function ModelInfoView({
         max_retries: values.max_retries,
         timeout: values.timeout,
         stream_timeout: values.stream_timeout,
-        input_cost_per_token: values.input_cost / 1_000_000,
-        output_cost_per_token: values.output_cost / 1_000_000,
         tags: values.tags,
       };
+
+      if (form.isFieldTouched("input_cost")) {
+        if (values.input_cost !== undefined && values.input_cost !== null && values.input_cost !== "") {
+          updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
+        } else {
+          // Explicit null signals the backend to remove the pricing override.
+          updatedLitellmParams.input_cost_per_token = null;
+        }
+      }
+      if (form.isFieldTouched("output_cost")) {
+        if (values.output_cost !== undefined && values.output_cost !== null && values.output_cost !== "") {
+          updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
+        } else {
+          updatedLitellmParams.output_cost_per_token = null;
+        }
+      }
+
+      // Cache Read Cost:
+      //   - explicit value provided → use it
+      //   - field touched but empty → explicit null (signals backend to remove override)
+      //   - only input_cost touched → fall back to input_cost (guarded against null)
+      if (form.isFieldTouched("cache_read_cost") || form.isFieldTouched("input_cost")) {
+        if (values.cache_read_cost !== undefined && values.cache_read_cost !== null && values.cache_read_cost !== "") {
+          updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
+        } else if (form.isFieldTouched("cache_read_cost")) {
+          updatedLitellmParams.cache_read_input_token_cost = null;
+        } else if (
+          updatedLitellmParams.input_cost_per_token !== undefined &&
+          updatedLitellmParams.input_cost_per_token !== null
+        ) {
+          updatedLitellmParams.cache_read_input_token_cost = updatedLitellmParams.input_cost_per_token;
+        }
+      }
+
+      // Cache Write Cost: explicit value if provided, else explicit null so the
+      // backend removes the override and falls back to the model-level default.
+      // Sending 0 here would persist a zero rate even when the user intended to unset it.
+      if (form.isFieldTouched("cache_write_cost")) {
+        if (
+          values.cache_write_cost !== undefined &&
+          values.cache_write_cost !== null &&
+          values.cache_write_cost !== ""
+        ) {
+          updatedLitellmParams.cache_creation_input_token_cost = Number(values.cache_write_cost) / 1_000_000;
+        } else {
+          updatedLitellmParams.cache_creation_input_token_cost = null;
+        }
+      }
+
       if (values.litellm_credential_name) {
         updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
       } else {
@@ -373,6 +420,12 @@ export default function ModelInfoView({
           model: localModelData.litellm_model_name,
         },
         {
+          // `id` is required to disambiguate when multiple deployments
+          // share the same model_name (e.g. wildcard `openai/*` with two
+          // different `api_base` values for failover). Without it the
+          // backend silently falls back to deployments[0] and probes
+          // the wrong endpoint.
+          id: localModelData.model_info?.id,
           mode: localModelData.model_info?.mode,
         },
         localModelData.model_info?.mode,
@@ -449,10 +502,11 @@ export default function ModelInfoView({
               size="small"
               icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
-              className={`left-2 z-10 transition-all duration-200 ${copiedStates["model-id"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                }`}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["model-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
             />
           </div>
         </div>
@@ -563,10 +617,10 @@ export default function ModelInfoView({
                 Created At{" "}
                 {modelData.model_info.created_at
                   ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  })
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })
                   : "Not Set"}
               </div>
               <div className="flex items-center gap-x-2">
@@ -626,6 +680,22 @@ export default function ModelInfoView({
                     output_cost: localModelData.litellm_params?.output_cost_per_token
                       ? localModelData.litellm_params.output_cost_per_token * 1_000_000
                       : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
+                    cache_read_cost:
+                      localModelData.litellm_params?.cache_read_input_token_cost !== undefined &&
+                      localModelData.litellm_params?.cache_read_input_token_cost !== null
+                        ? localModelData.litellm_params.cache_read_input_token_cost * 1_000_000
+                        : localModelData.model_info?.cache_read_input_token_cost !== undefined &&
+                            localModelData.model_info?.cache_read_input_token_cost !== null
+                          ? localModelData.model_info.cache_read_input_token_cost * 1_000_000
+                          : null,
+                    cache_write_cost:
+                      localModelData.litellm_params?.cache_creation_input_token_cost !== undefined &&
+                      localModelData.litellm_params?.cache_creation_input_token_cost !== null
+                        ? localModelData.litellm_params.cache_creation_input_token_cost * 1_000_000
+                        : localModelData.model_info?.cache_creation_input_token_cost !== undefined &&
+                            localModelData.model_info?.cache_creation_input_token_cost !== null
+                          ? localModelData.model_info.cache_creation_input_token_cost * 1_000_000
+                          : null,
                     cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
                     cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
                     model_access_group: Array.isArray(localModelData.model_info?.access_groups)
@@ -708,6 +778,52 @@ export default function ModelInfoView({
                               ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.output_cost_per_token
                                 ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4)
+                                : "Not Set"}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Cache Read Cost (per 1M tokens)</Text>
+                        {isEditing ? (
+                          <Form.Item
+                            name="cache_read_cost"
+                            className="mb-0"
+                            tooltip="If left blank on save, defaults to Input Cost."
+                          >
+                            <NumericalInput placeholder="Defaults to Input Cost if blank" />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData?.litellm_params?.cache_read_input_token_cost !== undefined &&
+                            localModelData?.litellm_params?.cache_read_input_token_cost !== null
+                              ? (localModelData.litellm_params.cache_read_input_token_cost * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.cache_read_input_token_cost !== undefined &&
+                                  localModelData?.model_info?.cache_read_input_token_cost !== null
+                                ? (localModelData.model_info.cache_read_input_token_cost * 1_000_000).toFixed(4)
+                                : "Not Set"}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Cache Write Cost (per 1M tokens)</Text>
+                        {isEditing ? (
+                          <Form.Item
+                            name="cache_write_cost"
+                            className="mb-0"
+                            tooltip="If left blank on save, defaults to Input Cost (backend falls back to input_cost_per_token)."
+                          >
+                            <NumericalInput placeholder="Defaults to Input Cost if blank" />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData?.litellm_params?.cache_creation_input_token_cost !== undefined &&
+                            localModelData?.litellm_params?.cache_creation_input_token_cost !== null
+                              ? (localModelData.litellm_params.cache_creation_input_token_cost * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.cache_creation_input_token_cost !== undefined &&
+                                  localModelData?.model_info?.cache_creation_input_token_cost !== null
+                                ? (localModelData.model_info.cache_creation_input_token_cost * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
                         )}
@@ -961,7 +1077,7 @@ export default function ModelInfoView({
                                         >
                                           {vsId}
                                         </span>
-                                      )
+                                      ),
                                     )}
                                   </div>
                                 ) : (
@@ -1064,18 +1180,20 @@ export default function ModelInfoView({
                                 allowClear
                                 options={(() => {
                                   const wildcardProvider = modelData.litellm_model_name.split("/")[0];
-                                  return modelHubData?.data
-                                    ?.filter((model: any) => {
-                                      // Filter by provider to match the wildcard provider
-                                      return (
-                                        model.providers?.includes(wildcardProvider) &&
-                                        model.model_group !== modelData.litellm_model_name
-                                      );
-                                    })
-                                    .map((model: any) => ({
-                                      value: model.model_group,
-                                      label: model.model_group,
-                                    })) || [];
+                                  return (
+                                    modelHubData?.data
+                                      ?.filter((model: any) => {
+                                        // Filter by provider to match the wildcard provider
+                                        return (
+                                          model.providers?.includes(wildcardProvider) &&
+                                          model.model_group !== modelData.litellm_model_name
+                                        );
+                                      })
+                                      .map((model: any) => ({
+                                        value: model.model_group,
+                                        label: model.model_group,
+                                      })) || []
+                                  );
                                 })()}
                               />
                             </Form.Item>

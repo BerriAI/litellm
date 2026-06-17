@@ -22,7 +22,9 @@ class HTTPError(Exception):
 
 
 class FakeResponse:
-    def __init__(self, *, status_code=200, headers=None, text="", content=b"", json_data=None):
+    def __init__(
+        self, *, status_code=200, headers=None, text="", content=b"", json_data=None
+    ):
         self.status_code = status_code
         self.headers = headers or {}
         self.text = text
@@ -47,9 +49,10 @@ class StubHTTPHandler:
     Minimal stub that returns a FakeResponse based on url.
     Configure behavior by customizing self.routes in each test.
     """
+
     def __init__(self):
         self.routes = {}  # url -> FakeResponse or Exception
-        self.calls = []   # [(method, url, headers)]
+        self.calls = []  # [(method, url, headers)]
 
     def get(self, url, headers=None):
         self.calls.append(("GET", url, headers or {}))
@@ -58,7 +61,9 @@ class StubHTTPHandler:
             raise resp_or_exc
         if resp_or_exc is None:
             # default: 404 not found
-            return FakeResponse(status_code=404, headers={"content-type": "application/json"}, text="{}")
+            return FakeResponse(
+                status_code=404, headers={"content-type": "application/json"}, text="{}"
+            )
         return resp_or_exc
 
     def close(self):
@@ -103,7 +108,7 @@ def test_ref_prefers_tag_over_branch():
 
 def test_default_branch_is_main_when_absent():
     c = make_client(branch=None)  # explicit None
-    assert c.ref == 'main'
+    assert c.ref == "main"
 
 
 def test_auth_header_token_default():
@@ -135,7 +140,7 @@ def test_get_file_content_raw_text_success():
     c.http_handler.routes[raw_url] = FakeResponse(
         status_code=200,
         headers={"content-type": "text/plain; charset=utf-8"},
-        text="Hello world"
+        text="Hello world",
     )
     out = c.get_file_content("path/to/file.prompt")
     assert out == "Hello world"
@@ -149,7 +154,7 @@ def test_get_file_content_raw_binary_utf8_decodes():
     c.http_handler.routes[raw_url] = FakeResponse(
         status_code=200,
         headers={"content-type": "application/octet-stream"},
-        content="προμ pt".encode("utf-8")
+        content="προμ pt".encode("utf-8"),
     )
     out = c.get_file_content("bin/file.raw")
     assert out == "προμ pt"
@@ -160,12 +165,14 @@ def test_get_file_content_fallbacks_to_json_when_raw_404_and_decodes_base64():
     raw_url = f"https://gitlab.example.com/api/v4/projects/{enc_project('group/sub/repo')}/repository/files/prompts%2Ffoo.prompt/raw?ref=main"
     json_url = f"https://gitlab.example.com/api/v4/projects/{enc_project('group/sub/repo')}/repository/files/prompts%2Ffoo.prompt?ref=main"
 
-    c.http_handler.routes[raw_url] = FakeResponse(status_code=404, headers={"content-type": "application/json"}, text="{}")
+    c.http_handler.routes[raw_url] = FakeResponse(
+        status_code=404, headers={"content-type": "application/json"}, text="{}"
+    )
     encoded = base64.b64encode("FROM JSON".encode("utf-8")).decode("ascii")
     c.http_handler.routes[json_url] = FakeResponse(
         status_code=200,
         headers={"content-type": "application/json"},
-        json_data={"content": encoded, "encoding": "base64"}
+        json_data={"content": encoded, "encoding": "base64"},
     )
 
     out = c.get_file_content("prompts/foo.prompt")
@@ -247,7 +254,9 @@ def test_get_repository_info_success():
 
 def test_test_connection_true_and_false():
     c = make_client()
-    ok_url = f"https://gitlab.example.com/api/v4/projects/{enc_project('group/sub/repo')}"
+    ok_url = (
+        f"https://gitlab.example.com/api/v4/projects/{enc_project('group/sub/repo')}"
+    )
     c.http_handler.routes[ok_url] = FakeResponse(status_code=200, json_data={"id": 1})
     assert c.test_connection() is True
 
@@ -259,7 +268,9 @@ def test_test_connection_true_and_false():
 def test_get_branches_returns_list():
     c = make_client()
     url = f"https://gitlab.example.com/api/v4/projects/{enc_project('group/sub/repo')}/repository/branches"
-    c.http_handler.routes[url] = FakeResponse(status_code=200, json_data=[{"name": "main"}])
+    c.http_handler.routes[url] = FakeResponse(
+        status_code=200, json_data=[{"name": "main"}]
+    )
     branches = c.get_branches()
     assert isinstance(branches, list)
     assert branches[0]["name"] == "main"
@@ -270,8 +281,12 @@ def test_get_file_metadata_parses_headers_and_handles_404():
     raw_url = f"https://gitlab.example.com/api/v4/projects/{enc_project('group/sub/repo')}/repository/files/foo%2Fbar.raw/raw?ref=x"
     c.http_handler.routes[raw_url] = FakeResponse(
         status_code=200,
-        headers={"content-type": "application/octet-stream", "content-length": "1234", "last-modified": "Thu, 01 Jan 1970 00:00:00 GMT"},
-        content=b"\x00"
+        headers={
+            "content-type": "application/octet-stream",
+            "content-length": "1234",
+            "last-modified": "Thu, 01 Jan 1970 00:00:00 GMT",
+        },
+        content=b"\x00",
     )
     meta = c.get_file_metadata("foo/bar.raw")
     assert meta["content_type"] == "application/octet-stream"

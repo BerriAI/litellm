@@ -2,7 +2,11 @@ name: LiteLLM MCP Tests (folder - tests/mcp_tests)
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
 
 permissions:
   contents: read
@@ -39,4 +43,4 @@ jobs:
 
       - name: Run MCP tests
         run: |
-          uv run --no-sync pytest tests/mcp_tests -x -vv -n 4 --cov=litellm --cov-report=xml --durations=5
+          uv run --no-sync pytest tests/mcp_tests -x -vv -n 4 --cov=./litellm --cov-report=xml --durations=5

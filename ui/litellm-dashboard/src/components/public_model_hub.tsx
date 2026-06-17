@@ -10,14 +10,17 @@ import NotificationsManager from "./molecules/notifications_manager";
 import Navbar from "./navbar";
 import {
   agentHubPublicModelsCall,
+  skillHubPublicCall,
   getPublicModelHubInfo,
   getUiConfig,
   mcpHubPublicServersCall,
   modelHubPublicModelsCall,
 } from "./networking";
-import { generateCodeSnippet } from "./playground/chat_ui/CodeSnippets";
-import { getEndpointType } from "./playground/chat_ui/mode_endpoint_mapping";
-import { MessageType } from "./playground/chat_ui/types";
+import { Plugin } from "./claude_code_plugins/types";
+import SkillHubDashboard from "./AIHub/SkillHubDashboard";
+import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
+import { getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
+import { MessageType } from "@/components/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 
 const { TabPane } = Tabs;
@@ -118,8 +121,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [selectedModel, setSelectedModel] = useState<null | ModelGroupInfo>(null);
   const [selectedAgent, setSelectedAgent] = useState<null | AgentCard>(null);
   const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
-  const [proxySettings, setProxySettings] = useState<any>({});
   const [activeTab, setActiveTab] = useState<string>("models");
+  const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
+  const [skillLoading, setSkillLoading] = useState<boolean>(false);
 
   useEffect(() => {
     const initializeAndFetch = async () => {
@@ -180,11 +184,24 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         setUsefulLinks(publicModelHubInfo.useful_links || {});
       };
 
+      const fetchSkillData = async () => {
+        try {
+          setSkillLoading(true);
+          const response = await skillHubPublicCall();
+          setSkillHubData(response.plugins ?? []);
+        } catch (error) {
+          console.error("There was an error fetching the public skill data", error);
+        } finally {
+          setSkillLoading(false);
+        }
+      };
+
       fetchPublicModelHubInfo();
 
       fetchPublicData();
       fetchAgentData();
       fetchMcpData();
+      fetchSkillData();
     };
 
     initializeAndFetch();
@@ -963,20 +980,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     <ThemeProvider accessToken={accessToken}>
       <div className={isEmbedded ? "w-full" : "min-h-screen bg-white"}>
         {/* Navigation - only show when not embedded */}
-        {!isEmbedded && (
-          <Navbar
-            userID={null}
-            userEmail={null}
-            userRole={null}
-            premiumUser={false}
-            setProxySettings={setProxySettings}
-            proxySettings={proxySettings}
-            accessToken={accessToken || null}
-            isPublicPage={true}
-            isDarkMode={false}
-            toggleDarkMode={() => {}}
-          />
-        )}
+        {!isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
 
         <div className={isEmbedded ? "w-full p-6" : "w-full px-8 py-12"}>
           {/* Embedded Explainer - only shown when embedded in dashboard */}
@@ -1294,6 +1298,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   </div>
                 </TabPane>
               )}
+
+              {/* Skill Hub Tab */}
+              <TabPane tab="Skill Hub" key="skills">
+                <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
+              </TabPane>
             </Tabs>
           </Card>
         </div>

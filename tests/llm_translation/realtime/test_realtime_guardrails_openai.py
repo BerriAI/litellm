@@ -26,9 +26,7 @@ from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.types.guardrails import GuardrailEventHooks
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENAI_REALTIME_URL = (
-    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
-)
+OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
 
 pytestmark = pytest.mark.skipif(
     not OPENAI_API_KEY,
@@ -42,14 +40,10 @@ BLOCKED_PHRASE = "XSECRETBLOCKTESTPHRASEX"
 class PhraseBlockingGuardrail(CustomGuardrail):
     """Blocks any message containing BLOCKED_PHRASE."""
 
-    async def apply_guardrail(
-        self, inputs, request_data, input_type, logging_obj=None
-    ):
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
         for text in inputs.get("texts", []):
             if BLOCKED_PHRASE in text:
-                raise ValueError(
-                    "Content blocked: contains forbidden test phrase."
-                )
+                raise ValueError("Content blocked: contains forbidden test phrase.")
         return inputs
 
 
@@ -108,7 +102,8 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
     Send a text message containing the blocked phrase.
     Guardrail must:
       - Send error event (guardrail_violation) to client.
-      - Send response.audio_transcript.delta with the block message to client.
+      - Send response.output_audio_transcript.delta (or beta-protocol
+        response.audio_transcript.delta) with the block message to client.
       - NOT forward response.create to OpenAI (no AI response).
     """
     import websockets
@@ -123,7 +118,6 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
             OPENAI_REALTIME_URL,
             additional_headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "OpenAI-Beta": "realtime=v1",
             },
         ) as backend_ws:
             streaming, input_queue = await _build_streaming(client_events, backend_ws)
@@ -174,27 +168,59 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
         #    if the OpenAI session emits other errors, e.g. missing parameters)
         error_events = [e for e in client_events if e.get("type") == "error"]
         guardrail_errors = [
-            e for e in error_events
+            e
+            for e in error_events
             if e.get("error", {}).get("type") == "guardrail_violation"
         ]
-        assert len(guardrail_errors) >= 1, (
-            f"Expected at least one guardrail_violation error but got: {[e.get('error', {}).get('type') for e in error_events]}"
-        )
+        assert (
+            len(guardrail_errors) >= 1
+        ), f"Expected at least one guardrail_violation error but got: {[e.get('error', {}).get('type') for e in error_events]}"
 
         # 2. Must have the guardrail message surfaced as an AI transcript delta
         transcript_deltas = [
             e
             for e in client_events
-            if e.get("type") == "response.audio_transcript.delta"
+            if e.get("type")
+            in (
+                "response.output_audio_transcript.delta",
+                "response.audio_transcript.delta",
+            )
         ]
-        assert len(transcript_deltas) >= 1, (
-            f"Expected guardrail message in transcript delta, got: {event_types}"
-        )
+        assert (
+            len(transcript_deltas) >= 1
+        ), f"Expected guardrail message in transcript delta, got: {event_types}"
 
-        # 3. No *real* AI response should have been generated.
-        #    The guardrail may produce its own response (e.g. "Content blocked: ...")
-        #    via response.cancel + conversation.item.create + response.create.
-        #    We allow the guardrail's own block message but NOT original AI content.
+        # 3. No *real* AI response to the blocked content should have been
+        #    generated. The original user message is blocked BEFORE it is
+        #    forwarded to OpenAI, so the only thing the model ever sees is the
+        #    guardrail's "say exactly: <block message>" prompt
+        #    (see realtime_streaming.py). Two safe outcomes are possible:
+        #      - the model voices the block message verbatim (older realtime
+        #        snapshots did this -> text contains "blocked"), or
+        #      - the model declines to repeat it (gpt-realtime tends to refuse
+        #        verbatim-repeat instructions, e.g. "I'm sorry, but I can't
+        #        repeat that message.").
+        #    Both mean the blocked prompt itself was never answered, so we
+        #    accept either. The hard invariant is that the blocked phrase must
+        #    never leak into AI output, and the model must not have produced a
+        #    normal answer to the user (which would have neither a block nor a
+        #    refusal marker).
+        safe_markers = (
+            "block",
+            "guardrail",
+            "content filter",
+            "policy",
+            "can't repeat",
+            "cannot repeat",
+            "can't say",
+            "cannot say",
+            "won't repeat",
+            "can't assist",
+            "can't help",
+            "unable to",
+            "i'm sorry",
+            "i am sorry",
+        )
         done_events = [e for e in client_events if e.get("type") == "response.done"]
         for done in done_events:
             output = done.get("response", {}).get("output", [])
@@ -204,11 +230,20 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
                 for c in item.get("content", [])
             ]
             real_ai_text = " ".join(ai_texts).strip()
-            # Allow guardrail-generated block messages (contain "Content blocked" or "blocked")
             if real_ai_text:
-                assert "blocked" in real_ai_text.lower() or "guardrail" in real_ai_text.lower(), (
-                    f"AI responded with non-guardrail content even though message was blocked: {real_ai_text!r}"
+                assert (
+                    BLOCKED_PHRASE not in real_ai_text
+                ), f"Blocked phrase leaked into AI response: {real_ai_text!r}"
+                normalized_ai_text = (
+                    real_ai_text.lower()
+                    .replace("\u2019", "'")
+                    .replace("\u2018", "'")
+                    .replace("\u201c", '"')
+                    .replace("\u201d", '"')
                 )
+                assert any(
+                    marker in normalized_ai_text for marker in safe_markers
+                ), f"AI responded with non-guardrail content even though message was blocked: {real_ai_text!r}"
 
     finally:
         litellm.callbacks = []
@@ -254,9 +289,9 @@ async def test_voice_transcript_blocked_by_guardrail():
 
         # 1. Error event must be sent to client
         error_events = [e for e in client_events if e.get("type") == "error"]
-        assert len(error_events) >= 1, (
-            f"Expected guardrail error event, got: {event_types}"
-        )
+        assert (
+            len(error_events) >= 1
+        ), f"Expected guardrail error event, got: {event_types}"
         assert error_events[0]["error"]["type"] == "guardrail_violation"
 
         # 2. Check what was sent to backend.
@@ -271,9 +306,9 @@ async def test_voice_transcript_blocked_by_guardrail():
         response_cancels = [
             e for e in sent_to_backend if e.get("type") == "response.cancel"
         ]
-        assert len(response_cancels) >= 1 or len(sent_to_backend) == 0, (
-            f"Guardrail should have sent response.cancel or nothing, got: {sent_to_backend}"
-        )
+        assert (
+            len(response_cancels) >= 1 or len(sent_to_backend) == 0
+        ), f"Guardrail should have sent response.cancel or nothing, got: {sent_to_backend}"
 
         # Note: The guardrail may or may not send transcript deltas; the error event
         # (assertion #1) is the primary signal that the blocked content was handled.
@@ -300,7 +335,6 @@ async def test_clean_text_message_passes_through_to_openai():
             OPENAI_REALTIME_URL,
             additional_headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "OpenAI-Beta": "realtime=v1",
             },
         ) as backend_ws:
             streaming, input_queue = await _build_streaming(client_events, backend_ws)
@@ -340,17 +374,19 @@ async def test_clean_text_message_passes_through_to_openai():
         # No guardrail error should have been sent
         error_events = [e for e in client_events if e.get("type") == "error"]
         guardrail_errors = [
-            e for e in error_events if e.get("error", {}).get("type") == "guardrail_violation"
+            e
+            for e in error_events
+            if e.get("error", {}).get("type") == "guardrail_violation"
         ]
-        assert len(guardrail_errors) == 0, (
-            f"Clean message should not trigger guardrail, got: {guardrail_errors}"
-        )
+        assert (
+            len(guardrail_errors) == 0
+        ), f"Clean message should not trigger guardrail, got: {guardrail_errors}"
 
         # AI response must be present
         done_events = [e for e in client_events if e.get("type") == "response.done"]
-        assert len(done_events) >= 1, (
-            f"Expected response.done from OpenAI, got: {[e.get('type') for e in client_events]}"
-        )
+        assert (
+            len(done_events) >= 1
+        ), f"Expected response.done from OpenAI, got: {[e.get('type') for e in client_events]}"
 
     finally:
         litellm.callbacks = []

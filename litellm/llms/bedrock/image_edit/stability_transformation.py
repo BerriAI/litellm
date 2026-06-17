@@ -149,7 +149,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
 
         return mapped_params
 
-    def transform_image_edit_request(  # noqa: PLR0915
+    def transform_image_edit_request(
         self,
         model: str,
         prompt: Optional[str],
@@ -372,6 +372,8 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         """
         Validate environment for Bedrock Stability image edit.

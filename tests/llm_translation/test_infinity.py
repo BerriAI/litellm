@@ -187,6 +187,7 @@ async def test_infinity_rerank_with_env(monkeypatch):
 
         assert_response_shape(response, custom_llm_provider="infinity")
 
+
 #### Embedding Tests
 @pytest.mark.asyncio()
 async def test_infinity_embedding():
@@ -197,7 +198,7 @@ async def test_infinity_embedding():
             "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
             "usage": {"prompt_tokens": 100, "total_tokens": 150},
             "model": "custom-model/embedding-v1",
-            "object": "list"
+            "object": "list",
         }
 
     mock_response.json = return_val
@@ -208,7 +209,7 @@ async def test_infinity_embedding():
         "model": "custom-model/embedding-v1",
         "input": ["hello world"],
         "encoding_format": "float",
-        "output_dimension": 512
+        "output_dimension": 512,
     }
 
     with patch(
@@ -221,7 +222,6 @@ async def test_infinity_embedding():
             dimensions=512,
             encoding_format="float",
             api_base="https://api.infinity.ai/embeddings",
-            
         )
 
         # Assert
@@ -253,7 +253,7 @@ async def test_infinity_embedding_with_env(monkeypatch):
             "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
             "usage": {"prompt_tokens": 100, "total_tokens": 150},
             "model": "custom-model/embedding-v1",
-            "object": "list"
+            "object": "list",
         }
 
     mock_response.json = return_val
@@ -264,7 +264,7 @@ async def test_infinity_embedding_with_env(monkeypatch):
         "model": "custom-model/embedding-v1",
         "input": ["hello world"],
         "encoding_format": "float",
-        "output_dimension": 512
+        "output_dimension": 512,
     }
 
     with patch(
@@ -307,7 +307,7 @@ async def test_infinity_embedding_extra_params():
             "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
             "usage": {"prompt_tokens": 100, "total_tokens": 150},
             "model": "custom-model/embedding-v1",
-            "object": "list"
+            "object": "list",
         }
 
     mock_response.json = return_val
@@ -347,7 +347,7 @@ async def test_infinity_embedding_prompt_token_mapping():
             "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
             "usage": {"total_tokens": 1, "prompt_tokens": 1},
             "model": "custom-model/embedding-v1",
-            "object": "list"
+            "object": "list",
         }
 
     mock_response.json = return_val

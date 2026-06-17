@@ -5,16 +5,36 @@ Bedrock Mantle is Amazon Bedrock's OpenAI-compatible inference engine (Project M
 API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 """
 
+import json
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+import httpx
 import pytest
 
 import litellm
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
 from litellm.types.utils import LlmProviders
+
+
+@pytest.fixture
+def local_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    original_bedrock_mantle_models = set(litellm.bedrock_mantle_models)
+    try:
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.get_model_info.cache_clear()
+        litellm.add_known_models()
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.bedrock_mantle_models.clear()
+        litellm.bedrock_mantle_models.update(original_bedrock_mantle_models)
+        litellm.get_model_info.cache_clear()
 
 
 class TestBedrockMantleProviderRegistration:
@@ -31,10 +51,12 @@ class TestBedrockMantleProviderRegistration:
         assert "bedrock_mantle/openai.gpt-oss-120b" in litellm.bedrock_mantle_models
         assert "bedrock_mantle/openai.gpt-oss-20b" in litellm.bedrock_mantle_models
         assert (
-            "bedrock_mantle/openai.gpt-oss-safeguard-120b" in litellm.bedrock_mantle_models
+            "bedrock_mantle/openai.gpt-oss-safeguard-120b"
+            in litellm.bedrock_mantle_models
         )
         assert (
-            "bedrock_mantle/openai.gpt-oss-safeguard-20b" in litellm.bedrock_mantle_models
+            "bedrock_mantle/openai.gpt-oss-safeguard-20b"
+            in litellm.bedrock_mantle_models
         )
 
 
@@ -57,6 +79,71 @@ class TestBedrockMantleConfig:
         cfg = BedrockMantleChatConfig()
         api_base, _ = cfg._get_openai_compatible_provider_info(None, None)
         assert api_base == "https://bedrock-mantle.ap-northeast-1.api.aws/v1"
+
+    def test_default_api_base_uses_aws_region_name_env(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.setenv("AWS_REGION_NAME", "ca-central-1")
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://bedrock-mantle.ca-central-1.api.aws/v1"
+
+    def test_aws_region_name_param_overrides_env(self, monkeypatch):
+        from litellm.types.router import GenericLiteLLMParams
+
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-west-2")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(
+            None, None, litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2")
+        )
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+
+    def test_malicious_aws_region_name_rejected(self, monkeypatch):
+        from litellm.types.router import GenericLiteLLMParams
+
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        cfg = BedrockMantleChatConfig()
+        with pytest.raises(ValueError):
+            cfg._get_openai_compatible_provider_info(
+                None,
+                None,
+                litellm_params=GenericLiteLLMParams(
+                    aws_region_name="us-east-1.api.aws.attacker.example/"
+                ),
+            )
+
+    def test_get_llm_provider_rejects_malicious_aws_region_name(self, monkeypatch):
+        from litellm.types.router import GenericLiteLLMParams
+
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        with pytest.raises(litellm.exceptions.BadRequestError):
+            litellm.get_llm_provider(
+                model="openai.gpt-5.5",
+                custom_llm_provider="bedrock_mantle",
+                litellm_params=GenericLiteLLMParams(
+                    aws_region_name="us-east-1.api.aws.attacker.example/"
+                ),
+            )
+
+    def test_get_llm_provider_uses_aws_region_name_for_responses(self, monkeypatch):
+        from litellm.types.router import GenericLiteLLMParams
+
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        _, provider, _, api_base = litellm.get_llm_provider(
+            model="openai.gpt-5.5",
+            custom_llm_provider="bedrock_mantle",
+            litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
+        )
+        assert provider == "bedrock_mantle"
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
 
     def test_default_api_base_fallback_to_us_east_1(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
@@ -92,6 +179,79 @@ class TestBedrockMantleConfig:
         assert "temperature" in params
         assert "stream" in params
         assert "max_tokens" in params
+
+
+class TestBedrockMantleProjectHeader:
+    def test_validate_environment_sets_openai_project_header(self):
+        cfg = BedrockMantleChatConfig()
+        headers = cfg.validate_environment(
+            headers={},
+            model="openai.gpt-oss-120b",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={"aws_bedrock_project_id": "proj_abc123def456"},
+            api_key="fake-key",
+        )
+        assert headers["OpenAI-Project"] == "proj_abc123def456"
+        assert headers["Authorization"] == "Bearer fake-key"
+
+    def test_validate_environment_without_project_id(self):
+        cfg = BedrockMantleChatConfig()
+        headers = cfg.validate_environment(
+            headers={},
+            model="openai.gpt-oss-120b",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            api_key="fake-key",
+        )
+        assert "OpenAI-Project" not in headers
+
+    def test_completion_sends_openai_project_header_and_clean_body(self):
+        requests = []
+
+        def mock_post(self, url, data=None, headers=None, **kwargs):
+            raw_body = data.decode("utf-8") if isinstance(data, bytes) else data
+            requests.append(
+                {"headers": headers or {}, "body": json.loads(raw_body or "{}")}
+            )
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1733529600,
+                    "model": "openai.gpt-oss-120b",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", mock_post
+        ):
+            response = litellm.completion(
+                model="bedrock_mantle/openai.gpt-oss-120b",
+                messages=[{"role": "user", "content": "hello"}],
+                api_key="fake-key",
+                aws_bedrock_project_id="proj_abc123def456",
+            )
+
+        assert response.choices[0].message.content == "ok"
+        assert len(requests) == 1
+        assert requests[0]["headers"]["OpenAI-Project"] == "proj_abc123def456"
+        assert "aws_bedrock_project_id" not in requests[0]["body"]
 
 
 class TestBedrockMantleProviderResolution:
@@ -167,3 +327,52 @@ class TestBedrockMantlePricing:
         litellm.add_known_models()
         info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
         assert info["max_input_tokens"] == 131072
+
+
+@pytest.mark.parametrize(
+    "model_id,input_cost,output_cost,max_tokens",
+    [
+        ("google.gemma-4-31b", 1.4e-07, 4e-07, 256000),
+        ("google.gemma-4-26b-a4b", 1.3e-07, 4e-07, 256000),
+        ("google.gemma-4-e2b", 4e-08, 8e-08, 128000),
+    ],
+)
+def test_gemma_4_bedrock_mantle_model_metadata(
+    local_cost_map, model_id, input_cost, output_cost, max_tokens
+):
+    full_model_name = f"bedrock_mantle/{model_id}"
+    info = litellm.get_model_info(full_model_name)
+
+    assert info["mode"] == "chat"
+    assert info["input_cost_per_token"] == pytest.approx(input_cost)
+    assert info["output_cost_per_token"] == pytest.approx(output_cost)
+    assert info["max_input_tokens"] == max_tokens
+    assert info["max_output_tokens"] == max_tokens
+    assert info["supports_function_calling"] is True
+    assert info["supports_reasoning"] is True
+    assert info["supports_tool_choice"] is True
+    assert info["supports_vision"] is True
+    assert (
+        litellm.supports_parallel_function_calling(
+            model=full_model_name, custom_llm_provider="bedrock_mantle"
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "google.gemma-4-31b",
+        "google.gemma-4-26b-a4b",
+        "google.gemma-4-e2b",
+    ],
+)
+def test_gemma_4_models_register_under_bedrock_mantle(local_cost_map, model_id):
+    full_model_name = f"bedrock_mantle/{model_id}"
+
+    assert full_model_name in litellm.bedrock_mantle_models
+
+    resolved_model, provider, _, _ = litellm.get_llm_provider(full_model_name)
+    assert provider == "bedrock_mantle"
+    assert resolved_model == model_id

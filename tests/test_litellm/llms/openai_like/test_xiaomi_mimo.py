@@ -27,11 +27,11 @@ class TestXiaomiMiMoProviderConfig:
         from litellm import LlmProviders
 
         # Verify xiaomi_mimo is in the enum
-        assert hasattr(LlmProviders, 'XIAOMI_MIMO')
-        assert LlmProviders.XIAOMI_MIMO.value == 'xiaomi_mimo'
+        assert hasattr(LlmProviders, "XIAOMI_MIMO")
+        assert LlmProviders.XIAOMI_MIMO.value == "xiaomi_mimo"
 
         # Verify it's in the provider list
-        assert 'xiaomi_mimo' in litellm.provider_list
+        assert "xiaomi_mimo" in litellm.provider_list
 
     def test_xiaomi_mimo_json_config_exists(self):
         """Test that xiaomi_mimo is configured in providers.json"""
@@ -98,7 +98,12 @@ class TestXiaomiMiMoIntegration:
         try:
             response = litellm.completion(
                 model="xiaomi_mimo/mimo-v2-flash",
-                messages=[{"role": "user", "content": "Say 'test successful' and nothing else"}],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Say 'test successful' and nothing else",
+                    }
+                ],
                 max_tokens=10,
             )
 
@@ -114,7 +119,9 @@ class TestXiaomiMiMoIntegration:
             content = response.choices[0].message.content.lower()
             assert len(content) > 0
 
-            print(f"✓ Xiaomi MiMo completion successful: {response.choices[0].message.content}")
+            print(
+                f"✓ Xiaomi MiMo completion successful: {response.choices[0].message.content}"
+            )
 
         except Exception as e:
             if pytest:
@@ -145,6 +152,6 @@ if __name__ == "__main__":
     test_config.test_xiaomi_mimo_router_config()
     print("   ✓ Router configuration works (issue #18794 fixed)")
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("✓ All configuration tests passed!")
-    print("="*50)
+    print("=" * 50)

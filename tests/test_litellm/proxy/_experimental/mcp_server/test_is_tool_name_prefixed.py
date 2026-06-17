@@ -49,25 +49,19 @@ class TestWithKnownPrefixes:
     def test_hyphenated_non_mcp_tool_returns_false(self):
         """This is the core fix: 'text-to-speech' is NOT an MCP-prefixed tool."""
         assert (
-            is_tool_name_prefixed(
-                "text-to-speech", known_server_prefixes=self.PREFIXES
-            )
+            is_tool_name_prefixed("text-to-speech", known_server_prefixes=self.PREFIXES)
             is False
         )
 
     def test_code_review_not_misclassified(self):
         assert (
-            is_tool_name_prefixed(
-                "code-review", known_server_prefixes=self.PREFIXES
-            )
+            is_tool_name_prefixed("code-review", known_server_prefixes=self.PREFIXES)
             is False
         )
 
     def test_no_separator_returns_false(self):
         assert (
-            is_tool_name_prefixed(
-                "simple_tool", known_server_prefixes=self.PREFIXES
-            )
+            is_tool_name_prefixed("simple_tool", known_server_prefixes=self.PREFIXES)
             is False
         )
 

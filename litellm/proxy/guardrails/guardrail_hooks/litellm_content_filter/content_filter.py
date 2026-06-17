@@ -212,17 +212,17 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.image_model = image_model
         # Store loaded categories
         self.loaded_categories: Dict[str, CategoryConfig] = {}
-        self.category_keywords: Dict[
-            str, Tuple[str, str, ContentFilterAction]
-        ] = {}  # keyword -> (category, severity, action)
+        self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
+            {}
+        )  # keyword -> (category, severity, action)
         # Always-block keywords are checked after exceptions (exceptions take precedence)
         self.always_block_category_keywords: Dict[
             str, Tuple[str, str, ContentFilterAction]
         ] = {}
         # Store conditional categories (identifier_words + block_words)
-        self.conditional_categories: Dict[
-            str, Dict[str, Any]
-        ] = {}  # category_name -> {identifier_words, block_words, action, severity}
+        self.conditional_categories: Dict[str, Dict[str, Any]] = (
+            {}
+        )  # category_name -> {identifier_words, block_words, action, severity}
 
         # Competitor intent checker (optional; airline uses major_airlines.json, generic requires competitors)
         self._competitor_intent_checker: Optional[BaseCompetitorIntentChecker] = None
@@ -328,7 +328,24 @@ class ContentFilterGuardrail(CustomGuardrail):
         return result
 
     @staticmethod
-    def _resolve_category_file_path(file_path: str) -> str:
+    def _assert_within_categories_dir(path: str, categories_dir: str) -> None:
+        """Raise ValueError if path escapes the categories directory."""
+        resolved = os.path.realpath(path)
+        allowed = os.path.realpath(categories_dir)
+        try:
+            common = os.path.commonpath([resolved, allowed])
+        except ValueError:
+            # commonpath() raises ValueError on Windows when paths span different drives
+            raise ValueError(
+                f"Category file path '{path}' is outside the allowed categories directory"
+            )
+        if common != allowed:
+            raise ValueError(
+                f"Category file path '{path}' is outside the allowed "
+                f"categories directory '{categories_dir}'"
+            )
+
+    def _resolve_category_file_path(self, file_path: str) -> str:
         """
         Resolve a category file path that may be relative.
 
@@ -339,12 +356,17 @@ class ContentFilterGuardrail(CustomGuardrail):
         file isn't found.
 
         Resolution order:
-        1. Return as-is if absolute or already exists.
-        2. Try joining the full path relative to this module's directory.
+        1. Return as-is if absolute or already exists (jailed to module dir).
+        2. Try joining the full path relative to this module's directory (jailed).
         3. Progressively strip leading path components and try each suffix
-           relative to this module's directory (handles paths like
-           "litellm/proxy/.../policy_templates/file.yaml" by finding the
-           "policy_templates/file.yaml" suffix that exists).
+           relative to this module's directory (jailed).
+
+        The directory jail can be disabled for deployments that legitimately
+        store category files outside the package (e.g. mounted volumes) by
+        setting the environment variable
+        ``LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS=true``.  Use only in
+        trusted environments where the proxy configuration cannot be influenced
+        by untrusted input.
 
         Args:
             file_path: The file path to resolve (absolute or relative).
@@ -352,15 +374,33 @@ class ContentFilterGuardrail(CustomGuardrail):
         Returns:
             The resolved absolute-ish path, or the original path if
             resolution fails (caller should check existence).
-        """
-        if os.path.isabs(file_path) or os.path.exists(file_path):
-            return file_path
 
+        Raises:
+            ValueError: If the resolved path escapes the module directory
+                and ``LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS`` is not set.
+        """
         module_dir = os.path.dirname(__file__)
+        allow_external = (
+            os.environ.get("LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS", "").lower()
+            == "true"
+        )
+
+        if os.path.isabs(file_path) or os.path.exists(file_path):
+            if not allow_external:
+                self._assert_within_categories_dir(file_path, module_dir)
+            else:
+                verbose_proxy_logger.warning(
+                    "LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS is set — "
+                    "skipping directory jail for category_file '%s'",
+                    file_path,
+                )
+            return file_path
 
         # Try the full relative path joined to the module directory
         candidate = os.path.join(module_dir, file_path)
         if os.path.exists(candidate):
+            if not allow_external:
+                self._assert_within_categories_dir(candidate, module_dir)
             return candidate
 
         # Progressively strip leading components to find a matching suffix
@@ -369,8 +409,17 @@ class ContentFilterGuardrail(CustomGuardrail):
             suffix = os.path.join(*parts[i:])
             candidate = os.path.join(module_dir, suffix)
             if os.path.exists(candidate):
+                if not allow_external:
+                    self._assert_within_categories_dir(candidate, module_dir)
                 return candidate
 
+        # File not found via any resolution strategy — jail the module-relative
+        # path anyway to reject traversal attempts (e.g. "../../../../etc/passwd")
+        # regardless of CWD or whether the target file exists.
+        if not allow_external:
+            self._assert_within_categories_dir(
+                os.path.join(module_dir, file_path), module_dir
+            )
         return file_path
 
     def _load_categories(self, categories: List[ContentFilterCategoryConfig]) -> None:
@@ -395,6 +444,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                 )
                 continue
 
+            # Prevent path traversal via category_name (e.g. "../../etc/passwd")
+            if not re.match(r"^[a-zA-Z0-9_\-]+$", category_name):
+                verbose_proxy_logger.warning(
+                    f"Category name '{category_name}' contains invalid characters, skipping"
+                )
+                continue
+
             enabled = cat_config.get("enabled", True)
             action = cat_config.get("action")
             severity_threshold = (
@@ -411,7 +467,13 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             # Load category file (custom or default)
             if custom_file:
-                category_file_path = self._resolve_category_file_path(custom_file)
+                try:
+                    category_file_path = self._resolve_category_file_path(custom_file)
+                except ValueError as e:
+                    verbose_proxy_logger.warning(
+                        f"Category {category_name}: invalid category_file path, skipping. {e}"
+                    )
+                    continue
             else:
                 # Try .yaml first, then .json (e.g. harm_toxic_abuse.json)
                 yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")
@@ -1202,7 +1264,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={
                     "error": error_msg,
                     "category": category_name,
@@ -1242,7 +1304,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={
                     "error": error_msg,
                     "category": category_name,
@@ -1285,7 +1347,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             error_msg = f"Content blocked: {pattern_name} pattern detected"
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={"error": error_msg, "pattern": pattern_name},
             )
         elif action == ContentFilterAction.MASK:
@@ -1325,7 +1387,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 error_msg += f" ({description})"
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={
                     "error": error_msg,
                     "keyword": keyword,
@@ -1677,7 +1739,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 "ContentFilterGuardrail: competitor intent refuse - %s", intent_val
             )
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={
                     "error": msg,
                     "intent": intent_val,
@@ -1866,83 +1928,139 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         For BLOCK action: Raises HTTPException immediately when blocked content is detected.
         For MASK action: Content is buffered to handle patterns split across chunks.
+
+        At stream end (including when BLOCK raises HTTPException), write a
+        standard_logging_guardrail_information entry into request_data["metadata"]
+        so the post-call log row reaches standard_logging_object.guardrail_information
+        and the UI Request Lifecycle panel. Mirrors apply_guardrail's finally-block
+        contract.
         """
-        accumulated_full_text = ""
-        yielded_masked_text_len = 0
+        accumulated_text_by_choice: Dict[int, str] = {}
+        yielded_masked_text_len_by_choice: Dict[int, int] = {}
+        latest_detections_by_choice: Dict[int, List[ContentFilterDetection]] = {}
         buffer_size = 50  # Increased buffer to catch patterns split across many chunks
+
+        start_time = datetime.now()
+        detections: List[ContentFilterDetection] = []
+        masked_entity_count: Dict[str, int] = {}
+        status: GuardrailStatus = "success"
+        exception_str: str = ""
 
         verbose_proxy_logger.info(
             f"ContentFilterGuardrail: Starting robust streaming masking for model {request_data.get('model')}"
         )
 
-        async for item in response:
-            if isinstance(item, ModelResponseStream) and item.choices:
-                delta_content = ""
-                is_final = False
-                for choice in item.choices:
-                    if hasattr(choice, "delta") and choice.delta:
+        try:
+            async for item in response:
+                if isinstance(item, ModelResponseStream) and item.choices:
+                    for choice in item.choices:
+                        if not (hasattr(choice, "delta") and choice.delta):
+                            continue
+
+                        choice_index = getattr(choice, "index", 0)
+                        if not isinstance(choice_index, int):
+                            choice_index = 0
+
                         content = getattr(choice.delta, "content", None)
-                        if content and isinstance(content, str):
-                            delta_content += content
-                    if getattr(choice, "finish_reason", None):
-                        is_final = True
+                        is_final = bool(getattr(choice, "finish_reason", None))
+                        if isinstance(content, str) and content:
+                            accumulated_text_by_choice[choice_index] = (
+                                accumulated_text_by_choice.get(choice_index, "")
+                                + content
+                            )
+                        elif not is_final:
+                            continue
 
-                accumulated_full_text += delta_content
+                        text_to_check = accumulated_text_by_choice.get(choice_index, "")
+                        if not text_to_check:
+                            continue
 
-                # Check for blocking or apply masking
-                # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
-                text_to_check = accumulated_full_text
-                if is_final:
-                    text_to_check += " "
+                        # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
+                        text_to_scan = text_to_check + (" " if is_final else "")
+                        choice_detections: List[ContentFilterDetection] = []
 
-                try:
-                    masked_text = self._filter_single_text(text_to_check)
-                    if is_final and masked_text.endswith(" "):
-                        masked_text = masked_text[:-1]
-                except HTTPException:
-                    raise
-                except Exception as e:
-                    verbose_proxy_logger.error(
-                        f"ContentFilterGuardrail: Error in masking: {e}"
-                    )
-                    masked_text = text_to_check  # Fallback to current text
+                        try:
+                            # _filter_single_text scans the whole accumulated
+                            # choice buffer every chunk, so previous-chunk
+                            # matches are guaranteed to be re-found. Keeping
+                            # only each choice's latest scan avoids duplicate
+                            # detections in the final log row.
+                            masked_text = self._filter_single_text(
+                                text_to_scan, detections=choice_detections
+                            )
+                            if is_final and masked_text.endswith(" "):
+                                masked_text = masked_text[:-1]
+                            latest_detections_by_choice[choice_index] = (
+                                choice_detections
+                            )
+                        except HTTPException:
+                            latest_detections_by_choice[choice_index] = (
+                                choice_detections
+                            )
+                            raise
+                        except Exception as e:
+                            verbose_proxy_logger.error(
+                                f"ContentFilterGuardrail: Error in masking: {e}"
+                            )
+                            masked_text = text_to_scan  # Fallback to current text
 
-                # Determine how much can be safely yielded
-                if is_final:
-                    safe_to_yield_len = len(masked_text)
-                else:
-                    safe_to_yield_len = max(0, len(masked_text) - buffer_size)
+                        # Determine how much can be safely yielded
+                        if is_final:
+                            safe_to_yield_len = len(masked_text)
+                        else:
+                            safe_to_yield_len = max(0, len(masked_text) - buffer_size)
 
-                if safe_to_yield_len > yielded_masked_text_len:
-                    new_masked_content = masked_text[
-                        yielded_masked_text_len:safe_to_yield_len
-                    ]
-                    # Modify the chunk to contain only the new masked content
-                    if (
-                        item.choices
-                        and hasattr(item.choices[0], "delta")
-                        and item.choices[0].delta
-                    ):
-                        item.choices[0].delta.content = new_masked_content
-                        yielded_masked_text_len = safe_to_yield_len
-                        yield item
-                else:
-                    # Hold content by yielding empty content chunk (keeps metadata/structure)
-                    if (
-                        item.choices
-                        and hasattr(item.choices[0], "delta")
-                        and item.choices[0].delta
-                    ):
-                        item.choices[0].delta.content = ""
+                        yielded_masked_text_len = yielded_masked_text_len_by_choice.get(
+                            choice_index, 0
+                        )
+                        if safe_to_yield_len > yielded_masked_text_len:
+                            new_masked_content = masked_text[
+                                yielded_masked_text_len:safe_to_yield_len
+                            ]
+                            choice.delta.content = new_masked_content
+                            yielded_masked_text_len_by_choice[choice_index] = (
+                                safe_to_yield_len
+                            )
+                        else:
+                            # Hold content by yielding empty content on this choice
+                            # while preserving chunk metadata and other choices.
+                            choice.delta.content = ""
+
                     yield item
-            else:
-                # Not a ModelResponseStream or no choices - yield as is
-                yield item
+                else:
+                    # Not a ModelResponseStream or no choices - yield as is
+                    yield item
 
-        # Any remaining content (should have been handled by is_final, but just in case)
-        if yielded_masked_text_len < len(accumulated_full_text):
-            # We already reached the end of the generator
-            pass
+            # Any remaining content (should have been handled by is_final, but just in case)
+            if any(
+                yielded_masked_text_len_by_choice.get(choice_index, 0)
+                < len(accumulated_text)
+                for choice_index, accumulated_text in accumulated_text_by_choice.items()
+            ):
+                # We already reached the end of the generator
+                pass
+        except HTTPException:
+            status = "guardrail_intervened"
+            raise
+        except Exception as e:
+            status = "guardrail_failed_to_respond"
+            exception_str = str(e)
+            raise e
+        finally:
+            detections = [
+                detection
+                for choice_detections in latest_detections_by_choice.values()
+                for detection in choice_detections
+            ]
+            self._count_masked_entities(detections, masked_entity_count)
+            self._log_guardrail_information(
+                request_data=request_data,
+                detections=detections,
+                status=status,
+                start_time=start_time,
+                masked_entity_count=masked_entity_count,
+                exception_str=exception_str,
+            )
 
     @staticmethod
     def get_config_model():

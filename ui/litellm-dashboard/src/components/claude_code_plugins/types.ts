@@ -4,9 +4,10 @@
  */
 
 export interface PluginSource {
-  source: "github" | "url";
-  repo?: string;  // Format: "org/repo" for GitHub
-  url?: string;   // Full URL for other sources
+  source: "github" | "url" | "git-subdir";
+  repo?: string; // Format: "org/repo" for GitHub
+  url?: string; // Full URL for other sources
+  path?: string; // Subdirectory path for git-subdir
 }
 
 export interface PluginAuthor {
@@ -16,14 +17,16 @@ export interface PluginAuthor {
 
 export interface Plugin {
   id: string;
-  name: string;  // kebab-case
-  version?: string;  // semantic version
+  name: string; // kebab-case
+  version?: string; // semantic version
   description?: string;
   source: PluginSource;
   author?: PluginAuthor;
   homepage?: string;
   keywords?: string[];
   category?: string;
+  domain?: string;
+  namespace?: string;
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
@@ -40,6 +43,8 @@ export interface PluginListItem {
   homepage?: string;
   keywords?: string[];
   category?: string;
+  domain?: string;
+  namespace?: string;
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
@@ -60,6 +65,8 @@ export interface RegisterPluginRequest {
   homepage?: string;
   keywords?: string[];
   category?: string;
+  domain?: string;
+  namespace?: string;
 }
 
 export interface RegisterPluginResponse {
@@ -86,7 +93,7 @@ export interface MarketplaceOwner {
 }
 
 export interface MarketplaceResponse {
-  name: string;  // Marketplace name (e.g., "litellm")
+  name: string; // Marketplace name (e.g., "litellm")
   owner: MarketplaceOwner;
   plugins: MarketplacePluginEntry[];
 }
@@ -100,14 +107,17 @@ export interface CategoryTab {
 
 export interface PluginFormData {
   name: string;
-  sourceType: "github" | "url";
+  sourceType: "github" | "url" | "git-subdir";
   repo: string;
   url: string;
+  path: string;
   version: string;
   description: string;
   authorName: string;
   authorEmail: string;
   homepage: string;
   category: string;
-  keywords: string;  // Comma-separated string, will be split into array
+  keywords: string; // Comma-separated string, will be split into array
+  domain: string;
+  namespace: string;
 }

@@ -49,7 +49,8 @@ class ResponseMetadata:
                 result=self.result, litellm_model_name=model, router_model_id=model_id
             ),
             "additional_headers": process_response_headers(
-                self._get_value_from_hidden_params("additional_headers") or {}
+                self._get_value_from_hidden_params("additional_headers") or {},
+                preserve_litellm_internal_headers=True,
             ),
             "litellm_model_name": model,
         }

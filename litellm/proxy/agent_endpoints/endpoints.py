@@ -10,14 +10,17 @@ Follows the A2A Spec.
 
 import asyncio
 import os
-from typing import Any, Dict, List, Optional
+import uuid
+from typing import Any, Dict, List, Mapping, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.a2a.agent_card import merge_agent_card
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -28,11 +31,39 @@ from litellm.types.agents import (
     MakeAgentsPublicRequest,
     PatchAgentRequest,
 )
-from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
 )
+
+
+def _proxy_base_url(http_request: Request) -> str:
+    """Return the proxy's base URL as seen by the caller, without trailing slash."""
+    return str(http_request.base_url).rstrip("/")
+
+
+def _build_merged_agent_card(
+    upstream_card: Optional[Mapping[str, Any]],
+    *,
+    agent_id: str,
+    http_request: Request,
+    agent_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Apply the LiteLLM-fronting merge to ``upstream_card`` for ``agent_id``."""
+    proxy_base = _proxy_base_url(http_request)
+    # Prefer a card-supplied ``name`` (the discovery UI exposes an editable
+    # "Name (shown to API clients)" field that flows into
+    # ``agent_card_params.name``) over the internal ``agent_name`` identifier.
+    # Fall back to ``agent_name`` only when the card itself has no name.
+    card_name = upstream_card.get("name") if upstream_card else None
+    return merge_agent_card(
+        upstream_card,
+        proxy_url=f"{proxy_base}/a2a/{agent_id}",
+        proxy_base_url=proxy_base,
+        name=card_name or agent_name,
+    )
+
 
 router = APIRouter()
 
@@ -188,7 +219,7 @@ async def get_agents(
         if prisma_client is not None:
             agent_ids = [agent.agent_id for agent in returned_agents]
             if agent_ids:
-                db_agents = await prisma_client.db.litellm_agentstable.find_many(
+                db_agents = await AgentsRepository(prisma_client).table.find_many(
                     where={"agent_id": {"in": agent_ids}},
                 )
                 spend_map = {a.agent_id: a.spend for a in db_agents}
@@ -200,10 +231,9 @@ async def get_agents(
         for agent in returned_agents:
             if agent.litellm_params is None:
                 agent.litellm_params = {}
-            agent.litellm_params[
-                "is_public"
-            ] = litellm.public_agent_groups is not None and (
-                agent.agent_id in litellm.public_agent_groups
+            agent.litellm_params["is_public"] = (
+                litellm.public_agent_groups is not None
+                and (agent.agent_id in litellm.public_agent_groups)
             )
 
         # Redact sensitive fields for non-admin users
@@ -271,6 +301,7 @@ async def get_agents(
 from litellm.proxy.agent_endpoints.agent_registry import (
     global_agent_registry as AGENT_REGISTRY,
 )
+from litellm.repositories.table_repositories import AgentsRepository
 
 
 @router.post(
@@ -281,6 +312,7 @@ from litellm.proxy.agent_endpoints.agent_registry import (
 )
 async def create_agent(
     request: AgentConfig,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -288,36 +320,34 @@ async def create_agent(
 
     Example Request:
     ```bash
-    curl -X POST "http://localhost:4000/agents" \\
+    curl -X POST "http://localhost:4000/v1/agents" \\
         -H "Authorization: Bearer <your_api_key>" \\
         -H "Content-Type: application/json" \\
         -d '{
-            "agent": {
-                "agent_name": "my-custom-agent",
-                "agent_card_params": {
-                    "protocolVersion": "1.0",
-                    "name": "Hello World Agent",
-                    "description": "Just a hello world agent",
-                    "url": "http://localhost:9999/",
-                    "version": "1.0.0",
-                    "defaultInputModes": ["text"],
-                    "defaultOutputModes": ["text"],
-                    "capabilities": {
-                        "streaming": true
-                    },
-                    "skills": [
-                        {
-                            "id": "hello_world",
-                            "name": "Returns hello world",
-                            "description": "just returns hello world",
-                            "tags": ["hello world"],
-                            "examples": ["hi", "hello world"]
-                        }
-                    ]
+            "agent_name": "my-custom-agent",
+            "agent_card_params": {
+                "protocolVersion": "1.0",
+                "name": "Hello World Agent",
+                "description": "Just a hello world agent",
+                "url": "http://localhost:9999/",
+                "version": "1.0.0",
+                "defaultInputModes": ["text"],
+                "defaultOutputModes": ["text"],
+                "capabilities": {
+                    "streaming": true
                 },
-                "litellm_params": {
-                    "make_public": true
-                }
+                "skills": [
+                    {
+                        "id": "hello_world",
+                        "name": "Returns hello world",
+                        "description": "just returns hello world",
+                        "tags": ["hello world"],
+                        "examples": ["hi", "hello world"]
+                    }
+                ]
+            },
+            "litellm_params": {
+                "make_public": true
             }
         }'
     ```
@@ -345,8 +375,31 @@ async def create_agent(
                 detail=f"Agent with name {request.get('agent_name')} already exists",
             )
 
+        # Apply the LiteLLM-fronting merge only when the admin actually
+        # provided an agent card. Plain chat/LLM agents register without
+        # ``agent_card_params``, and synthesising a default A2A card for them
+        # would advertise capabilities (``supportedInterfaces``, security
+        # schemes, default skills) the agent doesn't actually expose.
+        upstream_card = request.get("agent_card_params")
+        agent_to_create: AgentConfig = request
+        new_agent_id: Optional[str] = None
+        if upstream_card is not None:
+            # Pre-generate the agent_id so the merged card can reference it
+            # in ``supportedInterfaces`` before the DB row exists.
+            new_agent_id = str(uuid.uuid4())
+            merged_card = _build_merged_agent_card(
+                upstream_card,
+                agent_id=new_agent_id,
+                http_request=http_request,
+                agent_name=request.get("agent_name"),
+            )
+            agent_to_create = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
+
         result = await AGENT_REGISTRY.add_agent_to_db(
-            agent=request, prisma_client=prisma_client, created_by=created_by
+            agent=agent_to_create,
+            prisma_client=prisma_client,
+            created_by=created_by,
+            agent_id=new_agent_id,
         )
 
         agent_name = result.agent_name
@@ -387,11 +440,29 @@ async def get_agent_by_id(
 
     Example Request:
     ```bash
-    curl -X GET "http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000" \\
+    curl -X GET "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000" \\
         -H "Authorization: Bearer <your_api_key>"
     ```
     """
     await check_feature_access_for_user(user_api_key_dict, "agents")
+
+    is_admin = (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+    if not is_admin:
+        from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+            AgentRequestHandler,
+        )
+
+        is_allowed = await AgentRequestHandler.is_agent_allowed(
+            agent_id=agent_id, user_api_key_auth=user_api_key_dict
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
+            )
 
     from litellm.proxy.proxy_server import prisma_client
 
@@ -401,7 +472,7 @@ async def get_agent_by_id(
     try:
         agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
         if agent is None:
-            agent_row = await prisma_client.db.litellm_agentstable.find_unique(
+            agent_row = await AgentsRepository(prisma_client).table.find_unique(
                 where={"agent_id": agent_id},
                 include={"object_permission": True},
             )
@@ -409,17 +480,17 @@ async def get_agent_by_id(
                 agent_dict = agent_row.model_dump()
                 if agent_row.object_permission is not None:
                     try:
-                        agent_dict[
-                            "object_permission"
-                        ] = agent_row.object_permission.model_dump()
+                        agent_dict["object_permission"] = (
+                            agent_row.object_permission.model_dump()
+                        )
                     except Exception:
-                        agent_dict[
-                            "object_permission"
-                        ] = agent_row.object_permission.dict()
+                        agent_dict["object_permission"] = (
+                            agent_row.object_permission.dict()
+                        )
                 agent = AgentResponse(**agent_dict)  # type: ignore
         else:
             # Agent found in memory — refresh spend from DB
-            db_row = await prisma_client.db.litellm_agentstable.find_unique(
+            db_row = await AgentsRepository(prisma_client).table.find_unique(
                 where={"agent_id": agent_id}
             )
             if db_row is not None:
@@ -455,6 +526,7 @@ async def get_agent_by_id(
 async def update_agent(
     agent_id: str,
     request: AgentConfig,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -462,28 +534,26 @@ async def update_agent(
 
     Example Request:
     ```bash
-    curl -X PUT "http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000" \\
+    curl -X PUT "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000" \\
         -H "Authorization: Bearer <your_api_key>" \\
         -H "Content-Type: application/json" \\
         -d '{
-            "agent": {
-                "agent_name": "updated-agent",
-                "agent_card_params": {
-                    "protocolVersion": "1.0",
-                    "name": "Updated Agent",
-                    "description": "Updated description",
-                    "url": "http://localhost:9999/",
-                    "version": "1.1.0",
-                    "defaultInputModes": ["text"],
-                    "defaultOutputModes": ["text"],
-                    "capabilities": {
-                        "streaming": true
-                    },
-                    "skills": []
+            "agent_name": "updated-agent",
+            "agent_card_params": {
+                "protocolVersion": "1.0",
+                "name": "Updated Agent",
+                "description": "Updated description",
+                "url": "http://localhost:9999/",
+                "version": "1.1.0",
+                "defaultInputModes": ["text"],
+                "defaultOutputModes": ["text"],
+                "capabilities": {
+                    "streaming": true
                 },
-                "litellm_params": {
-                    "make_public": false
-                }
+                "skills": []
+            },
+            "litellm_params": {
+                "make_public": false
             }
         }'
     ```
@@ -501,7 +571,7 @@ async def update_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
+        existing_agent = await AgentsRepository(prisma_client).table.find_unique(
             where={"agent_id": agent_id}
         )
         if existing_agent is not None:
@@ -515,9 +585,25 @@ async def update_agent(
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
 
+        # Re-apply the LiteLLM-fronting merge — an update is a re-registration,
+        # so any new upstream card the admin pasted must go through the same
+        # transformation as initial create. Plain agents without an
+        # ``agent_card_params`` skip the merge so we don't synthesise an A2A
+        # card for them.
+        upstream_card = request.get("agent_card_params")
+        agent_to_update: AgentConfig = request
+        if upstream_card is not None:
+            merged_card = _build_merged_agent_card(
+                upstream_card,
+                agent_id=agent_id,
+                http_request=http_request,
+                agent_name=request.get("agent_name"),
+            )
+            agent_to_update = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
+
         result = await AGENT_REGISTRY.update_agent_in_db(
             agent_id=agent_id,
-            agent=request,
+            agent=agent_to_update,
             prisma_client=prisma_client,
             updated_by=updated_by,
         )
@@ -548,6 +634,7 @@ async def update_agent(
 async def patch_agent(
     agent_id: str,
     request: PatchAgentRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -555,28 +642,26 @@ async def patch_agent(
 
     Example Request:
     ```bash
-    curl -X PUT "http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000" \\
+    curl -X PATCH "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000" \\
         -H "Authorization: Bearer <your_api_key>" \\
         -H "Content-Type: application/json" \\
         -d '{
-            "agent": {
-                "agent_name": "updated-agent",
-                "agent_card_params": {
-                    "protocolVersion": "1.0",
-                    "name": "Updated Agent",
-                    "description": "Updated description",
-                    "url": "http://localhost:9999/",
-                    "version": "1.1.0",
-                    "defaultInputModes": ["text"],
-                    "defaultOutputModes": ["text"],
-                    "capabilities": {
-                        "streaming": true
-                    },
-                    "skills": []
+            "agent_name": "updated-agent",
+            "agent_card_params": {
+                "protocolVersion": "1.0",
+                "name": "Updated Agent",
+                "description": "Updated description",
+                "url": "http://localhost:9999/",
+                "version": "1.1.0",
+                "defaultInputModes": ["text"],
+                "defaultOutputModes": ["text"],
+                "capabilities": {
+                    "streaming": true
                 },
-                "litellm_params": {
-                    "make_public": false
-                }
+                "skills": []
+            },
+            "litellm_params": {
+                "make_public": false
             }
         }'
     ```
@@ -594,7 +679,7 @@ async def patch_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
+        existing_agent = await AgentsRepository(prisma_client).table.find_unique(
             where={"agent_id": agent_id}
         )
         if existing_agent is not None:
@@ -608,9 +693,26 @@ async def patch_agent(
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
 
+        # Re-merge only when the patch actually touches agent_card_params; a
+        # patch updating just litellm_params/rate limits (``agent_card_params``
+        # omitted) shouldn't rewrite the stored card. An explicitly provided
+        # ``agent_card_params`` — even an empty dict — still goes through the
+        # merge so LiteLLM applies its security schemes and supported
+        # interfaces instead of storing a bare card.
+        patch_payload: PatchAgentRequest = request
+        upstream_card = request.get("agent_card_params")
+        if upstream_card is not None:
+            merged_card = _build_merged_agent_card(
+                upstream_card,
+                agent_id=agent_id,
+                http_request=http_request,
+                agent_name=request.get("agent_name"),
+            )
+            patch_payload = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
+
         result = await AGENT_REGISTRY.patch_agent_in_db(
             agent_id=agent_id,
-            agent=request,
+            agent=patch_payload,
             prisma_client=prisma_client,
             updated_by=updated_by,
         )
@@ -646,7 +748,7 @@ async def delete_agent(
 
     Example Request:
     ```bash
-    curl -X DELETE "http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000" \\
+    curl -X DELETE "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000" \\
         -H "Authorization: Bearer <your_api_key>"
     ```
 
@@ -668,7 +770,7 @@ async def delete_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
+        existing_agent = await AgentsRepository(prisma_client).table.find_unique(
             where={"agent_id": agent_id}
         )
         if existing_agent is not None:
@@ -758,7 +860,7 @@ async def make_agent_public(
         agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
         if agent is None:
             # check if agent exists in DB
-            agent = await prisma_client.db.litellm_agentstable.find_unique(
+            agent = await AgentsRepository(prisma_client).table.find_unique(
                 where={"agent_id": agent_id}
             )
             if agent is not None:
@@ -881,7 +983,7 @@ async def make_agents_public(
             agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
             if agent is None:
                 # check if agent exists in DB
-                agent = await prisma_client.db.litellm_agentstable.find_unique(
+                agent = await AgentsRepository(prisma_client).table.find_unique(
                     where={"agent_id": agent_id}
                 )
                 if agent is not None:
@@ -956,11 +1058,68 @@ async def get_agent_daily_activity(
             exclude_agent_ids.split(",") if exclude_agent_ids else None
         )
 
-    where_condition = {}
+    # Without scoping, an empty `agent_ids` query returned every agent's
+    # spend/token rows on the proxy. Restrict non-admin callers to the
+    # agents they're permitted to invoke (or that they created), and
+    # intersect their explicit `agent_ids` filter with the same allowlist.
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
+    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+    where_condition: Dict[str, Any] = {}
+    if not _user_has_admin_view(user_api_key_dict):
+        permitted_agent_ids = await AgentRequestHandler.get_allowed_agents(
+            user_api_key_auth=user_api_key_dict
+        )
+        # `get_allowed_agents` returns an empty list when the caller's key
+        # and team carry no agent restrictions. For activity scoping that's
+        # not "see everything" — fall back to the agents the caller
+        # created so they cannot enumerate other tenants' agents.
+        # Guard against `user_id is None`: a literal None in Prisma
+        # `where={"created_by": None}` resolves to ``created_by IS NULL``
+        # and would expose every ownerless agent's rows.
+        if not permitted_agent_ids:
+            if user_api_key_dict.user_id is None:
+                permitted_agent_ids = []
+            else:
+                owned_records = await AgentsRepository(prisma_client).table.find_many(
+                    where={"created_by": user_api_key_dict.user_id}
+                )
+                permitted_agent_ids = [a.agent_id for a in owned_records]
+
+        if agent_ids_list:
+            permitted_agent_id_set = set(permitted_agent_ids)
+            agent_ids_list = [
+                aid for aid in agent_ids_list if aid in permitted_agent_id_set
+            ]
+        else:
+            agent_ids_list = list(permitted_agent_ids)
+
+        # No accessible agents → return an empty page without querying.
+        if not agent_ids_list:
+            return SpendAnalyticsPaginatedResponse(
+                results=[],
+                metadata=DailySpendMetadata(
+                    total_spend=0.0,
+                    total_prompt_tokens=0,
+                    total_completion_tokens=0,
+                    total_tokens=0,
+                    total_api_requests=0,
+                    total_successful_requests=0,
+                    total_failed_requests=0,
+                    total_cache_read_input_tokens=0,
+                    total_cache_creation_input_tokens=0,
+                    page=page,
+                    total_pages=0,
+                    has_more=False,
+                ),
+            )
+
     if agent_ids_list:
         where_condition["agent_id"] = {"in": list(agent_ids_list)}
 
-    agent_records = await prisma_client.db.litellm_agentstable.find_many(
+    agent_records = await AgentsRepository(prisma_client).table.find_many(
         where=where_condition
     )
     agent_metadata = {

@@ -16,6 +16,7 @@ import time
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast
 
+from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import ResponseOutputItem, ResponsesAPIResponse
 from litellm.types.vector_stores import VectorStoreSearchResult
@@ -427,6 +428,108 @@ def _prepare_emulated_file_search_call(
     return include_search_results, updated_kwargs
 
 
+def _extract_tool_call_fields(tool_call: Any, fallback_call_id: str) -> Tuple[str, str]:
+    """Extract (call_id, raw_arguments_string) from a dict or Pydantic tool_call item."""
+    if isinstance(tool_call, dict):
+        call_id = str(
+            tool_call.get("call_id") or tool_call.get("id") or fallback_call_id
+        )
+        raw_args = tool_call.get("arguments") or "{}"
+    else:
+        raw_call_id = (
+            getattr(tool_call, "call_id", None)
+            or getattr(tool_call, "id", None)
+            or fallback_call_id
+        )
+        call_id = str(raw_call_id)
+        raw_args = getattr(tool_call, "arguments", "{}") or "{}"
+    return call_id, raw_args
+
+
+def _resolve_queries_from_args(args: Dict[str, Any], input: Any) -> List[str]:
+    """Pull the queries list out of parsed tool-call arguments, with backward-compat fallbacks."""
+    queries_from_call = args.get("queries")
+    if not queries_from_call:
+        # Fallback: check for single "query" field (backward compat)
+        single_query = args.get("query")
+        return [single_query] if single_query else [str(input)]
+    if not isinstance(queries_from_call, list):
+        return [str(queries_from_call)]
+    return queries_from_call
+
+
+async def _execute_file_search_tool_calls(
+    file_search_calls: List[Any],
+    all_vs_ids: List[str],
+    input: Any,
+    file_search_call_id: str,
+) -> Tuple[List[Dict[str, Any]], List[str], List[VectorStoreSearchResult]]:
+    """Run the vector search for each file_search tool_call and collect results."""
+    tool_results: List[Dict[str, Any]] = []
+    all_queries: List[str] = []
+    all_results: List[VectorStoreSearchResult] = []
+
+    for tool_call in file_search_calls:
+        call_id, raw_args = _extract_tool_call_fields(
+            tool_call, fallback_call_id=file_search_call_id
+        )
+
+        try:
+            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        except json.JSONDecodeError:
+            args = {}
+
+        queries_from_call = _resolve_queries_from_args(args, input)
+
+        vs_id_arg = args.get("vector_store_id")
+        vs_ids_for_call = [vs_id_arg] if vs_id_arg else all_vs_ids
+
+        queries, results = await _run_vector_searches(
+            queries=queries_from_call,
+            vector_store_ids=vs_ids_for_call,
+        )
+        all_queries.extend(queries)
+        all_results.extend(results)
+
+        tool_results.append(
+            {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": _format_search_results_as_tool_output(results),
+            }
+        )
+
+    return tool_results, all_queries, all_results
+
+
+def _build_follow_up_input(
+    input: Any,
+    first_response: ResponsesAPIResponse,
+    tool_results: List[Dict[str, Any]],
+) -> List[Any]:
+    """Assemble the follow-up call input: original messages + first-response output + tool results.
+
+    Including all output items (text blocks, reasoning, non-file-search calls) ensures providers
+    like Anthropic that emit text before the tool call have complete conversation context.
+    Serializes Pydantic model instances to plain dicts so the transformation layer can call .get().
+    """
+    original_input_items = (
+        list(input)
+        if isinstance(input, (list, tuple))
+        else [{"role": "user", "content": str(input)}]
+    )
+    first_response_output_items: List[Any] = []
+    for _item in first_response.output:
+        if isinstance(_item, dict):
+            first_response_output_items.append(_item)
+        elif hasattr(_item, "model_dump"):
+            first_response_output_items.append(_item.model_dump(exclude_none=True))  # type: ignore[union-attr]
+        else:
+            first_response_output_items.append(_item)
+
+    return original_input_items + first_response_output_items + tool_results
+
+
 async def aresponses_with_emulated_file_search(
     input: Any,
     model: str,
@@ -449,15 +552,20 @@ async def aresponses_with_emulated_file_search(
     # 2. First provider call — provider will call the file_search function.
     # Mark as an internal sub-call so wrapper_async skips billing callbacks;
     # the parent litellm_logging_obj (propagated via kwargs) fires once at the end.
-    first_response: ResponsesAPIResponse = cast(
-        ResponsesAPIResponse,
-        await _call_aresponses(
-            input=input,
-            model=model,
-            tools=transformed_tools or None,
-            **{**kwargs, "_is_litellm_internal_call": True},
-        ),
-    )
+    _prev_internal = is_internal_call.get()
+    is_internal_call.set(True)
+    try:
+        first_response: ResponsesAPIResponse = cast(
+            ResponsesAPIResponse,
+            await _call_aresponses(
+                input=input,
+                model=model,
+                tools=transformed_tools or None,
+                **kwargs,
+            ),
+        )
+    finally:
+        is_internal_call.set(_prev_internal)
 
     # 3. Look for a file_search function_call in the output
     file_search_calls = [
@@ -492,89 +600,36 @@ async def aresponses_with_emulated_file_search(
         )
 
     # 4. Execute each file_search tool call
-    tool_results: List[Dict[str, Any]] = []
-    all_queries: List[str] = []
-    all_results: List[VectorStoreSearchResult] = []
     file_search_call_id = f"fs_{uuid.uuid4().hex[:24]}"
-
-    for tool_call in file_search_calls:
-        if isinstance(tool_call, dict):
-            call_id = str(
-                tool_call.get("call_id") or tool_call.get("id") or file_search_call_id
-            )
-            raw_args = tool_call.get("arguments") or "{}"
-        else:
-            raw_call_id = (
-                getattr(tool_call, "call_id", None)
-                or getattr(tool_call, "id", None)
-                or file_search_call_id
-            )
-            call_id = str(raw_call_id)
-            raw_args = getattr(tool_call, "arguments", "{}") or "{}"
-
-        try:
-            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-        except json.JSONDecodeError:
-            args = {}
-
-        # Extract queries array (OpenAI-style multi-query support)
-        queries_from_call = args.get("queries")
-        if not queries_from_call:
-            # Fallback: check for single "query" field (backward compat)
-            single_query = args.get("query")
-            queries_from_call = [single_query] if single_query else [str(input)]
-        elif not isinstance(queries_from_call, list):
-            queries_from_call = [str(queries_from_call)]
-
-        vs_id_arg = args.get("vector_store_id")
-        vs_ids_for_call = [vs_id_arg] if vs_id_arg else all_vs_ids
-
-        queries, results = await _run_vector_searches(
-            queries=queries_from_call,
-            vector_store_ids=vs_ids_for_call,
-        )
-        all_queries.extend(queries)
-        all_results.extend(results)
-
-        tool_results.append(
-            {
-                "type": "function_call_output",
-                "call_id": call_id,
-                "output": _format_search_results_as_tool_output(results),
-            }
-        )
+    tool_results, all_queries, all_results = await _execute_file_search_tool_calls(
+        file_search_calls=file_search_calls,
+        all_vs_ids=all_vs_ids,
+        input=input,
+        file_search_call_id=file_search_call_id,
+    )
 
     # 5. Build follow-up input: original messages + ALL first-response output items + tool results
-    # Including all output items (text blocks, reasoning, non-file-search calls) ensures providers
-    # like Anthropic that emit text before the tool call have complete conversation context.
-    # Serialize Pydantic model instances to plain dicts so the transformation layer can call .get().
-    original_input_items = (
-        list(input)
-        if isinstance(input, (list, tuple))
-        else [{"role": "user", "content": str(input)}]
+    follow_up_input = _build_follow_up_input(
+        input=input,
+        first_response=first_response,
+        tool_results=tool_results,
     )
-    first_response_output_items: List[Any] = []
-    for _item in first_response.output:
-        if isinstance(_item, dict):
-            first_response_output_items.append(_item)
-        elif hasattr(_item, "model_dump"):
-            first_response_output_items.append(_item.model_dump(exclude_none=True))  # type: ignore[union-attr]
-        else:
-            first_response_output_items.append(_item)
-
-    follow_up_input = original_input_items + first_response_output_items + tool_results
 
     # 6. Follow-up call — provider writes the final answer given search results.
     # Also an internal sub-call; billing is suppressed so the outer call fires once.
-    final_response: ResponsesAPIResponse = cast(
-        ResponsesAPIResponse,
-        await _call_aresponses(
-            input=follow_up_input,
-            model=model,
-            tools=None,  # no tools needed for the answer step
-            **{**kwargs, "_is_litellm_internal_call": True},
-        ),
-    )
+    is_internal_call.set(True)
+    try:
+        final_response: ResponsesAPIResponse = cast(
+            ResponsesAPIResponse,
+            await _call_aresponses(
+                input=follow_up_input,
+                model=model,
+                tools=None,  # no tools needed for the answer step
+                **kwargs,
+            ),
+        )
+    finally:
+        is_internal_call.set(_prev_internal)
 
     # 7. Synthesize OpenAI-format output
     response_text = _extract_text_from_responses_output(final_response)

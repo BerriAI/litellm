@@ -277,7 +277,6 @@ class TestScimTransformations:
             assert scim_user.emails is None or len(scim_user.emails) == 0
 
 
-
 class TestSCIMPatchOperations:
     """Test SCIM PATCH operation validation and case-insensitive handling"""
 

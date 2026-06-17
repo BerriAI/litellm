@@ -21,6 +21,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+
 import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
@@ -37,15 +38,6 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
-from litellm.proxy.utils import ProxyLogging, is_known_model
-from litellm.router import Router
-from litellm.types.llms.openai import (
-    CREATE_FILE_REQUESTS_PURPOSE,
-    FileExpiresAfter,
-    OpenAIFileObject,
-    OpenAIFilesPurpose,
-)
-
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     encode_file_id_with_model,
@@ -53,6 +45,16 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
+    validate_managed_files_requirement,
+)
+from litellm.proxy.utils import ProxyLogging, is_known_model
+from litellm.repositories.table_repositories import ManagedFileRepository
+from litellm.router import Router
+from litellm.types.llms.openai import (
+    CREATE_FILE_REQUESTS_PURPOSE,
+    FileExpiresAfter,
+    OpenAIFileObject,
+    OpenAIFilesPurpose,
 )
 
 router = APIRouter()
@@ -282,7 +284,7 @@ async def route_create_file(
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def create_file(  # noqa: PLR0915
+async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
@@ -344,6 +346,11 @@ async def create_file(  # noqa: PLR0915
         target_storage = file_params.target_storage
         target_model_names_list = file_params.target_model_names
         model_param = file_params.model
+
+        validate_managed_files_requirement(
+            target_model_names=target_model_names_list, model=model_param
+        )
+
         # Prepare the data for forwarding
 
         # Replace with:
@@ -364,10 +371,10 @@ async def create_file(  # noqa: PLR0915
         expires_after: Optional[FileExpiresAfter] = None
         form_data_raw = await request.form()
         form_data_dict: Dict[str, Any] = dict(form_data_raw)
-        extracted_litellm_metadata: Optional[
-            Dict[str, Any]
-        ] = extract_nested_form_metadata(
-            form_data=form_data_dict, prefix="litellm_metadata["
+        extracted_litellm_metadata: Optional[Dict[str, Any]] = (
+            extract_nested_form_metadata(
+                form_data=form_data_dict, prefix="litellm_metadata["
+            )
         )
         expires_after_anchor = form_data_raw.get("expires_after[anchor]")
         expires_after_seconds_str = form_data_raw.get("expires_after[seconds]")
@@ -582,7 +589,7 @@ async def create_file(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def get_file_content(  # noqa: PLR0915
+async def get_file_content(
     request: Request,
     fastapi_response: Response,
     file_id: str,
@@ -634,7 +641,7 @@ async def get_file_content(  # noqa: PLR0915
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
-           
+
         ## check if file_id is a litellm managed file
         is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
         if is_base64_unified_file_id:
@@ -666,7 +673,7 @@ async def get_file_content(  # noqa: PLR0915
                 managed_files_obj, "prisma_client", None
             ):
                 prisma_client = getattr(managed_files_obj, "prisma_client")
-                db_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                db_file = await ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": file_id}
                 )
                 if db_file and db_file.storage_backend and db_file.storage_url:
@@ -735,6 +742,7 @@ async def get_file_content(  # noqa: PLR0915
             from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
                 FileContentStreamingHandler,
             )
+
             (
                 resolved_custom_llm_provider,
                 resolved_file_id,
@@ -773,6 +781,7 @@ async def get_file_content(  # noqa: PLR0915
                     data=data,
                     credentials=credentials,  # type: ignore
                     file_id=original_file_id,  # Use decoded file ID if from encoded ID
+                    include_internal_credentials=True,
                 )
                 response = await litellm.afile_content(
                     custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
@@ -948,6 +957,7 @@ async def get_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
             response = await litellm.afile_retrieve(**data)  # type: ignore
@@ -1148,6 +1158,7 @@ async def delete_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
             response = await litellm.afile_delete(

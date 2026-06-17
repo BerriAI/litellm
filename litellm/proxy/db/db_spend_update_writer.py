@@ -28,7 +28,10 @@ from typing import (
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache
-from litellm.constants import DB_SPEND_UPDATE_JOB_NAME,DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME
+from litellm.constants import (
+    DB_SPEND_UPDATE_JOB_NAME,
+    DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
+)
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -57,12 +60,42 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
 )
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 else:
     PrismaClient = Any
     ProxyLogging = Any
+
+
+def _extract_cache_read_tokens(usage_obj: dict) -> int:
+    """
+    Anthropic: top-level cache_read_input_tokens field.
+    OpenAI-compatible (moonshotai, openai, deepseek, etc.): prompt_tokens_details.cached_tokens.
+    """
+    explicit = usage_obj.get("cache_read_input_tokens", 0) or 0
+    if explicit:
+        return int(explicit)
+    details = usage_obj.get("prompt_tokens_details") or {}
+    return int(details.get("cached_tokens", 0) or 0)
+
+
+def _extract_cache_creation_tokens(usage_obj: dict) -> int:
+    """
+    Anthropic: top-level cache_creation_input_tokens field.
+    OpenAI-compatible (kimi-k2 etc.): prompt_tokens_details.cache_write_tokens
+    or prompt_tokens_details.cache_creation_tokens.
+    """
+    explicit = usage_obj.get("cache_creation_input_tokens", 0) or 0
+    if explicit:
+        return int(explicit)
+    details = usage_obj.get("prompt_tokens_details") or {}
+    return int(
+        details.get("cache_write_tokens", 0)
+        or details.get("cache_creation_tokens", 0)
+        or 0
+    )
 
 
 class DBSpendUpdateWriter:
@@ -189,17 +222,16 @@ class DBSpendUpdateWriter:
 
             verbose_proxy_logger.debug("Runs spend update on all tables")
         except Exception:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - update_database failed. Spend log insertion or daily transaction enqueue "
                 "may not have completed for this request. "
-                "response_cost=%s, token=%s, user_id=%s, team_id=%s, org_id=%s, end_user_id=%s - %s",
+                "response_cost=%s, token=%s, user_id=%s, team_id=%s, org_id=%s, end_user_id=%s",
                 response_cost,
                 token,
                 user_id,
                 team_id,
                 org_id,
                 end_user_id,
-                traceback.format_exc(),
             )
 
     def _enqueue_tool_registry_upsert(
@@ -488,9 +520,7 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Update Key DB Call failed to execute - {str(e)}"
-            )
+            spend_log_error("Update Key DB Call failed to execute - %s", str(e), exc=e)
             raise e
 
     async def _update_user_db(
@@ -537,14 +567,14 @@ class DBSpendUpdateWriter:
                         )
                     )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue user spend update. "
-                "user_id=%s, end_user_id=%s, response_cost=%s - %s\n%s",
+                "user_id=%s, end_user_id=%s, response_cost=%s - %s",
                 user_id,
                 end_user_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
 
     async def _update_team_db(
@@ -582,23 +612,23 @@ class DBSpendUpdateWriter:
                         )
                     )
             except Exception as e:
-                verbose_proxy_logger.error(
+                spend_log_error(
                     "Spend tracking - failed to enqueue team member spend update. "
-                    "team_id=%s, user_id=%s, response_cost=%s - %s\n%s",
+                    "team_id=%s, user_id=%s, response_cost=%s - %s",
                     team_id,
                     user_id,
                     response_cost,
                     str(e),
-                    traceback.format_exc(),
+                    exc=e,
                 )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue team spend update. "
-                "team_id=%s, response_cost=%s - %s\n%s",
+                "team_id=%s, response_cost=%s - %s",
                 team_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -623,13 +653,13 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue org spend update. "
-                "org_id=%s, response_cost=%s - %s\n%s",
+                "org_id=%s, response_cost=%s - %s",
                 org_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -651,13 +681,13 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue agent spend update. "
-                "agent_id=%s, response_cost=%s - %s\n%s",
+                "agent_id=%s, response_cost=%s - %s",
                 agent_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -704,13 +734,13 @@ class DBSpendUpdateWriter:
                         )
                     )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue tag spend update. "
-                "request_tags=%s, response_cost=%s - %s\n%s",
+                "request_tags=%s, response_cost=%s - %s",
                 request_tags,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -903,11 +933,11 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_agent_spend_update_transactions,
                     )
             except Exception as e:
-                verbose_proxy_logger.error(
+                spend_log_error(
                     "Spend tracking - failed to commit spend updates from Redis to DB. "
-                    "Data already popped from Redis may be lost. Error: %s\n%s",
+                    "Data already popped from Redis may be lost. Error: %s",
                     str(e),
-                    traceback.format_exc(),
+                    exc=e,
                 )
             finally:
                 await self.pod_lock_manager.release_lock(
@@ -1011,7 +1041,7 @@ class DBSpendUpdateWriter:
             proxy_logging_obj=proxy_logging_obj,
             daily_spend_transactions=daily_agent_spend_update_transactions,
         )
-        
+
         ################## Tool Registry Upserts ##################
         await self._flush_tool_discovery_queue(prisma_client=prisma_client)
 
@@ -1059,7 +1089,9 @@ class DBSpendUpdateWriter:
         ):
             verbose_proxy_logger.debug("acquired lock for daily tag spend updates")
             try:
-                daily_tag_spend_update_transactions = await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+                daily_tag_spend_update_transactions = (
+                    await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+                )
 
                 if daily_tag_spend_update_transactions:
                     await DBSpendUpdateWriter.update_daily_tag_spend(
@@ -1069,11 +1101,11 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_tag_spend_update_transactions,
                     )
             except Exception as e:
-                verbose_proxy_logger.error(
+                spend_log_error(
                     "Spend tracking - failed to commit daily tag spend updates from Redis to DB. "
-                    "Data already popped from Redis may be lost. Error: %s\n%s",
+                    "Data already popped from Redis may be lost. Error: %s",
                     str(e),
-                    traceback.format_exc(),
+                    exc=e,
                 )
             finally:
                 await self.pod_lock_manager.release_lock(
@@ -1096,7 +1128,7 @@ class DBSpendUpdateWriter:
                 "_flush_tool_discovery_queue error (non-blocking): %s", e
             )
 
-    async def _commit_spend_updates_to_db(  # noqa: PLR0915
+    async def _commit_spend_updates_to_db(
         self,
         prisma_client: PrismaClient,
         n_retry_times: int,
@@ -1128,10 +1160,12 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                user_id,
-                                response_cost,
-                            ) in user_list_transactions.items():
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks.
+                            # batch_() issues statements sequentially within the tx, so iteration
+                            # order = lock acquisition order.
+                            for user_id, response_cost in sorted(
+                                user_list_transactions.items()
+                            ):
                                 batcher.litellm_usertable.update_many(
                                     where={"user_id": user_id},
                                     data={"spend": {"increment": response_cost}},
@@ -1183,10 +1217,10 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                token,
-                                response_cost,
-                            ) in key_list_transactions.items():
+                            # Sort by token for consistent lock ordering across pods to prevent deadlocks.
+                            for token, response_cost in sorted(
+                                key_list_transactions.items()
+                            ):
                                 batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"token": token},
                                     data={
@@ -1227,10 +1261,10 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                team_id,
-                                response_cost,
-                            ) in team_list_transactions.items():
+                            # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
+                            for team_id, response_cost in sorted(
+                                team_list_transactions.items()
+                            ):
                                 verbose_proxy_logger.debug(
                                     "Updating spend for team id={} by {}".format(
                                         team_id, response_cost
@@ -1285,17 +1319,21 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                key,
-                                response_cost,
-                            ) in team_member_list_transactions.items():
+                            # Sort by composite key for consistent lock ordering across pods to prevent deadlocks.
+                            # Key format "team_id::<v>::user_id::<v>" makes the string sort equivalent to sorting by (team_id, user_id).
+                            for key, response_cost in sorted(
+                                team_member_list_transactions.items()
+                            ):
                                 # key is "team_id::<value>::user_id::<value>"
                                 team_id = key.split("::")[1]
                                 user_id = key.split("::")[3]
 
                                 batcher.litellm_teammembership.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"team_id": team_id, "user_id": user_id},
-                                    data={"spend": {"increment": response_cost}},
+                                    data={
+                                        "spend": {"increment": response_cost},
+                                        "total_spend": {"increment": response_cost},
+                                    },
                                 )
                     # Transaction succeeded, break out of retry loop
                     break
@@ -1342,10 +1380,10 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                org_id,
-                                response_cost,
-                            ) in org_list_transactions.items():
+                            # Sort by org_id for consistent lock ordering across pods to prevent deadlocks.
+                            for org_id, response_cost in sorted(
+                                org_list_transactions.items()
+                            ):
                                 batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"organization_id": org_id},
                                     data={"spend": {"increment": response_cost}},
@@ -1433,7 +1471,10 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for entity_id, response_cost in transactions.items():
+                            # Sort by entity_id for consistent lock ordering across pods to prevent deadlocks.
+                            for entity_id, response_cost in sorted(
+                                transactions.items()
+                            ):
                                 verbose_proxy_logger.debug(
                                     f"Updating spend for {entity_name} {where_field}={entity_id} by {response_cost}"
                                 )
@@ -1659,14 +1700,14 @@ class DBSpendUpdateWriter:
 
                                 # Add cache-related fields if they exist
                                 if "cache_read_input_tokens" in transaction:
-                                    common_data[
-                                        "cache_read_input_tokens"
-                                    ] = transaction.get("cache_read_input_tokens", 0)
+                                    common_data["cache_read_input_tokens"] = (
+                                        transaction.get("cache_read_input_tokens", 0)
+                                    )
                                 if "cache_creation_input_tokens" in transaction:
-                                    common_data[
-                                        "cache_creation_input_tokens"
-                                    ] = transaction.get(
-                                        "cache_creation_input_tokens", 0
+                                    common_data["cache_creation_input_tokens"] = (
+                                        transaction.get(
+                                            "cache_creation_input_tokens", 0
+                                        )
                                     )
 
                                 if entity_type == "tag" and "request_id" in transaction:
@@ -1728,11 +1769,15 @@ class DBSpendUpdateWriter:
                     except Exception as batch_error:
                         # Log detailed error information for debugging batch upsert failures
                         # This helps diagnose issues like unique constraint violations
-                        verbose_proxy_logger.exception(
-                            f"Daily {entity_type} spend batch upsert failed. "
-                            f"Table: {table_name}, Constraint: {unique_constraint_name}, "
-                            f"Batch size: {len(transactions_to_process)}, "
-                            f"Error: {str(batch_error)}"
+                        spend_log_error(
+                            "Daily %s spend batch upsert failed. "
+                            "Table: %s, Constraint: %s, Batch size: %d, Error: %s",
+                            entity_type,
+                            table_name,
+                            unique_constraint_name,
+                            len(transactions_to_process),
+                            str(batch_error),
+                            exc=batch_error,
                         )
                         raise
 
@@ -1976,12 +2021,8 @@ class DBSpendUpdateWriter:
                 api_requests=1,
                 successful_requests=1 if request_status == "success" else 0,
                 failed_requests=1 if request_status != "success" else 0,
-                cache_read_input_tokens=usage_obj.get("cache_read_input_tokens", 0)
-                or 0,
-                cache_creation_input_tokens=usage_obj.get(
-                    "cache_creation_input_tokens", 0
-                )
-                or 0,
+                cache_read_input_tokens=_extract_cache_read_tokens(usage_obj),
+                cache_creation_input_tokens=_extract_cache_creation_tokens(usage_obj),
             )
             return daily_transaction
         except Exception as e:

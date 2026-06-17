@@ -1,0 +1,36 @@
+suite: "hpa with behavior"
+templates:
+  - hpa.yaml
+tests:
+  - it: "renders behavior when set"
+    set:
+      autoscaling.enabled: true
+      autoscaling.behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          policies:
+            - type: Pods
+              value: 2
+              periodSeconds: 60
+        scaleDown:
+          stabilizationWindowSeconds: 90
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 60
+    asserts:
+      - isKind: { of: HorizontalPodAutoscaler }
+      - equal: { path: spec.behavior.scaleUp.stabilizationWindowSeconds, value: 60 }
+      - equal: { path: spec.behavior.scaleDown.stabilizationWindowSeconds, value: 90 }
+
+---
+suite: "hpa without behavior"
+templates:
+  - hpa.yaml
+tests:
+  - it: "does not render behavior when not set"
+    set:
+      autoscaling.enabled: true
+    asserts:
+      - isKind: { of: HorizontalPodAutoscaler }
+      - isNull: { path: spec.behavior }

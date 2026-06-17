@@ -1,6 +1,7 @@
 """
 Base Search transformation configuration.
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx

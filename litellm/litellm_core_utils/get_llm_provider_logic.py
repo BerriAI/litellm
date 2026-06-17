@@ -1,11 +1,50 @@
-from typing import Optional, Tuple
+import re
+from typing import Optional, Tuple, cast
+from urllib.parse import urlparse
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
-from ..types.router import LiteLLM_Params
+from ..types.router import GenericLiteLLMParams, LiteLLM_Params
+
+
+def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
+    """
+    Match a registered openai-compatible endpoint against a caller-supplied
+    ``api_base`` using parsed-URL semantics, not unanchored substring search.
+
+    Both inputs may be a bare hostname (``api.perplexity.ai``), host+path
+    (``api.deepinfra.com/v1/openai``), or a full URL
+    (``https://api.cerebras.ai/v1``). Hostnames must match exactly
+    (case-insensitive); if the registered endpoint has a non-trivial path,
+    the api_base path must start with it on a segment boundary.
+
+    The naive ``endpoint in api_base`` shape lets a caller pass
+    ``https://attacker.com/api.groq.com/openai/v1`` to coerce the proxy
+    into reading the server's GROQ_API_KEY from the environment and
+    forwarding it to the attacker's host as a Bearer credential.
+    """
+
+    def _parse(value: str):
+        # Ensure urlparse sees a scheme so it populates hostname / path.
+        normalized = value if "://" in value else f"https://{value}"
+        return urlparse(normalized)
+
+    parsed_endpoint = _parse(endpoint)
+    parsed_url = _parse(api_base)
+
+    endpoint_host = (parsed_endpoint.hostname or "").lower()
+    url_host = (parsed_url.hostname or "").lower()
+    if not endpoint_host or endpoint_host != url_host:
+        return False
+
+    endpoint_path = parsed_endpoint.path.rstrip("/")
+    if not endpoint_path:
+        return True
+    url_path = parsed_url.path.rstrip("/")
+    return url_path == endpoint_path or url_path.startswith(endpoint_path + "/")
 
 
 def _is_non_openai_azure_model(model: str) -> bool:
@@ -31,6 +70,25 @@ def _is_azure_claude_model(model: str) -> bool:
         return "claude" in model_lower or model_lower.startswith("claude")
     except Exception:
         return False
+
+
+_CLAUDE_PATTERN = re.compile(r"^claude-[a-z]+-\d+-\d+(?:-\d{8})?$", re.IGNORECASE)
+
+
+def _matches_claude_model_pattern(model: str) -> bool:
+    """
+    Check if a model string matches the Claude model naming pattern.
+
+    Matches patterns like:
+    - claude-opus-4-7
+    - claude-sonnet-4-6
+    - claude-haiku-4-5
+    - claude-opus-5-1-20270101 (with optional date suffix)
+
+    This allows future Claude models to be routed to the Anthropic provider
+    without requiring updates to model_prices_and_context_window.json.
+    """
+    return _CLAUDE_PATTERN.match(model) is not None
 
 
 def handle_cohere_chat_model_custom_llm_provider(
@@ -96,12 +154,12 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
-def get_llm_provider(  # noqa: PLR0915
+def get_llm_provider(
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
-    litellm_params: Optional[LiteLLM_Params] = None,
+    litellm_params: Optional[GenericLiteLLMParams] = None,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
@@ -120,7 +178,7 @@ def get_llm_provider(  # noqa: PLR0915
             )
 
         if litellm.LiteLLMProxyChatConfig._should_use_litellm_proxy_by_default(
-            litellm_params=litellm_params
+            litellm_params=cast(Optional[LiteLLM_Params], litellm_params)
         ):
             return litellm.LiteLLMProxyChatConfig.litellm_proxy_get_custom_llm_provider_info(
                 model=model, api_base=api_base, api_key=api_key
@@ -128,12 +186,10 @@ def get_llm_provider(  # noqa: PLR0915
 
         ## IF LITELLM PARAMS GIVEN ##
         if litellm_params:
-            assert (
-                custom_llm_provider is None and api_base is None and api_key is None
-            ), "Either pass in litellm_params or the custom_llm_provider/api_base/api_key. Otherwise, these values will be overriden."
-            custom_llm_provider = litellm_params.custom_llm_provider
-            api_base = litellm_params.api_base
-            api_key = litellm_params.api_key
+            if custom_llm_provider is None and api_base is None and api_key is None:
+                custom_llm_provider = litellm_params.custom_llm_provider
+                api_base = litellm_params.api_base
+                api_key = litellm_params.api_key
 
         dynamic_api_key = None
         # check if llm provider provided
@@ -177,6 +233,7 @@ def get_llm_provider(  # noqa: PLR0915
                 api_base=api_base,
                 api_key=api_key,
                 dynamic_api_key=dynamic_api_key,
+                litellm_params=litellm_params,
             )
 
         # check if llm provider part of model name
@@ -192,6 +249,7 @@ def get_llm_provider(  # noqa: PLR0915
                 api_base=api_base,
                 api_key=api_key,
                 dynamic_api_key=dynamic_api_key,
+                litellm_params=litellm_params,
             )
         elif model.split("/", 1)[0] in litellm.provider_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -210,7 +268,7 @@ def get_llm_provider(  # noqa: PLR0915
         # check if api base is a known openai compatible endpoint
         if api_base:
             for endpoint in litellm.openai_compatible_endpoints:
-                if endpoint in api_base:
+                if _endpoint_matches_api_base(endpoint, api_base):
                     if endpoint == "api.perplexity.ai":
                         custom_llm_provider = "perplexity"
                         dynamic_api_key = get_secret_str("PERPLEXITYAI_API_KEY")
@@ -276,6 +334,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "dashscope-intl.aliyuncs.com/compatible-mode/v1":
                         custom_llm_provider = "dashscope"
                         dynamic_api_key = get_secret_str("DASHSCOPE_API_KEY")
+                    elif endpoint == "https://api-inference.modelscope.cn/v1":
+                        custom_llm_provider = "modelscope"
+                        dynamic_api_key = get_secret_str("MODELSCOPE_API_KEY")
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
@@ -315,6 +376,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.lambda.ai/v1":
                         custom_llm_provider = "lambda_ai"
                         dynamic_api_key = get_secret_str("LAMBDA_API_KEY")
+                    elif endpoint == "https://api.inceptionlabs.ai/v1":
+                        custom_llm_provider = "inception"
+                        dynamic_api_key = get_secret_str("INCEPTION_API_KEY")
                     elif endpoint == "https://api.hyperbolic.xyz/v1":
                         custom_llm_provider = "hyperbolic"
                         dynamic_api_key = get_secret_str("HYPERBOLIC_API_KEY")
@@ -348,6 +412,7 @@ def get_llm_provider(  # noqa: PLR0915
             or "ft:gpt-3.5-turbo" in model
             or "ft:gpt-4" in model  # catches ft:gpt-4-0613, ft:gpt-4o
             or model in litellm.openai_image_generation_models
+            or model.startswith("gpt-image")
             or model in litellm.openai_video_generation_models
         ):
             custom_llm_provider = "openai"
@@ -359,6 +424,9 @@ def get_llm_provider(  # noqa: PLR0915
                 custom_llm_provider = "anthropic_text"
             else:
                 custom_llm_provider = "anthropic"
+        ## anthropic - pattern-based matching for future Claude models
+        elif _matches_claude_model_pattern(model):
+            custom_llm_provider = "anthropic"
         ## cohere
         elif model in litellm.cohere_models or model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"
@@ -461,11 +529,11 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "sap"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
-                print()  # noqa
-                print(  # noqa
-                    "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"  # noqa
-                )  # noqa
-                print()  # noqa
+                print()  # noqa: T201
+                print(  # noqa: T201
+                    "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"
+                )
+                print()  # noqa: T201
             error_str = f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model={model}\n Pass model as E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/starcoder',..)` Learn more: https://docs.litellm.ai/docs/providers"
             # maps to openai.NotFoundError, this is raised when openai does not recognize the llm
             raise litellm.exceptions.BadRequestError(  # type: ignore
@@ -500,11 +568,12 @@ def get_llm_provider(  # noqa: PLR0915
             )
 
 
-def _get_openai_compatible_provider_info(  # noqa: PLR0915
+def _get_openai_compatible_provider_info(
     model: str,
     api_base: Optional[str],
     api_key: Optional[str],
     dynamic_api_key: Optional[str],
+    litellm_params: Optional[GenericLiteLLMParams] = None,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Returns:
@@ -572,7 +641,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
-            api_base, api_key
+            api_base, api_key, litellm_params=litellm_params
         )
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
@@ -582,6 +651,23 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://integrate.api.nvidia.com/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("NVIDIA_NIM_API_KEY")
+    elif custom_llm_provider == "nvidia_riva":
+        # NVIDIA Riva is gRPC-based; api_base must be a host:port like
+        # `grpc.nvcf.nvidia.com:443` or `localhost:50051`. There is no
+        # public-default endpoint, so we do not fill one in here.
+        api_base = api_base or get_secret_str("NVIDIA_RIVA_API_BASE")  # type: ignore
+        # Fall back to NVIDIA_NIM_API_KEY because users running both NVCF
+        # services typically reuse the same nvapi-* key.
+        dynamic_api_key = (
+            api_key
+            or get_secret_str("NVIDIA_RIVA_API_KEY")
+            or get_secret_str("NVIDIA_NIM_API_KEY")
+        )
+    elif custom_llm_provider == "soniox":
+        api_base = (
+            api_base or get_secret_str("SONIOX_API_BASE") or "https://api.soniox.com"
+        )
+        dynamic_api_key = api_key or get_secret_str("SONIOX_API_KEY")
     elif custom_llm_provider == "cerebras":
         api_base = (
             api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
@@ -844,6 +930,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.DashScopeChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "modelscope":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.ModelScopeChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "moonshot":
         (
             api_base,
@@ -878,6 +971,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.LambdaAIChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "inception":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.InceptionChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "hyperbolic":

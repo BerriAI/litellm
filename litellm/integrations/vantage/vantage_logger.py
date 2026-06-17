@@ -83,9 +83,11 @@ class VantageLogger(FocusLogger):
 
         verbose_logger.debug(
             "VantageLogger initialized (integration_token=%s)",
-            resolved_token[:4] + "***"
-            if resolved_token and len(resolved_token) > 4
-            else "***",
+            (
+                resolved_token[:4] + "***"
+                if resolved_token and len(resolved_token) > 4
+                else "***"
+            ),
         )
 
     async def initialize_focus_export_job(self) -> None:
@@ -124,10 +126,10 @@ class VantageLogger(FocusLogger):
         scheduler: AsyncIOScheduler,
     ) -> None:
         """Register the Vantage export job with the provided scheduler."""
-        vantage_loggers: List[
-            CustomLogger
-        ] = litellm.logging_callback_manager.get_custom_loggers_for_type(
-            callback_type=VantageLogger
+        vantage_loggers: List[CustomLogger] = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=VantageLogger
+            )
         )
         if not vantage_loggers:
             verbose_logger.debug("No Vantage logger registered; skipping scheduler")

@@ -14,6 +14,7 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
+from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router = APIRouter()
@@ -96,7 +97,7 @@ async def create_credential(
         )
         credentials_dict = encrypted_credential.model_dump()
         credentials_dict_jsonified = jsonify_object(credentials_dict)
-        await prisma_client.db.litellm_credentialstable.create(
+        await CredentialsRepository(prisma_client).create(
             data={
                 **credentials_dict_jsonified,
                 "created_by": user_api_key_dict.user_id,
@@ -245,9 +246,7 @@ async def delete_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        await prisma_client.db.litellm_credentialstable.delete(
-            where={"credential_name": credential_name}
-        )
+        await CredentialsRepository(prisma_client).delete_by_name(credential_name)
 
         ## DELETE FROM LITELLM ##
         litellm.credential_list = [
@@ -326,20 +325,49 @@ async def update_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        db_credential = await prisma_client.db.litellm_credentialstable.find_unique(
-            where={"credential_name": credential_name},
-        )
+        credentials_repository = CredentialsRepository(prisma_client)
+        db_credential = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
         merged_credential = update_db_credential(db_credential, credential)
         credential_object_jsonified = jsonify_object(merged_credential.model_dump())
-        await prisma_client.db.litellm_credentialstable.update(
-            where={"credential_name": credential_name},
+        await credentials_repository.update_by_name(
+            credential_name,
             data={
                 **credential_object_jsonified,
                 "updated_by": user_api_key_dict.user_id,
             },
         )
+
+        # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
+        new_name = merged_credential.credential_name
+        existing_in_memory: Optional[CredentialItem] = None
+        for cred in litellm.credential_list:
+            if cred.credential_name == credential_name:
+                existing_in_memory = cred
+                break
+
+        if existing_in_memory is not None:
+            in_memory_values = dict(existing_in_memory.credential_values or {})
+            if credential.credential_values:
+                in_memory_values.update(credential.credential_values)
+            in_memory_info = dict(existing_in_memory.credential_info or {})
+            if credential.credential_info:
+                in_memory_info.update(credential.credential_info)
+            updated_in_memory = CredentialItem(
+                credential_name=new_name,
+                credential_values=in_memory_values,
+                credential_info=in_memory_info,
+            )
+            # Remove old entry if renamed, then use upsert_credentials to handle duplicates
+            if new_name != credential_name:
+                litellm.credential_list = [
+                    c
+                    for c in litellm.credential_list
+                    if c.credential_name != credential_name
+                ]
+            CredentialAccessor.upsert_credentials([updated_in_memory])
+
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)

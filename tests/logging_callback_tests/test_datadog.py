@@ -3,12 +3,12 @@ import os
 import sys
 
 from litellm.integrations.datadog.datadog_handler import (
-  get_datadog_source,
-  get_datadog_service,
-  get_datadog_env, 
-  get_datadog_pod_name,
-  get_datadog_hostname,
-  get_datadog_tags,
+    get_datadog_source,
+    get_datadog_service,
+    get_datadog_env,
+    get_datadog_pod_name,
+    get_datadog_hostname,
+    get_datadog_tags,
 )
 
 sys.path.insert(0, os.path.abspath("../.."))
@@ -54,9 +54,9 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         endTime=1234567891.0,
         completionStartTime=1234567890.5,
         model_map_information=StandardLoggingModelInformation(
-            model_map_key="gpt-3.5-turbo", model_map_value=None
+            model_map_key="gpt-4.1-mini", model_map_value=None
         ),
-        model="gpt-3.5-turbo",
+        model="gpt-4.1-mini",
         model_id="model-123",
         model_group="openai-gpt",
         api_base="https://api.openai.com",
@@ -195,7 +195,7 @@ async def test_datadog_logging_http_request():
         # Make the completion call
         for _ in range(5):
             response = await litellm.acompletion(
-                model="gpt-3.5-turbo",
+                model="gpt-4.1-mini",
                 messages=[{"role": "user", "content": "what llm are u"}],
                 max_tokens=10,
                 temperature=0.2,
@@ -279,7 +279,7 @@ async def test_datadog_logging_http_request():
 
         # Check specific fields
         assert message["call_type"] == "acompletion"
-        assert message["model"] == "gpt-3.5-turbo"
+        assert message["model"] == "gpt-4.1-mini"
         assert isinstance(message["model_parameters"], dict)
         assert "temperature" in message["model_parameters"]
         assert "max_tokens" in message["model_parameters"]
@@ -411,7 +411,7 @@ async def test_datadog_log_redis_failures():
         # Make the completion call
         for _ in range(3):
             response = await litellm.acompletion(
-                model="gpt-3.5-turbo",
+                model="gpt-4.1-mini",
                 messages=[{"role": "user", "content": "what llm are u"}],
                 max_tokens=10,
                 temperature=0.2,
@@ -469,7 +469,7 @@ async def test_datadog_logging():
         litellm.success_callback = ["datadog"]
         litellm.set_verbose = True
         response = await litellm.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-4.1-mini",
             messages=[{"role": "user", "content": "what llm are u"}],
             max_tokens=10,
             temperature=0.2,
@@ -591,9 +591,8 @@ def test_datadog_static_methods():
     assert get_datadog_pod_name() == "unknown"
 
     # Test tags format with default values
-    assert (
-        "env:unknown,service:litellm-server,version:unknown,HOSTNAME:"
-        in ",".join(get_datadog_tags())
+    assert "env:unknown,service:litellm-server,version:unknown,HOSTNAME:" in ",".join(
+        get_datadog_tags()
     )
 
     # Test with custom environment variables
@@ -608,13 +607,9 @@ def test_datadog_static_methods():
 
     with patch.dict(os.environ, test_env):
         assert get_datadog_source() == "custom-source"
-        print(
-            "DataDogLogger._get_datadog_source()", get_datadog_source()
-        )
+        print("DataDogLogger._get_datadog_source()", get_datadog_source())
         assert get_datadog_service() == "custom-service"
-        print(
-            "DataDogLogger._get_datadog_service()", get_datadog_service()
-        )
+        print("DataDogLogger._get_datadog_service()", get_datadog_service())
         assert get_datadog_hostname() == "test-host"
         print(
             "DataDogLogger._get_datadog_hostname()",
@@ -716,42 +711,68 @@ def test_get_datadog_tags():
 @pytest.mark.asyncio
 async def test_datadog_message_redaction():
     """
-    Test that DataDog logger correctly initializes with turn_off_message_logging=True 
+    Test that DataDog logger correctly initializes with turn_off_message_logging=True
     from litellm.datadog_params
     """
     try:
         # Test using litellm.datadog_params pattern
         litellm.datadog_params = DatadogInitParams(turn_off_message_logging=True)
-        
+
         os.environ["DD_SITE"] = "https://fake.datadoghq.com"
         os.environ["DD_API_KEY"] = "anything"
-        
+
         # Mock the periodic flush to avoid async issues
         with patch("asyncio.create_task"):
             dd_logger = DataDogLogger()
 
         # Verify that turn_off_message_logging was set correctly from litellm.datadog_params
-        assert hasattr(dd_logger, 'turn_off_message_logging'), "DataDogLogger should have turn_off_message_logging attribute"
-        assert dd_logger.turn_off_message_logging is True, f"Expected turn_off_message_logging=True, got {dd_logger.turn_off_message_logging}"
-        
+        assert hasattr(
+            dd_logger, "turn_off_message_logging"
+        ), "DataDogLogger should have turn_off_message_logging attribute"
+        assert (
+            dd_logger.turn_off_message_logging is True
+        ), f"Expected turn_off_message_logging=True, got {dd_logger.turn_off_message_logging}"
+
         # Test the redaction method inherited from CustomLogger
         model_call_details = {
             "standard_logging_object": {
-                "messages": [{"role": "user", "content": "This is sensitive information that should be redacted"}],
-                "response": {"choices": [{"message": {"content": "This is a sensitive response that should be redacted"}}]}
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "This is sensitive information that should be redacted",
+                    }
+                ],
+                "response": {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "This is a sensitive response that should be redacted"
+                            }
+                        }
+                    ]
+                },
             }
         }
-        
+
         # Apply redaction using the inherited method
-        redacted_details = dd_logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
+        redacted_details = (
+            dd_logger.redact_standard_logging_payload_from_model_call_details(
+                model_call_details
+            )
+        )
         redacted_str = "redacted-by-litellm"
-        
+
         # Verify that messages are redacted
         redacted_standard_obj = redacted_details["standard_logging_object"]
-        assert redacted_standard_obj["messages"][0]["content"] == redacted_str, f"Messages not redacted. Got: {redacted_standard_obj['messages'][0]['content']}"
-        
+        assert (
+            redacted_standard_obj["messages"][0]["content"] == redacted_str
+        ), f"Messages not redacted. Got: {redacted_standard_obj['messages'][0]['content']}"
+
         # Verify that response is redacted
-        assert redacted_standard_obj["response"]["choices"][0]["message"]["content"] == redacted_str, f"Response not redacted. Got: {redacted_standard_obj['response']['choices'][0]['message']['content']}"
+        assert (
+            redacted_standard_obj["response"]["choices"][0]["message"]["content"]
+            == redacted_str
+        ), f"Response not redacted. Got: {redacted_standard_obj['response']['choices'][0]['message']['content']}"
 
         print("✅ DataDog message redaction test passed")
 
@@ -766,7 +787,7 @@ async def test_datadog_message_redaction():
 def test_datadog_agent_configuration():
     """
     Test that DataDog logger correctly configures agent endpoint when LITELLM_DD_AGENT_HOST is set.
-    
+
     Note: We use LITELLM_DD_AGENT_HOST instead of DD_AGENT_HOST to avoid conflicts
     with ddtrace which automatically sets DD_AGENT_HOST for APM tracing.
     """
@@ -774,20 +795,22 @@ def test_datadog_agent_configuration():
         "LITELLM_DD_AGENT_HOST": "localhost",
         "LITELLM_DD_AGENT_PORT": "10518",
     }
-    
+
     # Remove DD_SITE and DD_API_KEY to verify they're not required for agent mode
     env_to_remove = ["DD_SITE", "DD_API_KEY"]
-    
+
     with patch.dict(os.environ, test_env, clear=False):
         for key in env_to_remove:
             os.environ.pop(key, None)
-        
+
         with patch("asyncio.create_task"):
             dd_logger = DataDogLogger()
-        
+
         # Verify agent endpoint is configured correctly
-        assert dd_logger.intake_url == "http://localhost:10518/api/v2/logs", f"Expected agent URL, got {dd_logger.intake_url}"
-        
+        assert (
+            dd_logger.intake_url == "http://localhost:10518/api/v2/logs"
+        ), f"Expected agent URL, got {dd_logger.intake_url}"
+
         # Verify DD_API_KEY is optional (can be None)
         assert dd_logger.DD_API_KEY is None or isinstance(dd_logger.DD_API_KEY, str)
 
@@ -795,13 +818,13 @@ def test_datadog_agent_configuration():
 def test_datadog_ignores_ddtrace_agent_host():
     """
     Regression test: Ensure DD_AGENT_HOST set by ddtrace doesn't interfere with LiteLLM logging.
-    
+
     When users have ddtrace installed for APM tracing, it automatically sets DD_AGENT_HOST.
     LiteLLM should ignore DD_AGENT_HOST and only use LITELLM_DD_AGENT_HOST for agent mode.
-    
+
     This prevents the 404 error when ddtrace's DD_AGENT_HOST points to an APM endpoint
     that doesn't support /api/v2/logs.
-    
+
     Regression test for: https://github.com/BerriAI/litellm/issues/16379
     """
     test_env = {
@@ -812,17 +835,17 @@ def test_datadog_ignores_ddtrace_agent_host():
         "DD_AGENT_HOST": "10.176.100.40",
         "DD_AGENT_PORT": "8126",
     }
-    
+
     with patch.dict(os.environ, test_env, clear=False):
         with patch("asyncio.create_task"):
             dd_logger = DataDogLogger()
-        
+
         # Verify direct API endpoint is used (DD_AGENT_HOST should be ignored)
         expected_url = "https://http-intake.logs.us5.datadoghq.com/api/v2/logs"
         assert dd_logger.intake_url == expected_url, (
             f"Expected direct API URL '{expected_url}', got '{dd_logger.intake_url}'. "
             "DD_AGENT_HOST (set by ddtrace) should be ignored - only LITELLM_DD_AGENT_HOST should trigger agent mode."
         )
-        
+
         # Verify API key is set correctly
         assert dd_logger.DD_API_KEY == "fake-api-key"

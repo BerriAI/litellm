@@ -4,6 +4,7 @@ Transformation for Azure AI Foundry Model Router.
 The Model Router is a special Azure AI deployment that automatically routes requests
 to the best available model. It has specific cost tracking requirements.
 """
+
 from typing import Any, List, Optional
 
 from httpx import Response

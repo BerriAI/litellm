@@ -1,6 +1,8 @@
 """
 Tests for Gemini (Veo) video generation transformation.
 """
+
+import io
 import json
 import os
 from unittest.mock import MagicMock, Mock, patch
@@ -130,6 +132,87 @@ class TestGeminiVideoConfig:
         assert data["parameters"]["aspectRatio"] == "16:9"
         assert data["parameters"]["durationSeconds"] == 8
         assert data["parameters"]["resolution"] == "1080p"
+
+    def test_transform_video_create_request_image_goes_to_instance(self):
+        """Image belongs in instances[0], not in parameters (per Veo API)."""
+        prompt = "Animate this still"
+        api_base = "https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-preview:predictLongRunning"
+        image_dict = {"bytesBase64Encoded": "aGVsbG8=", "mimeType": "image/jpeg"}
+
+        data, _, _ = self.config.transform_video_create_request(
+            model="veo-3.0-generate-preview",
+            prompt=prompt,
+            api_base=api_base,
+            video_create_optional_request_params={
+                "image": image_dict,
+                "aspectRatio": "16:9",
+                "durationSeconds": 4,
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["instances"][0]["prompt"] == prompt
+        assert data["instances"][0]["image"] == image_dict
+        assert "image" not in data.get("parameters", {})
+        assert data["parameters"]["aspectRatio"] == "16:9"
+        assert data["parameters"]["durationSeconds"] == 4
+
+    def test_transform_video_create_request_image_filelike_goes_to_instance(self):
+        """File-like image (BytesIO) gets base64-encoded into instances[0]['image']."""
+        prompt = "Animate this still"
+        api_base = "https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-preview:predictLongRunning"
+        # 1x1 PNG (8 bytes after magic + minimal IHDR is not legal — but the
+        # transformer only cares that ImageEditRequestUtils can sniff a MIME and
+        # that .read() returns bytes; an explicit name="image.jpeg" hands the
+        # MIME sniffer a clean answer regardless of payload).
+        image_bytes = b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+        image_file = io.BytesIO(image_bytes)
+        image_file.name = "still.jpeg"
+
+        data, _, _ = self.config.transform_video_create_request(
+            model="veo-3.0-generate-preview",
+            prompt=prompt,
+            api_base=api_base,
+            video_create_optional_request_params={
+                "image": image_file,
+                "aspectRatio": "16:9",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        # File-like took the _convert_image_to_gemini_format branch and landed
+        # in instances[0]["image"], not in parameters.
+        instance_image = data["instances"][0]["image"]
+        assert isinstance(instance_image, dict)
+        assert instance_image["mimeType"].startswith("image/")
+        assert instance_image["bytesBase64Encoded"]
+        # Round-trip the base64 — should equal the original bytes.
+        import base64
+
+        assert base64.b64decode(instance_image["bytesBase64Encoded"]) == image_bytes
+        assert "image" not in data.get("parameters", {})
+
+    def test_transform_video_create_request_image_none_is_dropped(self):
+        """Explicit image=None is popped and never reaches parameters."""
+        prompt = "no image at all"
+        api_base = "https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-preview:predictLongRunning"
+
+        data, _, _ = self.config.transform_video_create_request(
+            model="veo-3.0-generate-preview",
+            prompt=prompt,
+            api_base=api_base,
+            video_create_optional_request_params={
+                "image": None,
+                "aspectRatio": "16:9",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "image" not in data["instances"][0]
+        assert "image" not in data.get("parameters", {})
 
     def test_map_openai_params(self):
         """Test parameter mapping from OpenAI format to Veo format."""

@@ -12,15 +12,15 @@ import {
   GuardrailProviders,
   skipSystemMessageToChoice,
   choiceToSkipSystemForCreate,
+  skipToolMessageToChoice,
+  choiceToSkipToolForCreate,
 } from "./guardrail_info_helpers";
 
 describe("guardrail_info_helpers", () => {
   // Reset mutable module state between tests
   beforeEach(() => {
     // Clear DynamicGuardrailProviders by repopulating with empty
-    Object.keys(DynamicGuardrailProviders).forEach(
-      (key) => delete DynamicGuardrailProviders[key]
-    );
+    Object.keys(DynamicGuardrailProviders).forEach((key) => delete DynamicGuardrailProviders[key]);
     // Remove any dynamically added keys from guardrail_provider_map
     const staticKeys = new Set([
       "PresidioPII",
@@ -121,15 +121,11 @@ describe("guardrail_info_helpers", () => {
         },
       });
 
-      expect(
-        shouldRenderContentFilterConfigSettings("LitellmContentFilter")
-      ).toBe(true);
+      expect(shouldRenderContentFilterConfigSettings("LitellmContentFilter")).toBe(true);
     });
 
     it("should return false for unrelated providers", () => {
-      expect(shouldRenderContentFilterConfigSettings("PresidioPII")).toBe(
-        false
-      );
+      expect(shouldRenderContentFilterConfigSettings("PresidioPII")).toBe(false);
     });
 
     it("should return false for null", () => {
@@ -145,9 +141,7 @@ describe("guardrail_info_helpers", () => {
         },
       });
 
-      expect(
-        shouldRenderAzureTextModerationConfigSettings("AzureContentSafety")
-      ).toBe(true);
+      expect(shouldRenderAzureTextModerationConfigSettings("AzureContentSafety")).toBe(true);
     });
 
     it("should return false for null", () => {
@@ -213,6 +207,20 @@ describe("guardrail_info_helpers", () => {
       expect(choiceToSkipSystemForCreate(undefined)).toBeUndefined();
       expect(choiceToSkipSystemForCreate("yes")).toBe(true);
       expect(choiceToSkipSystemForCreate("no")).toBe(false);
+    });
+  });
+
+  describe("skipToolMessageToChoice / choiceToSkipToolForCreate", () => {
+    it("maps API values to form choices and back for create", () => {
+      expect(skipToolMessageToChoice(undefined)).toBe("inherit");
+      expect(skipToolMessageToChoice(null)).toBe("inherit");
+      expect(skipToolMessageToChoice(true)).toBe("yes");
+      expect(skipToolMessageToChoice(false)).toBe("no");
+
+      expect(choiceToSkipToolForCreate("inherit")).toBeUndefined();
+      expect(choiceToSkipToolForCreate(undefined)).toBeUndefined();
+      expect(choiceToSkipToolForCreate("yes")).toBe(true);
+      expect(choiceToSkipToolForCreate("no")).toBe(false);
     });
   });
 });

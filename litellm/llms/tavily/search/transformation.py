@@ -3,6 +3,7 @@ Calls Tavily's /search endpoint to search the web.
 
 Tavily API Reference: https://docs.tavily.com/documentation/api-reference/endpoint/search
 """
+
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
@@ -32,7 +33,9 @@ class TavilySearchRequest(_TavilySearchRequestRequired, total=False):
     include_domains: List[str]  # Optional - list of domains to include (max 300)
     exclude_domains: List[str]  # Optional - list of domains to exclude (max 150)
     topic: str  # Optional - category of search ('general', 'news', 'finance'), default 'general'
-    search_depth: str  # Optional - depth of search ('basic', 'advanced'), default 'basic'
+    search_depth: (
+        str  # Optional - depth of search ('basic', 'advanced'), default 'basic'
+    )
     include_answer: Union[bool, str]  # Optional - include LLM-generated answer
     include_raw_content: Union[bool, str]  # Optional - include raw HTML content
     include_images: bool  # Optional - perform image search

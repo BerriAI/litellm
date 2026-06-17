@@ -369,6 +369,7 @@ class TestLiteLLMCompletionResponsesConfig:
         ]
         assert len(message_items) == 1, "Should have exactly one message item"
         assert message_items[0].content[0].text == "Just a regular answer."
+        assert responses_api_response.object == "response"
 
     def test_transform_chat_completion_response_multiple_choices_with_reasoning(self):
         """Test that only reasoning from first choice is included when multiple choices exist"""
@@ -947,6 +948,28 @@ class TestToolChoiceTransformation:
         tool_choice = {"type": "function", "function": {"name": "my_tool"}}
         result = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
         assert result == tool_choice
+
+    def test_transform_tool_choice_responses_flat_function_name(self):
+        """Responses-API forced-function with a top-level name maps to the nested Chat
+        Completions shape instead of degrading to required and dropping the name"""
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function", "name": "get_weather"}
+        )
+        assert result == {"type": "function", "function": {"name": "get_weather"}}
+
+    def test_transform_tool_choice_function_without_name_falls_back_to_required(self):
+        """A function-type dict with no name still falls back to required"""
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function"}
+        )
+        assert result == "required"
+
+    def test_transform_tool_choice_function_empty_name_falls_back_to_required(self):
+        """An empty top-level name is falsy and must not produce an empty function name"""
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function", "name": ""}
+        )
+        assert result == "required"
 
 
 class TestContentTypeTransformation:
@@ -2169,3 +2192,111 @@ class TestEnsureOutputItemContentPartAdded:
 
         events = iterator._pending_response_events
         assert len(events) == 2
+
+
+class TestCacheControlPreservation:
+    def test_cache_control_preserved_in_content_transformation(self):
+        """cache_control injected by AnthropicCacheControlHook must survive
+        the Responses API -> Chat Completion content transformation."""
+        content = [
+            {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_content_without_cache_control_unaffected(self):
+        """Content blocks that don't have cache_control should be unaffected."""
+        content = [{"type": "text", "text": "hello"}]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert "cache_control" not in result[0]
+
+    def test_cache_control_preserved_in_input_item_transformation(self):
+        """cache_control survives the full input-item -> messages transformation."""
+        input_item = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "long context",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item
+        )
+        assert len(messages) == 1
+        msg_content = (
+            messages[0].get("content")
+            if isinstance(messages[0], dict)
+            else getattr(messages[0], "content", None)
+        )
+        assert isinstance(msg_content, list)
+        assert msg_content[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_cache_control_preserved_for_input_file_block(self):
+        content = [
+            {
+                "type": "input_file",
+                "file_id": "file-abc123",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_cache_control_preserved_for_input_image_block(self):
+        content = [
+            {
+                "type": "input_image",
+                "image_url": "https://example.com/img.png",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
+    """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0`` that
+    resets every response) alongside a unique ``id`` (``fc_...``). For that degenerate
+    form the converter must expose the unique ``id``; otherwise every tool call across
+    an agent's turns collapses to the same id, the agent cannot correlate its tool
+    results, and it loops re-issuing the same call. A normal (unique) ``call_id`` must
+    be preserved, since it is the canonical Responses API correlation key. Regression
+    for the bedrock-mantle gpt-5.5 non-streaming path."""
+    from types import SimpleNamespace
+
+    convert = (
+        LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call
+    )
+
+    mantle = SimpleNamespace(
+        id="fc_unique_abc123", call_id="call_0", name="get_weather", arguments="{}"
+    )
+    assert convert(mantle)["id"] == "fc_unique_abc123"
+
+    openai = SimpleNamespace(
+        id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}"
+    )
+    assert convert(openai)["id"] == "call_tokyo"

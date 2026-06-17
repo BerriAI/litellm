@@ -120,6 +120,19 @@ def get_secret_str(
     return value
 
 
+def normalize_nonempty_secret_str(val: Optional[str]) -> Optional[str]:
+    """
+    Strip whitespace and treat None, '', and whitespace-only strings as unset.
+
+    Use when pairing secrets (mutual exclusion, optional auth) so whitespace-only
+    values do not count as present.
+    """
+    if val is None:
+        return None
+    stripped = val.strip()
+    return stripped if stripped else None
+
+
 def get_secret_bool(
     secret_name: str,
     default_value: Optional[bool] = None,
@@ -143,7 +156,7 @@ def get_secret_bool(
         return str_to_bool(_secret_value)
 
 
-def get_secret(  # noqa: PLR0915
+def get_secret(
     secret_name: str,
     default_value: Optional[Union[str, bool]] = None,
 ):

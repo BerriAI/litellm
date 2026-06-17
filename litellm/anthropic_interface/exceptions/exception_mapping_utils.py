@@ -9,7 +9,6 @@ from typing import Dict, Optional
 
 from .exceptions import AnthropicErrorResponse, AnthropicErrorType
 
-
 # HTTP status code -> Anthropic error type
 # Source: https://docs.anthropic.com/en/api/errors
 ANTHROPIC_ERROR_TYPE_MAP: Dict[int, AnthropicErrorType] = {

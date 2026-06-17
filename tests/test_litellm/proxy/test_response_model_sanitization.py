@@ -66,7 +66,72 @@ def _make_model_response_stream_chunk(model: str) -> litellm.ModelResponseStream
     return litellm.ModelResponseStream(**chunk_dict)
 
 
-def test_proxy_chat_completion_does_not_return_provider_prefixed_model(tmp_path, monkeypatch):
+def _decode_sse_chunk(chunk) -> str:
+    return chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+
+
+def test_restamp_streaming_chunk_skips_matching_model():
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    chunk = _make_model_response_stream_chunk("client-model")
+
+    result, model_mismatch_logged = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert result is chunk
+    assert result.model == "client-model"
+    assert model_mismatch_logged is False
+
+
+def test_fast_serialize_simple_streaming_chunk_matches_model_dump_json():
+    from litellm.proxy.proxy_server import _serialize_streaming_chunk
+
+    chunk = _make_model_response_stream_chunk("client-model")
+
+    assert json.loads(_serialize_streaming_chunk(chunk)) == json.loads(
+        chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    )
+
+
+def test_fast_serialize_returns_none_when_model_field_is_missing():
+    """
+    The fast path must mirror ``model_dump_json(exclude_none=True)``: when
+    ``chunk.model`` is ``None`` the slow path omits the field entirely.
+    Emitting ``"model": null`` would diverge and trip strict OpenAI-
+    compatible clients that reject ``null`` for optional string fields.
+    Falling back to ``None`` lets the canonical serializer handle the edge.
+    """
+    from litellm.proxy.proxy_server import (
+        _fast_serialize_simple_model_response_stream,
+        _serialize_streaming_chunk,
+    )
+
+    chunk = _make_model_response_stream_chunk("client-model")
+    chunk.model = None  # type: ignore[assignment]
+
+    assert _fast_serialize_simple_model_response_stream(chunk) is None
+
+    # Going through the public ``_serialize_streaming_chunk`` should still
+    # produce a serialized result via the slow-path fallback, and it must
+    # not contain ``"model": null``.
+    serialized = _serialize_streaming_chunk(chunk)
+    payload_str = (
+        serialized.decode("utf-8") if isinstance(serialized, bytes) else serialized
+    )
+    assert '"model": null' not in payload_str
+    assert '"model":null' not in payload_str
+    assert json.loads(payload_str) == json.loads(
+        chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    )
+
+
+def test_proxy_chat_completion_does_not_return_provider_prefixed_model(
+    tmp_path, monkeypatch
+):
     """
     Regression test:
 
@@ -96,13 +161,25 @@ def test_proxy_chat_completion_does_not_return_provider_prefixed_model(tmp_path,
     monkeypatch.setattr(
         proxy_server.llm_router,  # type: ignore[arg-type]
         "acompletion",
-        AsyncMock(return_value=_make_minimal_chat_completion_response(model=internal_model)),
+        AsyncMock(
+            return_value=_make_minimal_chat_completion_response(model=internal_model)
+        ),
     )
 
     # Also no-op proxy logging hooks to keep this test focused and deterministic.
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "during_call_hook", AsyncMock(return_value=None))
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "update_request_status", AsyncMock(return_value=None))
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "post_call_success_hook", AsyncMock(side_effect=lambda **kwargs: kwargs["response"]))
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj, "during_call_hook", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "update_request_status",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "post_call_success_hook",
+        AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
+    )
 
     resp = client.post(
         "/v1/chat/completions",
@@ -117,7 +194,9 @@ def test_proxy_chat_completion_does_not_return_provider_prefixed_model(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(monkeypatch):
+async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(
+    monkeypatch,
+):
     """
     Regression test for streaming:
 
@@ -138,11 +217,30 @@ async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(monk
     ):
         yield _make_model_response_stream_chunk(model=internal_model)
 
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "async_post_call_streaming_iterator_hook", _iterator_hook)
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_iterator_hook",
+        _iterator_hook,
+    )
     monkeypatch.setattr(
         proxy_server.proxy_logging_obj,
         "async_post_call_streaming_hook",
         AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "has_streaming_callbacks",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_iterator_wrap",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_per_chunk_streaming_hook",
+        MagicMock(return_value=True),
     )
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
@@ -159,7 +257,7 @@ async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(monk
 
     # First chunk is expected to be JSON, last chunk is [DONE]
     assert len(chunks) >= 2
-    first = chunks[0]
+    first = _decode_sse_chunk(chunks[0])
     assert first.startswith("data: ")
 
     payload = json.loads(first[len("data: ") :].strip())
@@ -168,7 +266,9 @@ async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(monk
 
 
 @pytest.mark.asyncio
-async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_mapping(monkeypatch):
+async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_mapping(
+    monkeypatch,
+):
     """
     Regression test for alias mapping on streaming:
 
@@ -190,11 +290,30 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
     ):
         yield _make_model_response_stream_chunk(model=internal_model)
 
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "async_post_call_streaming_iterator_hook", _iterator_hook)
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_iterator_hook",
+        _iterator_hook,
+    )
     monkeypatch.setattr(
         proxy_server.proxy_logging_obj,
         "async_post_call_streaming_hook",
         AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "has_streaming_callbacks",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_iterator_wrap",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_per_chunk_streaming_hook",
+        MagicMock(return_value=True),
     )
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
@@ -213,7 +332,7 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
         chunks.append(item)
 
     assert len(chunks) >= 2
-    first = chunks[0]
+    first = _decode_sse_chunk(chunks[0])
     assert first.startswith("data: ")
 
     payload = json.loads(first[len("data: ") :].strip())
@@ -243,11 +362,30 @@ async def test_proxy_streaming_azure_model_router_preserves_actual_model(monkeyp
     ):
         yield _make_model_response_stream_chunk(model=actual_model_used)
 
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "async_post_call_streaming_iterator_hook", _iterator_hook)
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_iterator_hook",
+        _iterator_hook,
+    )
     monkeypatch.setattr(
         proxy_server.proxy_logging_obj,
         "async_post_call_streaming_hook",
         AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "has_streaming_callbacks",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_iterator_wrap",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_per_chunk_streaming_hook",
+        MagicMock(return_value=True),
     )
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
@@ -266,7 +404,7 @@ async def test_proxy_streaming_azure_model_router_preserves_actual_model(monkeyp
         chunks.append(item)
 
     assert len(chunks) >= 2
-    first = chunks[0]
+    first = _decode_sse_chunk(chunks[0])
     assert first.startswith("data: ")
 
     payload = json.loads(first[len("data: ") :].strip())
@@ -307,6 +445,21 @@ async def test_proxy_streaming_fastest_response_preserves_winning_model(monkeypa
         "async_post_call_streaming_hook",
         AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
     )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "has_streaming_callbacks",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_iterator_wrap",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_per_chunk_streaming_hook",
+        MagicMock(return_value=True),
+    )
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
 
@@ -325,7 +478,7 @@ async def test_proxy_streaming_fastest_response_preserves_winning_model(monkeypa
         chunks.append(item)
 
     assert len(chunks) >= 2
-    first = chunks[0]
+    first = _decode_sse_chunk(chunks[0])
     assert first.startswith("data: ")
 
     payload = json.loads(first[len("data: ") :].strip())
