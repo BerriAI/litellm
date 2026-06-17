@@ -2213,6 +2213,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         inference_geo: Optional[str] = None
         if "inference_geo" in _usage and _usage["inference_geo"] is not None:
             inference_geo = _usage["inference_geo"]
+        service_tier = cast(
+            str | None,
+            _usage.get("service_tier"),  # any-ok: untyped usage dict
+        )
 
         iterations: Optional[List[Any]] = _usage.get("iterations")
         if iterations:
@@ -2324,6 +2328,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ),
             inference_geo=inference_geo,
             speed=speed,
+            service_tier=service_tier,
         )
         return usage
 
