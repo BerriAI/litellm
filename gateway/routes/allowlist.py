@@ -118,5 +118,9 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/docs/oauth2-redirect",
         "/redoc",
         "/test",
+        # Claude Code telemetry stub (introduced upstream by #20504); hit
+        # by Claude Code clients as part of the `/v1/messages` data path,
+        # so it belongs on the gateway component.
+        "/api/event_logging/batch",
     }
 )
