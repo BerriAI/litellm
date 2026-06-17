@@ -15,6 +15,7 @@ import pytest
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator
 from litellm.proxy.proxy_server import (
     _get_proxy_model_info,
     _translate_model_name_for_response,
@@ -716,11 +717,9 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     ]
 
 
-def test_translate_team_model_names_for_listing_swaps_and_dedupes(monkeypatch):
+def test_translate_team_model_names_for_listing_swaps_and_dedupes():
     """Internal team routing keys -> public name; sibling deployments sharing a
     public name collapse to one entry (order preserved); globals untouched."""
-    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
-
     router = MagicMock()
     router.get_model_list.return_value = [
         {
@@ -739,42 +738,34 @@ def test_translate_team_model_names_for_listing_swaps_and_dedupes(monkeypatch):
         },
         {"model_name": "gpt-4o", "model_info": {"db_model": False}},
     ]
-    monkeypatch.setattr(ps, "general_settings", {})
 
-    out = _translate_team_model_names_for_listing(
+    out = TeamModelNameTranslator.translate_listing(
         ["model_name_teamX_uuidA", "model_name_teamX_uuidB", "gpt-4o"],
         router,
+        {},
     )
     assert out == ["tushar-gpt-4.1", "gpt-4o"]
 
 
-def test_translate_team_model_names_for_listing_leaves_unmapped_names(monkeypatch):
+def test_translate_team_model_names_for_listing_leaves_unmapped_names():
     """Names with no team mapping (globals, access-group keys) pass through."""
-    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
-
     router = MagicMock()
     router.get_model_list.return_value = [
         {"model_name": "gpt-4o", "model_info": {"db_model": False}}
     ]
-    monkeypatch.setattr(ps, "general_settings", {})
 
-    assert _translate_team_model_names_for_listing(
-        ["gpt-4o", "beta-group"], router
+    assert TeamModelNameTranslator.translate_listing(
+        ["gpt-4o", "beta-group"], router, {}
     ) == ["gpt-4o", "beta-group"]
 
 
-def test_translate_team_model_names_for_listing_none_router(monkeypatch):
+def test_translate_team_model_names_for_listing_none_router():
     """No router -> return the input list unchanged."""
-    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
-
-    monkeypatch.setattr(ps, "general_settings", {})
-    assert _translate_team_model_names_for_listing(["a", "b"], None) == ["a", "b"]
+    assert TeamModelNameTranslator.translate_listing(["a", "b"], None, {}) == ["a", "b"]
 
 
-def test_translate_team_model_names_for_listing_respects_legacy_flag(monkeypatch):
+def test_translate_team_model_names_for_listing_respects_legacy_flag():
     """Operators can keep returning the legacy internal routing key."""
-    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
-
     router = MagicMock()
     router.get_model_list.return_value = [
         {
@@ -785,10 +776,9 @@ def test_translate_team_model_names_for_listing_respects_legacy_flag(monkeypatch
             },
         }
     ]
-    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
 
-    assert _translate_team_model_names_for_listing(
-        ["model_name_teamX_uuidA"], router
+    assert TeamModelNameTranslator.translate_listing(
+        ["model_name_teamX_uuidA"], router, {"use_team_public_model_name": False}
     ) == ["model_name_teamX_uuidA"]
 
 
@@ -798,83 +788,76 @@ def _public_named_router(*team_rows: dict) -> MagicMock:
     return router
 
 
-def test_resolve_public_name_to_internal_routing_key(monkeypatch):
+def test_resolve_public_name_to_internal_routing_key():
     """A public team name resolves back to the internal routing key the router
     indexes by, so `GET /v1/models/{public_name}` can find the deployment."""
-    from litellm.proxy.proxy_server import _resolve_team_public_model_name
-
-    monkeypatch.setattr(ps, "general_settings", {})
     router = _public_named_router(_team_row())
 
     assert (
-        _resolve_team_public_model_name(
+        TeamModelNameTranslator.resolve_public_name(
             model_id="team-claude-sonnet",
             available_models=["model_name_team-abc-123_4a6b8"],
             llm_router=router,
+            general_settings={},
         )
         == "model_name_team-abc-123_4a6b8"
     )
 
 
-def test_resolve_public_name_is_access_scoped_across_teams(monkeypatch):
+def test_resolve_public_name_is_access_scoped_across_teams():
     """Two teams can publish the SAME public name. A caller's query must resolve
     to the internal key they can actually access, never another team's."""
-    from litellm.proxy.proxy_server import _resolve_team_public_model_name
-
-    monkeypatch.setattr(ps, "general_settings", {})
     # both rows share public name "team-claude-sonnet"
     router = _public_named_router(_team_row(), _other_team_row())
 
     # caller only has access to their own team's internal key
-    resolved = _resolve_team_public_model_name(
+    resolved = TeamModelNameTranslator.resolve_public_name(
         model_id="team-claude-sonnet",
         available_models=["model_name_team-abc-123_4a6b8"],
         llm_router=router,
+        general_settings={},
     )
     assert resolved == "model_name_team-abc-123_4a6b8"
     assert resolved != "model_name_team-other_9f2c1"
 
 
-def test_resolve_public_name_unmapped_passes_through(monkeypatch):
+def test_resolve_public_name_unmapped_passes_through():
     """A public name with no accessible internal mapping is returned unchanged so
     the caller hits the normal 404/access path; internal names pass through too."""
-    from litellm.proxy.proxy_server import _resolve_team_public_model_name
-
-    monkeypatch.setattr(ps, "general_settings", {})
     router = _public_named_router(_team_row())
 
     # not accessible -> unchanged (downstream validate_model_access will 404)
     assert (
-        _resolve_team_public_model_name(
+        TeamModelNameTranslator.resolve_public_name(
             model_id="team-claude-sonnet",
             available_models=[],
             llm_router=router,
+            general_settings={},
         )
         == "team-claude-sonnet"
     )
     # already an internal routing key -> unchanged
     assert (
-        _resolve_team_public_model_name(
+        TeamModelNameTranslator.resolve_public_name(
             model_id="model_name_team-abc-123_4a6b8",
             available_models=["model_name_team-abc-123_4a6b8"],
             llm_router=router,
+            general_settings={},
         )
         == "model_name_team-abc-123_4a6b8"
     )
 
 
-def test_resolve_public_name_respects_legacy_flag(monkeypatch):
+def test_resolve_public_name_respects_legacy_flag():
     """With the legacy flag set, no public-name resolution happens."""
-    from litellm.proxy.proxy_server import _resolve_team_public_model_name
-
-    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
     router = _public_named_router(_team_row())
 
     assert (
-        _resolve_team_public_model_name(
+        TeamModelNameTranslator.resolve_public_name(
             model_id="team-claude-sonnet",
             available_models=["model_name_team-abc-123_4a6b8"],
             llm_router=router,
+            general_settings={"use_team_public_model_name": False},
         )
         == "team-claude-sonnet"
     )
