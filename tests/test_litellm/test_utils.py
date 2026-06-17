@@ -781,6 +781,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "mode": {
                     "type": "string",
                     "enum": [
+                        "audio_generation",
                         "audio_speech",
                         "audio_transcription",
                         "chat",
