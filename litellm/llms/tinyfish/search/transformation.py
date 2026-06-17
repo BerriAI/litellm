@@ -6,7 +6,7 @@ Docs: https://docs.tinyfish.ai/search-api
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional, TypedDict, Union
+from typing import Literal, TypedDict
 from urllib.parse import urlencode
 
 import httpx
@@ -32,6 +32,9 @@ class TinyfishSearchRequest(_TinyfishSearchRequestRequired, total=False):
     max_results: int
 
 
+_TINYFISH_PARAMS_KEY = "_tinyfish_params"
+
+
 class TinyfishSearchConfig(BaseSearchConfig):
     TINYFISH_API_BASE = "https://api.search.tinyfish.ai"
 
@@ -44,98 +47,97 @@ class TinyfishSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        **kwargs,
-    ) -> Dict:
-        api_key = api_key or get_secret_str("TINYFISH_API_KEY")
-        if not api_key:
+        headers: dict[str, str],
+        api_key: str | None = None,
+        api_base: str | None = None,
+        **kwargs: object,
+    ) -> dict[str, str]:
+        resolved_key = api_key or get_secret_str("TINYFISH_API_KEY")
+        if not resolved_key:
             raise ValueError(
                 "TINYFISH_API_KEY is not set. Set `TINYFISH_API_KEY` environment variable."
             )
-        headers["X-API-Key"] = api_key
-        headers["Accept"] = "application/json"
-        return headers
+        return {**headers, "X-API-Key": resolved_key, "Accept": "application/json"}
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
-        **kwargs,
+        api_base: str | None,
+        optional_params: dict[str, object],
+        data: dict[str, object] | list[dict[str, object]] | None = None,
+        **kwargs: object,
     ) -> str:
-        api_base = (
+        resolved_base = (
             api_base or get_secret_str("TINYFISH_API_BASE") or self.TINYFISH_API_BASE
         )
-        if data and isinstance(data, dict) and "_tinyfish_params" in data:
-            query_string = urlencode(data["_tinyfish_params"], doseq=True)
-            return f"{api_base}?{query_string}"
-        return api_base
+        if isinstance(data, dict) and _TINYFISH_PARAMS_KEY in data:
+            params = data[_TINYFISH_PARAMS_KEY]
+            if isinstance(params, dict):
+                query_string = urlencode(params, doseq=True)
+                return f"{resolved_base}?{query_string}"
+        return resolved_base
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
-        optional_params: dict,
-        **kwargs,
-    ) -> Dict:
-        if isinstance(query, list):
-            query = " ".join(query)
+        query: str | list[str],
+        optional_params: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        resolved_query = " ".join(query) if isinstance(query, list) else query
 
-        request_data: TinyfishSearchRequest = {"query": query}
+        request_data: TinyfishSearchRequest = {"query": resolved_query}
 
-        if "country" in optional_params:
-            request_data["location"] = optional_params["country"]
+        country = optional_params.get("country")
+        if isinstance(country, str):
+            request_data["location"] = country
 
-        if "max_results" in optional_params:
-            request_data["max_results"] = max(
-                1, min(int(optional_params["max_results"]), 20)
+        raw_max = optional_params.get("max_results")
+        if raw_max is not None:
+            request_data["max_results"] = max(1, min(int(raw_max), 20))
+
+        domain_filter = optional_params.get("search_domain_filter")
+        if isinstance(domain_filter, list) and len(domain_filter) > 0:
+            request_data["query"] = _append_domain_filters(
+                request_data["query"],
+                [str(d) for d in domain_filter],
             )
 
-        if "search_domain_filter" in optional_params:
-            domains = optional_params["search_domain_filter"]
-            if isinstance(domains, list) and len(domains) > 0:
-                request_data["query"] = self._append_domain_filters(
-                    request_data["query"], domains
-                )
+        result_data: dict[str, object] = dict(request_data)
 
-        result_data = dict(request_data)
-
+        supported_perplexity = self.get_supported_perplexity_optional_params()
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in supported_perplexity and param not in result_data:
                 result_data[param] = value
 
-        return {"_tinyfish_params": result_data}
-
-    @staticmethod
-    def _append_domain_filters(query: str, domains: List[str]) -> str:
-        domain_clauses = " OR ".join(f"site:{d}" for d in domains)
-        return f"({query}) AND ({domain_clauses})"
+        return {_TINYFISH_PARAMS_KEY: result_data}
 
     def transform_search_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Optional[LiteLLMLoggingObj],
-        **kwargs,
+        logging_obj: LiteLLMLoggingObj | None,
+        **kwargs: object,
     ) -> SearchResponse:
-        response_json = raw_response.json()
+        response_json: dict[str, object] = raw_response.json()
 
-        query_params = raw_response.request.url.params if raw_response.request else {}
-        max_results = min(int(query_params.get("max_results", 20)), 20)
+        raw_max: object = {}
+        if raw_response.request:
+            raw_max = raw_response.request.url.params.get("max_results", 20)
+        max_results = min(int(raw_max) if raw_max else 20, 20)
 
-        results: List[SearchResult] = []
-        for item in response_json.get("results", []):
-            if len(results) >= max_results:
-                break
-            results.append(
-                SearchResult(
-                    title=item.get("title", ""),
-                    url=item.get("url", ""),
-                    snippet=item.get("snippet", ""),
-                )
+        raw_results = response_json.get("results")
+        items: list[object] = list(raw_results) if isinstance(raw_results, list) else []
+
+        results = tuple(
+            SearchResult(
+                title=item.get("title", "") if isinstance(item, dict) else "",
+                url=item.get("url", "") if isinstance(item, dict) else "",
+                snippet=item.get("snippet", "") if isinstance(item, dict) else "",
             )
+            for item in items[:max_results]
+        )
 
-        return SearchResponse(results=results, object="search")
+        return SearchResponse(results=list(results), object="search")
+
+
+def _append_domain_filters(query: str, domains: list[str]) -> str:
+    domain_clauses = " OR ".join(f"site:{d}" for d in domains)
+    return f"({query}) AND ({domain_clauses})"

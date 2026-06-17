@@ -8,7 +8,10 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
+from litellm.llms.tinyfish.search.transformation import (
+    TinyfishSearchConfig,
+    _append_domain_filters,
+)
 
 MOCK_TINYFISH_RESPONSE = {
     "query": "web automation tools",
@@ -172,11 +175,11 @@ class TestTransformSearchRequest:
         config = TinyfishSearchConfig()
         supported = config.get_supported_perplexity_optional_params()
         if supported:
-            first_param = list(supported)[0]
+            param = next(p for p in supported if p != "max_results" and p != "country")
             result = config.transform_search_request(
-                query="test", optional_params={first_param: "value"}
+                query="test", optional_params={param: "value"}
             )
-            assert first_param not in result["_tinyfish_params"]
+            assert param not in result["_tinyfish_params"]
 
 
 class TestGetCompleteUrl:
@@ -331,11 +334,9 @@ class TestTransformSearchResponse:
 
 class TestAppendDomainFilters:
     def test_single_domain(self):
-        result = TinyfishSearchConfig._append_domain_filters("test", ["example.com"])
+        result = _append_domain_filters("test", ["example.com"])
         assert result == "(test) AND (site:example.com)"
 
     def test_multiple_domains(self):
-        result = TinyfishSearchConfig._append_domain_filters(
-            "query", ["a.com", "b.com", "c.com"]
-        )
+        result = _append_domain_filters("query", ["a.com", "b.com", "c.com"])
         assert result == "(query) AND (site:a.com OR site:b.com OR site:c.com)"
