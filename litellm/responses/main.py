@@ -689,6 +689,7 @@ def _resolve_model_provider_for_responses(
         custom_llm_provider=custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
+        litellm_params=litellm_params.model_dump(exclude_none=True),
     )
     local_vars["custom_llm_provider"] = custom_llm_provider
     if dynamic_api_key is not None:
@@ -1994,6 +1995,7 @@ def compact_responses(
             custom_llm_provider=custom_llm_provider,
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
+            litellm_params=litellm_params.model_dump(exclude_none=True),
         )
 
         # Update local_vars with detected provider (fixes #19782)
