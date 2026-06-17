@@ -49,6 +49,7 @@ from typing import Iterable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
+    AGENT_SHIN_CLOSE_MARKER,
     ALLOWLIST_LOGINS,
     GRACE_COMMENT_MARKER,
     GRACE_PERIOD_SECONDS,
@@ -256,32 +257,21 @@ def post_grace_warning(
     print(f"  Posted grace warning on PR #{pr_number} (greptile={score}/5)")
 
 
-def close_pr(
-    pr: dict,
-    score: int,
-    threshold: int,
-    age_days: int,
-    repo: str | None,
-    dry_run: bool,
-    label: str | None,
-) -> None:
-    """Post the explanatory comment and close the PR."""
-    pr_number = pr["number"]
-    repo_args = ["--repo", repo] if repo else []
+def format_close_comment(score: int, threshold: int) -> str:
+    """Comment posted when a low-Greptile-score PR is auto-closed.
 
-    if dry_run:
-        print(
-            f"  [DRY RUN] Would close PR #{pr_number} "
-            f"(age={age_days}d, greptile={score}/5): {pr['title']}"
-        )
-        return
-
+    Carries `AGENT_SHIN_CLOSE_MARKER` so the `@agent-shin reconsider` path
+    (guarded by `was_closed_by_agent_shin`) recognizes this as an Agent Shin
+    close and is allowed to reopen the PR once it passes again; without the
+    marker that recovery path the comment advertises silently rejects the
+    contributor.
+    """
     score_sentence = (
         f"Greptile's most recent review scored this PR **{score}/5**, below "
         f"our merge bar of **{threshold}/5**, and the 2-hour grace period since "
         "the warning has elapsed.\n\n"
     )
-    comment_body = (
+    return (
         f"Closing as part of automated PR triage.\n\n"
         f"{score_sentence}"
         "We close low-confidence PRs aggressively to keep the review queue "
@@ -302,7 +292,31 @@ def close_pr(
         "review; that works **even after the PR is closed**.\n\n"
         "Thanks for contributing to LiteLLM. We know auto-closures can sting; "
         "the goal is to keep the project healthy, not to dismiss your work."
+        f"\n\n{AGENT_SHIN_CLOSE_MARKER}"
     )
+
+
+def close_pr(
+    pr: dict,
+    score: int,
+    threshold: int,
+    age_days: int,
+    repo: str | None,
+    dry_run: bool,
+    label: str | None,
+) -> None:
+    """Post the explanatory comment and close the PR."""
+    pr_number = pr["number"]
+    repo_args = ["--repo", repo] if repo else []
+
+    if dry_run:
+        print(
+            f"  [DRY RUN] Would close PR #{pr_number} "
+            f"(age={age_days}d, greptile={score}/5): {pr['title']}"
+        )
+        return
+
+    comment_body = format_close_comment(score, threshold)
     gh("pr", "comment", str(pr_number), "--body", comment_body, *repo_args)
 
     if label:

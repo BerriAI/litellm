@@ -190,6 +190,24 @@ class TestReviewGateRegression:
         assert rec.closed == []  # regression NEVER closes the PR
         assert triage_module.REGRESSED_MARKER in rec.comments[0]
         assert "QA proof" in rec.comments[0]
+        # The state machine closes a still-failing PR `grace_days` after this
+        # notice (default 24h); the comment must disclose that deadline rather
+        # than implying the PR stays open indefinitely.
+        assert "24 hours" in rec.comments[0]
+        assert "auto-closed" in rec.comments[0]
+
+    def test_regression_comment_discloses_grace_deadline(self, triage_module):
+        one_day = triage_module.format_regression_comment(
+            ["QA proof"], "needs work", grace_days=1
+        )
+        assert "24 hours" in one_day
+        assert "auto-closed" in one_day
+
+        three_days = triage_module.format_regression_comment(
+            ["QA proof"], "needs work", grace_days=3
+        )
+        assert "3 days" in three_days
+        assert "auto-closed" in three_days
 
     def test_greptile_drop_alone_triggers_regression(self, triage_module, monkeypatch):
         # Rubric still passes, but Greptile fell to 2/5 -> not passing.

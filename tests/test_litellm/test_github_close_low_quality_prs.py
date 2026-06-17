@@ -592,21 +592,30 @@ class TestGraceWarningCommentText:
         assert closer_module.GRACE_COMMENT_MARKER in body
 
     def test_close_comment_should_mention_greptileai_post_close(self, closer_module):
-        # The actual close comment should ALSO point at the @greptileai
-        # post-close re-review path so contributors see the same options
-        # whether they read the warning or only catch the close comment.
-        # `close_pr` writes the close comment via `gh pr comment` — we
-        # don't easily call it directly here, but the comment body is
-        # constructed inline. Re-creating it via a no-op `gh` stub is
-        # awkward, so we assert against the same string template by
-        # asserting that the close path's text constant is updated.
-        # `close_pr` source must contain the marker text — guarded by
-        # this whole-module read-and-assert.
-        from pathlib import Path
+        # The close comment should ALSO point at the @greptileai post-close
+        # re-review path so contributors see the same options whether they
+        # read the warning or only catch the close comment.
+        body = closer_module.format_close_comment(score=2, threshold=4)
+        assert "@greptileai" in body
+        assert "even after the PR is closed" in body
 
-        source = Path(closer_module.__file__).read_text()
-        assert "even after the PR is closed" in source
-        assert "@greptileai" in source
+    def test_close_comment_should_advertise_reconsider(self, closer_module):
+        body = closer_module.format_close_comment(score=2, threshold=4)
+        assert "@agent-shin reconsider" in body
+
+    def test_close_comment_should_carry_agent_shin_close_marker(self, closer_module):
+        # The close comment advertises `@agent-shin reconsider`, and the
+        # reconsider reopen guard (`was_closed_by_agent_shin`) only treats a
+        # PR as Agent-Shin-closed when the close comment carries this marker.
+        # Dropping it silently breaks the advertised recovery path for every
+        # PR closed by this daily sweep.
+        body = closer_module.format_close_comment(score=2, threshold=4)
+        assert closer_module.AGENT_SHIN_CLOSE_MARKER in body
+
+    def test_close_comment_should_state_score_and_threshold(self, closer_module):
+        body = closer_module.format_close_comment(score=1, threshold=4)
+        assert "1/5" in body
+        assert "4/5" in body
 
 
 class TestHasOptoutLabel:

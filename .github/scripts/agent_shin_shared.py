@@ -40,6 +40,15 @@ SCORE_PATTERN = re.compile(
 
 GRACE_COMMENT_MARKER = "<!-- agent-shin:grace-warning -->"
 
+# Hidden HTML marker stamped on every Agent Shin auto-close comment (the LLM
+# judge's grace/review-gate close and the daily Greptile sweep's close).
+# `was_closed_by_agent_shin` requires this marker — not just the closing actor —
+# before `@agent-shin reconsider` may reopen, because the `github-actions[bot]`
+# identity is shared with every other workflow in the repo and is not unique to
+# Agent Shin. Both close paths must stamp it or the reconsider path silently
+# rejects the contributor.
+AGENT_SHIN_CLOSE_MARKER = "<!-- agent-shin:closed -->"
+
 # 2 hours between the grace warning and the auto-close. Short enough to
 # dogfood the "fix it before it closes" loop in one sitting; bump back up
 # (e.g. 86400 for a day) for the public rollout.

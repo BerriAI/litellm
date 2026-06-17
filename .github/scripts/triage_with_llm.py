@@ -48,6 +48,7 @@ from typing import Any, Iterable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
+    AGENT_SHIN_CLOSE_MARKER,
     AGENT_SHIN_DEFAULT_BOT_LOGIN,
     ALLOWLIST_LOGINS,
     GRACE_COMMENT_MARKER,
@@ -115,14 +116,9 @@ WITHIN_GRACE_MARKER = "<!-- agent-shin:within-grace -->"
 # so the daily sweep and the review gate read the score through the
 # same set of logins / patterns.
 
-# Hidden HTML marker stamped on every Agent Shin auto-close comment
-# (`format_pr_close_comment` / `format_issue_close_comment`, which back both
-# the grace-period close and the review-gate close). `was_closed_by_agent_shin`
-# requires this marker — not just the closing actor — before
-# `@agent-shin reconsider` may reopen, because the `github-actions[bot]`
-# identity is shared with every other workflow in the repo and is not unique
-# to Agent Shin.
-AGENT_SHIN_CLOSE_MARKER = "<!-- agent-shin:closed -->"
+# `AGENT_SHIN_CLOSE_MARKER` is imported from `agent_shin_shared` so this LLM
+# judge and the daily Greptile sweep stamp the same marker on their close
+# comments — `was_closed_by_agent_shin` keys the reconsider reopen path off it.
 
 # Model families that require `reasoning_effort` to be set, and that reject
 # `temperature != 1` unless `reasoning_effort` is "none". For these models we
@@ -1100,8 +1096,17 @@ def format_all_clear_comment(verdict: dict, greptile_score: int | None) -> str:
     )
 
 
-def format_regression_comment(missing: list[str], explanation: str) -> str:
-    """Posted when a previously-tagged PR regresses (label removed, PR stays open)."""
+def format_regression_comment(
+    missing: list[str], explanation: str, grace_days: int
+) -> str:
+    """Posted when a previously-tagged PR regresses (label removed, PR stays open).
+
+    Discloses the same ``grace_days`` deadline the state machine enforces:
+    once that window elapses with the PR still failing, the close path fires.
+    Hiding the deadline behind a bare "stays open" would surprise contributors
+    with an auto-close they were never warned about.
+    """
+    window = "24 hours" if grace_days == 1 else f"{grace_days} days"
     return (
         "⚠️ **Removing the `ready for review` tag.**\n"
         "\n"
@@ -1112,8 +1117,12 @@ def format_regression_comment(missing: list[str], explanation: str) -> str:
         "\n"
         f"> {explanation}\n"
         "\n"
-        "The PR stays open; address the points above and Agent Shin will post "
-        'an "all clear" comment and re-add the tag automatically.\n'
+        f"The PR stays open for ~{window}; address the points above and Agent "
+        'Shin will post an "all clear" comment and re-add the tag '
+        "automatically. If the points still aren't addressed after that "
+        "window, the PR is auto-closed; that's not a rejection, and you can "
+        "comment `@agent-shin reconsider` to have it re-evaluated and reopened "
+        "once it passes.\n"
         f"{REGRESSED_MARKER}"
     )
 
@@ -1297,7 +1306,7 @@ def review_gate(
     missing = _combine_missing(verdict, greptile_score, min_greptile_score)
 
     if label_present:
-        comment = format_regression_comment(missing, explanation)
+        comment = format_regression_comment(missing, explanation, grace_days)
         if not close:
             return {**base_result, "action": "would-remove-label", "comment": comment}
         remove_label(repo, number, label)
