@@ -1227,10 +1227,14 @@ def completion_cost(  # noqa: PLR0915
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
 
-        # "auto" is a routing preference, not a billable tier: the provider picks
-        # the tier and reports the one actually served on the response/usage, so
-        # defer to that instead of pricing the request-level "auto" as standard
-        if service_tier is not None and service_tier.lower() == ServiceTier.AUTO.value:
+        # A request-level service_tier only prices the request when it is a
+        # concrete billable tier string. "auto" is a routing preference and any
+        # non-string value is not a billable tier, so defer to the tier the
+        # provider reports on the response/usage instead of crashing or mispricing
+        if (
+            not isinstance(service_tier, str)
+            or service_tier.lower() == ServiceTier.AUTO.value
+        ):
             service_tier = None
 
         # Extract service_tier from completion_response if not provided
