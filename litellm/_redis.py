@@ -60,31 +60,19 @@ def _get_redis_kwargs():
 def _get_redis_url_kwargs(client=None):
     if client is None:
         client = redis.Redis.from_url
-    arg_spec = inspect.getfullargspec(redis.Redis.from_url)
-
-    # Only allow primitive arguments
-    exclude_args = {
-        "self",
-        "connection_pool",
-        "retry",
-    }
-
+    sig = inspect.signature(redis.Redis)
+    exclude_args = {"self", "connection_pool", "retry"}
     include_args = ["url"]
-
-    available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
-
+    available_args = [x for x in sig.parameters if x not in exclude_args] + include_args
     return available_args
 
 
 def _get_redis_cluster_kwargs(client=None):
     if client is None:
         client = redis.Redis.from_url
-    arg_spec = inspect.getfullargspec(redis.RedisCluster)
-
-    # Only allow primitive arguments
+    sig = inspect.signature(redis.RedisCluster)
     exclude_args = {"self", "connection_pool", "retry", "host", "port", "startup_nodes"}
-
-    available_args = {x for x in arg_spec.args if x not in exclude_args}
+    available_args = {x for x in sig.parameters if x not in exclude_args}
     available_args |= {
         "password",
         "username",
@@ -92,7 +80,7 @@ def _get_redis_cluster_kwargs(client=None):
         "ssl_cert_reqs",
         "ssl_check_hostname",
         "ssl_ca_certs",
-        "redis_connect_func",  # Needed for sync clusters and IAM detection
+        "redis_connect_func",
         "gcp_service_account",
         "gcp_ssl_ca_certs",
         "azure_redis_ad_token",
@@ -103,7 +91,6 @@ def _get_redis_cluster_kwargs(client=None):
         "socket_timeout",
         "socket_connect_timeout",
     }
-
     return available_args
 
 
