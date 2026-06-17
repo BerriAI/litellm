@@ -3,7 +3,7 @@
 import logging
 import os
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 from fastapi import HTTPException
 
@@ -62,19 +62,19 @@ class WonderFenceGuardrail(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         api_timeout: float = 10.0,
-        platform: Optional[str] = None,
+        platform: str | None = None,
         fail_open: bool = False,
         block_message: str = "Content violates our policies and has been blocked",
         debug: bool = False,
-        max_cached_clients: Optional[int] = None,
-        connection_pool_limit: Optional[int] = None,
+        max_cached_clients: int | None = None,
+        connection_pool_limit: int | None = None,
         allow_request_metadata_override: bool = False,
-        event_hook: Optional[
-            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
-        ] = None,
+        event_hook: (
+            Union[GuardrailEventHooks, list[GuardrailEventHooks], Mode] | None
+        ) = None,
         default_on: bool = True,
         **kwargs,
     ) -> None:
@@ -122,7 +122,7 @@ class WonderFenceGuardrail(CustomGuardrail):
             os.environ.get("ALICE_MAX_CACHED_CLIENTS", "10")
         )
         env_pool = os.environ.get("ALICE_CONNECTION_POOL_LIMIT")
-        self._connection_pool_limit: Optional[int] = (
+        self._connection_pool_limit: int | None = (
             connection_pool_limit
             if connection_pool_limit is not None
             else (int(env_pool) if env_pool else None)
@@ -298,6 +298,6 @@ class WonderFenceGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         """Return the config model for UI rendering."""
         return WonderFenceGuardrailConfigModel

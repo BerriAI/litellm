@@ -9,7 +9,8 @@ target a different backend.
 import asyncio
 import re
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, List, Optional
+from typing import Any
+from collections.abc import Awaitable, Callable
 
 MAX_PROMPT_CHARS = 10000  # WonderFence server-side prompt limit
 DEFAULT_MAX_CONCURRENCY = 10  # used when the client connection_pool_limit is unset
@@ -26,12 +27,12 @@ CHUNK_OVERLAP_CHARS = 512
 @dataclass
 class SegmentVerdict:
     action: str  # "BLOCK" | "MASK" | "DETECT" | ""
-    masked_text: Optional[str]
+    masked_text: str | None
     detections: list
-    correlation_ids: List[str]
+    correlation_ids: list[str]
 
 
-def _split_text(text: str, max_chars: int) -> List[str]:
+def _split_text(text: str, max_chars: int) -> list[str]:
     """Split ``text`` into <= ``max_chars`` chunks with ``"".join(chunks) == text``.
 
     Splits at whitespace boundaries; whitespace runs are preserved as their own
@@ -42,7 +43,7 @@ def _split_text(text: str, max_chars: int) -> List[str]:
         return [text]
 
     tokens = re.findall(r"\S+|\s+", text)
-    chunks: List[str] = []
+    chunks: list[str] = []
     current = ""
     for token in tokens:
         if len(current) + len(token) <= max_chars:
@@ -65,7 +66,7 @@ def _action_str(result: Any) -> str:
     return action.value if hasattr(action, "value") else (action or "")
 
 
-def _boundary_windows(chunks: List[str], overlap: int) -> List[str]:
+def _boundary_windows(chunks: list[str], overlap: int) -> list[str]:
     """Windows spanning each adjacent chunk boundary, for detection only.
 
     Each window is the last ``overlap`` chars of one chunk joined to the first
@@ -80,14 +81,14 @@ def _boundary_windows(chunks: List[str], overlap: int) -> List[str]:
 
 
 def _aggregate(
-    chunks: List[str],
-    chunk_results: List[Any],
-    boundary_results: List[Any],
+    chunks: list[str],
+    chunk_results: list[Any],
+    boundary_results: list[Any],
 ) -> SegmentVerdict:
     chunk_actions = [_action_str(r) for r in chunk_results]
     boundary_actions = [_action_str(r) for r in boundary_results]
     detections: list = []
-    correlation_ids: List[str] = []
+    correlation_ids: list[str] = []
     for r in (*chunk_results, *boundary_results):
         detections.extend(getattr(r, "detections", None) or [])
         cid = getattr(r, "correlation_id", None)
@@ -111,12 +112,12 @@ def _aggregate(
 
 
 async def evaluate_segments(
-    segments: List[str],
+    segments: list[str],
     evaluate: Callable[[str], Awaitable[Any]],
     max_chars: int = MAX_PROMPT_CHARS,
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
     overlap: int = CHUNK_OVERLAP_CHARS,
-) -> List[SegmentVerdict]:
+) -> list[SegmentVerdict]:
     """Evaluate every segment (chunked) in parallel; return one verdict per segment.
 
     Each segment is split into <= ``max_chars`` disjoint chunks; multi-chunk
@@ -138,7 +139,7 @@ async def evaluate_segments(
     seg_chunks = [_split_text(s, max_chars) for s in segments]
     seg_boundaries = [_boundary_windows(chunks, ov) for chunks in seg_chunks]
 
-    index: List[tuple] = []
+    index: list[tuple] = []
     tasks = []
     for si in range(len(segments)):
         for ci, chunk in enumerate(seg_chunks[si]):
@@ -149,8 +150,8 @@ async def evaluate_segments(
             tasks.append(run(window))
     results = await asyncio.gather(*tasks)
 
-    chunk_res: List[List[Any]] = [[None] * len(c) for c in seg_chunks]
-    bound_res: List[List[Any]] = [[None] * len(b) for b in seg_boundaries]
+    chunk_res: list[list[Any]] = [[None] * len(c) for c in seg_chunks]
+    bound_res: list[list[Any]] = [[None] * len(b) for b in seg_boundaries]
     for (si, is_boundary, idx), res in zip(index, results):
         (bound_res if is_boundary else chunk_res)[si][idx] = res
 

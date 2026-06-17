@@ -1,6 +1,6 @@
 """Pure transforms for Alice WonderFence: context build, user-text mapping, verdict apply."""
 
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -15,7 +15,7 @@ logger = verbose_proxy_logger.getChild("alice_wonderfence")
 
 def build_analysis_context(
     request_data: dict,
-    platform: Optional[str],
+    platform: str | None,
     context_class: Any,
 ) -> Any:
     """Build WonderFence AnalysisContext from request data."""
@@ -54,7 +54,7 @@ def build_analysis_context(
 
 def tool_call_arg_segments(
     inputs: GenericGuardrailAPIInputs,
-) -> Tuple[List[int], List[str]]:
+) -> tuple[list[int], list[str]]:
     """Return (indices, argument strings) for tool calls carrying string args.
 
     ``inputs["tool_calls"]`` entries are dicts shaped
@@ -63,8 +63,8 @@ def tool_call_arg_segments(
     scanned like any other segment.
     """
     tool_calls = inputs.get("tool_calls") or []
-    indices: List[int] = []
-    segments: List[str] = []
+    indices: list[int] = []
+    segments: list[str] = []
     for i, tool_call in enumerate(tool_calls):
         fn = tool_call.get("function") if isinstance(tool_call, dict) else None
         args = fn.get("arguments") if isinstance(fn, dict) else None
@@ -74,27 +74,37 @@ def tool_call_arg_segments(
     return indices, segments
 
 
-def _description_strings(obj: Any, prefix: List[Any]) -> List[Tuple[List[Any], str]]:
+def _description_strings(
+    root: Any, root_prefix: list[Any]
+) -> list[tuple[list[Any], str]]:
     """Collect ``(path, text)`` for every non-blank ``description`` string under
-    ``obj`` (a tool's ``function`` dict). Recurses into nested JSON-schema
-    parameters so parameter descriptions are included, not just the top one."""
-    out: List[Tuple[List[Any], str]] = []
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if key == "description" and isinstance(value, str) and value.strip():
-                out.append((prefix + [key], value))
-            elif isinstance(value, (dict, list)):
-                out.extend(_description_strings(value, prefix + [key]))
-    elif isinstance(obj, list):
-        for idx, item in enumerate(obj):
-            if isinstance(item, (dict, list)):
-                out.extend(_description_strings(item, prefix + [idx]))
+    ``root`` (a tool's ``function`` dict), walking nested JSON-schema parameters
+    so parameter descriptions are included, not just the top one.
+
+    Iterative (explicit stack) rather than recursive: caller-supplied tool
+    schemas can nest arbitrarily, and unbounded recursion on request input is a
+    DoS / stack-overflow risk.
+    """
+    out: list[tuple[list[Any], str]] = []
+    stack: list[tuple[Any, list[Any]]] = [(root, root_prefix)]
+    while stack:
+        obj, prefix = stack.pop()
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if key == "description" and isinstance(value, str) and value.strip():
+                    out.append((prefix + [key], value))
+                elif isinstance(value, (dict, list)):
+                    stack.append((value, prefix + [key]))
+        elif isinstance(obj, list):
+            for idx, item in enumerate(obj):
+                if isinstance(item, (dict, list)):
+                    stack.append((item, prefix + [idx]))
     return out
 
 
 def tool_definition_segments(
     inputs: GenericGuardrailAPIInputs,
-) -> Tuple[List[List[Any]], List[str]]:
+) -> tuple[list[list[Any]], list[str]]:
     """Return (paths, texts) for free-text in tool definitions.
 
     The chat translation layer passes caller-supplied ``inputs["tools"]`` to the
@@ -103,8 +113,8 @@ def tool_definition_segments(
     the string within ``inputs["tools"]`` so a MASK verdict can be written back.
     """
     tools = inputs.get("tools") or []
-    paths: List[List[Any]] = []
-    segments: List[str] = []
+    paths: list[list[Any]] = []
+    segments: list[str] = []
     for i, tool in enumerate(tools):
         fn = tool.get("function") if isinstance(tool, dict) else None
         if not isinstance(fn, dict):
@@ -115,7 +125,7 @@ def tool_definition_segments(
     return paths, segments
 
 
-def _set_by_path(root: Any, path: List[Any], value: Any) -> None:
+def _set_by_path(root: Any, path: list[Any], value: Any) -> None:
     obj = root
     for key in path[:-1]:
         obj = obj[key]
@@ -123,10 +133,10 @@ def _set_by_path(root: Any, path: List[Any], value: Any) -> None:
 
 
 def _block_detail(
-    blocked: List[SegmentVerdict], guardrail_name: str, block_message: str
+    blocked: list[SegmentVerdict], guardrail_name: str, block_message: str
 ) -> dict:
     detections: list = []
-    correlation_ids: List[str] = []
+    correlation_ids: list[str] = []
     for v in blocked:
         detections.extend(v.detections)
         correlation_ids.extend(v.correlation_ids)
@@ -147,7 +157,7 @@ def _block_detail(
 
 def _masked_value(
     verdict: SegmentVerdict, guardrail_name: str, label: str
-) -> Optional[str]:
+) -> str | None:
     """Return the replacement string for a MASK verdict (logging as a side
     effect), or None for DETECT/NO_ACTION. The caller writes it to the slot the
     segment came from."""
@@ -172,14 +182,14 @@ def _masked_value(
 
 def apply_verdicts(
     inputs: GenericGuardrailAPIInputs,
-    indices: List[int],
-    verdicts: List[SegmentVerdict],
+    indices: list[int],
+    verdicts: list[SegmentVerdict],
     guardrail_name: str,
     block_message: str,
-    tool_indices: Optional[List[int]] = None,
-    tool_verdicts: Optional[List[SegmentVerdict]] = None,
-    tool_def_paths: Optional[List[List[Any]]] = None,
-    tool_def_verdicts: Optional[List[SegmentVerdict]] = None,
+    tool_indices: list[int] | None = None,
+    tool_verdicts: list[SegmentVerdict] | None = None,
+    tool_def_paths: list[list[Any]] | None = None,
+    tool_def_verdicts: list[SegmentVerdict] | None = None,
 ) -> GenericGuardrailAPIInputs:
     """Apply per-segment verdicts back onto request text, tool-call args, and
     tool-definition descriptions.

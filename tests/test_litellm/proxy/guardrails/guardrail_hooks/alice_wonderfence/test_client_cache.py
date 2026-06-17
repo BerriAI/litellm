@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-
 # ----------------------------- LRU cache -----------------------------
 
 

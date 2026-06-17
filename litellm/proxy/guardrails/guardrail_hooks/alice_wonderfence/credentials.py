@@ -18,12 +18,12 @@ The stash bridges pre_call resolution into post_call where request metadata is
 gone — see ``stash_resolved`` for the full rationale.
 """
 
-from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from .exceptions import WonderFenceMissingSecrets
 
 
-def _nonempty_str(value: Any) -> Optional[str]:
+def _nonempty_str(value: Any) -> str | None:
     """Return ``value`` only if it is a non-empty/non-blank string, else None.
 
     Credential sources (request body, key/team metadata, config default) are
@@ -76,7 +76,7 @@ def get_metadata(request_data: dict) -> dict:
 
 def resolve_api_key(
     request_data: dict,
-    default_api_key: Optional[str],
+    default_api_key: str | None,
     allow_request_metadata_override: bool,
 ) -> str:
     """Resolve api_key from key → team → (request, when opt-in) → default.
@@ -204,7 +204,7 @@ def stash_resolved(
 
 def recover_resolved(
     logging_obj: Optional["LiteLLMLoggingObj"], guardrail_name: str
-) -> Optional[Tuple[str, str]]:
+) -> tuple[str, str] | None:
     """Look up the (api_key, app_id) this guardrail stashed earlier in this
     request, or ``None``.
 
@@ -226,9 +226,9 @@ def resolve_credentials(
     input_type: Literal["request", "response"],
     logging_obj: Optional["LiteLLMLoggingObj"],
     guardrail_name: str,
-    default_api_key: Optional[str],
+    default_api_key: str | None,
     allow_request_metadata_override: bool,
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Resolve (api_key, app_id) for this call.
 
     For ``request``: read from request_data (canonical pre_call path) and stash

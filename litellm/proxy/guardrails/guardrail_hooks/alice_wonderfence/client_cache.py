@@ -1,7 +1,7 @@
 """WonderFence SDK loader + per-api_key LRU client cache."""
 
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from wonderfence_sdk.client import (  # type: ignore[import-untyped]
@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     )
 
 
-def load_sdk() -> Tuple[Any, Any]:
+def load_sdk() -> tuple[Any, Any]:
     """Lazy-import WonderFence SDK classes (``WonderFenceV2Client``, ``AnalysisContext``).
 
     Deferred to instance construction (not module load) because wonderfence_sdk
@@ -37,9 +37,9 @@ def get_or_create_client(
     cache_maxsize: int,
     client_class: Any,
     api_timeout: float,
-    api_base: Optional[str],
-    platform: Optional[str],
-    connection_pool_limit: Optional[int],
+    api_base: str | None,
+    platform: str | None,
+    connection_pool_limit: int | None,
 ) -> "_WonderFenceV2Client":
     """LRU client lookup keyed by ``api_key``; construct on miss."""
     if api_key in cache:
