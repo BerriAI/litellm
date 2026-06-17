@@ -383,7 +383,7 @@ class LiteLLMAnthropicMessagesAdapter:
             isinstance(tool_type, str) and tool_type.startswith("web_search")
         ) or tool_name == "web_search"
 
-    def translate_anthropic_messages_to_openai(  # noqa: PLR0915
+    def translate_anthropic_messages_to_openai(
         self,
         messages: List[
             Union[

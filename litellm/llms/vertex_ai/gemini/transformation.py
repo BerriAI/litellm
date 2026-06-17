@@ -678,7 +678,7 @@ def check_if_part_exists_in_parts(
     return False
 
 
-def _gemini_convert_messages_with_history(  # noqa: PLR0915
+def _gemini_convert_messages_with_history(
     messages: List[AllMessageValues],
     model: Optional[str] = None,
     litellm_params: Optional[dict] = None,
@@ -1176,7 +1176,7 @@ def _rewrite_google_maps_response_format(data: RequestBody) -> None:
         _rewrite_mime_type_to_response_format(generation_config)
 
 
-def _transform_request_body(  # noqa: PLR0915
+def _transform_request_body(
     messages: List[AllMessageValues],
     model: str,
     optional_params: dict,
