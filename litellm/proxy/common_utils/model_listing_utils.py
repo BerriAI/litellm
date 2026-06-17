@@ -40,6 +40,8 @@ class TeamModelNameTranslator:
             isinstance(team_id, str)
             and isinstance(team_public, str)
             and isinstance(name, str)
+            and team_id
+            and team_public
             and name.startswith(f"model_name_{team_id}_")
         ):
             return name, team_public

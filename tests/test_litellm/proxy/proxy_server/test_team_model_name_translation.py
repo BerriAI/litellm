@@ -978,6 +978,28 @@ def test_listing_and_resolve_agree_on_sibling_internal_key():
     assert listing_lookup == resolve_lookup
 
 
+def test_listing_entries_skips_empty_team_public_model_name():
+    """Regression: a misconfigured row with `team_public_model_name: ""` must not
+    produce a listing entry with an empty `id`; the internal routing key should
+    pass through unchanged, matching `/v1/model/info`'s falsy-check behavior."""
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {
+            "model_name": "model_name_teamX_uuidA",
+            "model_info": {
+                "team_id": "teamX",
+                "team_public_model_name": "",
+            },
+        },
+    ]
+
+    entries = TeamModelNameTranslator.listing_entries(
+        ["model_name_teamX_uuidA"], router, {}
+    )
+
+    assert entries == [("model_name_teamX_uuidA", "model_name_teamX_uuidA")]
+
+
 def test_listing_entries_passthrough_when_disabled():
     """Legacy flag / no router -> response id equals lookup id (no translation)."""
     assert TeamModelNameTranslator.listing_entries(["a", "b"], None, {}) == [
