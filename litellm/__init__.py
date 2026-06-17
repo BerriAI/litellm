@@ -235,6 +235,17 @@ modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
+# When True, strip the OpenAI-flavored `usage.total_tokens` field that
+# LiteLLM injects into non-streaming /v1/messages responses, bringing the
+# wire response into line with the Anthropic spec (matches the streaming
+# SSE path, which already omits total_tokens). Default False to preserve
+# backward compatibility for clients that read the LiteLLM-shaped
+# `usage.total_tokens` today. Planned to flip to True in a future major
+# release; opt in early via Python:
+#   `litellm.strip_anthropic_total_tokens = True`
+# Or via `litellm_settings.strip_anthropic_total_tokens: true` in
+# config.yaml.
+strip_anthropic_total_tokens: bool = False
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
