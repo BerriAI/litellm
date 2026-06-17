@@ -8582,7 +8582,7 @@ async def model_info(
     blocked_names = (
         llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
     )
-    unhealthy_names: Set[str] = set()
+    unhealthy_names: set[str] = set()
     if healthy_only and llm_router is not None:
         unhealthy_names = await llm_router.async_get_fully_unhealthy_model_names()
     hidden_names = blocked_names | unhealthy_names
