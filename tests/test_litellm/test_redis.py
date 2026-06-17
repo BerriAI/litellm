@@ -38,6 +38,31 @@ def _mock_azure_identity(mock_credential):
     return mock_azure_identity
 
 
+def test_azure_redis_workload_identity_uses_default_credential(monkeypatch):
+    from litellm._redis import _build_azure_credential
+
+    default_credential = object()
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.DefaultAzureCredential = MagicMock(
+        return_value=default_credential
+    )
+    mock_azure_identity.ClientSecretCredential = MagicMock()
+    mock_azure_identity.ManagedIdentityCredential = MagicMock()
+    monkeypatch.setenv("AZURE_CLIENT_ID", "client-id")
+    monkeypatch.setenv("AZURE_TENANT_ID", "tenant-id")
+    monkeypatch.setenv("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+    ):
+        credential = _build_azure_credential()
+
+    assert credential is default_credential
+    mock_azure_identity.DefaultAzureCredential.assert_called_once_with()
+    mock_azure_identity.ManagedIdentityCredential.assert_not_called()
+
+
 def test_get_redis_url_from_environment_single_url(monkeypatch):
     """Test when REDIS_URL is directly provided"""
     # Set the environment variable

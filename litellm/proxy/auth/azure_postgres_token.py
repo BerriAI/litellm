@@ -26,6 +26,7 @@ def _build_azure_postgres_credential(
     _client_id = azure_client_id or os.environ.get("AZURE_CLIENT_ID")
     _tenant_id = azure_tenant_id or os.environ.get("AZURE_TENANT_ID")
     _client_secret = azure_client_secret or os.environ.get("AZURE_CLIENT_SECRET")
+    _federated_token_file = os.environ.get("AZURE_FEDERATED_TOKEN_FILE")
 
     if _client_id and _tenant_id and _client_secret:
         return ClientSecretCredential(
@@ -33,6 +34,8 @@ def _build_azure_postgres_credential(
             tenant_id=_tenant_id,
             client_secret=_client_secret,
         )
+    if _federated_token_file:
+        return DefaultAzureCredential()
     if _client_id:
         return ManagedIdentityCredential(client_id=_client_id)
     return DefaultAzureCredential()
