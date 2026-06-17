@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Any-discipline gate: fail when a *changed* file holds a value typed `Any`.
+"""Any-discipline gate: fail when a changed file exceeds its `Any` budget.
 
 Where ruff, `mypy --strict`, and even basedpyright's `reportAny` stop short, this
 catches the case that actually bites: a *union* hiding an `Any`. For example
@@ -7,18 +7,26 @@ catches the case that actually bites: a *union* hiding an `Any`. For example
 -> `list[Any]`/`dict[..., Any]`. Any value whose inferred type *contains* `Any`
 (recursively, through unions / generics / tuples) is reported.
 
-Scope: changed-only, changed-lines
-----------------------------------
-litellm already contains a large amount of pre-existing `Any` (a single legacy
-file can have >100 findings), and a whole-tree scan would have to re-export types
-for litellm's entire import closure on every run (~2 min, ~3 GB). So this gate is
-*changed-only* and reports a finding only on a line that the diff against
-`--base` actually adds or edits (untracked files count as wholly new). A brand
-new file is therefore checked in full, while editing a legacy file only requires
-*your* lines to be clean -- you can't introduce an `X | Any`, but you aren't
-forced to clean the file's existing debt. This mirrors how `ruff_strict_gate.py`
-blames a change only for the violations it introduces; cold legacy code is left
-to the ratchet gates (mypy/basedpyright/ruff budgets).
+Scope: changed files, per-file budget
+-------------------------------------
+litellm carries a large amount of pre-existing `Any` (a single legacy file can
+have >100 findings). Rather than force every touched line clean (the original
+changed-lines rule, which tripped on merely *editing* a legacy `X | Any` line),
+this gate grandfathers each file: `any-discipline-budget.json` records every
+file's current count of Any-typed values, and a file fails only when its count
+exceeds `baseline + slack`, where `slack` is 50% headroom (rounded up). New or
+unbudgeted files have baseline 0, so they stay airtight.
+
+Only *changed* files (vs the merge-base with `--base`) are re-type-checked -- an
+unchanged file's count can't move from edits this branch didn't make -- so the
+per-PR cost equals re-checking just those files, exactly like the original
+changed-lines gate. The whole-tree scan needed to (re)capture the budget
+(~2 min, ~3 GB) runs only under `--update`.
+
+The budget is a one-way ratchet (the same `{baseline, slack}` shape as the
+ruff / mypy / basedpyright budgets) guarded by `scripts/budget_ratchet_check.py`:
+a file's ceiling may fall but never rise. Drive a file's count down and rerun
+`--update` (`make lint-any-budget-update`) to lock in the lower ceiling.
 
 How it works
 ------------
@@ -36,8 +44,9 @@ Rules
 -----
 Codes share the `LIT***` namespace with `scripts/check_type_discipline.py` (PR
 #30500), which owns LIT001/002/003/004/006/007/008. This gate claims the rest:
-LIT009  A value expression's inferred type is, or contains, `Any`.
-        Suppress with `# any-ok: <reason>` on the offending line.
+LIT009  A value expression's inferred type is, or contains, `Any`. Budgeted
+        per file (a file fails when its count exceeds `baseline + slack`).
+        Suppress an individual line with `# any-ok: <reason>`.
 LIT005  An `# any-ok` suppression without a reason (the shared
         suppression-needs-a-reason code, same as `# cast-ok` / `# guard-ok`).
 LIT000  Setup failure: mypy could not build, or a target file could not be read.
@@ -48,13 +57,16 @@ whose signature mentions `Any` is not flagged -- only the value its call produce
 
 Usage
 -----
-    # gate mode (CI / pre-push): check changed lines under litellm/
+    # gate mode (CI / pre-push): per-file Any budget on changed files
     uv run --no-sync python scripts/check_any_discipline.py --changed --base origin/litellm_internal_staging
 
-    # whole-file spot-check (no line filter), paths relative to repo root
+    # re-capture the per-file budget across the whole tree (ratchet)
+    uv run --no-sync python scripts/check_any_discipline.py --update
+
+    # whole-file spot-check (no budget, no line filter), paths relative to repo root
     uv run --no-sync python scripts/check_any_discipline.py litellm/budget_manager.py
 
-Exit code 1 if any Any-tainted value is found, 2 on a setup/usage error.
+Exit code 1 if a file is over budget (or a hard rule trips), 2 on a setup error.
 """
 
 from __future__ import annotations
@@ -66,7 +78,7 @@ import re
 import subprocess
 import sys
 import tokenize
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -104,6 +116,7 @@ MYPY_INI = LITELLM_DIR / "mypy.ini"
 CACHE_DIR = REPO_ROOT / ".mypy_cache_any"
 PY_TAG = f"{sys.version_info.major}.{sys.version_info.minor}"
 DEFAULT_BASE = "origin/litellm_internal_staging"
+BUDGET_PATH = REPO_ROOT / "any-discipline-budget.json"
 
 MIN_REASON_LEN = 3
 ANY_OK_RE = re.compile(r"#\s*any-ok(?::\s*(?P<reason>.*))?")
@@ -164,32 +177,50 @@ class Violation(NamedTuple):
 # --------------------------------------------------------------------------- #
 
 
-def contains_any(t: Type, _seen: set[int] | None = None) -> bool:
-    """True if a *value* of type ``t`` carries `Any` anywhere meaningful."""
-    seen = _seen if _seen is not None else set()
-    p = get_proper_type(t)
-    if id(p) in seen:
-        return False
-    seen.add(id(p))
+# Recursive type aliases (e.g. a JSON-like `T = Union[..., list[T], dict[str, T]]`)
+# make `get_proper_type` yield a fresh object at every unfold, so an id()-based
+# cycle guard never trips and a naive recursion overflows the stack. We walk
+# iteratively and cap the depth: a real `Any` lives at shallow depth in the
+# alias's definition, so a deep alias that has not produced one by `_MAX_DEPTH`
+# never will. (The changed-lines gate never hit this; a whole-tree scan does.)
+_MAX_DEPTH = 100
 
-    # A function/method *reference* whose signature mentions Any is not itself an
-    # unsafe value -- only its eventual call result is. Don't recurse into it.
-    if isinstance(p, (CallableType, Overloaded)):
-        return False
-    if isinstance(p, AnyType):
-        return p.type_of_any not in _HARMLESS_ANY
-    if isinstance(p, UnionType):
-        return any(contains_any(item, seen) for item in p.items)
-    if isinstance(p, Instance):
-        value_arg_indices = _SYNTHETIC_SEND_YIELD_VALUE_ARGS.get(p.type.fullname)
-        if value_arg_indices is not None:
-            return any(
-                index < len(p.args) and contains_any(p.args[index], seen)
-                for index in value_arg_indices
-            )
-        return any(contains_any(arg, seen) for arg in p.args)
-    if isinstance(p, TupleType):
-        return any(contains_any(item, seen) for item in p.items)
+
+def contains_any(t: Type) -> bool:
+    """True if a *value* of type ``t`` carries `Any` anywhere meaningful."""
+    seen: set[int] = set()
+    stack: list[tuple[Type, int]] = [(t, 0)]
+    while stack:
+        cur, depth = stack.pop()
+        if depth > _MAX_DEPTH:
+            continue
+        p = get_proper_type(cur)
+        if id(p) in seen:
+            continue
+        seen.add(id(p))
+
+        # A function/method *reference* whose signature mentions Any is not itself
+        # an unsafe value -- only its eventual call result is. Don't recurse in.
+        if isinstance(p, (CallableType, Overloaded)):
+            continue
+        if isinstance(p, AnyType):
+            if p.type_of_any not in _HARMLESS_ANY:
+                return True
+            continue
+        if isinstance(p, UnionType):
+            stack.extend((item, depth + 1) for item in p.items)
+        elif isinstance(p, Instance):
+            value_arg_indices = _SYNTHETIC_SEND_YIELD_VALUE_ARGS.get(p.type.fullname)
+            if value_arg_indices is None:
+                stack.extend((arg, depth + 1) for arg in p.args)
+            else:
+                stack.extend(
+                    (p.args[index], depth + 1)
+                    for index in value_arg_indices
+                    if index < len(p.args)
+                )
+        elif isinstance(p, TupleType):
+            stack.extend((item, depth + 1) for item in p.items)
     return False
 
 
@@ -514,65 +545,233 @@ def _in_scope(v: Violation, line_map: dict[str, LineScope] | None) -> bool:
     if line_map is None or v.code == "LIT000":
         return True
     lines = line_map.get(v.path.as_posix())
-    return lines is ALL_LINES or (lines is not None and v.line in lines)
+    return lines is ALL_LINES or (isinstance(lines, set) and v.line in lines)
+
+
+# --------------------------------------------------------------------------- #
+# Per-file Any budget (one-way ratchet, 50% headroom; ratchet-checked)
+# --------------------------------------------------------------------------- #
+
+
+def _slack_for(baseline: int) -> int:
+    """50% headroom, rounded up so even a 1-Any file gets a little room."""
+    return (baseline + 1) // 2
+
+
+def _ceiling(spec: dict[str, int]) -> int:
+    """A file's ceiling: ``baseline + slack`` (0 for an absent/empty entry)."""
+    return int(spec.get("baseline", 0)) + int(spec.get("slack", 0))
+
+
+def load_budget() -> dict[str, dict[str, int]]:
+    """Read ``any-discipline-budget.json`` ({path: {baseline, slack}}); {} if absent."""
+    if not BUDGET_PATH.exists():
+        return {}
+    try:
+        data = json.loads(BUDGET_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_budget(counts: dict[str, int]) -> None:
+    """Write a fresh budget from per-file counts, with 50% headroom each.
+
+    Files with zero Any are omitted: an absent entry means baseline 0, so a
+    file's first Any always trips the gate until it is deliberately baselined."""
+    budget = {
+        path: {"baseline": n, "slack": _slack_for(n)}
+        for path, n in counts.items()
+        if n > 0
+    }
+    BUDGET_PATH.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
+
+
+def lit009_counts(violations: Iterable[Violation]) -> dict[str, int]:
+    """Count LIT009 (Any-typed value) findings per repo-relative file path."""
+    counts: dict[str, int] = {}
+    for v in violations:
+        if v.code == "LIT009":
+            key = v.path.as_posix()
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def all_litellm_py_files() -> list[str] | None:
+    """Every tracked ``.py`` under litellm/, as litellm-package-relative paths;
+    None if git is unavailable / not a repo (mirrors ``changed_line_map``)."""
+    try:
+        tracked = _git("ls-files", "--", "litellm")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    return _to_litellm_relative(
+        REPO_ROOT / name for name in tracked if name.endswith(".py")
+    )
+
+
+def update_budget(
+    list_files: Callable[[], list[str] | None] = all_litellm_py_files,
+) -> int:
+    """Whole-tree scan: recapture every file's Any count into the budget."""
+    rel_paths = list_files()
+    if rel_paths is None:
+        print(
+            "check_any_discipline: not a git repository; cannot capture the budget",
+            file=sys.stderr,
+        )
+        return 2
+    if not rel_paths:
+        print("check_any_discipline: no litellm/*.py files found", file=sys.stderr)
+        return 2
+    violations = check_files(rel_paths)
+    build_errors = [v for v in violations if v.code == "LIT000"]
+    if build_errors:
+        for v in build_errors:
+            print(v.render(), file=sys.stderr)
+        print(
+            "FAIL: mypy could not build the tree; budget left unchanged.",
+            file=sys.stderr,
+        )
+        return 2
+    counts = lit009_counts(violations)
+    save_budget(counts)
+    print(
+        f"Wrote {BUDGET_PATH.name}: "
+        f"{sum(1 for n in counts.values() if n > 0)} file(s), "
+        f"{sum(counts.values())} Any-typed value(s) baselined (50% headroom each)."
+    )
+    return 0
+
+
+def _report_over_budget(
+    path: str,
+    count: int,
+    spec: dict[str, int] | None,
+    lit009: list[Violation],
+    line_map: dict[str, LineScope],
+) -> None:
+    """Print one over-budget file plus the Any findings on its changed lines."""
+    ceiling = _ceiling(spec or {})
+    if spec:
+        why = f"baseline {spec['baseline']} + 50% slack {spec['slack']} = ceiling {ceiling}"
+    else:
+        why = "no budget entry -> baseline 0 (a new/unbudgeted file must be Any-free)"
+    print(f"{path}: {count} Any-typed value(s) total, over budget ({why})")
+    # Surface the findings on changed lines first: the ones this branch most
+    # likely just added, and the cheapest path back under the ceiling.
+    scope = line_map.get(path)
+    for v in sorted(lit009):
+        if scope is ALL_LINES or (isinstance(scope, set) and v.line in scope):
+            print(f"  changed-line Any  {v.line}:{v.col} {v.message}")
+
+
+def run_gate(base: str) -> int:
+    """Gate changed files under litellm/ against the committed per-file budget."""
+    line_map = changed_line_map(base)
+    if line_map is None:
+        print(
+            "check_any_discipline: not a git repository; nothing to check",
+            file=sys.stderr,
+        )
+        return 0
+    rel_paths = _to_litellm_relative((REPO_ROOT / name).resolve() for name in line_map)
+    if not rel_paths:
+        print("OK: no changed Python files under litellm/ to check")
+        return 0
+
+    violations = check_files(rel_paths)
+    budget = load_budget()
+
+    # Hard rules, independent of the budget: a build/read failure (always), and a
+    # reasonless `# any-ok` on a line this branch touched.
+    hard = sorted(
+        v
+        for v in violations
+        if v.code == "LIT000" or (v.code == "LIT005" and _in_scope(v, line_map))
+    )
+
+    # Per-file Any budget: a changed file fails when its total Any count exceeds
+    # its ceiling. Unchanged files keep their committed baseline (never re-scanned).
+    counts = lit009_counts(violations)
+    lit009_by_file: dict[str, list[Violation]] = {}
+    for v in violations:
+        if v.code == "LIT009":
+            lit009_by_file.setdefault(v.path.as_posix(), []).append(v)
+    over_budget = [
+        (path, count)
+        for path, count in sorted(counts.items())
+        if count > _ceiling(budget.get(path, {}))
+    ]
+
+    if not hard and not over_budget:
+        print(
+            f"OK: {len(rel_paths)} changed file(s) under litellm/ are within their Any budget"
+        )
+        return 0
+
+    for v in hard:
+        print(v.render())
+    for path, count in over_budget:
+        _report_over_budget(
+            path, count, budget.get(path), lit009_by_file.get(path, []), line_map
+        )
+
+    print(
+        f"\nFAIL: {len(hard)} hard violation(s), {len(over_budget)} file(s) over their Any budget.\n"
+        "Give the new values concrete types (validate untyped input with Pydantic) to get back\n"
+        "under the file's ceiling, or annotate a genuine boundary line `# any-ok: <reason>`.\n"
+        "Re-baseline with `make lint-any-budget-update` only to lock in a reduction.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def spot_check(rel_paths: Sequence[str]) -> int:
+    """Explicit-paths mode: report every finding in the files (no budget)."""
+    violations = sorted(check_files(rel_paths))
+    for v in violations:
+        print(v.render())
+    if violations:
+        print(f"\nFAIL: {len(violations)} Any-discipline finding(s).", file=sys.stderr)
+        return 1
+    print(f"OK: {len(rel_paths)} file(s) have no Any-typed values")
+    return 0
 
 
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Any-discipline gate (changed-only, changed-lines)."
+        description="Any-discipline gate (changed files, per-file Any budget)."
     )
     parser.add_argument(
         "paths",
         nargs="*",
-        help="explicit files (repo-root relative); whole-file, no line filter",
+        help="explicit files (repo-root relative); whole-file spot-check, no budget",
     )
     parser.add_argument(
         "--changed",
         action="store_true",
-        help="check changed lines under litellm/ vs --base",
+        help="gate changed files under litellm/ vs --base against the per-file budget",
+    )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="recapture the whole-tree per-file budget (any-discipline-budget.json)",
     )
     parser.add_argument("--base", default=os.environ.get("ANY_GATE_BASE", DEFAULT_BASE))
     args = parser.parse_args(list(argv))
 
-    line_map: dict[str, LineScope] | None = None
+    if args.update:
+        return update_budget()
     if args.changed:
-        line_map = changed_line_map(args.base)
-        if line_map is None:
-            print(
-                "check_any_discipline: not a git repository; nothing to check",
-                file=sys.stderr,
-            )
-            return 0
-        rel_paths = _to_litellm_relative(
-            (REPO_ROOT / name).resolve() for name in line_map
-        )
-    elif args.paths:
+        return run_gate(args.base)
+    if args.paths:
         rel_paths = _to_litellm_relative((REPO_ROOT / p).resolve() for p in args.paths)
-    else:
-        parser.error("pass --changed or explicit file paths")
-        return 2
-
-    if not rel_paths:
-        print("OK: no changed Python lines under litellm/ to check")
-        return 0
-
-    violations = tuple(v for v in check_files(rel_paths) if _in_scope(v, line_map))
-
-    for v in sorted(violations):
-        print(v.render())
-
-    if violations:
-        n = len(violations)
-        print(
-            f"\nFAIL: {n} Any-discipline violation(s) on changed lines.\n"
-            "Give the value a concrete type, or annotate the line `# any-ok: <reason>`.",
-            file=sys.stderr,
-        )
-        return 1
-    print(
-        f"OK: {len(rel_paths)} changed file(s) under litellm/ have no Any-typed values on changed lines"
-    )
-    return 0
+        if not rel_paths:
+            print("check_any_discipline: no litellm/*.py paths given", file=sys.stderr)
+            return 2
+        return spot_check(rel_paths)
+    parser.error("pass --changed, --update, or explicit file paths")
+    return 2
 
 
 if __name__ == "__main__":
