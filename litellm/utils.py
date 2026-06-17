@@ -9069,8 +9069,6 @@ class ProviderConfigManager:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
-        elif litellm.LlmProviders.DASHSCOPE == provider:
-            return litellm.DashScopeResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
             # Mantle serves Responses on two upstream paths. A model takes the
             # /openai/v1/responses path when its price-map entry declares
