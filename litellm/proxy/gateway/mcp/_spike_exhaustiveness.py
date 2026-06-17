@@ -61,6 +61,8 @@ def http_status(err: CredError) -> int:
             return 503
         case "unsupported_mode":
             return 500
+        case "precondition_required":
+            return 412
     assert_never(err.tag)
 
 

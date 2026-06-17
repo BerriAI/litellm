@@ -28,11 +28,12 @@ from .types import (
     AuthorizationCodeConfig,
     AuthSpecKind,
     AwsSigV4Config,
+    Byok,
     ClientCredentialsConfig,
     CredError,
     NoneConfig,
     PassthroughConfig,
-    PerUserKey,
+    PerUserEnvVar,
     ServerSpec,
     SharedKey,
     Subject,
@@ -77,23 +78,37 @@ class UpstreamCredentialProvider:
     ) -> Result[httpx.Auth, CredError]:
         match config.key_source:
             case SharedKey() as source:
+                # The shared key is read straight from ServerSpec.config, not the per-user
+                # store; it is the same credential for every caller.
                 return Ok(StaticHeaderAuth(config.header_for(source.value)))
-            case PerUserKey():
-                value = self._credential_store.get(
-                    CredentialKey(
-                        tenant_id=subject.tenant_id,
-                        subject_id=subject.subject_id,
-                        server_id=server.server_id,
+            case PerUserEnvVar():
+                value = self._per_user_value(subject, server)
+                if value is None:
+                    return Error(
+                        CredError.of_precondition_required(
+                            "api_key: per-user env var not set for this subject"
+                        )
                     )
-                )
+                return Ok(StaticHeaderAuth(config.header_for(value)))
+            case Byok():
+                value = self._per_user_value(subject, server)
                 if value is None:
                     return Error(
                         CredError.of_unauthorized(
-                            "api_key: no per-user credential for this subject"
+                            "api_key: no BYOK credential for this subject"
                         )
                     )
                 return Ok(StaticHeaderAuth(config.header_for(value)))
         assert_never(config.key_source)
+
+    def _per_user_value(self, subject: Subject, server: ServerSpec) -> str | None:
+        return self._credential_store.get(
+            CredentialKey(
+                tenant_id=subject.tenant_id,
+                subject_id=subject.subject_id,
+                server_id=server.server_id,
+            )
+        )
 
     def _passthrough(
         self, subject: Subject, server: ServerSpec, config: PassthroughConfig

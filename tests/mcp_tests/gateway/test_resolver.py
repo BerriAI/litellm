@@ -16,12 +16,15 @@ from litellm.proxy.gateway.mcp.outbound_credentials.httpx_auth import (
     NoOpAuth,
     StaticHeaderAuth,
 )
+from litellm.proxy.gateway.mcp._spike_exhaustiveness import http_status
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     ApiKeyConfig,
     AuthSpecKind,
+    Byok,
+    CredError,
     NoneConfig,
     PassthroughConfig,
-    PerUserKey,
+    PerUserEnvVar,
     ServerSpec,
     SharedKey,
     Subject,
@@ -85,21 +88,29 @@ def test_api_key_emits_the_right_scheme(scheme: str, expected: str):
     assert _applied_headers(result.ok)["Authorization"] == expected
 
 
-def test_api_key_per_user_pulls_the_subject_credential():
+@pytest.mark.parametrize("source", [Byok(), PerUserEnvVar()])
+def test_api_key_per_user_pulls_the_subject_credential(source: object):
     store = InMemoryCredentialStore(
         {CredentialKey(tenant_id="t1", subject_id="u1", server_id="s1"): "user-secret"}
     )
     provider = UpstreamCredentialProvider(store)
-    result = provider.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=PerUserKey())))
+    result = provider.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=source)))  # type: ignore[arg-type]
     assert isinstance(result, Ok)
     assert _applied_headers(result.ok)["Authorization"] == "Bearer user-secret"
 
 
-def test_api_key_per_user_missing_credential_fails_closed():
-    # Empty store -> the per-user arm fails closed rather than sending no/garbage auth.
-    result = PROVIDER.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=PerUserKey())))
+def test_api_key_byok_missing_returns_unauthorized():
+    # Missing BYOK credential -> 401 + WWW-Authenticate (the user must provide it).
+    result = PROVIDER.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=Byok())))
     assert isinstance(result, Error)
     assert result.error.tag == "unauthorized"
+
+
+def test_api_key_env_var_missing_returns_precondition_required():
+    # Missing per-user env var -> 412 (a setup precondition), distinct from BYOK's 401.
+    result = PROVIDER.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=PerUserEnvVar())))
+    assert isinstance(result, Error)
+    assert result.error.tag == "precondition_required"
 
 
 def test_api_key_per_user_isolated_by_subject():
@@ -109,9 +120,15 @@ def test_api_key_per_user_isolated_by_subject():
     )
     provider = UpstreamCredentialProvider(store)
     other = Subject(tenant_id="t1", subject_id="u2")
-    result = provider.resolve(other, _spec(ApiKeyConfig(key_source=PerUserKey())))
+    result = provider.resolve(other, _spec(ApiKeyConfig(key_source=Byok())))
     assert isinstance(result, Error)
     assert result.error.tag == "unauthorized"
+
+
+def test_missing_status_maps_byok_401_distinct_from_env_var_412():
+    # The two per-user sources surface different HTTP statuses at the edge.
+    assert http_status(CredError.of_unauthorized("byok missing")) == 401
+    assert http_status(CredError.of_precondition_required("env var missing")) == 412
 
 
 def test_passthrough_forwards_the_inbound_token():

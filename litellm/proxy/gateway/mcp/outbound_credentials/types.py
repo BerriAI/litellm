@@ -63,7 +63,11 @@ class CredError:
     """
 
     tag: Literal[
-        "unauthorized", "misconfigured", "upstream_unavailable", "unsupported_mode"
+        "unauthorized",
+        "misconfigured",
+        "upstream_unavailable",
+        "unsupported_mode",
+        "precondition_required",
     ] = tag()
 
     unauthorized: str = (
@@ -78,6 +82,9 @@ class CredError:
     unsupported_mode: str = (
         case()
     )  # a raw mode string did not parse into AuthSpecKind (boundary)
+    precondition_required: str = (
+        case()
+    )  # a required per-user value (e.g. an env var) has not been provided -> 412
 
     @staticmethod
     def of_unauthorized(detail: str) -> CredError:
@@ -95,6 +102,10 @@ class CredError:
     def of_unsupported_mode(detail: str) -> CredError:
         return CredError(unsupported_mode=detail)
 
+    @staticmethod
+    def of_precondition_required(detail: str) -> CredError:
+        return CredError(precondition_required=detail)
+
     @property
     def summary(self) -> str:
         # Exhaustiveness: every Literal tag has an arm; the trailing assert_never typechecks
@@ -108,6 +119,8 @@ class CredError:
                 return f"upstream unavailable: {self.upstream_unavailable}"
             case "unsupported_mode":
                 return self.unsupported_mode
+            case "precondition_required":
+                return f"precondition required: {self.precondition_required}"
         assert_never(self.tag)
 
 
@@ -155,15 +168,27 @@ class SharedKey(BaseModel):
     value: str
 
 
-class PerUserKey(BaseModel):
-    """A key seeded per-user (per-user env var or BYOK). The value is not static; it is
-    pulled from the credential store at resolve time, keyed by the subject."""
+class PerUserEnvVar(BaseModel):
+    """A per-user value the admin templated as an env var; the user fills it in. Pulled from
+    the credential store at resolve time. Missing means the user has not completed setup, a
+    precondition (412) rather than an auth failure."""
 
     model_config = ConfigDict(frozen=True)
-    source: Literal["per_user"] = "per_user"
+    source: Literal["per_user_env_var"] = "per_user_env_var"
 
 
-ApiKeySource = Annotated[SharedKey | PerUserKey, Field(discriminator="source")]
+class Byok(BaseModel):
+    """A key the user brings via the entry flow, stored per-user. Pulled from the credential
+    store at resolve time. Missing means the user must provide it, a 401 + WWW-Authenticate
+    challenge."""
+
+    model_config = ConfigDict(frozen=True)
+    source: Literal["byok"] = "byok"
+
+
+ApiKeySource = Annotated[
+    SharedKey | PerUserEnvVar | Byok, Field(discriminator="source")
+]
 
 
 class ApiKeyConfig(BaseModel):
