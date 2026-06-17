@@ -1711,9 +1711,15 @@ async def test_release_budget_reservation_on_cancel_gives_back_counter(
         token="key-cancel-give-back", spend=0.0, max_budget=10.0
     )
 
-    with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-        return_value=3.0,
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=3.0,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_input_cost",
+            return_value=0.5,
+        ),
     ):
         reservation = await reserve_budget_for_request(
             request_body=_request_body(),
@@ -1733,16 +1739,19 @@ async def test_release_budget_reservation_on_cancel_gives_back_counter(
 
     await release_budget_reservation_on_cancel(reservation)
 
+    # the provider already received the input, so the reservation is reconciled
+    # to the input cost (0.5), not refunded to zero; the worst-case output
+    # reservation (3.0 -> 0.5) is released
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-cancel-give-back"
-    ) == pytest.approx(0.0)
+    ) == pytest.approx(0.5)
     assert reservation["finalized"] is True
 
-    # idempotent: a second cancel release must not double-subtract
+    # idempotent: a second cancel reconcile must not change the counter again
     await release_budget_reservation_on_cancel(reservation)
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-cancel-give-back"
-    ) == pytest.approx(0.0)
+    ) == pytest.approx(0.5)
 
 
 @pytest.mark.asyncio
@@ -1783,9 +1792,15 @@ async def test_release_budget_reservation_on_cancel_noop_when_finalized(
 
 async def _reserve_for_stream(counter_cache, key_cache, proxy_logging_obj, token: str):
     valid_token = UserAPIKeyAuth(token=token, spend=0.0, max_budget=10.0)
-    with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-        return_value=2.0,
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=2.0,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_input_cost",
+            return_value=0.5,
+        ),
     ):
         reservation = await reserve_budget_for_request(
             request_body=_request_body(),
@@ -1820,7 +1835,7 @@ def _drive_streaming_cancel(valid_token, iterator_hook):
 
 
 @pytest.mark.asyncio
-async def test_streaming_cancel_before_any_chunk_refunds_reservation(
+async def test_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
     spend_counter_state,
 ):
     counter_cache, key_cache = spend_counter_state
@@ -1842,10 +1857,11 @@ async def test_streaming_cancel_before_any_chunk_refunds_reservation(
             received.append(chunk)
 
     assert received == []
-    # nothing was delivered, so the hold is refunded
+    # no chunk delivered, but the provider already received the input, so the
+    # reservation is reconciled to the input cost (0.5), not refunded to zero
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-cancel-no-chunk"
-    ) == pytest.approx(0.0)
+    ) == pytest.approx(0.5)
     assert reservation["finalized"] is True
 
 
@@ -1888,9 +1904,10 @@ async def test_release_budget_reservation_on_cancel_swallows_release_errors():
         "reserved_cost": 3.0,
         "entries": [{"counter_key": "spend:key:key-cancel-error"}],
         "finalized": False,
+        "input_cost": 0.5,
     }
     with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
         new=AsyncMock(side_effect=RuntimeError("redis down")),
     ):
         # must return without raising
@@ -1933,10 +1950,11 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
                 received.append(chunk)
 
     assert received == []
-    # cancellation happened before any chunk reached the client -> refund
+    # cancellation happened before any chunk reached the client, but the
+    # provider already received the input -> reconcile to the input cost (0.5)
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-cancel-slowpath"
-    ) == pytest.approx(0.0)
+    ) == pytest.approx(0.5)
     assert reservation["finalized"] is True
 
 
