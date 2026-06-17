@@ -526,7 +526,8 @@ export interface paths {
          * List Plugins
          * @description Return registered plugins for authenticated UI callers.
          *
-         *     plugin_key is only returned to callers with a valid litellm token.
+         *     plugin_key is only returned to proxy admins — not to regular users —
+         *     so plugin credentials cannot be extracted by non-admin callers.
          */
         get: operations["list_plugins_api_plugins_get"];
         put?: never;
