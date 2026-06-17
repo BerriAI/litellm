@@ -289,6 +289,28 @@ def test_token_base_cost_sorts_tier_thresholds_numerically():
     assert completion_cost == 11e-6
 
 
+def test_token_base_cost_skips_malformed_threshold_keys():
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "input_cost_per_token_above_90k_tokens": 5e-6,
+            "output_cost_per_token_above_90k_tokens": 7e-6,
+            "input_cost_per_token_above_128k_tokens": 9e-6,
+            "output_cost_per_token_above_128k_tokens": 11e-6,
+            "input_cost_per_token_above_": 99e-6,
+            "input_cost_per_token_above_bad_tokens": 99e-6,
+        },
+    )
+    usage = Usage(prompt_tokens=150_000, completion_tokens=10, total_tokens=150_010)
+
+    prompt_cost, completion_cost, *_ = _get_token_base_cost(model_info, usage)
+
+    assert prompt_cost == 9e-6
+    assert completion_cost == 11e-6
+
+
 def test_generic_cost_per_token_above_200k_tokens():
     # gemini-2.5-pro-exp-03-25 was removed; gemini-2.5-pro has same above-200k pricing
     model = "gemini-2.5-pro"
