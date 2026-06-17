@@ -15,6 +15,7 @@ import pytest
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.common_utils.model_listing_utils import get_model_listing_entries
 from litellm.proxy.proxy_server import (
     _get_proxy_model_info,
     _translate_model_name_for_response,
@@ -678,7 +679,8 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
 
 @pytest.mark.asyncio
 async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
-    """include_metadata=true must build metadata for the public model id."""
+    """include_metadata=true must return the public id while resolving
+    fallback metadata through the internal router key."""
     team_dep = {
         "model_name": "model_name_teamX_uuid9",
         "litellm_params": {"model": "azure/gpt-4.1"},
@@ -695,6 +697,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     router.get_fully_blocked_model_names.return_value = set()
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
+    router.fallbacks = [{"model_name_teamX_uuid9": ["fallback-gpt-4.1"]}]
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)
@@ -711,15 +714,14 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
             "object": "model",
             "created": 1677610602,
             "owned_by": "openai",
-            "metadata": {"fallbacks": []},
+            "metadata": {"fallbacks": ["fallback-gpt-4.1"]},
         }
     ]
 
 
-def test_translate_team_model_names_for_listing_swaps_and_dedupes(monkeypatch):
+def test_model_listing_entries_swaps_and_dedupes(monkeypatch):
     """Internal team routing keys -> public name; sibling deployments sharing a
     public name collapse to one entry (order preserved); globals untouched."""
-    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
 
     router = MagicMock()
     router.get_model_list.return_value = [
@@ -741,16 +743,19 @@ def test_translate_team_model_names_for_listing_swaps_and_dedupes(monkeypatch):
     ]
     monkeypatch.setattr(ps, "general_settings", {})
 
-    out = _translate_team_model_names_for_listing(
+    out = get_model_listing_entries(
         ["model_name_teamX_uuidA", "model_name_teamX_uuidB", "gpt-4o"],
         router,
+        {},
     )
-    assert out == ["tushar-gpt-4.1", "gpt-4o"]
+    assert list(out) == [
+        ("tushar-gpt-4.1", "model_name_teamX_uuidA"),
+        ("gpt-4o", "gpt-4o"),
+    ]
 
 
-def test_translate_team_model_names_for_listing_leaves_unmapped_names(monkeypatch):
+def test_model_listing_entries_leave_unmapped_names(monkeypatch):
     """Names with no team mapping (globals, access-group keys) pass through."""
-    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
 
     router = MagicMock()
     router.get_model_list.return_value = [
@@ -758,22 +763,26 @@ def test_translate_team_model_names_for_listing_leaves_unmapped_names(monkeypatc
     ]
     monkeypatch.setattr(ps, "general_settings", {})
 
-    assert _translate_team_model_names_for_listing(
-        ["gpt-4o", "beta-group"], router
-    ) == ["gpt-4o", "beta-group"]
+    out = get_model_listing_entries(["gpt-4o", "beta-group"], router, {})
+    assert list(out) == [
+        ("gpt-4o", "gpt-4o"),
+        ("beta-group", "beta-group"),
+    ]
 
 
-def test_translate_team_model_names_for_listing_none_router(monkeypatch):
+def test_model_listing_entries_handle_none_router(monkeypatch):
     """No router -> return the input list unchanged."""
-    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
 
     monkeypatch.setattr(ps, "general_settings", {})
-    assert _translate_team_model_names_for_listing(["a", "b"], None) == ["a", "b"]
+    out = get_model_listing_entries(["a", "b"], None, {})
+    assert list(out) == [
+        ("a", "a"),
+        ("b", "b"),
+    ]
 
 
-def test_translate_team_model_names_for_listing_respects_legacy_flag(monkeypatch):
+def test_model_listing_entries_respect_legacy_flag(monkeypatch):
     """Operators can keep returning the legacy internal routing key."""
-    from litellm.proxy.proxy_server import _translate_team_model_names_for_listing
 
     router = MagicMock()
     router.get_model_list.return_value = [
@@ -787,6 +796,30 @@ def test_translate_team_model_names_for_listing_respects_legacy_flag(monkeypatch
     ]
     monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
 
-    assert _translate_team_model_names_for_listing(
-        ["model_name_teamX_uuidA"], router
-    ) == ["model_name_teamX_uuidA"]
+    out = get_model_listing_entries(
+        ["model_name_teamX_uuidA"],
+        router,
+        {"use_team_public_model_name": False},
+    )
+    assert list(out) == [("model_name_teamX_uuidA", "model_name_teamX_uuidA")]
+
+
+def test_model_listing_entries_handles_unexpected_router_model_list():
+    router = MagicMock()
+    router.get_model_list.return_value = {"not": "a list"}
+
+    out = get_model_listing_entries(["gpt-4o"], router, None)
+
+    assert list(out) == [("gpt-4o", "gpt-4o")]
+
+
+def test_model_listing_entries_ignores_malformed_router_rows():
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        object(),
+        {"model_name": "model_name_teamX_uuidA", "model_info": "not-a-dict"},
+    ]
+
+    out = get_model_listing_entries(["model_name_teamX_uuidA"], router, {})
+
+    assert list(out) == [("model_name_teamX_uuidA", "model_name_teamX_uuidA")]
