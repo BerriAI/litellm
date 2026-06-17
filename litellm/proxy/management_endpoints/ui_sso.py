@@ -145,6 +145,9 @@ _CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS = 60
 _CLI_SSO_START_RATE_LIMIT_MAX_ATTEMPTS = 30
 _CLI_SSO_USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _CLI_SSO_LOGIN_ID_RE = re.compile(r"^cli-[A-Za-z0-9_-]{12,124}$")
+_CLI_SSO_USER_CODE_RE = re.compile(
+    rf"^[{_CLI_SSO_USER_CODE_ALPHABET}]{{4}}-[{_CLI_SSO_USER_CODE_ALPHABET}]{{4}}$"
+)
 _CLI_SSO_SCALAR_TYPES = (str, int, float, bool)
 _CLI_SSO_DEST_KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _CLI_SSO_SECRET_KEY_FRAGMENTS = frozenset(
@@ -180,6 +183,45 @@ def _get_cli_sso_flow_cache_key(login_id: str) -> str:
 
 def _is_valid_cli_sso_login_id(login_id: Optional[str]) -> bool:
     return isinstance(login_id, str) and bool(_CLI_SSO_LOGIN_ID_RE.fullmatch(login_id))
+
+
+def _is_valid_cli_sso_user_code(user_code: str | None) -> bool:
+    return isinstance(user_code, str) and bool(
+        _CLI_SSO_USER_CODE_RE.fullmatch(user_code)
+    )
+
+
+def _cli_sso_verification_uri_complete_enabled() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return bool(
+        general_settings.get(  # any-ok: operator opt-in read from the untyped general_settings dict
+            "allow_cli_sso_verification_uri_complete", False
+        )
+    )
+
+
+def _cli_sso_start_response_body(
+    *,
+    login_id: str,
+    poll_secret: str,
+    user_code: str,
+    verification_uri_complete: str | None,
+) -> dict[str, str | int]:
+    if verification_uri_complete is None:
+        return {
+            "login_id": login_id,
+            "poll_secret": poll_secret,
+            "user_code": user_code,
+            "expires_in": CLI_SSO_SESSION_TTL_SECONDS,
+        }
+    return {
+        "login_id": login_id,
+        "poll_secret": poll_secret,
+        "user_code": user_code,
+        "verification_uri_complete": verification_uri_complete,
+        "expires_in": CLI_SSO_SESSION_TTL_SECONDS,
+    }
 
 
 def _get_cli_sso_start_rate_limit_cache_key(
@@ -478,10 +520,20 @@ def _cli_poll_attribution_metadata_from_session(
 
 
 def _render_cli_sso_verification_page(
-    verify_url: str, browser_complete_token: str
+    verify_url: str,
+    browser_complete_token: str,
+    prefill_user_code: str | None = None,
 ) -> str:
     escaped_verify_url = escape(verify_url, quote=True)
     escaped_browser_complete_token = escape(browser_complete_token, quote=True)
+    user_code_value_attr = (
+        f' value="{escape(prefill_user_code, quote=True)}"' if prefill_user_code else ""
+    )
+    instructions = (
+        "Confirm the verification code below to finish this login."
+        if prefill_user_code
+        else "Enter the verification code shown in your terminal to finish this login."
+    )
     return f"""
     <!doctype html>
     <html>
@@ -535,11 +587,11 @@ def _render_cli_sso_verification_page(
       <body>
         <main>
           <h1>Complete CLI Login</h1>
-          <p>Enter the verification code shown in your terminal to finish this login.</p>
+          <p>{instructions}</p>
           <form method="post" action="{escaped_verify_url}">
             <input type="hidden" name="browser_complete_token" value="{escaped_browser_complete_token}" />
             <label for="user_code">Verification code</label>
-            <input id="user_code" name="user_code" autocomplete="one-time-code" required autofocus />
+            <input id="user_code" name="user_code" autocomplete="one-time-code"{user_code_value_attr} required autofocus />
             <button type="submit">Continue</button>
           </form>
         </main>
@@ -573,12 +625,29 @@ async def cli_sso_start(request: Request):
     }
     _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
 
-    return {
-        "login_id": login_id,
-        "poll_secret": poll_secret,
-        "user_code": user_code,
-        "expires_in": CLI_SSO_SESSION_TTL_SECONDS,
-    }
+    verification_uri_complete: str | None = (
+        (
+            get_custom_url(
+                request_base_url=str(request.base_url), route="sso/key/generate"
+            )
+            + "?"
+            + urlencode(
+                {
+                    "source": LITELLM_CLI_SOURCE_IDENTIFIER,
+                    "key": login_id,
+                    "user_code": user_code,
+                }
+            )
+        )
+        if _cli_sso_verification_uri_complete_enabled()
+        else None
+    )
+    return _cli_sso_start_response_body(
+        login_id=login_id,
+        poll_secret=poll_secret,
+        user_code=user_code,
+        verification_uri_complete=verification_uri_complete,
+    )
 
 
 @router.post(
@@ -829,6 +898,7 @@ async def google_login(
     key: Optional[str] = None,
     existing_key: Optional[str] = None,
     return_to: Optional[str] = None,
+    user_code: str | None = None,
 ):
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
@@ -897,6 +967,7 @@ async def google_login(
     cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
         source=source,
         key=key,
+        user_code=(user_code if _cli_sso_verification_uri_complete_enabled() else None),
     )
 
     # check if user defined a custom auth sso sign in handler, if yes, use it
@@ -1921,14 +1992,16 @@ async def auth_callback(request: Request, state: Optional[str] = None):
         )
 
     if state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
-        # State format: {PREFIX}:{login_id}
-        state_parts = state.split(":", 1)
+        # State format: {PREFIX}:{login_id}[:{user_code}]
+        state_parts = state.split(":", 2)
         key_id = state_parts[1] if len(state_parts) > 1 else None
+        prefill_user_code = state_parts[2] if len(state_parts) > 2 else None
 
         verbose_proxy_logger.info("CLI SSO callback detected")
         return await cli_sso_callback(
             request=request,
             key=key_id,
+            prefill_user_code=prefill_user_code,
             result=result,
             received_response=received_response,
         )
@@ -2008,6 +2081,7 @@ async def _complete_cli_sso_callback_session(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    prefill_user_code: str | None = None,
 ):
     from fastapi.responses import HTMLResponse
 
@@ -2071,6 +2145,7 @@ async def _complete_cli_sso_callback_session(
         content=_render_cli_sso_verification_page(
             verify_url=verify_url,
             browser_complete_token=browser_complete_token,
+            prefill_user_code=prefill_user_code,
         ),
         status_code=200,
     )
@@ -2081,6 +2156,7 @@ async def cli_sso_callback(
     key: Optional[str] = None,
     result: Optional[Union[OpenID, dict]] = None,
     received_response: Optional[dict] = None,
+    prefill_user_code: str | None = None,
 ):
     """CLI SSO callback - stores session info for JWT generation on polling"""
     verbose_proxy_logger.info("CLI SSO callback")
@@ -2137,6 +2213,7 @@ async def cli_sso_callback(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            prefill_user_code=prefill_user_code,
         )
     except ProxyException:
         raise
@@ -3053,21 +3130,27 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def _get_cli_state(
-        source: Optional[str], key: Optional[str], existing_key: Optional[str] = None
+        source: str | None,
+        key: str | None,
+        existing_key: str | None = None,
+        user_code: str | None = None,
     ) -> Optional[str]:
         """
         Checks the request 'source' if a cli state token was passed in
 
         This is used to authenticate through the CLI login flow.
 
-        The state parameter format is: {PREFIX}:{login_id}
+        The state parameter format is: {PREFIX}:{login_id}[:{user_code}]
         - The state parameter is used to pass data through the OAuth flow without changing the callback URL
+        - user_code is appended only for the opt-in verification_uri_complete flow so the verify page can pre-fill it
         """
         from litellm.constants import (
             LITELLM_CLI_SESSION_TOKEN_PREFIX,
         )
 
         if source == LITELLM_CLI_SOURCE_IDENTIFIER and key:
+            if _is_valid_cli_sso_user_code(user_code):
+                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}:{user_code}"
             return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
         else:
             return None
