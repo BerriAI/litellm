@@ -1959,3 +1959,68 @@ async def test_cancel__exception_calls_failure_hook(cancel_harness):
         ].args[0]
         == "provider boom"
     )
+
+
+# =========================================================================== #
+# Router-required 500 guards (one per endpoint branch that calls the router).
+# These pin the defensive checks that fire when llm_router is unset.
+# =========================================================================== #
+
+
+@pytest.mark.asyncio
+async def test_create__loadbalancing_no_router_500(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "model": "lb-model",
+        },
+    )
+    harness.is_known_model.return_value = True
+    with patch.object(
+        litellm, "enable_loadbalancing_on_batch_endpoints", True
+    ), patch.object(proxy_server, "llm_router", None):
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
+
+    assert exc.value.code == "500"
+    harness.router_acreate.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__unified_no_router_500(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "litellm_proxy_unified_id",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    with patch.object(
+        endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"
+    ), patch.object(
+        endpoints, "get_models_from_unified_file_id", return_value=["gpt-4o-mini"]
+    ), patch.object(
+        proxy_server, "llm_router", None
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
+
+    assert exc.value.code == "500"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__unified_no_router_500(retrieve_harness):
+    with patch.object(
+        endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID
+    ), patch.object(proxy_server, "llm_router", None):
+        with pytest.raises(ProxyException) as exc:
+            await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert exc.value.code == "500"
+    retrieve_harness.router_aretrieve.assert_not_called()
+    retrieve_harness.litellm_aretrieve.assert_not_called()
