@@ -5749,3 +5749,43 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                         exporter="console", attributes=attributes
                     )
                 )
+
+
+class PydanticLikeToolResult:
+    """Mimics mcp.types.CallToolResult: a Pydantic-style object with model_dump
+    and no dict .get (the shape that crashed set_attributes — see #30651)."""
+
+    def model_dump(self):
+        return {"content": [{"type": "text", "text": "ok"}], "isError": False}
+
+
+def test_set_attributes_does_not_crash_on_non_dict_response_obj():
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
+    otel = OpenTelemetry()
+    otel.tracer = MagicMock()
+    span = MagicMock()
+    from collections import defaultdict
+
+    # defaultdict(dict) keeps the many standard_logging_payload[...] subscripts in
+    # set_attributes safe so execution reaches the response_obj.get(...) path,
+    # which is where the non-dict crash (#30651) happened.
+    kwargs = {
+        "standard_logging_object": defaultdict(dict, {"id": "log-1"}),
+        "litellm_params": {},
+        "optional_params": {},
+    }
+
+    def _set_attr_error_count(response_obj):
+        with patch("litellm.integrations.opentelemetry.verbose_logger") as vl:
+            otel.set_attributes(span, kwargs, response_obj)
+        return sum(
+            1 for c in vl.exception.call_args_list if "set_attributes" in str(c)
+        )
+
+    # A dict response is the known-good baseline; a Pydantic (non-dict) response
+    # used to raise "'CallToolResult' object has no attribute 'get'" on top of it.
+    # After the fix the non-dict path must not add any set_attributes error.
+    baseline = _set_attr_error_count({"id": "resp-1"})
+    pydantic = _set_attr_error_count(PydanticLikeToolResult())
+    assert pydantic <= baseline, (pydantic, baseline)
