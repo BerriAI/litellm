@@ -3004,7 +3004,7 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
         host_progress_callback: Optional[Callable] = None,
-        allowed_mcp_servers: Optional[List[MCPServer]] = None,
+        allowed_mcp_servers: list[MCPServer] | None = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import

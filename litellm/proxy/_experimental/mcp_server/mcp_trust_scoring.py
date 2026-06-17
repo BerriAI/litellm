@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Literal, Optional, Protocol, Sequence, Tuple, cast
+from typing import TYPE_CHECKING, Callable, Literal, Protocol, Sequence, cast
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -53,7 +53,7 @@ class MCPTrustScoringConfig(BaseModel):
         default=True,
         description="When True, keep servers reachable if DO is down, rate-limited, or has no score yet",
     )
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         description="Optional API key for paid Dominion Observatory tiers",
     )
@@ -64,16 +64,16 @@ class DominionObservatoryTrustResult(BaseModel):
 
     server_url: str
     found: bool
-    trust_score_normalized: Optional[float] = Field(
+    trust_score_normalized: float | None = Field(
         default=None,
         description="Trust score normalized to 0-1",
     )
-    trust_score_raw: Optional[float] = Field(
+    trust_score_raw: float | None = Field(
         default=None,
         description="Raw trust score from Dominion Observatory (0-100 scale)",
     )
     lookup_status: Literal["ok", "skipped", "error"] = "ok"
-    message: Optional[str] = None
+    message: str | None = None
 
     def meets_min_trust(self, min_trust_score: float) -> bool:
         if self.lookup_status == "skipped":
@@ -82,7 +82,7 @@ class DominionObservatoryTrustResult(BaseModel):
             return False
         return self.trust_score_normalized >= min_trust_score
 
-    def sort_key(self) -> Tuple[int, float]:
+    def sort_key(self) -> tuple[int, float]:
         if self.lookup_status == "skipped":
             return (1, 0.0)
         if self.trust_score_normalized is None:
@@ -100,8 +100,8 @@ class _DominionObservatoryTrustApiResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     found: bool = False
-    trust_score: Optional[float] = None
-    message: Optional[str] = None
+    trust_score: float | None = None
+    message: str | None = None
 
 
 class _SharedTrustCache(Protocol):
@@ -132,8 +132,8 @@ class _HttpClient(Protocol):
         self,
         url: str,
         *,
-        params: Optional[dict[str, str]] = None,
-        headers: Optional[dict[str, str]] = None,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response: ...
 
 
@@ -148,13 +148,13 @@ def _normalize_server_url(server_url: str) -> str:
 
 
 def _cache_key_for_url(server_url: str) -> str:
-    digest = hashlib.sha256(_normalize_server_url(server_url).encode("utf-8")).hexdigest()[
-        :32
-    ]
+    digest = hashlib.sha256(
+        _normalize_server_url(server_url).encode("utf-8")
+    ).hexdigest()[:32]
     return f"mcp:do_trust:{digest}"
 
 
-def normalize_trust_score(raw_score: object) -> Optional[float]:
+def normalize_trust_score(raw_score: object) -> float | None:
     if raw_score is None:
         return None
     if not isinstance(raw_score, (int, float)):
@@ -209,9 +209,9 @@ class MCPTrustScoringClient:
         self,
         config: MCPTrustScoringConfig,
         *,
-        local_cache: Optional[InMemoryCache] = None,
-        cache_getter: Optional[Callable[[], _SharedTrustCache]] = None,
-        http_client_getter: Optional[Callable[[], _HttpClient]] = None,
+        local_cache: InMemoryCache | None = None,
+        cache_getter: Callable[[], _SharedTrustCache] | None = None,
+        http_client_getter: Callable[[], _HttpClient] | None = None,
     ) -> None:
         self._config = config
         self._local_cache: _LocalTrustCache = cast(
@@ -237,8 +237,8 @@ class MCPTrustScoringClient:
     @classmethod
     def from_config_dict(
         cls,
-        config: Optional[dict[str, object]],
-    ) -> Optional[MCPTrustScoringClient]:
+        config: dict[str, object] | None,
+    ) -> MCPTrustScoringClient | None:
         if not config:
             return None
         parsed = MCPTrustScoringConfig.model_validate(config)
@@ -249,7 +249,9 @@ class MCPTrustScoringClient:
     def _lock_for_url(self, server_url: str) -> asyncio.Lock:
         return self._locks.setdefault(_cache_key_for_url(server_url), asyncio.Lock())
 
-    async def _read_cached_result(self, server_url: str) -> Optional[DominionObservatoryTrustResult]:
+    async def _read_cached_result(
+        self, server_url: str
+    ) -> DominionObservatoryTrustResult | None:
         cache_key = _cache_key_for_url(server_url)
         local_cached = self._local_cache.get_cache(cache_key)
         if isinstance(local_cached, str):
@@ -275,7 +277,9 @@ class MCPTrustScoringClient:
                 entry.payload_json,
                 ttl=self._config.cache_ttl_seconds,
             )
-            return DominionObservatoryTrustResult.model_validate_json(entry.payload_json)
+            return DominionObservatoryTrustResult.model_validate_json(
+                entry.payload_json
+            )
         return None
 
     async def _write_cached_result(
@@ -319,7 +323,9 @@ class MCPTrustScoringClient:
             await self._write_cached_result(normalized_url, result)
             return result
 
-    async def _fetch_trust_score(self, server_url: str) -> DominionObservatoryTrustResult:
+    async def _fetch_trust_score(
+        self, server_url: str
+    ) -> DominionObservatoryTrustResult:
         headers: dict[str, str] = {}
         if self._config.api_key:
             headers["Authorization"] = f"Bearer {self._config.api_key}"
@@ -332,9 +338,9 @@ class MCPTrustScoringClient:
                 headers=headers or None,
             )
             response.raise_for_status()
-            parsed_api = TypeAdapter(_DominionObservatoryTrustApiResponse).validate_json(
-                response.text
-            )
+            parsed_api = TypeAdapter(
+                _DominionObservatoryTrustApiResponse
+            ).validate_json(response.text)
         except Exception as exc:
             verbose_logger.debug(
                 "Dominion Observatory trust lookup failed for %s: %s",
@@ -373,7 +379,7 @@ class MCPTrustScoringClient:
     async def score_servers(
         self,
         servers: Sequence[MCPServer],
-    ) -> Tuple[_ScoredServer, ...]:
+    ) -> tuple[_ScoredServer, ...]:
         if not servers:
             return ()
 
@@ -388,7 +394,7 @@ class MCPTrustScoringClient:
     async def filter_servers_by_trust(
         self,
         servers: Sequence[MCPServer],
-    ) -> Tuple[MCPServer, ...]:
+    ) -> tuple[MCPServer, ...]:
         if not self.enabled:
             return tuple(servers)
 
@@ -402,7 +408,7 @@ class MCPTrustScoringClient:
     async def rank_servers_by_trust(
         self,
         servers: Sequence[MCPServer],
-    ) -> Tuple[MCPServer, ...]:
+    ) -> tuple[MCPServer, ...]:
         if not self.enabled:
             return tuple(servers)
 
@@ -428,16 +434,16 @@ def _default_dual_cache_getter() -> _SharedTrustCache:
     return cast(_SharedTrustCache, user_api_key_cache)
 
 
-_global_mcp_trust_scoring_client: Optional[MCPTrustScoringClient] = None
+_global_mcp_trust_scoring_client: MCPTrustScoringClient | None = None
 
 
-def get_mcp_trust_scoring_client() -> Optional[MCPTrustScoringClient]:
+def get_mcp_trust_scoring_client() -> MCPTrustScoringClient | None:
     return _global_mcp_trust_scoring_client
 
 
 def _resolve_trust_scoring_config_values(
-    config: Optional[dict[str, object]],
-) -> Optional[dict[str, object]]:
+    config: dict[str, object] | None,
+) -> dict[str, object] | None:
     if not config:
         return None
 
@@ -451,8 +457,8 @@ def _resolve_trust_scoring_config_values(
 
 
 def initialize_mcp_trust_scoring_from_config(
-    config: Optional[dict[str, object]],
-) -> Optional[MCPTrustScoringClient]:
+    config: dict[str, object] | None,
+) -> MCPTrustScoringClient | None:
     global _global_mcp_trust_scoring_client
 
     client = MCPTrustScoringClient.from_config_dict(
@@ -476,8 +482,8 @@ def initialize_mcp_trust_scoring_from_config(
 async def filter_mcp_servers_by_trust(
     servers: Sequence[MCPServer],
     *,
-    client: Optional[MCPTrustScoringClient] = None,
-) -> Tuple[MCPServer, ...]:
+    client: MCPTrustScoringClient | None = None,
+) -> tuple[MCPServer, ...]:
     active_client = client or get_mcp_trust_scoring_client()
     if active_client is None:
         return tuple(servers)
@@ -487,8 +493,8 @@ async def filter_mcp_servers_by_trust(
 async def rank_mcp_servers_by_trust(
     servers: Sequence[MCPServer],
     *,
-    client: Optional[MCPTrustScoringClient] = None,
-) -> Tuple[MCPServer, ...]:
+    client: MCPTrustScoringClient | None = None,
+) -> tuple[MCPServer, ...]:
     active_client = client or get_mcp_trust_scoring_client()
     if active_client is None:
         return tuple(servers)
@@ -498,6 +504,6 @@ async def rank_mcp_servers_by_trust(
 async def apply_trust_filter_to_allowed_mcp_servers(
     servers: Sequence[MCPServer],
     *,
-    client: Optional[MCPTrustScoringClient] = None,
-) -> Tuple[MCPServer, ...]:
+    client: MCPTrustScoringClient | None = None,
+) -> tuple[MCPServer, ...]:
     return await filter_mcp_servers_by_trust(servers, client=client)

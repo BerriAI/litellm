@@ -13,7 +13,19 @@ import json
 import os
 import re
 import time
-from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Set, Tuple, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 from urllib.parse import urlparse
 
 import anyio
@@ -1625,19 +1637,22 @@ class MCPServerManager:
 
         from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
             apply_trust_filter_to_allowed_mcp_servers,
+            get_mcp_trust_scoring_client,
         )
 
-        allowed_server_objects = tuple(
-            server
-            for server_id in allowed_mcp_servers
-            if (server := self.get_mcp_server_by_id(server_id)) is not None
-        )
-        allowed_mcp_servers = [
-            server.server_id
-            for server in await apply_trust_filter_to_allowed_mcp_servers(
-                allowed_server_objects
+        trust_client = get_mcp_trust_scoring_client()
+        if trust_client is not None and trust_client.enabled:
+            allowed_server_objects = tuple(
+                server
+                for server_id in allowed_mcp_servers
+                if (server := self.get_mcp_server_by_id(server_id)) is not None
             )
-        ]
+            allowed_mcp_servers = [
+                server.server_id
+                for server in await apply_trust_filter_to_allowed_mcp_servers(
+                    allowed_server_objects
+                )
+            ]
 
         verbose_logger.debug("SERVER MANAGER LISTING TOOLS")
 
@@ -3570,7 +3585,9 @@ class MCPServerManager:
 
     @staticmethod
     def _should_attempt_trust_fallback(error: BaseException) -> bool:
-        if isinstance(error, (BlockedPiiEntityError, GuardrailRaisedException, ValueError)):
+        if isinstance(
+            error, (BlockedPiiEntityError, GuardrailRaisedException, ValueError)
+        ):
             return False
         if isinstance(error, HTTPException):
             return error.status_code not in {401, 403, 412}
@@ -3585,9 +3602,9 @@ class MCPServerManager:
         if server_name:
             server_matches = False
             for identifier in (server.alias, server.server_name, server.name):
-                if identifier and normalize_server_name(identifier) == normalize_server_name(
-                    server_name
-                ):
+                if identifier and normalize_server_name(
+                    identifier
+                ) == normalize_server_name(server_name):
                     server_matches = True
                     break
             if not server_matches:
@@ -3611,7 +3628,9 @@ class MCPServerManager:
                     server.name,
                     known_prefix,
                 ):
-                    if identifier and normalized_mapped == normalize_server_name(identifier):
+                    if identifier and normalized_mapped == normalize_server_name(
+                        identifier
+                    ):
                         return True
         return False
 
@@ -3619,8 +3638,8 @@ class MCPServerManager:
         self,
         server_name: str,
         name: str,
-        allowed_mcp_servers: Optional[Sequence[MCPServer]],
-    ) -> Tuple[MCPServer, ...]:
+        allowed_mcp_servers: Sequence[MCPServer] | None,
+    ) -> tuple[MCPServer, ...]:
         primary = self._resolve_mcp_server_for_tool_call(server_name, name)
 
         from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
@@ -3657,17 +3676,17 @@ class MCPServerManager:
         mcp_server: MCPServer,
         server_name: str,
         name: str,
-        arguments: Dict[str, Any],
-        user_api_key_auth: Optional[UserAPIKeyAuth],
-        mcp_auth_header: Optional[str],
-        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
-        proxy_logging_obj: Optional[ProxyLogging],
-        oauth2_headers: Optional[Dict[str, str]],
-        raw_headers: Optional[Dict[str, str]],
-        host_progress_callback: Optional[Callable],
+        arguments: dict[str, Any],
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_auth_header: str | None,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        proxy_logging_obj: ProxyLogging | None,
+        oauth2_headers: dict[str, str] | None,
+        raw_headers: dict[str, str] | None,
+        host_progress_callback: Callable | None,
         start_time: datetime.datetime,
     ) -> CallToolResult:
-        hook_result: Dict[str, Any] = {}
+        hook_result: dict[str, Any] = {}
         if proxy_logging_obj:
             hook_result = await self.pre_call_tool_check(
                 name=name,
@@ -3681,7 +3700,7 @@ class MCPServerManager:
             if "arguments" in hook_result:
                 arguments = hook_result["arguments"]
 
-        tasks: List = []
+        tasks: list = []
         if proxy_logging_obj:
             during_hook_task = self._create_during_hook_task(
                 name=name,
@@ -3735,15 +3754,15 @@ class MCPServerManager:
         self,
         server_name: str,
         name: str,
-        arguments: Dict[str, Any],
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-        mcp_auth_header: Optional[str] = None,
-        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
-        proxy_logging_obj: Optional[ProxyLogging] = None,
-        oauth2_headers: Optional[Dict[str, str]] = None,
-        raw_headers: Optional[Dict[str, str]] = None,
-        host_progress_callback: Optional[Callable] = None,
-        allowed_mcp_servers: Optional[Sequence[MCPServer]] = None,
+        arguments: dict[str, Any],
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        mcp_auth_header: str | None = None,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
+        proxy_logging_obj: ProxyLogging | None = None,
+        oauth2_headers: dict[str, str] | None = None,
+        raw_headers: dict[str, str] | None = None,
+        host_progress_callback: Callable | None = None,
+        allowed_mcp_servers: Sequence[MCPServer] | None = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -3769,7 +3788,7 @@ class MCPServerManager:
             allowed_mcp_servers=allowed_mcp_servers,
         )
 
-        last_error: Optional[BaseException] = None
+        last_error: BaseException | None = None
         for attempt_index, mcp_server in enumerate(ordered_servers):
             effective_server_name = server_name or mcp_server.name
             try:
@@ -3892,8 +3911,8 @@ class MCPServerManager:
 
     async def _gather_openapi_tool_tasks(
         self,
-        tasks: List[Any],
-        proxy_logging_obj: Optional[ProxyLogging],
+        tasks: list[Any],
+        proxy_logging_obj: ProxyLogging | None,
     ) -> CallToolResult:
         """Await OpenAPI tool tasks and return the tool call result."""
         try:

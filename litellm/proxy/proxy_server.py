@@ -7601,7 +7601,7 @@ class ProxyStartupEvent:
     @classmethod
     def _initialize_mcp_trust_scoring(
         cls,
-        litellm_settings: Dict[str, Any],
+        litellm_settings: dict[str, Any],
     ) -> None:
         from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
             initialize_mcp_trust_scoring_from_config,
