@@ -744,3 +744,464 @@ async def test_create__exception_calls_failure_hook(harness):
         ].args[0]
         == "provider boom"
     )
+
+
+# =========================================================================== #
+#                                                                             #
+#   GET /v1/batches/{batch_id}  -  retrieve_batch routing-contract tests      #
+#                                                                             #
+#   Same discipline as create_batch above. retrieve_batch has more seams: it  #
+#   first consults the ManagedObjectTable (get_batch_from_database) and may    #
+#   short-circuit on a terminal-status row WITHOUT ever calling a provider,    #
+#   then on a miss/non-terminal row routes to one of three downstream seams    #
+#   (litellm.aretrieve_batch via model creds, llm_router.aretrieve_batch, or   #
+#   litellm.aretrieve_batch via env-var provider) and writes the fresh state   #
+#   back via update_batch_in_database. Every test below locks exactly which    #
+#   of those seams fired and asserts the siblings did NOT, so a reordered or   #
+#   negated branch - or a dropped DB short-circuit / write-back - fails loud.  #
+#                                                                             #
+#   The DB seams (get_batch_from_database, update_batch_in_database,           #
+#   resolve_*_to_unified) are true prisma I/O boundaries and are mocked. The   #
+#   encode/decode/credential-merge helpers run for real, so payload and id     #
+#   round-trip assertions reflect production exactly.                          #
+# =========================================================================== #
+
+
+# A real model-encoded BATCH id: decodes to "azure/gpt-4o", strips to
+# "batch_orig123". Distinct from AZURE_FILE_ID so retrieve tests can't pass by
+# accidentally reusing the create fixture's value.
+AZURE_BATCH_ID = encode_file_id_with_model(
+    "batch_orig123", "azure/gpt-4o", id_type="batch"
+)
+
+# A realistic decoded unified batch id (what _is_base64_encoded_unified_file_id
+# returns). model_id / llm_batch_id are parsed out of this by the real helpers.
+UNIFIED_BATCH_ID = "litellm_proxy;model_id:gpt-4o-mini;llm_batch_id:batch-raw-xyz"
+
+
+@dataclass
+class RetrieveHarness:
+    """Seams for retrieve_batch. `data['data']` is the dict pre-call enrichment
+    returns; the routing branches mutate it, so it is reset per call."""
+
+    data: Dict[str, Any]
+    pre_call: AsyncMock
+    get_headers: MagicMock
+    provider_from_headers: MagicMock
+    provider_from_query: MagicMock
+    litellm_aretrieve: AsyncMock
+    router: MagicMock
+    logging: MagicMock
+    creds_resolver: MagicMock
+    get_batch_from_db: AsyncMock
+    update_batch_in_db: AsyncMock
+    resolve_input: AsyncMock
+    resolve_output: AsyncMock
+
+    @property
+    def router_aretrieve(self) -> AsyncMock:
+        return self.router.aretrieve_batch
+
+    def aretrieve_kwargs(self) -> Dict[str, Any]:
+        """Exact kwargs forwarded to litellm.aretrieve_batch."""
+        assert self.litellm_aretrieve.call_count == 1
+        return dict(self.litellm_aretrieve.call_args.kwargs)
+
+    def router_kwargs(self) -> Dict[str, Any]:
+        assert self.router_aretrieve.call_count == 1
+        return dict(self.router_aretrieve.call_args.kwargs)
+
+
+@pytest.fixture
+def retrieve_harness():
+    data_holder: Dict[str, Any] = {"data": {}}
+    logging = MagicMock(spec=ProxyLogging)
+    logging.post_call_success_hook = AsyncMock(side_effect=lambda **kw: kw["response"])
+    logging.post_call_failure_hook = AsyncMock()
+    logging.update_request_status = AsyncMock()
+    logging.get_proxy_hook = MagicMock(return_value=None)
+
+    router = MagicMock(spec=Router)
+    router.aretrieve_batch = AsyncMock(return_value=make_batch())
+    router.get_deployment_credentials_with_provider = MagicMock(
+        side_effect=_creds_lookup
+    )
+
+    pre_call = AsyncMock(side_effect=lambda **kw: (data_holder["data"], MagicMock()))
+    get_headers = MagicMock(return_value={})
+    provider_from_headers = MagicMock(return_value=None)
+    provider_from_query = MagicMock(return_value=None)
+    litellm_aretrieve = AsyncMock(return_value=make_batch())
+    # Default: DB miss -> always fall through to provider routing.
+    get_batch_from_db = AsyncMock(return_value=(None, None))
+    update_batch_in_db = AsyncMock(return_value=None)
+    resolve_input = AsyncMock(return_value=None)
+    resolve_output = AsyncMock(return_value=None)
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "common_processing_pre_call_logic",
+                pre_call,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                ProxyBaseLLMRequestProcessing, "get_custom_headers", get_headers
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                endpoints,
+                "get_custom_llm_provider_from_request_headers",
+                provider_from_headers,
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                endpoints,
+                "get_custom_llm_provider_from_request_query",
+                provider_from_query,
+            )
+        )
+        stack.enter_context(
+            patch.object(endpoints, "get_batch_from_database", get_batch_from_db)
+        )
+        stack.enter_context(
+            patch.object(endpoints, "update_batch_in_database", update_batch_in_db)
+        )
+        stack.enter_context(
+            patch.object(endpoints, "resolve_input_file_id_to_unified", resolve_input)
+        )
+        stack.enter_context(
+            patch.object(
+                endpoints, "resolve_output_file_ids_to_unified", resolve_output
+            )
+        )
+        stack.enter_context(patch.object(litellm, "aretrieve_batch", litellm_aretrieve))
+        stack.enter_context(
+            patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", False)
+        )
+        stack.enter_context(patch.object(proxy_server, "llm_router", router))
+        stack.enter_context(patch.object(proxy_server, "proxy_logging_obj", logging))
+        stack.enter_context(patch.object(proxy_server, "general_settings", {}))
+        stack.enter_context(patch.object(proxy_server, "proxy_config", MagicMock()))
+        stack.enter_context(patch.object(proxy_server, "version", "test-version"))
+        stack.enter_context(patch.object(proxy_server, "prisma_client", MagicMock()))
+
+        yield RetrieveHarness(
+            data=data_holder,
+            pre_call=pre_call,
+            get_headers=get_headers,
+            provider_from_headers=provider_from_headers,
+            provider_from_query=provider_from_query,
+            litellm_aretrieve=litellm_aretrieve,
+            router=router,
+            logging=logging,
+            creds_resolver=router.get_deployment_credentials_with_provider,
+            get_batch_from_db=get_batch_from_db,
+            update_batch_in_db=update_batch_in_db,
+            resolve_input=resolve_input,
+            resolve_output=resolve_output,
+        )
+
+
+async def call_retrieve(
+    harness: RetrieveHarness,
+    batch_id: str,
+    *,
+    provider: Optional[str] = None,
+    user: Optional[UserAPIKeyAuth] = None,
+    headers: Optional[Dict[str, str]] = None,
+    query: Optional[Dict[str, str]] = None,
+):
+    # Mirror the real flow: data starts as RetrieveBatchRequest(batch_id=...).
+    harness.data["data"] = {"batch_id": batch_id}
+    return await endpoints.retrieve_batch(
+        request=FakeRequest(headers=headers, query=query),
+        fastapi_response=Response(),
+        user_api_key_dict=user or UserAPIKeyAuth(api_key="sk-test"),
+        provider=provider,
+        batch_id=batch_id,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# SCENARIO 1 - batch id encoded with model. litellm.aretrieve_batch via the
+# model's resolved credentials; response ids re-encoded for the client.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_retrieve__model_encoded_id(retrieve_harness):
+    resp = await call_retrieve(retrieve_harness, AZURE_BATCH_ID)
+
+    # 1. DISPATCH - model-credential path fired via litellm, router did not.
+    assert retrieve_harness.litellm_aretrieve.call_count == 1
+    retrieve_harness.router_aretrieve.assert_not_called()
+
+    # 2. CREDENTIALS - resolved for the model decoded FROM the batch id.
+    retrieve_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+
+    # 3. SEAM PAYLOAD - exact, whole dict forwarded to the provider call.
+    #    Note `model` is the DECODED model, not the deployment from creds: the
+    #    endpoint overrides it (provider-config providers like bedrock need it).
+    assert retrieve_harness.aretrieve_kwargs() == {
+        "custom_llm_provider": "azure",
+        "batch_id": "batch_orig123",  # encoding stripped by this layer
+        "api_key": "sk-azure",
+        "api_base": "https://azure.test",
+        "model": "azure/gpt-4o",
+    }
+
+    # 4. OUTPUT SHAPE - ids re-encoded with the model for the round-trip.
+    assert resp.id == encode_file_id_with_model(
+        "batch-provider-id", "azure/gpt-4o", id_type="batch"
+    )
+
+    # write-back to the managed-object table happened, tagged as a retrieve.
+    assert retrieve_harness.update_batch_in_db.call_count == 1
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["operation"] == "retrieve"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__model_encoded_id__forwards_decoded_model_not_deployment(
+    retrieve_harness,
+):
+    """Regression guard for the line-483 override: the model forwarded to the
+    provider must be the decoded model id, never the deployment name that the
+    credential merge pulled in. Dropping the override silently 400s bedrock."""
+    await call_retrieve(retrieve_harness, AZURE_BATCH_ID)
+
+    assert retrieve_harness.aretrieve_kwargs()["model"] == "azure/gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__model_encoded_id__encodes_output_and_error_ids(
+    retrieve_harness,
+):
+    retrieve_harness.litellm_aretrieve.return_value = make_batch(
+        id="batch-xyz",
+        output_file_id="file-out-raw",
+        error_file_id="file-err-raw",
+    )
+
+    resp = await call_retrieve(retrieve_harness, AZURE_BATCH_ID)
+
+    assert resp.output_file_id == encode_file_id_with_model(
+        "file-out-raw", "azure/gpt-4o"
+    )
+    assert resp.error_file_id == encode_file_id_with_model(
+        "file-err-raw", "azure/gpt-4o"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrieve__model_encoded_beats_loadbalancing(retrieve_harness):
+    """Precedence: model-encoded id is checked before the loadbalancing/unified
+    elif, so it wins even with loadbalancing enabled."""
+    with patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", True):
+        await call_retrieve(retrieve_harness, AZURE_BATCH_ID)
+
+    assert retrieve_harness.litellm_aretrieve.call_count == 1
+    retrieve_harness.router_aretrieve.assert_not_called()
+    retrieve_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+
+
+# --------------------------------------------------------------------------- #
+# Unified managed batch id -> llm_router.aretrieve_batch. model_id is parsed
+# out of the unified id and stamped onto hidden params; raw file ids on the
+# response are resolved back to unified ids.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_retrieve__unified_batch_id_routes_to_router(retrieve_harness):
+    with patch.object(
+        endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID
+    ):
+        resp = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    # DISPATCH - router fired, direct litellm did not.
+    assert retrieve_harness.router_aretrieve.call_count == 1
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+    retrieve_harness.creds_resolver.assert_not_called()
+
+    # router receives the (still-encoded) batch id verbatim - this layer does
+    # not decode it for the unified path.
+    assert retrieve_harness.router_kwargs() == {"batch_id": "batch-unified-blob"}
+
+    # hidden params: unified id passed through, model_id parsed from it.
+    assert resp._hidden_params["unified_batch_id"] == UNIFIED_BATCH_ID
+    assert resp._hidden_params["model_id"] == "gpt-4o-mini"
+
+    # raw provider file ids on the response are resolved back to unified ids.
+    retrieve_harness.resolve_input.assert_called_once()
+    retrieve_harness.resolve_output.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__loadbalancing_raw_id_routes_to_router(retrieve_harness):
+    """Loadbalancing on + a plain (non-encoded, non-unified) batch id routes to
+    the router. Locks the current dispatch contract of the shared elif."""
+    with patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", True):
+        resp = await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    assert retrieve_harness.router_aretrieve.call_count == 1
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+    assert retrieve_harness.router_kwargs() == {"batch_id": "batch-raw-xyz"}
+    # not a unified id -> hidden param reflects that, no model_id stamped.
+    assert resp._hidden_params["unified_batch_id"] is False
+    assert "model_id" not in resp._hidden_params
+    # not a unified id -> no file-id resolution.
+    retrieve_harness.resolve_input.assert_not_called()
+    retrieve_harness.resolve_output.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# SCENARIO 3 - fallback to custom_llm_provider (env-var creds). MUST NOT touch
+# the credential resolver or the router.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_retrieve__fallback_default_openai(retrieve_harness):
+    await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    assert retrieve_harness.litellm_aretrieve.call_count == 1
+    retrieve_harness.router_aretrieve.assert_not_called()
+    retrieve_harness.creds_resolver.assert_not_called()  # inverse-bug guard
+    assert retrieve_harness.aretrieve_kwargs() == {
+        "custom_llm_provider": "openai",
+        "batch_id": "batch-raw-xyz",
+    }
+    assert retrieve_harness.update_batch_in_db.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retrieve__fallback_provider_path_param(retrieve_harness):
+    await call_retrieve(retrieve_harness, "batch-raw-xyz", provider="anthropic")
+
+    retrieve_harness.creds_resolver.assert_not_called()
+    assert retrieve_harness.aretrieve_kwargs()["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__fallback_provider_from_header(retrieve_harness):
+    retrieve_harness.provider_from_headers.return_value = "bedrock"
+
+    await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    assert retrieve_harness.aretrieve_kwargs()["custom_llm_provider"] == "bedrock"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__fallback_provider_from_query(retrieve_harness):
+    retrieve_harness.provider_from_query.return_value = "vertex_ai"
+
+    await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    assert retrieve_harness.aretrieve_kwargs()["custom_llm_provider"] == "vertex_ai"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__fallback_provider_precedence_path_over_header(
+    retrieve_harness,
+):
+    """provider path param beats the header-derived provider."""
+    retrieve_harness.provider_from_headers.return_value = "bedrock"
+
+    await call_retrieve(retrieve_harness, "batch-raw-xyz", provider="anthropic")
+
+    assert retrieve_harness.aretrieve_kwargs()["custom_llm_provider"] == "anthropic"
+
+
+# --------------------------------------------------------------------------- #
+# ManagedObjectTable short-circuit. A terminal-status DB row is returned
+# immediately - no provider call, no write-back. A non-terminal row falls
+# through to a provider sync.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status", ["completed", "complete", "failed", "cancelled", "expired"]
+)
+async def test_retrieve__db_terminal_state_short_circuits(retrieve_harness, status):
+    # "complete" is the DB-normalized alias of "completed"; it is not a valid
+    # constructor literal but reaches the endpoint via a stored row, so set it
+    # post-construction to exercise that exact branch.
+    db_response = make_batch(id="batch-from-db", status="completed")
+    db_response.status = status
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(), db_response)
+
+    resp = await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    # No provider seam fired, and no write-back (the row is already terminal).
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+    retrieve_harness.router_aretrieve.assert_not_called()
+    retrieve_harness.update_batch_in_db.assert_not_called()
+    # The DB object is what the client gets back.
+    assert resp is db_response
+
+
+@pytest.mark.asyncio
+async def test_retrieve__db_terminal_unified_resolves_file_ids(retrieve_harness):
+    db_response = make_batch(id="batch-from-db", status="completed")
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(), db_response)
+
+    with patch.object(
+        endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID
+    ):
+        await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    # Terminal short-circuit still resolves raw provider file ids to unified.
+    retrieve_harness.resolve_input.assert_called_once()
+    retrieve_harness.resolve_output.assert_called_once()
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+    retrieve_harness.router_aretrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__db_non_terminal_state_syncs_with_provider(retrieve_harness):
+    """A non-terminal DB row must NOT short-circuit; the endpoint syncs with the
+    provider to refresh state."""
+    db_response = make_batch(id="batch-from-db", status="validating")
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(), db_response)
+
+    await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    # Provider sync happened despite the DB hit.
+    assert retrieve_harness.litellm_aretrieve.call_count == 1
+    assert retrieve_harness.update_batch_in_db.call_count == 1
+
+
+# --------------------------------------------------------------------------- #
+# Cross-cutting: enrichment route_type and failure-hook on provider error.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_retrieve__uses_aretrieve_batch_route_type(retrieve_harness):
+    await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    assert (
+        retrieve_harness.pre_call.call_args.kwargs["route_type"] == "aretrieve_batch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrieve__exception_calls_failure_hook(retrieve_harness):
+    retrieve_harness.litellm_aretrieve.side_effect = ValueError("provider boom")
+
+    with pytest.raises(Exception):
+        await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    retrieve_harness.logging.post_call_failure_hook.assert_called_once()
+    assert (
+        retrieve_harness.logging.post_call_failure_hook.call_args.kwargs[
+            "original_exception"
+        ].args[0]
+        == "provider boom"
+    )
