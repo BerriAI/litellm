@@ -251,6 +251,17 @@ async def anthropic_messages(
             prompt_variables=None,
             dynamic_callback_params={},
         )
+        # The hook pops `cache_control_injection_points` from
+        # `request_kwargs` once all message-level points are consumed; if
+        # non-message points (e.g. `tool_config`) remain, the hook
+        # re-inserts the key. Sync the outer `kwargs` so stale entries
+        # don't leak downstream — see greptile P1 on #30615.
+        if "cache_control_injection_points" in request_kwargs:
+            kwargs["cache_control_injection_points"] = request_kwargs[
+                "cache_control_injection_points"
+            ]
+        else:
+            kwargs.pop("cache_control_injection_points", None)
 
     # Extract modified parameters. Pop every named param of `anthropic_messages`
     # that we may forward explicitly downstream, so we (a) honor pre-request hook

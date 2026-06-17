@@ -165,6 +165,66 @@ async def test_anthropic_messages_applies_cache_control_injection_points():
     assert msgs[-1].get("cache_control") is None
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_does_not_leak_cache_control_injection_points_kwarg():
+    """Regression test for the greptile P1 finding on #30615.
+
+    After the AnthropicCacheControlHook runs, `cache_control_injection_points`
+    must NOT be in the kwargs that are forwarded to the dispatch handler.
+    The hook consumes all message-level points and pops the key from
+    `request_kwargs`; if the caller's outer `kwargs` dict still has the
+    key, it will be passed downstream to anthropic_messages_handler and
+    may be re-applied or sent to the backend, leading to double-injection
+    or unexpected behavior.
+
+    The fix: after the hook call, sync the outer `kwargs` with
+    `request_kwargs` — if the hook re-inserted the key (for non-message
+    points like tool_config), keep the updated value; otherwise pop it
+    from the outer kwargs.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "u"},
+    ]
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        captured["messages"] = kwargs.get("messages")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=msgs,
+            model="vertex_ai/claude-opus-4-6",
+            custom_llm_provider="vertex_ai-anthropic_models",
+            api_key="k",
+            cache_control_injection_points=[
+                {"location": "message", "role": "system"},
+            ],
+        )
+
+    # cache_control_injection_points must NOT leak into the dispatch kwargs
+    # when the hook has consumed all points. (If non-message points remained,
+    # the hook would re-insert it and we'd see it; but the test config has
+    # only message-level points, so the hook fully consumes the list.)
+    assert "cache_control_injection_points" not in captured["kwargs"], (
+        f"cache_control_injection_points leaked into dispatch kwargs: "
+        f"{captured['kwargs'].get('cache_control_injection_points')!r}. "
+        f"The hook consumes all message-level points and pops the key, "
+        f"so it must not appear in the outer kwargs after the hook runs."
+    )
+
+
 async def _async_return(value):
     return value
 
