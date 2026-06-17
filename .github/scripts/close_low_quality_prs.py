@@ -49,6 +49,7 @@ from typing import Iterable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
+    ALLOWLIST_LOGINS,
     GRACE_COMMENT_MARKER,
     GRACE_PERIOD_SECONDS,
     GREPTILE_BOT_LOGINS,
@@ -338,12 +339,13 @@ def evaluate_pr(
     min_score: int,
     repo: str | None,
     optout_labels: set[str],
+    allowlist: frozenset[str] = ALLOWLIST_LOGINS,
 ) -> tuple[str, int | None, int | None]:
     """Decide what to do with `pr` on this triage run.
 
     Returns (action, score_or_none, age_days_or_none) where action is one of:
-        "skip-too-young", "skip-optout-label", "skip-internal",
-        "skip-no-greptile-score", "skip-score-ok",
+        "skip-too-young", "skip-optout-label", "skip-not-allowlisted",
+        "skip-internal", "skip-no-greptile-score", "skip-score-ok",
         "warn-grace", "skip-in-grace-period", or "close".
 
     Drafts are NOT skipped — the goal is "open PR count == PRs internal
@@ -373,9 +375,15 @@ def evaluate_pr(
     if min_age_days > 0 and age_days < min_age_days:
         return ("skip-too-young", None, age_days)
 
-    # Only auto-close external OSS contributors. Internal contributors
-    # (BerriAI org members) handle their own backlog.
-    if not is_external_pr_author(pr, repo):
+    # While the allowlist is active it is the sole author gate: only those
+    # logins are acted on and the external-only restriction is bypassed for
+    # them. Otherwise auto-close only external OSS contributors — internal
+    # contributors (BerriAI org members) handle their own backlog.
+    login = ((pr.get("author") or {}).get("login") or "").lower()
+    if allowlist:
+        if login not in allowlist:
+            return ("skip-not-allowlisted", None, age_days)
+    elif not is_external_pr_author(pr, repo):
         return ("skip-internal", None, age_days)
 
     comments = fetch_pr_comments(pr["number"], repo)
@@ -387,7 +395,6 @@ def evaluate_pr(
     if score >= min_score:
         return ("skip-score-ok", score, age_days)
 
-    login = ((pr.get("author") or {}).get("login") or "").lower()
     if login in IMMEDIATE_CLOSE_LOGINS:
         return ("close", score, age_days)
 
@@ -477,6 +484,7 @@ def main() -> int:
         "skip-in-grace-period": 0,
         "skip-too-young": 0,
         "skip-optout-label": 0,
+        "skip-not-allowlisted": 0,
         "skip-internal": 0,
         "skip-no-greptile-score": 0,
         "skip-score-ok": 0,

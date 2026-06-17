@@ -695,7 +695,7 @@ class TestTriageOrchestration:
             "body": "PR body",
             "state": "open",
             "author_association": "NONE",
-            "user": {"login": "outside-dev"},
+            "user": {"login": "mateo-berri"},
         }
         base.update(overrides)
         return base
@@ -716,6 +716,7 @@ class TestTriageOrchestration:
             close=True,
             model="m",
             judge=boom,
+            allowlist=frozenset(),
         )
         assert result["action"] == "skip-internal-author"
 
@@ -1199,6 +1200,7 @@ class TestTriageOrchestration:
             model="m",
             judge=lambda p: pytest.fail("LLM must not run for internal author"),
             reconsider=True,
+            allowlist=frozenset(),
         )
         assert result["action"] == "skip-internal-author"
 
@@ -1341,7 +1343,7 @@ class TestTriageOrchestration:
             "body": "## Repro\n```bash\ncurl ...\n```\n\nExpected X, got Y.",
             "state": "closed",
             "author_association": "NONE",
-            "user": {"login": "outside"},
+            "user": {"login": "mateo-berri"},
         }
         monkeypatch.setattr(triage_module, "fetch_issue", lambda repo, n: issue)
         self._stub_reconsider_guards(triage_module, monkeypatch)
@@ -1380,7 +1382,7 @@ class TestTriageOrchestration:
             "body": "no detail",
             "state": "open",
             "author_association": "NONE",
-            "user": {"login": "outside"},
+            "user": {"login": "mateo-berri"},
         }
         monkeypatch.setattr(triage_module, "fetch_issue", lambda repo, n: issue)
         # Grace already aged out -> close path. (Issues use the same
@@ -1658,9 +1660,10 @@ class TestTriageOrchestration:
     def test_should_not_treat_random_external_login_as_immediate_close(
         self, triage_module, monkeypatch
     ):
-        # Sanity check — the bypass must NOT fire for any login other
-        # than the explicitly-listed test accounts.
-        pr = self._make_pr(body="thin", user={"login": "random-oss-dev"})
+        # Sanity check — the immediate-close bypass must NOT fire for an
+        # allowlisted account that isn't in IMMEDIATE_CLOSE_LOGINS; it still
+        # goes through the normal grace path.
+        pr = self._make_pr(body="thin", user={"login": "mateo-berri"})
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
         self._stub_grace_no_warning(triage_module, monkeypatch)
         posted = {}
@@ -1914,3 +1917,75 @@ class TestSecondsSinceLastGraceWarning:
         age = triage_module.seconds_since_last_grace_warning("o/r", 1)
         # Newer warning is 5 minutes (300s) before "now".
         assert age == 300.0
+
+
+class TestTriageAllowlist:
+    """The dogfood allowlist gates `triage`: while non-empty it is the sole
+    author filter (only the named accounts are acted on) and it bypasses the
+    internal-author exemption for them, so a maintainer can dogfood on their
+    own org account. Emptying it restores the internal-author skip."""
+
+    def _make_pr(self, **overrides):
+        base = {
+            "number": 1,
+            "title": "PR title",
+            "body": "Body with no linked issue and no QA proof.",
+            "state": "open",
+            "author_association": "NONE",
+            "user": {"login": "mateo-berri"},
+        }
+        base.update(overrides)
+        return base
+
+    def test_should_skip_author_not_on_allowlist(self, triage_module, monkeypatch):
+        pr = self._make_pr(user={"login": "random-oss-dev"})
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run for non-allowlisted author"),
+        )
+        assert result["action"] == "skip-not-allowlisted"
+
+    def test_should_act_on_allowlisted_internal_author(
+        self, triage_module, monkeypatch
+    ):
+        pr = self._make_pr(author_association="MEMBER", user={"login": "mateo-berri"})
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=lambda p: json.dumps(
+                {"verdict": "pass", "missing": [], "explanation": "ok"}
+            ),
+        )
+        assert result["action"] == "pass-llm"
+
+    def test_empty_allowlist_restores_internal_skip(self, triage_module, monkeypatch):
+        pr = self._make_pr(
+            author_association="MEMBER", user={"login": "krrishdholakia"}
+        )
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run for internal author"),
+            allowlist=frozenset(),
+        )
+        assert result["action"] == "skip-internal-author"
+
+    def test_allowlist_constant_is_the_two_dogfood_accounts(self, triage_module):
+        assert triage_module.ALLOWLIST_LOGINS == frozenset(
+            {"mateo-berri", "swiftwinds"}
+        )
+        for login in triage_module.ALLOWLIST_LOGINS:
+            assert login == login.lower(), login

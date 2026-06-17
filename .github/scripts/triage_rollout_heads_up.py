@@ -47,6 +47,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 from _agent_shin_actions import maybe_post_comment  # noqa: E402
 from agent_shin_shared import (  # noqa: E402
     AGENT_SHIN_DEFAULT_BOT_LOGIN,
+    ALLOWLIST_LOGINS,
     list_open_items,
 )
 from triage_with_llm import (  # noqa: E402
@@ -326,6 +327,7 @@ def _process_one(
     dry_run: bool,
     judge: Any = None,
     skip_marker_check: bool = False,
+    allowlist: frozenset[str] = ALLOWLIST_LOGINS,
 ) -> dict:
     """Evaluate one PR/issue and post a heads-up if it would be auto-closed.
 
@@ -337,7 +339,11 @@ def _process_one(
 
     if (item.get("state") or "") != "open":
         return {**base, "action": "skip-not-open"}
-    if is_internal_contributor(item):
+    if allowlist:
+        login = (item.get("user") or {}).get("login") or ""
+        if login.lower() not in allowlist:
+            return {**base, "action": "skip-not-allowlisted"}
+    elif is_internal_contributor(item):
         return {**base, "action": "skip-internal-author"}
     if not skip_marker_check and _has_heads_up_marker(item):
         return {**base, "action": "skip-already-marked-in-body"}

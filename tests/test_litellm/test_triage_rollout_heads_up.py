@@ -263,7 +263,7 @@ class TestProcessOne:
         install(
             {
                 "state": "open",
-                "user": {"login": "mateo-berri"},
+                "user": {"login": "krrishdholakia"},
                 "author_association": "MEMBER",
                 "body": "",
                 "labels": [],
@@ -277,6 +277,7 @@ class TestProcessOne:
             model="m",
             cutoff=dt.date(2026, 6, 1),
             dry_run=True,
+            allowlist=frozenset(),
         )
         assert r["action"] == "skip-internal-author"
         assert posts == []
@@ -286,7 +287,7 @@ class TestProcessOne:
         install(
             {
                 "state": "open",
-                "user": {"login": "outside-dev"},
+                "user": {"login": "mateo-berri"},
                 "author_association": "NONE",
                 "body": "Fixes #123 — clean fix with a passing rubric.",
                 "labels": [],
@@ -321,7 +322,7 @@ class TestProcessOne:
         install(
             {
                 "state": "open",
-                "user": {"login": "outside-dev"},
+                "user": {"login": "mateo-berri"},
                 "author_association": "NONE",
                 "body": "thin",
                 "labels": [],
@@ -362,7 +363,7 @@ class TestProcessOne:
         install(
             {
                 "state": "open",
-                "user": {"login": "outside-dev"},
+                "user": {"login": "mateo-berri"},
                 "author_association": "NONE",
                 "body": "X is broken",
                 "labels": [],
@@ -399,7 +400,7 @@ class TestProcessOne:
         install(
             {
                 "state": "open",
-                "user": {"login": "outside-dev"},
+                "user": {"login": "mateo-berri"},
                 "author_association": "NONE",
                 "body": "thin",
                 "labels": [],
@@ -428,7 +429,7 @@ class TestProcessOne:
         install(
             {
                 "state": "open",
-                "user": {"login": "outside-dev"},
+                "user": {"login": "mateo-berri"},
                 "author_association": "NONE",
                 "body": "thin",
                 "labels": [],
@@ -486,7 +487,7 @@ class TestRun:
 
         monkeypatch.setattr(heads_up_module, "_list_open_numbers", fake_list)
 
-        def make_item(login="outside-dev"):
+        def make_item(login="mateo-berri"):
             return {
                 "state": "open",
                 "user": {"login": login},
