@@ -30,10 +30,10 @@ help:
 	@echo "  make lint-basedpyright-budget-update - Re-capture the basedpyright per-rule budget (ratchet)"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
 	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its ceiling"
-	@echo "  make lint-any           - Gate changed files under litellm/ against their per-file Any budget"
+	@echo "  make lint-any           - Gate changed files under litellm/ against their per-file Any/object budgets"
 	@echo "  make lint-ruff-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
-	@echo "  make lint-budget-update - Re-capture all four ratchet budgets (ruff + mypy + basedpyright + any)"
-	@echo "  make lint-any-budget-update - Re-capture the per-file Any budget across the whole tree (ratchet)"
+	@echo "  make lint-budget-update - Re-capture all four ratchet budgets (ruff + mypy + basedpyright + any/object)"
+	@echo "  make lint-any-budget-update - Re-capture the per-file Any/object budgets across the whole tree (ratchet)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -147,7 +147,7 @@ lint-ruff-budget: install-dev
 lint-ruff-budget-update: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py --update
 
-# Ratchet all four budgets in one shot (ruff strict + mypy + basedpyright + any)
+# Ratchet all budgets in one shot (ruff strict + mypy + basedpyright + any/object)
 lint-budget-update: lint-ruff-budget-update lint-mypy-budget-update lint-basedpyright-budget-update lint-any-budget-update
 
 lint-any: install-dev

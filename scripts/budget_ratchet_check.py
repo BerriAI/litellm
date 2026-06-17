@@ -47,13 +47,16 @@ DEFAULT_BUDGETS: tuple[str, ...] = (
     "mypy-code-budget.json",
     "basedpyright-code-budget.json",
     "any-discipline-budget.json",
+    "object-discipline-budget.json",
 )
 
 # File-keyed budgets whose gate treats an absent entry as ceiling 0 (the file
 # must stay clean). Dropping an entry there is a tightening, not the "untracked,
 # now unbounded" loosening a vanished rule is for the rule-keyed budgets, so a
 # dropped entry must not read as a regression.
-ZERO_FLOOR_BUDGETS: frozenset[str] = frozenset({"any-discipline-budget.json"})
+ZERO_FLOOR_BUDGETS: frozenset[str] = frozenset(
+    {"any-discipline-budget.json", "object-discipline-budget.json"}
+)
 
 
 class Regression(NamedTuple):
@@ -80,7 +83,12 @@ def _load_head(rel: str) -> dict | None:
 
 
 def _ref_is_commit(ref: str) -> bool:
-    return _run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]).returncode == 0
+    return (
+        _run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]
+        ).returncode
+        == 0
+    )
 
 
 def _load_base(rel: str, ref: str) -> dict | None:
@@ -117,9 +125,15 @@ def regressions_for(rel: str, base: dict | None, head: dict | None) -> list[Regr
     for rule, base_cap in sorted(base_caps.items()):
         if rule not in head_caps:
             if not drop_floors_to_zero:
-                out.append(Regression(rel, rule, f"rule dropped (ceiling {base_cap} -> removed)"))
+                out.append(
+                    Regression(
+                        rel, rule, f"rule dropped (ceiling {base_cap} -> removed)"
+                    )
+                )
         elif head_caps[rule] > base_cap:
-            out.append(Regression(rel, rule, f"ceiling raised {base_cap} -> {head_caps[rule]}"))
+            out.append(
+                Regression(rel, rule, f"ceiling raised {base_cap} -> {head_caps[rule]}")
+            )
     return out
 
 
@@ -153,7 +167,9 @@ def main() -> int:
         regressions.extend(regressions_for(rel, base, head))
 
     if regressions:
-        print(f"FAIL: budget ceiling(s) loosened vs base {args.base} (merge-base {ref[:12]}):")
+        print(
+            f"FAIL: budget ceiling(s) loosened vs base {args.base} (merge-base {ref[:12]}):"
+        )
         for reg in regressions:
             print(f"  {reg.budget}  {reg.rule}: {reg.detail}")
         print(
