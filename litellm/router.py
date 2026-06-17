@@ -11986,11 +11986,12 @@ class Router:
 
     def get_allowed_fails_from_policy(self, exception: Exception):
         """
-        BadRequestErrorRetries: Optional[int] = None
-        AuthenticationErrorRetries: Optional[int] = None
-        TimeoutErrorRetries: Optional[int] = None
-        RateLimitErrorRetries: Optional[int] = None
-        ContentPolicyViolationErrorRetries: Optional[int] = None
+        AuthenticationErrorAllowedFails: Optional[int] = None
+        TimeoutErrorAllowedFails: Optional[int] = None
+        RateLimitErrorAllowedFails: Optional[int] = None
+        ContentPolicyViolationErrorAllowedFails: Optional[int] = None
+        InternalServerErrorAllowedFails: Optional[int] = None
+        BadRequestErrorAllowedFails: Optional[int] = None
         """
         # if we can find the exception then in the retry policy -> return the number of retries
         allowed_fails_policy: Optional[AllowedFailsPolicy] = self.allowed_fails_policy
