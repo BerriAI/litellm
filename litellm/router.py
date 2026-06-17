@@ -1975,6 +1975,13 @@ class Router:
                 self.routing_strategy_pre_call_checks(deployment=deployment)
 
             _strip_deployment_owned_credential_kwargs(kwargs)
+            # When the caller redirected api_base/base_url, recompute litellm_params
+            # so the deployment's own api_key is cleared and not sent to the client
+            # endpoint, and drop the cached client built for the admin endpoint.
+            if is_clientside_credential(request_kwargs=kwargs):
+                litellm_params = get_dynamic_litellm_params(litellm_params, kwargs)
+                if "api_base" in kwargs or "base_url" in kwargs:
+                    model_client = None
             input_kwargs = {
                 **litellm_params,
                 "messages": messages,
@@ -3015,6 +3022,13 @@ class Router:
             self.total_calls[model_name] += 1
 
             _strip_deployment_owned_credential_kwargs(kwargs)
+            # When the caller redirected api_base/base_url, recompute litellm_params
+            # so the deployment's own api_key is cleared and not sent to the client
+            # endpoint, and drop the cached client built for the admin endpoint.
+            if is_clientside_credential(request_kwargs=kwargs):
+                litellm_params = get_dynamic_litellm_params(litellm_params, kwargs)
+                if "api_base" in kwargs or "base_url" in kwargs:
+                    model_client = None
             input_kwargs = {
                 **litellm_params,
                 "messages": messages,

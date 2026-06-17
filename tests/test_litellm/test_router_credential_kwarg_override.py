@@ -158,3 +158,86 @@ async def test_router_strips_caller_credential_kwargs_before_merge_async():
     _, forwarded = mock_acompletion.call_args
     assert "vertex_project" in forwarded
     assert forwarded["vertex_project"] == "deployment-value"
+
+
+def _router_with_admin_key() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-deployment-secret",
+                    "api_base": "https://admin.example/v1",
+                },
+            }
+        ]
+    )
+
+
+def test_router_clears_deployment_api_key_on_base_override():
+    """A caller who redirects api_base without supplying a key must not have the
+    deployment's own api_key forwarded to the caller-controlled endpoint.
+
+    Captures the kwargs actually forwarded to litellm.completion (the merged
+    input_kwargs). Pre-fix the deployment api_key rode along to the new base;
+    asserting it is gone rejects that.
+    """
+    router = _router_with_admin_key()
+    mock_response = litellm.ModelResponse(choices=[{"message": {"content": "ok"}}])
+    mock_completion = MagicMock(return_value=mock_response)
+
+    with patch.object(litellm, "completion", mock_completion):
+        router._completion(
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"model_group": "primary"},
+            api_base="https://caller.example/v1",
+        )
+
+    assert mock_completion.call_count == 1
+    _, forwarded = mock_completion.call_args
+    assert forwarded.get("api_base") == "https://caller.example/v1"
+    assert forwarded.get("api_key") != "sk-deployment-secret"
+
+
+def test_router_forwards_caller_api_key_on_base_override():
+    """When the caller supplies their own key alongside the base override, that
+    key is used, not the deployment's."""
+    router = _router_with_admin_key()
+    mock_response = litellm.ModelResponse(choices=[{"message": {"content": "ok"}}])
+    mock_completion = MagicMock(return_value=mock_response)
+
+    with patch.object(litellm, "completion", mock_completion):
+        router._completion(
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"model_group": "primary"},
+            api_base="https://caller.example/v1",
+            api_key="sk-caller-byok",
+        )
+
+    assert mock_completion.call_count == 1
+    _, forwarded = mock_completion.call_args
+    assert forwarded.get("api_key") == "sk-caller-byok"
+
+
+@pytest.mark.asyncio
+async def test_router_clears_deployment_api_key_on_base_override_async():
+    """Async variant of the base-override key clearing."""
+    router = _router_with_admin_key()
+    mock_response = litellm.ModelResponse(choices=[{"message": {"content": "ok"}}])
+    mock_acompletion = AsyncMock(return_value=mock_response)
+
+    with patch.object(litellm, "acompletion", mock_acompletion):
+        await router._acompletion(
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"model_group": "primary"},
+            api_base="https://caller.example/v1",
+        )
+
+    assert mock_acompletion.call_count == 1
+    _, forwarded = mock_acompletion.call_args
+    assert forwarded.get("api_base") == "https://caller.example/v1"
+    assert forwarded.get("api_key") != "sk-deployment-secret"
