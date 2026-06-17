@@ -58,11 +58,8 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
 
     ## CALCULATE OUTPUT COST
     output_cost_per_token = _safe_float_cast(model_info.get("output_cost_per_token"))
-    completion_cost: float = (usage.completion_tokens or 0) * output_cost_per_token
 
-    ## ADD REASONING TOKENS COST (if present)
     reasoning_tokens = getattr(usage, "reasoning_tokens", 0) or 0
-    # Also check completion_tokens_details if reasoning_tokens is not directly available
     if (
         reasoning_tokens == 0
         and hasattr(usage, "completion_tokens_details")
@@ -73,9 +70,19 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         )
 
     reasoning_cost_value = model_info.get("output_cost_per_reasoning_token")
+
+    # `completion_tokens` includes `reasoning_tokens` per the OpenAI/Perplexity usage
+    # convention (codified for the central path in PR #18607). When a reasoning rate is
+    # configured we subtract before the output-rate multiplication so the reasoning
+    # tokens are not billed twice.
     if reasoning_tokens > 0 and reasoning_cost_value is not None:
-        reasoning_cost_per_token = _safe_float_cast(reasoning_cost_value)
-        completion_cost += reasoning_tokens * reasoning_cost_per_token
+        non_reasoning_completion_tokens = max(
+            0, (usage.completion_tokens or 0) - reasoning_tokens
+        )
+        completion_cost: float = non_reasoning_completion_tokens * output_cost_per_token
+        completion_cost += reasoning_tokens * _safe_float_cast(reasoning_cost_value)
+    else:
+        completion_cost = (usage.completion_tokens or 0) * output_cost_per_token
 
     ## ADD SEARCH QUERIES COST (if present)
     num_search_queries = 0
