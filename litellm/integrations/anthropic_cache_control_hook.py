@@ -27,6 +27,11 @@ else:
     LiteLLMLoggingObj = Any
 
 
+# Anthropic (and Bedrock Claude) reject requests with more than 4 cache_control
+# breakpoints: "A maximum of 4 blocks with cache_control may be provided."
+MAX_CACHE_CONTROL_BLOCKS = 4
+
+
 class AnthropicCacheControlHook(CustomPromptManagement):
     def get_chat_completion_prompt(
         self,
@@ -61,15 +66,29 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         processed_messages = copy.deepcopy(messages)
 
         # Separate message-level and non-message-level injection points
-        remaining_points = []
+        message_points: List[CacheControlMessageInjectionPoint] = []
+        remaining_points: List[CacheControlInjectionPoint] = []
         for point in injection_points:
             if point.get("location") == "message":
-                point = cast(CacheControlMessageInjectionPoint, point)
-                processed_messages = self._process_message_injection(
-                    point=point, messages=processed_messages
-                )
+                message_points.append(cast(CacheControlMessageInjectionPoint, point))
             else:
                 remaining_points.append(point)
+
+        # Non-message points (currently Bedrock tool_config) are handled in the
+        # provider transform, where each tool_config point appends at most one
+        # cachePoint to the tools. That block also counts toward Anthropic's
+        # limit, so reserve a slot for it here to leave room.
+        reserved_blocks = (
+            1
+            if any(p.get("location") == "tool_config" for p in remaining_points)
+            else 0
+        )
+
+        processed_messages = self._apply_message_injections(
+            points=message_points,
+            messages=processed_messages,
+            max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
+        )
 
         # Pass through non-message injection points for provider-specific handling
         if remaining_points:
@@ -78,14 +97,71 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return model, processed_messages, non_default_params
 
     @staticmethod
-    def _process_message_injection(
-        point: CacheControlMessageInjectionPoint, messages: List[AllMessageValues]
+    def _apply_message_injections(
+        points: List[CacheControlMessageInjectionPoint],
+        messages: List[AllMessageValues],
+        max_blocks: int,
     ) -> List[AllMessageValues]:
-        """Process message-level cache control injection."""
-        control: ChatCompletionCachedContent = point.get(
-            "control", None
-        ) or ChatCompletionCachedContent(type="ephemeral")
+        """Apply message-level cache control injection points in order.
 
+        Anthropic allows at most ``MAX_CACHE_CONTROL_BLOCKS`` cache_control
+        breakpoints per request. Client-supplied breakpoints count toward that
+        limit, so we never inject onto a message that already carries
+        cache_control (preserving the client's TTL) and we stop injecting once
+        ``max_blocks`` is reached. Injection points are honored in config order,
+        so earlier points win when slots are scarce.
+        """
+        used_blocks = sum(
+            AnthropicCacheControlHook._count_cache_control_blocks(msg)
+            for msg in messages
+        )
+
+        limit_reached = False
+        for point in points:
+            if used_blocks >= max_blocks:
+                limit_reached = True
+                break
+
+            control: ChatCompletionCachedContent = point.get(
+                "control", None
+            ) or ChatCompletionCachedContent(type="ephemeral")
+
+            for target_index in AnthropicCacheControlHook._resolve_target_indices(
+                point=point, messages=messages
+            ):
+                if used_blocks >= max_blocks:
+                    limit_reached = True
+                    break
+
+                if AnthropicCacheControlHook._message_has_cache_control(
+                    messages[target_index]
+                ):
+                    # Client already marked this message; don't overwrite it.
+                    continue
+
+                messages[target_index] = (
+                    AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                        messages[target_index], control
+                    )
+                )
+                used_blocks += 1
+
+            if limit_reached:
+                break
+
+        if limit_reached:
+            verbose_logger.warning(
+                f"AnthropicCacheControlHook: Reached the Anthropic limit of "
+                f"{MAX_CACHE_CONTROL_BLOCKS} cache_control blocks. Skipping further injection."
+            )
+
+        return messages
+
+    @staticmethod
+    def _resolve_target_indices(
+        point: CacheControlMessageInjectionPoint, messages: List[AllMessageValues]
+    ) -> List[int]:
+        """Resolve which message indices an injection point targets."""
         _targetted_index: Optional[Union[int, str]] = point.get("index", None)
         targetted_index: Optional[int] = None
         if isinstance(_targetted_index, str):
@@ -96,36 +172,49 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         else:
             targetted_index = _targetted_index
 
-        targetted_role = point.get("role", None)
-
         # Case 1: Target by specific index
         if targetted_index is not None:
             original_index = targetted_index
-            # Handle negative indices (convert to positive)
             if targetted_index < 0:
                 targetted_index += len(messages)
 
             if 0 <= targetted_index < len(messages):
-                messages[targetted_index] = (
-                    AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                        messages[targetted_index], control
-                    )
-                )
-            else:
-                verbose_logger.warning(
-                    f"AnthropicCacheControlHook: Provided index {original_index} is out of bounds for message list of length {len(messages)}. "
-                    f"Targeted index was {targetted_index}. Skipping cache control injection for this point."
-                )
+                return [targetted_index]
+
+            verbose_logger.warning(
+                f"AnthropicCacheControlHook: Provided index {original_index} is out of bounds for message list of length {len(messages)}. "
+                f"Targeted index was {targetted_index}. Skipping cache control injection for this point."
+            )
+            return []
+
         # Case 2: Target by role
-        elif targetted_role is not None:
-            for msg in messages:
-                if msg.get("role") == targetted_role:
-                    msg = (
-                        AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                            message=msg, control=control
-                        )
-                    )
-        return messages
+        targetted_role = point.get("role", None)
+        if targetted_role is not None:
+            return [
+                idx
+                for idx, msg in enumerate(messages)
+                if msg.get("role") == targetted_role
+            ]
+
+        return []
+
+    @staticmethod
+    def _count_cache_control_blocks(message: AllMessageValues) -> int:
+        """Count cache_control breakpoints on a message (message + content level)."""
+        count = 0
+        if message.get("cache_control") is not None:
+            count += 1
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("cache_control") is not None:
+                    count += 1
+        return count
+
+    @staticmethod
+    def _message_has_cache_control(message: AllMessageValues) -> bool:
+        """Return True if the message already carries any cache_control."""
+        return AnthropicCacheControlHook._count_cache_control_blocks(message) > 0
 
     @staticmethod
     def _safe_insert_cache_control_in_message(

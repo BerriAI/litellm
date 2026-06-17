@@ -6,9 +6,8 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components/networking";
-import OldTeams from "@/components/OldTeams";
-import { fetchUserModels, CreateKeyPrefillData } from "@/components/organisms/create_key_button";
-import Organizations, { fetchOrganizations } from "@/components/organizations";
+import { CreateKeyPrefillData } from "@/components/organisms/create_key_button";
+import { fetchOrganizations } from "@/components/organizations";
 import PassThroughSettings from "@/components/pass_through_settings";
 import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
 import Usage from "@/components/usage";
@@ -32,7 +31,6 @@ function CreateKeyPageContent() {
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<null | any[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [userModels, setUserModels] = useState<string[]>([]);
 
   const router = useRouter();
   const searchParams = useSearchParams()!;
@@ -172,9 +170,6 @@ function CreateKeyPageContent() {
   }, [token]);
 
   useEffect(() => {
-    if (accessToken && userID && userRole) {
-      fetchUserModels(userID, userRole, accessToken, setUserModels);
-    }
     if (accessToken && userID && userRole) {
       v2TeamListCall(accessToken, 1, 100, {
         userID: userRole !== "Admin" && userRole !== "Admin Viewer" ? userID : null,
@@ -321,26 +316,6 @@ function CreateKeyPageContent() {
               setModelData={setModelData}
               premiumUser={premiumUser}
               teams={teams}
-            />
-          ) : page == "teams" ? (
-            <OldTeams
-              teams={teams}
-              setTeams={setTeams}
-              accessToken={accessToken}
-              userID={userID}
-              userRole={userRole}
-              organizations={organizations}
-              premiumUser={premiumUser}
-              searchParams={searchParams}
-            />
-          ) : page == "organizations" ? (
-            <Organizations
-              organizations={organizations}
-              setOrganizations={setOrganizations}
-              userModels={userModels}
-              accessToken={accessToken}
-              userRole={userRole}
-              premiumUser={premiumUser}
             />
           ) : page == "pass-through-settings" ? (
             <PassThroughSettings

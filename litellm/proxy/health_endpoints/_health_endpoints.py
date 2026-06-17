@@ -167,7 +167,7 @@ async def test_endpoint(request: Request):
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def health_services_endpoint(  # noqa: PLR0915
+async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     service: services = fastapi.Query(description="Specify the service being hit."),
 ):
