@@ -76,7 +76,11 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     fetchUISettings();
 
     // Set base URL
-    const base = new URL("/", window.location.href);
+    const base = new URL(window.location.href);
+    const uiPathIndex = base.pathname.indexOf("/ui");
+    base.pathname = uiPathIndex >= 0 ? base.pathname.slice(0, uiPathIndex + 1) : "/";
+    base.search = "";
+    base.hash = "";
     setBaseUrl(base.toString());
   }, [accessToken]);
 
@@ -364,7 +368,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             if (!uiSettings?.SSO_ENABLED) {
               // Regular invitation flow
               const invitationData = await invitationCreateCall(accessToken, user_id);
-              const invitationUrl = new URL(`/ui?invitation_id=${invitationData.id}`, baseUrl).toString();
+              const invitationUrl = new URL(`ui?invitation_id=${invitationData.id}`, baseUrl).toString();
 
               setParsedData((current) =>
                 current.map((u, i) =>
@@ -380,7 +384,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
               );
             } else {
               // SSO flow - just use the base URL
-              const invitationUrl = new URL("/ui", baseUrl).toString();
+              const invitationUrl = new URL("ui", baseUrl).toString();
 
               setParsedData((current) =>
                 current.map((u, i) =>
