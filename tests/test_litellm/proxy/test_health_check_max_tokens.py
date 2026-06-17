@@ -454,3 +454,22 @@ def test_bedrock_chat_without_mode_still_injects_max_tokens_and_pins_provider():
     assert updated["max_tokens"] == 5
     assert updated["custom_llm_provider"] == "bedrock"
     assert updated["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+def test_bedrock_prefix_strip_preserves_explicit_custom_llm_provider():
+    """An operator-set provider (e.g. bedrock_converse) must survive the prefix strip.
+
+    The pin only fills in a provider when the deployment left it blank; it must
+    not clobber a more specific one, otherwise a converse deployment would be
+    probed against the Invoke endpoint and report a spurious failure.
+    """
+    updated = _update_litellm_params_for_health_check(
+        {},
+        {
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "custom_llm_provider": "bedrock_converse",
+        },
+    )
+
+    assert updated["custom_llm_provider"] == "bedrock_converse"
+    assert updated["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"

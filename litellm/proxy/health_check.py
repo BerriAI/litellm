@@ -452,7 +452,7 @@ def _update_litellm_params_for_health_check(
       reject unknown fields with 400 "Unknown parameter: 'max_tokens'".
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
-    - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
+    - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
     """
     litellm_params["messages"] = _get_random_llm_message()
     if _should_inject_health_check_max_tokens(
@@ -510,7 +510,10 @@ def _update_litellm_params_for_health_check(
 
         model = "/".join(filtered_parts)
         litellm_params["model"] = model
-        litellm_params["custom_llm_provider"] = "bedrock"  # any-ok: untyped router dict
+        if not litellm_params.get("custom_llm_provider"):  # any-ok: untyped router dict
+            litellm_params["custom_llm_provider"] = (  # any-ok: untyped router dict
+                "bedrock"
+            )
 
     return litellm_params
 
