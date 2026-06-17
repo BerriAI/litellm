@@ -210,6 +210,7 @@ from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image_edit.handler import BedrockImageEdit
 from .llms.bedrock.image_generation.image_handler import BedrockImageGeneration
 from .llms.bytez.chat.transformation import BytezChatConfig
+from .llms.gdc.chat.transformation import GDCGeminiConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
@@ -318,6 +319,7 @@ google_batch_embeddings = GoogleBatchEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_gemma_chat_completion = VertexAIGemmaModels()
 vertex_model_garden_chat_completion = VertexAIModelGardenModels()
+gdc_transformation = GDCGeminiConfig()
 # vertex_text_to_speech is now replaced by VertexAITextToSpeechConfig
 sagemaker_llm = SagemakerLLM()
 watsonx_chat_completion = WatsonXChatHandler()
@@ -5532,6 +5534,33 @@ def completion(  # type: ignore
             response = _complete_snowflake(_dispatch_ctx)
         elif custom_llm_provider == "gradient_ai":
             response = _complete_gradient_ai(_dispatch_ctx)
+
+        elif custom_llm_provider == "gdc":
+            api_key = (
+                api_key
+                or litellm.gdc_key
+                or get_secret_str("GDC_API_KEY")
+                or litellm.api_key
+            )
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=_get_encoding(),
+                stream=stream,
+                provider_config=gdc_transformation,
+            )
 
         elif custom_llm_provider == "bytez":
             response = _complete_bytez(_dispatch_ctx)
