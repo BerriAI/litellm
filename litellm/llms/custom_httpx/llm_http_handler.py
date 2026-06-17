@@ -231,6 +231,35 @@ def _has_pre_call_deployment_hook(logging_obj: Any) -> bool:
     return False
 
 
+def _is_json_serializable(value: object) -> bool:
+    try:
+        json.dumps(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def dumps_anthropic_messages_request_body(request_body: dict[str, object]) -> str:
+    """Serialize the /v1/messages body, dropping non-serializable values that a
+    callback added to metadata after validation (e.g. a Sentry span); those
+    belong in logs, not on the wire."""
+    try:
+        return json.dumps(request_body)
+    except (TypeError, ValueError):
+        metadata = request_body.get("metadata")
+        if not isinstance(metadata, dict):
+            raise
+        typed_metadata = cast(dict[str, object], metadata)
+        serializable_metadata = {key: value for key, value in typed_metadata.items() if _is_json_serializable(value)}
+        dropped = sorted(typed_metadata.keys() - serializable_metadata.keys())
+        if dropped:
+            verbose_logger.debug(
+                "Anthropic /v1/messages: dropped non-serializable metadata key(s) %s",
+                dropped,
+            )
+        return json.dumps({**request_body, "metadata": serializable_metadata})
+
+
 class BaseLLMHTTPHandler:
     async def _make_common_async_call(
         self,
@@ -1888,7 +1917,7 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=request_url,
                     headers=headers,
-                    data=signed_json_body or json.dumps(request_body),
+                    data=signed_json_body or dumps_anthropic_messages_request_body(request_body),
                     stream=stream or False,
                     logging_obj=logging_obj,
                 )
@@ -2043,15 +2072,11 @@ class BaseLLMHTTPHandler:
             model=model,
         )
 
-        # The request body was serialized once for the pre-call log input and
-        # again for the wire (json.dumps is O(payload), large for long-context
-        # Claude Code history). Serialize once and reuse for both. Only when
-        # the provider didn't sign the request (sign_request no-op for the
-        # native anthropic path -> signed_json_body is None); signed providers
-        # (e.g. Bedrock) keep their signed body untouched. The HTTP-error
-        # retry path mutates + re-signs the body, so it still re-serializes
-        # internally -- this only deduplicates the success path.
-        request_body_json = json.dumps(request_body)
+        # json.dumps is O(payload) and costly for long Claude Code histories,
+        # so serialize once here for the pre-call log and reuse it for the wire
+        # on the unsigned path (native anthropic -> signed_json_body is None).
+        # Signed providers (e.g. Bedrock) send their own signed body instead.
+        request_body_json = dumps_anthropic_messages_request_body(request_body)
 
         logging_obj.pre_call(
             input=[{"role": "user", "content": request_body_json}],
