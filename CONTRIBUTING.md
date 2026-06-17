@@ -155,7 +155,6 @@ Individual linting commands:
 make format-check       # Check Black formatting
 make lint-ruff          # Run Ruff linting
 make lint-basedpyright  # Run basedpyright type checking
-make lint-any           # Gate changed files against their per-file Any budget
 make check-circular-imports    # Check for circular imports
 make check-import-safety       # Check import safety
 ```

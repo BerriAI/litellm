@@ -2844,7 +2844,7 @@ async def make_call(
         sync_stream=False,
         logging_obj=logging_obj,
         response_headers=response.headers,
-        response=response,  # any-ok: untyped stream
+        response=response,
     )
     # LOGGING
     logging_obj.post_call(
@@ -2888,7 +2888,7 @@ def make_sync_call(
         sync_stream=True,
         logging_obj=logging_obj,
         response_headers=response.headers,
-        response=response,  # any-ok: untyped stream
+        response=response,
     )
 
     # LOGGING
@@ -3661,16 +3661,14 @@ class ModelResponseIterator:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     async def aclose(self) -> None:
-        iterator = getattr(  # any-ok: untyped stream
+        iterator = getattr(
             self,
             "async_response_iterator",
-            self.streaming_response,  # any-ok: untyped stream
+            self.streaming_response,
         )
-        if iterator is not None and hasattr(  # any-ok: untyped stream
-            iterator, "aclose"  # any-ok: untyped stream
-        ):
+        if iterator is not None and hasattr(iterator, "aclose"):
             try:
-                await iterator.aclose()  # any-ok: untyped stream
+                await iterator.aclose()
             except Exception as e:  # noqa: BLE001
                 verbose_logger.debug(
                     "ModelResponseIterator.aclose: error closing iterator: %s", e
@@ -3684,14 +3682,10 @@ class ModelResponseIterator:
                 )
 
     def close(self) -> None:
-        iterator = getattr(  # any-ok: untyped stream
-            self, "response_iterator", self.streaming_response  # any-ok: untyped stream
-        )
-        if iterator is not None and hasattr(  # any-ok: untyped stream
-            iterator, "close"  # any-ok: untyped stream
-        ):
+        iterator = getattr(self, "response_iterator", self.streaming_response)
+        if iterator is not None and hasattr(iterator, "close"):
             try:
-                iterator.close()  # any-ok: untyped stream
+                iterator.close()
             except Exception as e:  # noqa: BLE001
                 verbose_logger.debug(
                     "ModelResponseIterator.close: error closing iterator: %s", e

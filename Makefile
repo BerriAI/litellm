@@ -6,7 +6,7 @@
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
 	lint-basedpyright lint-basedpyright-budget-update \
-	lint-ruff-budget lint-any lint-ruff-budget-update lint-budget-update lint-any-budget-update \
+	lint-ruff-budget lint-ruff-budget-update lint-budget-update \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
@@ -28,10 +28,8 @@ help:
 	@echo "  make lint-basedpyright-budget-update - Re-capture the basedpyright per-rule budget (ratchet)"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
 	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its ceiling"
-	@echo "  make lint-any           - Gate changed files under litellm/ against their per-file Any budget"
 	@echo "  make lint-ruff-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
-	@echo "  make lint-budget-update - Re-capture all ratchet budgets (ruff + basedpyright + any)"
-	@echo "  make lint-any-budget-update - Re-capture the per-file Any budget across the whole tree (ratchet)"
+	@echo "  make lint-budget-update - Re-capture all ratchet budgets (ruff + basedpyright)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -139,14 +137,8 @@ lint-ruff-budget: install-dev
 lint-ruff-budget-update: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py --update
 
-# Ratchet all budgets in one shot (ruff strict + basedpyright + any)
-lint-budget-update: lint-ruff-budget-update lint-basedpyright-budget-update lint-any-budget-update
-
-lint-any: install-dev
-	$(UV_RUN) python scripts/check_any_discipline.py --changed
-
-lint-any-budget-update: install-dev
-	$(UV_RUN) python scripts/check_any_discipline.py --update
+# Ratchet all budgets in one shot (ruff strict + basedpyright)
+lint-budget-update: lint-ruff-budget-update lint-basedpyright-budget-update
 
 check-circular-imports: install-dev
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
@@ -155,10 +147,10 @@ check-import-safety: install-dev
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
 # Combined linting (matches test-linting.yml workflow)
-lint: format-check lint-ruff lint-basedpyright check-circular-imports check-import-safety lint-ruff-budget lint-any
+lint: format-check lint-ruff lint-basedpyright check-circular-imports check-import-safety lint-ruff-budget
 
 # Faster linting for local development (only checks changed code)
-lint-dev: lint-format-changed lint-any check-circular-imports check-import-safety
+lint-dev: lint-format-changed check-circular-imports check-import-safety
 
 # Testing targets
 test: install-test-deps

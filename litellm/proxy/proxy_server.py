@@ -894,7 +894,7 @@ async def proxy_startup_event(app: FastAPI):
     if transaction_buffer_redis_cache is None:
         transaction_buffer_redis_cache = (
             ProxyStartupEvent._get_transaction_buffer_redis_cache(
-                general_settings=general_settings  # any-ok: untyped stream
+                general_settings=general_settings
             )
         )
 
@@ -7080,9 +7080,7 @@ async def async_data_generator(
         # happened to ship a streaming-iterator override (the default).
         needs_iterator_wrap = proxy_logging_obj.needs_iterator_wrap()
         needs_per_chunk_hook = proxy_logging_obj.needs_per_chunk_streaming_hook()
-        is_raw_sse_stream = bool(
-            request_data.get("_litellm_raw_sse_stream")  # any-ok: untyped stream
-        )
+        is_raw_sse_stream = bool(request_data.get("_litellm_raw_sse_stream"))
         raw_sse_buffer = ""
 
         if needs_iterator_wrap:
@@ -7121,26 +7119,26 @@ async def async_data_generator(
                         frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
                         if frame is None:
                             break
-                        yield frame  # any-ok: untyped stream
+                        yield frame
                     if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
                         raise ValueError(
                             "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
                         )
                     continue
                 if chunk.startswith(("data:", "event:", ":")):
-                    yield (  # any-ok: untyped stream
+                    yield (
                         chunk
                         if chunk.endswith(_SSE_FRAME_DELIMITERS)
                         else chunk + "\n\n"
                     )
                     continue
-            elif isinstance(chunk, str) and is_raw_sse_stream:  # any-ok: untyped stream
+            elif isinstance(chunk, str) and is_raw_sse_stream:
                 raw_sse_buffer += chunk
                 while True:
                     frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
                     if frame is None:
                         break
-                    yield frame  # any-ok: untyped stream
+                    yield frame
                 if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
                     raise ValueError(
                         "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
@@ -7163,7 +7161,7 @@ async def async_data_generator(
             ProxyLogging._fire_deferred_stream_logging(request_data)
 
         if raw_sse_buffer:
-            yield (  # any-ok: untyped stream
+            yield (
                 raw_sse_buffer
                 if raw_sse_buffer.endswith(_SSE_FRAME_DELIMITERS)
                 else raw_sse_buffer + "\n\n"
@@ -7229,8 +7227,8 @@ async def async_data_generator(
 
         await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
             request=request,
-            request_data=request_data,  # any-ok: untyped stream
-            response=response,  # any-ok: untyped stream
+            request_data=request_data,
+            response=response,
             stream_completed=stream_completed,
             client_disconnected=client_disconnected,
         )
@@ -7351,10 +7349,8 @@ class ProxyStartupEvent:
         from litellm._redis import _redis_kwargs_from_environment
         from litellm.secret_managers.main import str_to_bool
 
-        _use_redis_transaction_buffer: bool | str | None = (
-            general_settings.get(  # any-ok: untyped stream
-                "use_redis_transaction_buffer", False
-            )
+        _use_redis_transaction_buffer: bool | str | None = general_settings.get(
+            "use_redis_transaction_buffer", False
         )
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
@@ -7362,14 +7358,11 @@ class ProxyStartupEvent:
         if not _use_redis_transaction_buffer:
             return None
 
-        redis_env_kwargs = _redis_kwargs_from_environment()  # any-ok: untyped stream
-        if (
-            "host" not in redis_env_kwargs  # any-ok: untyped stream
-            and "url" not in redis_env_kwargs  # any-ok: untyped stream
-        ):
+        redis_env_kwargs = _redis_kwargs_from_environment()
+        if "host" not in redis_env_kwargs and "url" not in redis_env_kwargs:
             return None
 
-        return RedisCache(**redis_env_kwargs)  # any-ok: untyped stream
+        return RedisCache(**redis_env_kwargs)
 
     @classmethod
     async def _initialize_semantic_tool_filter(

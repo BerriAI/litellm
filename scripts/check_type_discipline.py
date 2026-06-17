@@ -25,10 +25,8 @@ LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  type/pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
-LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` / `# any-ok`
-        suppression without a reason. (`any-ok` belongs to check_any_discipline.py;
-        it is enumerated here so the reason requirement holds even when only this
-        stdlib checker runs.)
+LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok`
+        suppression without a reason.
 LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equivalent
         of TypeScript's `as`); it lies to the type checker with zero runtime guarantee.
         Validate into a concrete frozen type at the boundary instead.
@@ -41,9 +39,8 @@ LIT008  `**kwargs` parameter. The keyword contract is erased and everything it c
         syntax. Declare explicit keyword params, or accept one frozen payload. `*args`,
         by contrast, is fine when typed (it's just a tuple). Suppress: `# kwargs-ok: <reason>`.
 
-LIT000 and LIT009 are the sibling Any gate's (check_any_discipline.py, #30379): a mypy
-build/read failure and an Any-typed value. They share this LIT namespace but are emitted
-by that checker, not this one.
+LIT000  Setup failure: a target file could not be read, or contains a syntax error.
+        Reported as a violation rather than crashing the run.
  
 Usage
 -----
@@ -105,17 +102,13 @@ MUTABLE_OK_RE = re.compile(r"#\s*mutable-ok(?::\s*(?P<reason>.*))?")
 CAST_OK_RE = re.compile(r"#\s*cast-ok(?::\s*(?P<reason>.*))?")
 GUARD_OK_RE = re.compile(r"#\s*guard-ok(?::\s*(?P<reason>.*))?")
 KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
-ANY_OK_RE = re.compile(r"#\s*any-ok(?::\s*(?P<reason>.*))?")
 
-# Suppression tokens that must each carry a reason (LIT005). `any-ok` is owned by
-# check_any_discipline.py but listed here so the reason requirement is enforced even
-# when only this stdlib checker runs.
+# Suppression tokens that must each carry a reason (LIT005).
 OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("mutable-ok", MUTABLE_OK_RE),
     ("cast-ok", CAST_OK_RE),
     ("guard-ok", GUARD_OK_RE),
     ("kwargs-ok", KWARGS_OK_RE),
-    ("any-ok", ANY_OK_RE),
 )
  
  
