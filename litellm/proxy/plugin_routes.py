@@ -6,14 +6,16 @@ the litellm proxy server.
 
 Config (in litellm config.yaml general_settings):
   plugins:
-    - name: agent-control-plane
+    - name: my-plugin
       url: "http://localhost:3210"
-      display_name: "Agent Control Plane"
+      display_name: "My Plugin"
       plugin_key: "sk-..."   # optional: plugin's own auth key
 """
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
 router = APIRouter()
@@ -32,12 +34,13 @@ def register_plugins_from_config(general_settings: dict) -> None:
 
 
 @router.get("/api/plugins", tags=["plugins"])
-async def list_plugins(request: Request) -> list:
-    """Return registered plugins for UI discovery.
+async def list_plugins(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> list:
+    """Return registered plugins for authenticated UI callers.
 
-    plugin_key is only returned to authenticated requests.
+    plugin_key is only returned to callers with a valid litellm token.
     """
-    authed = bool(request.headers.get("Authorization") or request.cookies.get("token"))
     result = []
     for name, plugin in _plugin_registry.items():
         entry: dict = {
@@ -45,7 +48,7 @@ async def list_plugins(request: Request) -> list:
             "display_name": plugin.get("display_name", name),
             "url": plugin.get("url", ""),
         }
-        if authed and plugin.get("plugin_key"):
+        if plugin.get("plugin_key"):
             entry["plugin_key"] = plugin["plugin_key"]
         result.append(entry)
     return result
@@ -57,8 +60,13 @@ async def list_plugins(request: Request) -> list:
     tags=["plugins"],
     include_in_schema=False,
 )
-async def plugin_proxy(plugin_name: str, path: str, request: Request) -> Response:
-    """Reverse-proxy any request to the registered plugin's backend."""
+async def plugin_proxy(
+    plugin_name: str,
+    path: str,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> Response:
+    """Authenticated reverse-proxy to a registered plugin backend."""
     plugin = _plugin_registry.get(plugin_name)
     if not plugin:
         return Response(

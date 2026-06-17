@@ -524,9 +524,9 @@ export interface paths {
         };
         /**
          * List Plugins
-         * @description Return registered plugins for UI discovery.
+         * @description Return registered plugins for authenticated UI callers.
          *
-         *     plugin_key is only returned to authenticated requests.
+         *     plugin_key is only returned to callers with a valid litellm token.
          */
         get: operations["list_plugins_api_plugins_get"];
         put?: never;
@@ -8898,37 +8898,37 @@ export interface paths {
         };
         /**
          * Plugin Proxy
-         * @description Reverse-proxy any request to the registered plugin's backend.
+         * @description Authenticated reverse-proxy to a registered plugin backend.
          */
         get: operations["plugin_proxy_plugin_proxy__plugin_name___path__get"];
         /**
          * Plugin Proxy
-         * @description Reverse-proxy any request to the registered plugin's backend.
+         * @description Authenticated reverse-proxy to a registered plugin backend.
          */
         put: operations["plugin_proxy_plugin_proxy__plugin_name___path__put"];
         /**
          * Plugin Proxy
-         * @description Reverse-proxy any request to the registered plugin's backend.
+         * @description Authenticated reverse-proxy to a registered plugin backend.
          */
         post: operations["plugin_proxy_plugin_proxy__plugin_name___path__post"];
         /**
          * Plugin Proxy
-         * @description Reverse-proxy any request to the registered plugin's backend.
+         * @description Authenticated reverse-proxy to a registered plugin backend.
          */
         delete: operations["plugin_proxy_plugin_proxy__plugin_name___path__delete"];
         /**
          * Plugin Proxy
-         * @description Reverse-proxy any request to the registered plugin's backend.
+         * @description Authenticated reverse-proxy to a registered plugin backend.
          */
         options: operations["plugin_proxy_plugin_proxy__plugin_name___path__options"];
         /**
          * Plugin Proxy
-         * @description Reverse-proxy any request to the registered plugin's backend.
+         * @description Authenticated reverse-proxy to a registered plugin backend.
          */
         head: operations["plugin_proxy_plugin_proxy__plugin_name___path__head"];
         /**
          * Plugin Proxy
-         * @description Reverse-proxy any request to the registered plugin's backend.
+         * @description Authenticated reverse-proxy to a registered plugin backend.
          */
         patch: operations["plugin_proxy_plugin_proxy__plugin_name___path__patch"];
         trace?: never;
