@@ -294,10 +294,4 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
-  repelloai: {
-    provider: "Repelloai",
-    guardrailNameSuggestion: "RepelloAI Argus",
-    mode: "pre_call",
-    defaultOn: false,
-  },
 };
