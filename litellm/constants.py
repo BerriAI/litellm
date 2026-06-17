@@ -611,6 +611,7 @@ LITELLM_CHAT_PROVIDERS = [
     "meta_llama",
     "featherless_ai",
     "nscale",
+    "atlas_cloud",
     "nebius",
     "dashscope",
     "moonshot",
@@ -766,6 +767,7 @@ openai_compatible_endpoints: List = [
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
+    "api.atlascloud.ai/v1",
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
@@ -826,6 +828,7 @@ openai_compatible_providers: List = [
     "chutes",  # Chutes - JSON-configured provider
     "featherless_ai",
     "nscale",
+    "atlas_cloud",
     "nebius",
     "dashscope",
     "moonshot",

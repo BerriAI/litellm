@@ -284,6 +284,7 @@ LLM_CONFIG_NAMES = (
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
+    "AtlasCloudConfig",
     "PerplexityChatConfig",
     "AzureOpenAIO1Config",
     "IBMWatsonXAIConfig",
@@ -1083,6 +1084,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "LmStudioEmbeddingConfig",
     ),
     "NscaleConfig": (".llms.nscale.chat.transformation", "NscaleConfig"),
+    "AtlasCloudConfig": (
+        ".llms.atlas_cloud.chat.transformation",
+        "AtlasCloudConfig",
+    ),
     "PerplexityChatConfig": (
         ".llms.perplexity.chat.transformation",
         "PerplexityChatConfig",

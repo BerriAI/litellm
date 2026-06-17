@@ -8293,6 +8293,7 @@ class ProviderConfigManager:
             ),
             LlmProviders.GRADIENT_AI: (lambda: litellm.GradientAIConfig(), False),
             LlmProviders.NSCALE: (lambda: litellm.NscaleConfig(), False),
+            LlmProviders.ATLAS_CLOUD: (lambda: litellm.AtlasCloudConfig(), False),
             LlmProviders.HEROKU: (lambda: litellm.HerokuChatConfig(), False),
             LlmProviders.OCI: (lambda: litellm.OCIChatConfig(), False),
             LlmProviders.HYPERBOLIC: (lambda: litellm.HyperbolicChatConfig(), False),
