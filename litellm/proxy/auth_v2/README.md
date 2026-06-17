@@ -16,8 +16,9 @@ the scheme, the subject, scopes/claims from the token, and, for exchangeable bea
 tokens, the raw token for downstream RFC 8693 token exchange.
 
 `Principal` is what the route handler receives: a normalized identity with the user,
-organization, teams, roles and scopes filled in. It holds identity only, no budget or
-policy state. Scope checking lives here as `Principal.has_required_scopes`.
+organization, teams, project, end user, roles and scopes filled in. It holds identity
+only, no budget or policy state. Scope checking lives here as
+`Principal.has_required_scopes`.
 
 The split matters: authentication proves the credential, resolution turns the proven
 credential into a known identity, and only then can authorization run.

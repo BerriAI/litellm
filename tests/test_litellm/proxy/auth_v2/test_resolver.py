@@ -77,6 +77,37 @@ async def test_api_key_resolves_to_principal_with_db_role():
     assert principal.roles == [Role.ORG_ADMIN]
 
 
+async def test_api_key_principal_carries_project_and_end_user():
+    raw = "sk-live-proj"
+    key = UserAPIKeyAuth(
+        token=hash_token(raw),
+        user_id="u-1",
+        project_id="proj-1",
+        project_alias="Acme Prod",
+        end_user_id="cust-7",
+    )
+    store = _store({hash_token(raw): key})
+
+    principal = await store.resolve(_api_key_credential(raw))
+
+    assert principal.project is not None
+    assert principal.project.id == "proj-1"
+    assert principal.project.name == "Acme Prod"
+    assert principal.end_user is not None
+    assert principal.end_user.id == "cust-7"
+
+
+async def test_api_key_principal_omits_project_and_end_user_when_absent():
+    raw = "sk-live-bare"
+    key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-1")
+    store = _store({hash_token(raw): key})
+
+    principal = await store.resolve(_api_key_credential(raw))
+
+    assert principal.project is None
+    assert principal.end_user is None
+
+
 async def test_api_key_lookup_is_keyed_on_hashed_token():
     raw = "sk-live-abc"
     key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-1")

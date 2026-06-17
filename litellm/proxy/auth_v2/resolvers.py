@@ -17,9 +17,11 @@ from litellm.proxy.auth_v2 import errors
 from litellm.proxy.auth_v2.models import (
     AuthMethod,
     Credential,
+    EndUserIdentity,
     OrganizationIdentity,
     Principal,
     PrincipalType,
+    ProjectIdentity,
     TeamIdentity,
     TeamRole,
     UserIdentity,
@@ -160,6 +162,14 @@ class DbIdentityStore(IdentityStore):
             if key.user_id is not None
             else None
         )
+        project = (
+            ProjectIdentity(id=key.project_id, name=key.project_alias)
+            if key.project_id is not None
+            else None
+        )
+        end_user = (
+            EndUserIdentity(id=key.end_user_id) if key.end_user_id is not None else None
+        )
         mapped = map_role(key.user_role)
         return Principal(
             principal_type=(
@@ -170,6 +180,8 @@ class DbIdentityStore(IdentityStore):
             user=user,
             organization=organization,
             teams=teams,
+            project=project,
+            end_user=end_user,
             roles=[mapped] if mapped else [],
             scopes=list(credential.scopes),
             auth_method=credential.method,
