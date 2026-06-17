@@ -6,7 +6,7 @@ and be proxied through the litellm proxy server.
 
 Config (in litellm config.yaml general_settings):
   plugins:
-    - name: agent-control-plane
+    - name: litellm-platform-plugin
       url: "http://localhost:3210"
       display_name: "Agent Control Plane"
 """

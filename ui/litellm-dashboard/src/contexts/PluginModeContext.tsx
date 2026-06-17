@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from "react";
 
-export type PluginMode = "ai-gateway" | "agent-control-plane";
+export type PluginMode = "ai-gateway" | "litellm-platform-plugin";
 
 export interface PluginNavItem {
   key: string;
@@ -48,7 +48,7 @@ export function PluginModeProvider({ children }: { children: React.ReactNode }) 
 
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY) as PluginMode | null;
-    if (stored === "agent-control-plane" || stored === "ai-gateway") {
+    if (stored === "litellm-platform-plugin" || stored === "ai-gateway") {
       setModeState(stored);
     }
     const storedUrl = localStorage.getItem(AGENT_URL_KEY);

@@ -13,6 +13,7 @@ import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext"
 
 function AgentControlPlaneView() {
   const { agentPlatformUrl, agentPlatformPath } = usePluginMode();
+  const { accessToken } = useAuth();
 
   if (!agentPlatformUrl) {
     return (
@@ -25,7 +26,9 @@ function AgentControlPlaneView() {
     );
   }
 
-  const iframeSrc = `${agentPlatformUrl}${agentPlatformPath}`;
+  // Pass litellm access token so agent platform auto-authenticates — no separate login
+  const params = accessToken ? `?token=${encodeURIComponent(accessToken)}` : "";
+  const iframeSrc = `${agentPlatformUrl}${agentPlatformPath}${params}`;
 
   return (
     <iframe
@@ -71,7 +74,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <div className="mt-2">
           <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
         </div>
-        {mode === "agent-control-plane" ? (
+        {mode === "litellm-platform-plugin" ? (
           <div className="flex-1 flex">
             <AgentControlPlaneView />
           </div>

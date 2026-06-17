@@ -658,7 +658,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const modeOptions = [
     { value: "ai-gateway" as PluginMode, label: "AI Gateway" },
-    { value: "agent-control-plane" as PluginMode, label: "Agent Control Plane" },
+    { value: "litellm-platform-plugin" as PluginMode, label: "Agent Control Plane" },
   ];
 
   return (
@@ -694,7 +694,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 borderRadius: "6px",
                 background: "#f5f5f5",
               }}
-              onClick={() => setMode(mode === "ai-gateway" ? "agent-control-plane" : "ai-gateway")}
+              onClick={() => setMode(mode === "ai-gateway" ? "litellm-platform-plugin" : "ai-gateway")}
             >
               <SwapOutlined style={{ fontSize: 16, color: "#6b7280" }} />
             </div>
