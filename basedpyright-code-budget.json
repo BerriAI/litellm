@@ -72,7 +72,7 @@
     "slack": 3
   },
   "reportMissingParameterType": {
-    "baseline": 3933,
+    "baseline": 3945,
     "slack": 10
   },
   "reportMissingTypeArgument": {
