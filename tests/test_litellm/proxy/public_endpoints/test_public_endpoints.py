@@ -201,6 +201,58 @@ def test_anthropic_provider_fields_support_byok():
     ), "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
 
 
+def test_google_ai_studio_provider_fields_expose_api_base():
+    """The Google AI Studio (gemini) credential form must let admins set a custom
+    api_base so they can point at a Gemini-compatible gateway (e.g. a self-hosted
+    proxy at /v1beta) without env var access.
+
+    The runtime gemini provider already supports custom api_base via
+    `vertex_llm_base._check_custom_proxy`; the UI just needs to expose the field.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    google_ai = next(
+        (p for p in providers if p["provider"] == "Google_AI_Studio"), None
+    )
+    assert google_ai is not None, "Google_AI_Studio provider entry not found"
+    assert google_ai["litellm_provider"] == "gemini"
+
+    fields_by_key = {f["key"]: f for f in google_ai["credential_fields"]}
+    assert "api_key" in fields_by_key
+    assert "api_base" in fields_by_key, (
+        "Google_AI_Studio provider form must expose api_base so admins can "
+        "point at a Gemini-compatible gateway without env var access."
+    )
+
+    api_base_field = fields_by_key["api_base"]
+    assert api_base_field["required"] is False
+    assert api_base_field["field_type"] == "text"
+    # default_value MUST be null (not the canonical URL): saving it as the
+    # default would persist v1beta into every credential record and bypass
+    # `_get_gemini_url`'s automatic v1alpha routing for Gemini 3+ models. The
+    # placeholder shows the canonical URL so users still get the visual hint.
+    # (See greptileai threads on PR #30419.)
+    assert api_base_field["default_value"] is None
+    assert (
+        api_base_field["placeholder"]
+        == "https://generativelanguage.googleapis.com/v1beta"
+    )
+
+    # UI forms render fields in credential_fields order; api_base should come
+    # first so an admin sees the URL override before the key field (matches
+    # OpenAI and Anthropic conventions).
+    field_order = [f["key"] for f in google_ai["credential_fields"]]
+    assert field_order.index("api_base") < field_order.index(
+        "api_key"
+    ), "api_base must appear before api_key in credential_fields."
+
+
 def test_public_model_hub_with_healthy_model():
     """Test that health information is populated for a healthy model"""
     app = FastAPI()

@@ -257,7 +257,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         return request_data
 
-    def transform_response(  # noqa: PLR0915
+    def transform_response(
         self,
         model: str,
         raw_response: httpx.Response,

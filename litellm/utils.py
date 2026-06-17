@@ -488,7 +488,7 @@ def print_verbose(
         elif log_level == "ERROR":
             verbose_logger.error(print_statement)
         if litellm.set_verbose is True and logger_only is False:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
     except Exception:
         pass
 
@@ -760,7 +760,7 @@ def _remove_thought_signatures_from_messages(
     return processed_messages
 
 
-def function_setup(  # noqa: PLR0915
+def function_setup(
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
     ### NOTICES ###
@@ -1422,12 +1422,12 @@ def post_call_processing(
         raise e
 
 
-def client(original_function):  # noqa: PLR0915
+def client(original_function):
     Rules = getattr(sys.modules[__name__], "Rules")
     rules_obj = Rules()
 
     @wraps(original_function)
-    def wrapper(*args, **kwargs):  # noqa: PLR0915
+    def wrapper(*args, **kwargs):
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         call_type = original_function.__name__
@@ -1775,7 +1775,7 @@ def client(original_function):  # noqa: PLR0915
             raise e
 
     @wraps(original_function)
-    async def wrapper_async(*args, **kwargs):  # noqa: PLR0915
+    async def wrapper_async(*args, **kwargs):
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
@@ -2942,7 +2942,7 @@ def _resolve_builtin_model_cost_entry(
     return None
 
 
-def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
+def register_model(model_cost: Union[str, dict]):
     """
     Register new / Override existing models (and their pricing) to specific providers.
     Provide EITHER a model cost dictionary or a url to a hosted json blob
@@ -3015,6 +3015,21 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         # custom pricing on subsequent cost lookups.
         if existing_model.get("litellm_provider") is None:
             existing_model.pop("litellm_provider", None)
+        # Same pattern for cost fields (#30198): ``_get_model_info_helper``
+        # synthesizes ``input_cost_per_token`` / ``output_cost_per_token``
+        # = 0 when they are absent from the raw entry. Writing those zeros
+        # back flips a sparse entry from "no cost keys" (priced via name)
+        # to "cost keys = 0" (free), which makes
+        # ``_is_cost_explicitly_configured`` return True and silently
+        # disables budget enforcement on the next re-registration.
+        _raw_entry = litellm.model_cost.get(model_cost_key)
+        if _raw_entry is None:
+            _raw_entry = litellm.model_cost.get(key)
+        if _raw_entry is None:
+            _raw_entry = {}
+        for _cost_field in ("input_cost_per_token", "output_cost_per_token"):
+            if _cost_field not in _raw_entry and _cost_field not in value:
+                existing_model.pop(_cost_field, None)
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
@@ -3350,7 +3365,7 @@ def get_optional_params_image_gen(
     return optional_params
 
 
-def get_optional_params_embeddings(  # noqa: PLR0915
+def get_optional_params_embeddings(
     # 2 optional params
     model: str,
     user: Optional[str] = None,
@@ -4097,7 +4112,7 @@ def pre_process_optional_params(
     return optional_params
 
 
-def get_optional_params(  # noqa: PLR0915
+def get_optional_params(
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
     model: str,
@@ -5860,7 +5875,7 @@ def _is_potential_model_name_in_model_cost(
     )
 
 
-def _get_model_info_helper(  # noqa: PLR0915
+def _get_model_info_helper(
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -6061,8 +6076,14 @@ def _get_model_info_helper(  # noqa: PLR0915
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
                 ),
+                cache_read_input_token_cost_above_200k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "cache_read_input_token_cost_above_200k_tokens_priority", None
+                ),
                 cache_read_input_token_cost_above_272k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens", None
+                ),
+                cache_read_input_token_cost_above_272k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "cache_read_input_token_cost_above_272k_tokens_priority", None
                 ),
                 cache_read_input_token_cost_above_512k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_512k_tokens", None
@@ -6085,8 +6106,14 @@ def _get_model_info_helper(  # noqa: PLR0915
                 input_cost_per_token_above_200k_tokens=_model_info.get(
                     "input_cost_per_token_above_200k_tokens", None
                 ),
+                input_cost_per_token_above_200k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "input_cost_per_token_above_200k_tokens_priority", None
+                ),
                 input_cost_per_token_above_272k_tokens=_model_info.get(
                     "input_cost_per_token_above_272k_tokens", None
+                ),
+                input_cost_per_token_above_272k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "input_cost_per_token_above_272k_tokens_priority", None
                 ),
                 input_cost_per_token_above_512k_tokens=_model_info.get(
                     "input_cost_per_token_above_512k_tokens", None
@@ -6143,8 +6170,14 @@ def _get_model_info_helper(  # noqa: PLR0915
                 output_cost_per_token_above_200k_tokens=_model_info.get(
                     "output_cost_per_token_above_200k_tokens", None
                 ),
+                output_cost_per_token_above_200k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "output_cost_per_token_above_200k_tokens_priority", None
+                ),
                 output_cost_per_token_above_272k_tokens=_model_info.get(
                     "output_cost_per_token_above_272k_tokens", None
+                ),
+                output_cost_per_token_above_272k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "output_cost_per_token_above_272k_tokens_priority", None
                 ),
                 output_cost_per_token_above_512k_tokens=_model_info.get(
                     "output_cost_per_token_above_512k_tokens", None
@@ -6584,7 +6617,7 @@ def create_proxy_transport_and_mounts():
     return sync_proxy_mounts, async_proxy_mounts
 
 
-def validate_environment(  # noqa: PLR0915
+def validate_environment(
     model: Optional[str] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -6866,6 +6899,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("DASHSCOPE_API_KEY")
+        elif custom_llm_provider == "modelscope":
+            if "MODELSCOPE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("MODELSCOPE_API_KEY")
         elif custom_llm_provider == "moonshot":
             if "MOONSHOT_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8537,6 +8575,7 @@ class ProviderConfigManager:
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
+            LlmProviders.MODELSCOPE: (lambda: litellm.ModelScopeChatConfig(), False),
             LlmProviders.MOONSHOT: (lambda: litellm.MoonshotChatConfig(), False),
             LlmProviders.DOCKER_MODEL_RUNNER: (
                 lambda: litellm.DockerModelRunnerChatConfig(),
@@ -8642,7 +8681,7 @@ class ProviderConfigManager:
         return LangFlowConfig()
 
     @staticmethod
-    def get_provider_chat_config(  # noqa: PLR0915
+    def get_provider_chat_config(
         model: str,
         provider: LlmProviders,
         base_model: Optional[str] = None,
@@ -9475,6 +9514,12 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_image_generation_config(model)
+        elif LlmProviders.MODELSCOPE == provider:
+            from litellm.llms.modelscope.image_generation import (
+                get_modelscope_image_generation_config,
+            )
+
+            return get_modelscope_image_generation_config(model)
         return None
 
     @staticmethod
@@ -9680,6 +9725,7 @@ class ProviderConfigManager:
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+        from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.linkup.search.transformation import LinkupSearchConfig
@@ -9702,6 +9748,7 @@ class ProviderConfigManager:
             SearchProviders.GOOGLE_PSE: GooglePSESearchConfig,
             SearchProviders.DATAFORSEO: DataForSEOSearchConfig,
             SearchProviders.FIRECRAWL: FirecrawlSearchConfig,
+            SearchProviders.FASTCRW: FastCRWSearchConfig,
             SearchProviders.SEARXNG: SearXNGSearchConfig,
             SearchProviders.LINKUP: LinkupSearchConfig,
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,

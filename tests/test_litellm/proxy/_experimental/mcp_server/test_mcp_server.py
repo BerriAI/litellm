@@ -5179,6 +5179,12 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
         side_effect=lambda update: MCPServer(
             server_id=legacy_server.server_id,
             name=legacy_server.name,
+            # Carry alias/server_name forward so get_server_prefix resolves to
+            # "legacy_m2m" (not the server_id) when the request scope filter
+            # matches by alias. Without these, the filter relied on the now-
+            # removed silent fail-open fallback.
+            alias=legacy_server.alias,
+            server_name=legacy_server.server_name,
             transport=MCPTransport.http,
             auth_type=legacy_server.auth_type,
             oauth2_flow=update.get("oauth2_flow", legacy_server.oauth2_flow),
@@ -6083,3 +6089,207 @@ async def test_execute_mcp_tool_rest_prefix_retry_resolution_still_enforces_serv
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail["error"] == "tool_server_mismatch"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for _get_allowed_mcp_servers_from_mcp_server_names
+#
+# Prior to the fail-closed fix, an unresolved scope filter (path- or
+# header-derived) silently returned the caller's full allowed-server set,
+# which made URL/header namespacing appear to work when it did not.
+# ---------------------------------------------------------------------------
+
+
+def _make_mcp_server_for_scope_filter(server_id: str, alias: str) -> MCPServer:
+    return MCPServer(
+        server_id=server_id,
+        name=alias,
+        alias=alias,
+        server_name=alias,
+        url=f"https://{alias}.test/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": alias},
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_from_mcp_server_names_unknown_name_fails_closed():
+    """
+    Bug fix: requesting an unknown server name (e.g. ``/mcp/<typo>/``) must
+    NOT silently fall back to the caller's full allowed-server set.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_allowed_mcp_servers_from_mcp_server_names,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    allowed = [
+        _make_mcp_server_for_scope_filter("id-a", "alpha"),
+        _make_mcp_server_for_scope_filter("id-b", "beta"),
+    ]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+        "MCPRequestHandler._get_mcp_servers_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        result = await _get_allowed_mcp_servers_from_mcp_server_names(
+            mcp_servers=["does-not-exist"],
+            allowed_mcp_servers=allowed,
+        )
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_from_mcp_server_names_none_returns_all():
+    """
+    Regression: ``mcp_servers=None`` (no scope filter requested) must still
+    return the full allowed-server set. This is the legitimate "no scoping"
+    path that the fail-closed fix must not break.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_allowed_mcp_servers_from_mcp_server_names,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    allowed = [
+        _make_mcp_server_for_scope_filter("id-a", "alpha"),
+        _make_mcp_server_for_scope_filter("id-b", "beta"),
+    ]
+
+    result = await _get_allowed_mcp_servers_from_mcp_server_names(
+        mcp_servers=None,
+        allowed_mcp_servers=allowed,
+    )
+
+    assert {s.server_id for s in result} == {"id-a", "id-b"}
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_from_mcp_server_names_known_alias_returns_match():
+    """
+    Regression: a known server alias must still resolve to exactly that
+    server. Guards against the fix accidentally narrowing the happy path.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_allowed_mcp_servers_from_mcp_server_names,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    allowed = [
+        _make_mcp_server_for_scope_filter("id-a", "alpha"),
+        _make_mcp_server_for_scope_filter("id-b", "beta"),
+    ]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+        "MCPRequestHandler._get_mcp_servers_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        result = await _get_allowed_mcp_servers_from_mcp_server_names(
+            mcp_servers=["alpha"],
+            allowed_mcp_servers=allowed,
+        )
+
+    assert [s.server_id for s in result] == ["id-a"]
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_from_mcp_server_names_mixed_known_and_unknown():
+    """
+    Mixed scope (one valid + one unknown) returns only the resolved server,
+    not the full allowed set. Confirms the fail-closed branch only fires
+    when NOTHING resolves.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_allowed_mcp_servers_from_mcp_server_names,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    allowed = [
+        _make_mcp_server_for_scope_filter("id-a", "alpha"),
+        _make_mcp_server_for_scope_filter("id-b", "beta"),
+    ]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+        "MCPRequestHandler._get_mcp_servers_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        result = await _get_allowed_mcp_servers_from_mcp_server_names(
+            mcp_servers=["alpha", "does-not-exist"],
+            allowed_mcp_servers=allowed,
+        )
+
+    assert [s.server_id for s in result] == ["id-a"]
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_from_mcp_server_names_access_group_resolves():
+    """
+    Regression: when a requested name is not a server alias but IS an access
+    group, it must still resolve to the underlying servers (not be treated
+    as unresolved).
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_allowed_mcp_servers_from_mcp_server_names,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    allowed = [
+        _make_mcp_server_for_scope_filter("id-a", "alpha"),
+        _make_mcp_server_for_scope_filter("id-b", "beta"),
+    ]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+        "MCPRequestHandler._get_mcp_servers_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["id-b"],
+    ):
+        result = await _get_allowed_mcp_servers_from_mcp_server_names(
+            mcp_servers=["group-name"],
+            allowed_mcp_servers=allowed,
+        )
+
+    assert [s.server_id for s in result] == ["id-b"]
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_from_mcp_server_names_empty_list_fails_closed():
+    """
+    Edge case: ``mcp_servers=[]`` (explicit empty scope) is still an
+    explicit filter request. Fail closed rather than returning everything.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_allowed_mcp_servers_from_mcp_server_names,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    allowed = [
+        _make_mcp_server_for_scope_filter("id-a", "alpha"),
+        _make_mcp_server_for_scope_filter("id-b", "beta"),
+    ]
+
+    result = await _get_allowed_mcp_servers_from_mcp_server_names(
+        mcp_servers=[],
+        allowed_mcp_servers=allowed,
+    )
+
+    assert result == []
