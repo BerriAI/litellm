@@ -105,6 +105,66 @@ async def test_anthropic_messages_sanitizes_empty_text_blocks_before_dispatch():
     assert len(msgs[0]["content"]) == 2  # caller untouched
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_applies_cache_control_injection_points():
+    """Regression test for #30293.
+
+    When a deployment has `cache_control_injection_points` configured in
+    its `litellm_params`, the AnthropicCacheControlHook must fire on the
+    /v1/messages (Anthropic Messages) path so that the proxy-level cache
+    breakpoints are injected into the request. Previously the hook only
+    fired for /chat/completions, so Anthropic-format clients (Anthropic
+    SDK, Claude Code) on the same deployment got no cache benefit.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there."},
+        {"role": "user", "content": "Tell me a long story about caching."},
+    ]
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=msgs,
+            model="vertex_ai/claude-opus-4-6",
+            custom_llm_provider="vertex_ai-anthropic_models",
+            api_key="k",
+            cache_control_injection_points=[
+                {"location": "message", "role": "system"},
+                {"location": "message", "index": -1},
+            ],
+        )
+
+    # The first (system) message must have cache_control injected.
+    assert captured["messages"][0].get("cache_control") == {
+        "type": "ephemeral"
+    }, "AnthropicCacheControlHook must inject cache_control on the system message"
+    # The last (user) message must have cache_control injected.
+    assert captured["messages"][-1].get("cache_control") == {
+        "type": "ephemeral"
+    }, "AnthropicCacheControlHook must inject cache_control on the last user message"
+    # The intermediate messages must be untouched (no cache_control added).
+    for msg in captured["messages"][1:-1]:
+        assert msg.get("cache_control") is None
+    # Caller's original messages must not be mutated.
+    assert msgs[0].get("cache_control") is None
+    assert msgs[-1].get("cache_control") is None
+
+
 async def _async_return(value):
     return value
 

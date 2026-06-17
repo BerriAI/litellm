@@ -229,6 +229,29 @@ async def anthropic_messages(
         **kwargs,
     )
 
+    # Apply the AnthropicCacheControlHook when the deployment has
+    # `cache_control_injection_points` configured in its litellm_params.
+    # Without this call, the proxy-level cache control config is silently
+    # ignored for /v1/messages (Anthropic Messages) requests, even though
+    # it works for /chat/completions on the same deployment. The hook
+    # injects cache_control breakpoints into the messages at the
+    # configured locations so that Anthropic / Bedrock / Vertex can write
+    # the prompt cache. See #30293.
+    if request_kwargs.get("cache_control_injection_points"):
+        from litellm.integrations.anthropic_cache_control_hook import (
+            AnthropicCacheControlHook,
+        )
+
+        cache_control_hook = AnthropicCacheControlHook()
+        _, messages, request_kwargs = cache_control_hook.get_chat_completion_prompt(
+            model=model,
+            messages=messages,
+            non_default_params=request_kwargs,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+
     # Extract modified parameters. Pop every named param of `anthropic_messages`
     # that we may forward explicitly downstream, so we (a) honor pre-request hook
     # overrides and (b) avoid duplicate-keyword conflicts when splatting `kwargs`
