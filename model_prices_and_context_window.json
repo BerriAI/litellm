@@ -13876,6 +13876,14 @@
             "notes": "APISerpent deep search (/api/search), multi-engine (Google, Bing, Yahoo, DuckDuckGo). Pricing: $0.60/1k searches."
         }
     },
+    "tinyfish/search": {
+        "input_cost_per_query": 0.005,
+        "litellm_provider": "tinyfish",
+        "mode": "search",
+        "metadata": {
+            "notes": "TinyFish web search. Pricing: $5/1k searches."
+        }
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
