@@ -64,7 +64,13 @@ class TavilySearchConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("TAVILY_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("TAVILY_API_KEY",),
+            base_env_var="TAVILY_API_BASE",
+            default_api_base=self.TAVILY_API_BASE,
+        )
         if not api_key:
             raise ValueError(
                 "TAVILY_API_KEY is not set. Set `TAVILY_API_KEY` environment variable."
