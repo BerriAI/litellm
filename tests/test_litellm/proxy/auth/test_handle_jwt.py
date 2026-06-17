@@ -4274,6 +4274,91 @@ async def test_multi_issuer_jwt_strips_unmapped_internal_claims(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_multi_issuer_jwt_drops_unmapped_scope_claims(
+    monkeypatch,
+):
+    """A token from a configured-but-low-trust issuer that carries a raw
+    ``scope`` claim must NOT escalate to proxy admin. The issuer config below
+    maps only an identity field, so ``scope`` is unmapped and dropped during
+    normalization; ``get_scopes``/``is_admin`` then see nothing.
+    """
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://low-trust-issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+                "user_id_jwt_field": "sub",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="expected-audience",
+        kid="issuer-key",
+        extra_claims={
+            "scope": "litellm_proxy_admin",
+            "roles": ["litellm_proxy_admin"],
+        },
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert "scope" not in claims
+    assert "roles" not in claims
+    assert jwt_handler.get_scopes(token=claims) == []
+    assert jwt_handler.is_admin(scopes=jwt_handler.get_scopes(token=claims)) is False
+
+
+@pytest.mark.asyncio
+async def test_global_jwt_path_still_trusts_scope_for_admin(monkeypatch):
+    """The legacy single-issuer / global path (no ``issuers`` configured) must
+    keep honoring the ``scope`` claim as the admin field. The cross-issuer
+    allowlist only applies to issuer-scoped normalization, so this path is
+    unchanged and a token carrying the configured admin scope still maps to
+    proxy admin.
+    """
+    from litellm.caching.dual_cache import DualCache
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+
+    jwks_url = "https://global-issuer.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+
+    private_key, jwk = _get_rsa_key_and_jwk(kid="global-key")
+    cache = DualCache()
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer="https://global-issuer.example.com",
+        audience="any-audience",
+        kid="global-key",
+        extra_claims={"scope": "litellm_proxy_admin"},
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert jwt_handler.get_scopes(token=claims) == ["litellm_proxy_admin"]
+    assert jwt_handler.is_admin(scopes=jwt_handler.get_scopes(token=claims)) is True
+
+
+@pytest.mark.asyncio
 async def test_multi_issuer_jwt_does_not_emit_unscoped_global_warning(
     monkeypatch, caplog
 ):

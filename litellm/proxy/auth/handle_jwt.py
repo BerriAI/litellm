@@ -113,6 +113,10 @@ class JWTHandler:
         LITELLM_ORG_ID_CLAIM,
         LITELLM_END_USER_ID_CLAIM,
     )
+    # Registered JWT claims (RFC 7519) that are safe to carry through issuer
+    # normalization regardless of mapping config: they identify/scope the token
+    # itself and are never trusted for authorization by LiteLLM.
+    STANDARD_JWT_CLAIMS = frozenset(("iss", "sub", "aud", "exp", "nbf", "iat", "jti"))
 
     def __init__(
         self,
@@ -941,8 +945,11 @@ class JWTHandler:
     def _apply_issuer_claim_mappings(
         self, token: dict, issuer_config: JWTIssuerConfig
     ) -> dict:
+        # Build the normalized token from standard registered claims; the
+        # issuer's mapped claims are re-added below. Unmapped claims are not
+        # carried across issuers.
         normalized: dict = {
-            k: v for k, v in token.items() if k not in self.LITELLM_INTERNAL_CLAIMS
+            k: v for k, v in token.items() if k in self.STANDARD_JWT_CLAIMS
         }
         normalized[self.LITELLM_JWT_ISSUER_CLAIM] = issuer_config.issuer
         claim_mappings = [
