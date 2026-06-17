@@ -301,6 +301,9 @@ from litellm.proxy.common_utils.load_config_utils import (
     get_config_file_contents_from_gcs,
     get_file_contents_from_s3,
 )
+from litellm.proxy.common_utils.model_listing_utils import (
+    get_model_listing_entries,
+)
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
@@ -8384,6 +8387,8 @@ async def model_list(
         get_available_models_for_user,
     )
 
+    proxy_general_settings: object = general_settings  # any-ok: legacy settings
+
     # Validate scope parameter if provided
     if scope is not None and scope != "expand":
         raise HTTPException(
@@ -8455,16 +8460,28 @@ async def model_list(
         if hidden_names:
             all_models = [m for m in all_models if m not in hidden_names]
 
+        model_entries = get_model_listing_entries(
+            model_names=all_models,
+            llm_router=llm_router,
+            general_settings=proxy_general_settings,
+        )
+
         # Build response data with all proxy models
-        model_data = []
-        for model in all_models:
-            model_info = create_model_info_response(
-                model_id=model,
-                provider="openai",
-                include_metadata=include_metadata or False,
-                fallback_type=fallback_type,
-                llm_router=llm_router,
+        model_data: list[dict[str, object]] = []
+        for response_model_id, metadata_lookup_model_id in model_entries:
+            model_info_raw: object = (
+                create_model_info_response(  # any-ok: legacy response helper
+                    model_id=metadata_lookup_model_id,
+                    provider="openai",
+                    include_metadata=include_metadata or False,
+                    fallback_type=fallback_type,
+                    llm_router=llm_router,
+                )
             )
+            model_info = cast(
+                dict[str, object], model_info_raw
+            )  # any-ok: legacy response helper
+            model_info["id"] = response_model_id
             model_data.append(model_info)
 
         return dict(
@@ -8492,16 +8509,28 @@ async def model_list(
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
 
+    model_entries = get_model_listing_entries(
+        model_names=all_models,
+        llm_router=llm_router,
+        general_settings=proxy_general_settings,
+    )
+
     # Build response data
-    model_data = []
-    for model in all_models:
-        model_info = create_model_info_response(
-            model_id=model,
-            provider="openai",
-            include_metadata=include_metadata or False,
-            fallback_type=fallback_type,
-            llm_router=llm_router,
+    model_data: list[dict[str, object]] = []  # any-ok: typed response list
+    for response_model_id, metadata_lookup_model_id in model_entries:
+        model_info_raw: object = (
+            create_model_info_response(  # any-ok: legacy response helper
+                model_id=metadata_lookup_model_id,
+                provider="openai",
+                include_metadata=include_metadata or False,
+                fallback_type=fallback_type,
+                llm_router=llm_router,
+            )
         )
+        model_info = cast(
+            dict[str, object], model_info_raw
+        )  # any-ok: legacy response helper
+        model_info["id"] = response_model_id
         model_data.append(model_info)
 
     return dict(

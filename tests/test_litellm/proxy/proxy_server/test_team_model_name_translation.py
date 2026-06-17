@@ -15,6 +15,7 @@ import pytest
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.common_utils.model_listing_utils import get_model_listing_entries
 from litellm.proxy.proxy_server import (
     _get_proxy_model_info,
     _translate_model_name_for_response,
@@ -593,3 +594,232 @@ async def test_model_info_v1_litellm_model_id_team_id_applies_team_filter(monkey
     team_filter.assert_awaited_once()
     assert team_filter.await_args.kwargs["team_id"] == "other-team"
     assert team_filter.await_args.kwargs["all_models"] == [team_row]
+
+
+@pytest.mark.asyncio
+async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch):
+    """Regression (#28382 sibling leak): a virtual key whose model access group
+    resolves to a team BYOK deployment must list the PUBLIC name in /v1/models,
+    not the internal routing key model_name_{team_id}_{uuid}.
+
+    The /model/info read-path fix did not cover /v1/models, which builds from
+    bare model-name strings via access-group expansion.
+    """
+    team_dep = {
+        "model_name": "model_name_teamX_uuid9",
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {
+            "id": "id1",
+            "team_id": "teamX",
+            "team_public_model_name": "tushar-gpt-4.1",
+            "access_groups": ["grp-a"],
+        },
+    }
+    router = MagicMock()
+    router.get_model_names.return_value = ["model_name_teamX_uuid9"]
+    router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_fully_blocked_model_names.return_value = set()
+    router.model_list = [team_dep]
+    router.get_model_list.return_value = [team_dep]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    # Default behavior: listing surfaces public names.
+    monkeypatch.setattr(ps, "general_settings", {})
+
+    # virtual key granted access via the access group (no team membership)
+    key = UserAPIKeyAuth(
+        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
+    )
+    resp = await ps.model_list(user_api_key_dict=key)
+
+    ids = [d["id"] for d in resp["data"]]
+    assert "tushar-gpt-4.1" in ids
+    assert "model_name_teamX_uuid9" not in ids
+
+
+@pytest.mark.asyncio
+async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
+    monkeypatch,
+):
+    """Compatibility override: /v1/models can still list the internal routing
+    name for consumers that scripted against those ids. Translation is enabled
+    by default and disabled via general_settings['use_team_public_model_name'].
+    """
+    team_dep = {
+        "model_name": "model_name_teamX_uuid9",
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {
+            "id": "id1",
+            "team_id": "teamX",
+            "team_public_model_name": "tushar-gpt-4.1",
+            "access_groups": ["grp-a"],
+        },
+    }
+    router = MagicMock()
+    router.get_model_names.return_value = ["model_name_teamX_uuid9"]
+    router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_fully_blocked_model_names.return_value = set()
+    router.model_list = [team_dep]
+    router.get_model_list.return_value = [team_dep]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
+
+    key = UserAPIKeyAuth(
+        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
+    )
+    resp = await ps.model_list(user_api_key_dict=key)
+
+    ids = [d["id"] for d in resp["data"]]
+    assert "model_name_teamX_uuid9" in ids  # internal id preserved (backward-compat)
+    assert "tushar-gpt-4.1" not in ids
+
+
+@pytest.mark.asyncio
+async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
+    """include_metadata=true must return the public id while resolving
+    fallback metadata through the internal router key."""
+    team_dep = {
+        "model_name": "model_name_teamX_uuid9",
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {
+            "id": "id1",
+            "team_id": "teamX",
+            "team_public_model_name": "tushar-gpt-4.1",
+            "access_groups": ["grp-a"],
+        },
+    }
+    router = MagicMock()
+    router.get_model_names.return_value = ["model_name_teamX_uuid9"]
+    router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_fully_blocked_model_names.return_value = set()
+    router.model_list = [team_dep]
+    router.get_model_list.return_value = [team_dep]
+    router.fallbacks = [{"model_name_teamX_uuid9": ["fallback-gpt-4.1"]}]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {})
+
+    key = UserAPIKeyAuth(
+        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
+    )
+    resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
+
+    assert resp["data"] == [
+        {
+            "id": "tushar-gpt-4.1",
+            "object": "model",
+            "created": 1677610602,
+            "owned_by": "openai",
+            "metadata": {"fallbacks": ["fallback-gpt-4.1"]},
+        }
+    ]
+
+
+def test_model_listing_entries_swaps_and_dedupes(monkeypatch):
+    """Internal team routing keys -> public name; sibling deployments sharing a
+    public name collapse to one entry (order preserved); globals untouched."""
+
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {
+            "model_name": "model_name_teamX_uuidA",
+            "model_info": {
+                "team_id": "teamX",
+                "team_public_model_name": "tushar-gpt-4.1",
+            },
+        },
+        {
+            "model_name": "model_name_teamX_uuidB",  # sibling: same public name
+            "model_info": {
+                "team_id": "teamX",
+                "team_public_model_name": "tushar-gpt-4.1",
+            },
+        },
+        {"model_name": "gpt-4o", "model_info": {"db_model": False}},
+    ]
+    monkeypatch.setattr(ps, "general_settings", {})
+
+    out = get_model_listing_entries(
+        ["model_name_teamX_uuidA", "model_name_teamX_uuidB", "gpt-4o"],
+        router,
+        {},
+    )
+    assert list(out) == [
+        ("tushar-gpt-4.1", "model_name_teamX_uuidA"),
+        ("gpt-4o", "gpt-4o"),
+    ]
+
+
+def test_model_listing_entries_leave_unmapped_names(monkeypatch):
+    """Names with no team mapping (globals, access-group keys) pass through."""
+
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {"model_name": "gpt-4o", "model_info": {"db_model": False}}
+    ]
+    monkeypatch.setattr(ps, "general_settings", {})
+
+    out = get_model_listing_entries(["gpt-4o", "beta-group"], router, {})
+    assert list(out) == [
+        ("gpt-4o", "gpt-4o"),
+        ("beta-group", "beta-group"),
+    ]
+
+
+def test_model_listing_entries_handle_none_router(monkeypatch):
+    """No router -> return the input list unchanged."""
+
+    monkeypatch.setattr(ps, "general_settings", {})
+    out = get_model_listing_entries(["a", "b"], None, {})
+    assert list(out) == [
+        ("a", "a"),
+        ("b", "b"),
+    ]
+
+
+def test_model_listing_entries_respect_legacy_flag(monkeypatch):
+    """Operators can keep returning the legacy internal routing key."""
+
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {
+            "model_name": "model_name_teamX_uuidA",
+            "model_info": {
+                "team_id": "teamX",
+                "team_public_model_name": "tushar-gpt-4.1",
+            },
+        }
+    ]
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
+
+    out = get_model_listing_entries(
+        ["model_name_teamX_uuidA"],
+        router,
+        {"use_team_public_model_name": False},
+    )
+    assert list(out) == [("model_name_teamX_uuidA", "model_name_teamX_uuidA")]
+
+
+def test_model_listing_entries_handles_unexpected_router_model_list():
+    router = MagicMock()
+    router.get_model_list.return_value = {"not": "a list"}
+
+    out = get_model_listing_entries(["gpt-4o"], router, None)
+
+    assert list(out) == [("gpt-4o", "gpt-4o")]
+
+
+def test_model_listing_entries_ignores_malformed_router_rows():
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        object(),
+        {"model_name": "model_name_teamX_uuidA", "model_info": "not-a-dict"},
+    ]
+
+    out = get_model_listing_entries(["model_name_teamX_uuidA"], router, {})
+
+    assert list(out) == [("model_name_teamX_uuidA", "model_name_teamX_uuidA")]
