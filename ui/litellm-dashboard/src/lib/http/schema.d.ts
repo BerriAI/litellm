@@ -33651,6 +33651,28 @@ export interface operations {
             };
         };
     };
+    plugin_auth_token_api_plugins_auth_token_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     apply_guardrail_apply_guardrail_post: {
         parameters: {
             query?: never;
