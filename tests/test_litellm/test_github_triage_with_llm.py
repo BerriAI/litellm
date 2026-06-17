@@ -310,11 +310,37 @@ class TestCloseCommentText:
                 or ("isn't us saying" in body)
             )
 
+    def test_only_close_comments_carry_the_agent_shin_close_marker(self, triage_module):
+        # The reconsider reopen guard keys off AGENT_SHIN_CLOSE_MARKER to tell
+        # an Agent Shin close from a same-identity close by another workflow.
+        # That only works if the marker is stamped on the close comments and
+        # NOT on the grace warnings (which don't close anything).
+        verdict = {"verdict": "fail", "missing": [], "explanation": ""}
+        marker = triage_module.AGENT_SHIN_CLOSE_MARKER
+        assert marker in triage_module.format_pr_close_comment(verdict)
+        assert marker in triage_module.format_issue_close_comment(verdict)
+        assert marker not in triage_module.format_grace_warning_pr_comment(verdict)
+        assert marker not in triage_module.format_grace_warning_issue_comment(verdict)
+
 
 class TestWasClosedByAgentShin:
-    """Bot-closed guard: only the bot's own closures are reopen candidates."""
+    """Bot-closed guard: only Agent Shin's own closures are reopen candidates."""
 
-    def test_should_return_true_when_last_close_actor_is_bot(
+    @staticmethod
+    def _stub_close_marker_present(triage_module, monkeypatch, *, present: bool):
+        """Stub the Agent Shin close-comment marker lookup.
+
+        `was_closed_by_agent_shin` requires both the closing actor AND an
+        Agent Shin close comment; these tests pin the latter so they exercise
+        the actor half in isolation.
+        """
+        monkeypatch.setattr(
+            triage_module,
+            "seconds_since_last_agent_shin_close",
+            lambda *a, **kw: 42.0 if present else None,
+        )
+
+    def test_should_return_true_when_bot_closed_and_close_comment_present(
         self, triage_module, monkeypatch
     ):
         monkeypatch.setattr(
@@ -322,18 +348,36 @@ class TestWasClosedByAgentShin:
             "fetch_last_close_actor",
             lambda repo, n: "github-actions[bot]",
         )
+        self._stub_close_marker_present(triage_module, monkeypatch, present=True)
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is True
+
+    def test_should_return_false_when_bot_closed_but_no_agent_shin_comment(
+        self, triage_module, monkeypatch
+    ):
+        # The `github-actions[bot]` identity is shared across workflows. A
+        # stale/duplicate sweep closing under that identity must NOT let
+        # @agent-shin reconsider reopen the item: without an Agent Shin close
+        # comment the guard fails closed.
+        monkeypatch.setattr(
+            triage_module,
+            "fetch_last_close_actor",
+            lambda repo, n: "github-actions[bot]",
+        )
+        self._stub_close_marker_present(triage_module, monkeypatch, present=False)
+        assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
 
     def test_should_return_false_when_last_close_actor_is_maintainer(
         self, triage_module, monkeypatch
     ):
         # A maintainer closed it (e.g. duplicate, security, design). The
-        # bot must refuse to reopen on @agent-shin reconsider.
+        # bot must refuse to reopen on @agent-shin reconsider even if an
+        # earlier Agent Shin close comment is still on the thread.
         monkeypatch.setattr(
             triage_module,
             "fetch_last_close_actor",
             lambda repo, n: "krrishdholakia",
         )
+        self._stub_close_marker_present(triage_module, monkeypatch, present=True)
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
 
     def test_should_fail_closed_when_no_close_event(self, triage_module, monkeypatch):
@@ -343,6 +387,7 @@ class TestWasClosedByAgentShin:
         monkeypatch.setattr(
             triage_module, "fetch_last_close_actor", lambda repo, n: None
         )
+        self._stub_close_marker_present(triage_module, monkeypatch, present=True)
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
 
     def test_should_respect_bot_login_override_via_env(
@@ -352,6 +397,7 @@ class TestWasClosedByAgentShin:
         # can override the expected bot login via env. The guard must
         # respect the override so non-default deployments still work.
         monkeypatch.setenv("AGENT_SHIN_BOT_LOGIN", "my-bot")
+        self._stub_close_marker_present(triage_module, monkeypatch, present=True)
         monkeypatch.setattr(
             triage_module, "fetch_last_close_actor", lambda repo, n: "my-bot"
         )
@@ -363,6 +409,64 @@ class TestWasClosedByAgentShin:
             lambda repo, n: "github-actions[bot]",
         )
         assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
+
+
+class TestSecondsSinceLastAgentShinClose:
+    """Close-provenance lookup: detects the bot's own auto-close marker."""
+
+    def _make_comment(self, *, login: str, body: str) -> dict:
+        return {
+            "user": {"login": login},
+            "body": body,
+            "created_at": "2026-05-18T05:00:00Z",
+        }
+
+    def test_should_return_none_when_bot_never_closed(self, triage_module, monkeypatch):
+        # Comments exist, but none is an Agent Shin close — e.g. only a grace
+        # warning, or a close by another workflow with no Agent Shin comment.
+        comments = [
+            self._make_comment(login="outside-dev", body="any update?"),
+            self._make_comment(
+                login="github-actions[bot]",
+                body=triage_module.format_grace_warning_pr_comment(
+                    {"verdict": "fail", "missing": [], "explanation": ""}
+                ),
+            ),
+        ]
+        monkeypatch.setattr(
+            triage_module, "_iter_paginated_json", lambda *a, **kw: iter(comments)
+        )
+        assert triage_module.seconds_since_last_agent_shin_close("o/r", 1) is None
+
+    def test_should_detect_bot_close_comment(self, triage_module, monkeypatch):
+        comments = [
+            self._make_comment(
+                login="github-actions[bot]",
+                body=triage_module.format_pr_close_comment(
+                    {"verdict": "fail", "missing": [], "explanation": ""}
+                ),
+            ),
+        ]
+        monkeypatch.setattr(
+            triage_module, "_iter_paginated_json", lambda *a, **kw: iter(comments)
+        )
+        assert triage_module.seconds_since_last_agent_shin_close("o/r", 1) is not None
+
+    def test_should_ignore_non_bot_comment_quoting_marker(
+        self, triage_module, monkeypatch
+    ):
+        # A contributor quoting the hidden marker (GitHub "Quote reply"
+        # preserves HTML comments) must not be mistaken for a bot close.
+        comments = [
+            self._make_comment(
+                login="curious-user",
+                body=f"what is this? {triage_module.AGENT_SHIN_CLOSE_MARKER}",
+            ),
+        ]
+        monkeypatch.setattr(
+            triage_module, "_iter_paginated_json", lambda *a, **kw: iter(comments)
+        )
+        assert triage_module.seconds_since_last_agent_shin_close("o/r", 1) is None
 
 
 class TestSecondsSinceLastReconsiderVerdict:

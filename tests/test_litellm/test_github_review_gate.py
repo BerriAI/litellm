@@ -271,8 +271,10 @@ class TestReviewGateGraceAndClose:
         assert result["action"] == "closed"
         assert rec.closed == [7]
         assert len(rec.comments) == 1
-        # The close comment must carry the reconsider provenance marker.
-        assert triage_module.AGENT_SHIN_AUTO_CLOSE_MARKER in rec.comments[0]
+        # The close comment must carry the reconsider provenance marker so
+        # `was_closed_by_agent_shin` can later recognize this as an Agent Shin
+        # close (and not some other workflow's `github-actions[bot]` close).
+        assert triage_module.AGENT_SHIN_CLOSE_MARKER in rec.comments[0]
 
     def test_recent_regression_marker_blocks_close(self, triage_module, monkeypatch):
         """A failing PR with a fresh regression notice must NOT be closed —

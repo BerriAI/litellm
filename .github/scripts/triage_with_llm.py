@@ -115,12 +115,14 @@ WITHIN_GRACE_MARKER = "<!-- agent-shin:within-grace -->"
 # so the daily sweep and the review gate read the score through the
 # same set of logins / patterns.
 
-# Marker phrase Agent Shin always includes in its auto-close comments
-# (see `format_pr_close_comment` / `format_issue_close_comment`). The
-# review-gate close path stamps the same marker so reconsider can recognize
-# the closure as a bot close. Keep the marker in sync with the literal text
-# in those formatter functions.
-AGENT_SHIN_AUTO_CLOSE_MARKER = "I'm **Agent Shin**"
+# Hidden HTML marker stamped on every Agent Shin auto-close comment
+# (`format_pr_close_comment` / `format_issue_close_comment`, which back both
+# the grace-period close and the review-gate close). `was_closed_by_agent_shin`
+# requires this marker — not just the closing actor — before
+# `@agent-shin reconsider` may reopen, because the `github-actions[bot]`
+# identity is shared with every other workflow in the repo and is not unique
+# to Agent Shin.
+AGENT_SHIN_CLOSE_MARKER = "<!-- agent-shin:closed -->"
 
 # Model families that require `reasoning_effort` to be set, and that reject
 # `temperature != 1` unless `reasoning_effort` is "none". For these models we
@@ -300,13 +302,23 @@ def fetch_last_close_actor(repo: str, number: int) -> str | None:
 def was_closed_by_agent_shin(
     repo: str, number: int, *, bot_login: str | None = None
 ) -> bool:
-    """Return True iff the PR/issue was most-recently closed by Agent Shin.
+    """Return True iff Agent Shin itself most-recently closed this PR/issue.
 
-    This is the guard that stops `@agent-shin reconsider` from being used
-    to override a maintainer's closure for non-rubric reasons (security,
-    duplicate, design rejection, etc.). The check is intentionally
-    fail-closed: any uncertainty about who closed the item must be
-    treated as "not the bot" so the destructive reopen path stays gated.
+    This is the guard that stops `@agent-shin reconsider` from reopening an
+    item Agent Shin did not close — a maintainer closing for non-rubric
+    reasons (security, duplicate, design rejection), or a different workflow
+    (stale/duplicate sweeps) closing under the shared `github-actions[bot]`
+    identity. Two independent signals must both hold, because that identity is
+    not unique to Agent Shin:
+
+      1. The most recent `closed` event's actor is the bot identity.
+      2. Agent Shin left one of its auto-close comments, detected via
+         `AGENT_SHIN_CLOSE_MARKER`. The actor check alone can't tell an Agent
+         Shin close from any other `github-actions[bot]` close.
+
+    The check is intentionally fail-closed: any uncertainty about who closed
+    the item is treated as "not Agent Shin" so the destructive reopen path
+    stays gated.
     """
     expected = (
         bot_login
@@ -314,9 +326,12 @@ def was_closed_by_agent_shin(
         or AGENT_SHIN_DEFAULT_BOT_LOGIN
     ).lower()
     actor = fetch_last_close_actor(repo, number)
-    if not actor:
+    if not actor or actor.lower() != expected:
         return False
-    return actor.lower() == expected
+    return (
+        seconds_since_last_agent_shin_close(repo, number, bot_login=bot_login)
+        is not None
+    )
 
 
 def _seconds_since_latest_marker_comment(
@@ -374,6 +389,22 @@ def seconds_since_last_grace_warning(
     """
     return _seconds_since_latest_marker_comment(
         repo, number, marker=GRACE_COMMENT_MARKER, bot_login=bot_login
+    )
+
+
+def seconds_since_last_agent_shin_close(
+    repo: str, number: int, *, bot_login: str | None = None
+) -> float | None:
+    """Return seconds since Agent Shin's most recent auto-close comment.
+
+    Detects close comments by matching `AGENT_SHIN_CLOSE_MARKER` (stamped by
+    `format_pr_close_comment` / `format_issue_close_comment`). Returns None
+    when Agent Shin has never closed this PR/issue — the signal
+    `was_closed_by_agent_shin` uses to keep the reconsider reopen path gated
+    against closures performed by other workflows sharing the bot identity.
+    """
+    return _seconds_since_latest_marker_comment(
+        repo, number, marker=AGENT_SHIN_CLOSE_MARKER, bot_login=bot_login
     )
 
 
@@ -745,6 +776,7 @@ def format_pr_close_comment(verdict: dict) -> str:
         "\n"
         "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, comment "
         "`@agent-shin reconsider` or ping a maintainer; they'll override me.)_"
+        f"\n\n{AGENT_SHIN_CLOSE_MARKER}"
     )
 
 
@@ -789,6 +821,7 @@ def format_issue_close_comment(verdict: dict) -> str:
         "\n"
         "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, comment "
         "`@agent-shin reconsider` or ping a maintainer; they'll override me.)_"
+        f"\n\n{AGENT_SHIN_CLOSE_MARKER}"
     )
 
 
