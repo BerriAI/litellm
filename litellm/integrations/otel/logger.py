@@ -3,7 +3,7 @@
 from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Sequence, cast
 
 from opentelemetry.context import attach, get_current
 from opentelemetry.sdk.trace import TracerProvider
@@ -565,6 +565,24 @@ def select_global_otel_v2_logger(
         (cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2)), None
     )
     return existing if existing is not None else OpenTelemetryV2()
+
+
+def publish_global_otel_v2_provider(
+    in_memory_loggers: Sequence[object],
+    set_global_provider: Callable[[TracerProvider], None],
+) -> "OpenTelemetryV2":
+    """Select the single v2 logger and publish its provider as the OTel global.
+
+    The proxy calls this once at startup, after callbacks are initialized, so the
+    preset logger already exists and is reused (see
+    :func:`select_global_otel_v2_logger`). ``set_global_provider`` is injected (the
+    proxy passes ``opentelemetry.trace.set_tracer_provider``) so the publish step
+    is unit-testable without mutating real global OTel state. Returns the logger
+    whose provider was published.
+    """
+    logger = select_global_otel_v2_logger(in_memory_loggers)
+    set_global_provider(logger._tracer_provider)
+    return logger
 
 
 def _registered_v2_logger() -> "OpenTelemetryV2 | None":

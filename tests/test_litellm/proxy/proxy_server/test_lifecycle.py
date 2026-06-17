@@ -515,14 +515,13 @@ def test_otel_global_provider_published_after_callback_init():
     global ``TracerProvider`` before that ran found no logger and built a second
     generic one whose provider became the global, so the FastAPI server span and
     the preset's gen-ai spans exported through different providers and the LLM
-    span was orphaned. The publish (``select_global_otel_v2_logger`` +
-    ``set_tracer_provider``) must therefore appear after
-    ``_initialize_startup_logging`` in the lifespan source.
+    span was orphaned. The publish (``publish_global_otel_v2_provider``) must
+    therefore appear after ``_initialize_startup_logging`` in the lifespan source.
     """
     wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
     source = inspect.getsource(wrapped)
     init_pos = source.find("_initialize_startup_logging(")
-    publish_pos = source.find("select_global_otel_v2_logger(")
+    publish_pos = source.find("publish_global_otel_v2_provider(")
     assert init_pos != -1, "callback init call not found in proxy_startup_event"
     assert publish_pos != -1, "OTEL global publish not found in proxy_startup_event"
     assert init_pos < publish_pos, (
