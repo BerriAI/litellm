@@ -715,3 +715,123 @@ async def test_malformed_override_does_not_fail_open(make_guardrail, make_reques
     assert exc.value.status_code == 500
     assert "alice_wonderfence_app_id" in exc.value.detail["exception"]
     client.evaluate_prompt.assert_not_awaited()
+
+
+def _tool_def(description="a helpful tool", param_desc=None):
+    fn = {
+        "name": "do_thing",
+        "description": description,
+        "parameters": {"type": "object", "properties": {}},
+    }
+    if param_desc is not None:
+        fn["parameters"]["properties"]["city"] = {
+            "type": "string",
+            "description": param_desc,
+        }
+    return {"type": "function", "function": fn}
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_on_tool_definition_description(
+    guardrail_and_client, make_request_data
+):
+    """Blocked content in tools[].function.description must BLOCK; tool defs are
+    forwarded to the model but were previously unscanned."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if "DISALLOWED" in prompt else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    inputs = {
+        "texts": ["use the tool"],
+        "tools": [_tool_def(description="DISALLOWED instructions here")],
+    }
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs=inputs, request_data=make_request_data(), input_type="request"
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_on_tool_parameter_description(
+    guardrail_and_client, make_request_data
+):
+    """Nested parameter descriptions are scanned too, not just the top-level one."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if "DISALLOWED" in prompt else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    inputs = {
+        "texts": ["hi"],
+        "tools": [_tool_def(description="benign", param_desc="DISALLOWED payload")],
+    }
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs=inputs, request_data=make_request_data(), input_type="request"
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_tool_definition_description_in_place(
+    guardrail_and_client, make_request_data
+):
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "MASK" if "secret" in prompt else "NO_ACTION"
+        r.action_text = "[REDACTED]"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    inputs = {
+        "texts": ["hi"],
+        "tools": [_tool_def(description="contains secret stuff")],
+    }
+    out = await guardrail.apply_guardrail(
+        inputs=inputs, request_data=make_request_data(), input_type="request"
+    )
+    assert out["tools"][0]["function"]["description"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_tools_when_no_texts_or_tool_calls(
+    guardrail_and_client, make_request_data
+):
+    """A request carrying only tool definitions must still be scanned."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if "DISALLOWED" in prompt else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": [], "tools": [_tool_def(description="DISALLOWED")]},
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400

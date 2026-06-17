@@ -47,3 +47,55 @@ def test_detect_and_no_action_leave_texts_unchanged():
     ]
     out = apply_verdicts(inputs, [0, 1], verdicts, "gn", "blocked!")
     assert out["texts"] == ["a", "b"]
+
+
+# --------------- tool_definition_segments ---------------
+
+
+def test_tool_definition_segments_extracts_description_and_param_descriptions():
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.processing import (
+        _set_by_path,
+        tool_definition_segments,
+    )
+
+    inputs = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "weather",
+                    "description": "TOP_DESC",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "PARAM_DESC"}
+                        },
+                    },
+                },
+            }
+        ]
+    }
+    paths, segments = tool_definition_segments(inputs)
+    assert set(segments) == {"TOP_DESC", "PARAM_DESC"}
+    # each path round-trips: writing via the path updates the right slot
+    for path, text in zip(paths, segments):
+        _set_by_path(inputs["tools"], path, f"<{text}>")
+    fn = inputs["tools"][0]["function"]
+    assert fn["description"] == "<TOP_DESC>"
+    assert fn["parameters"]["properties"]["city"]["description"] == "<PARAM_DESC>"
+
+
+def test_tool_definition_segments_ignores_non_dict_tools_and_blank_descriptions():
+    inputs = {
+        "tools": [
+            "not-a-dict",
+            {"type": "function", "function": {"name": "f", "description": "   "}},
+            {"type": "function"},
+        ]
+    }
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.processing import (
+        tool_definition_segments,
+    )
+
+    paths, segments = tool_definition_segments(inputs)
+    assert segments == []
