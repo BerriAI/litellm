@@ -256,7 +256,7 @@ class DeepKeepGuardrail(CustomGuardrail):
             return_inputs["images"] = response_json["images"]
         elif images:
             return_inputs["images"] = images
-        if response_json.get("tools"):
+        if response_json.get("tools") is not None:
             return_inputs["tools"] = response_json["tools"]
         elif tools:
             return_inputs["tools"] = tools
