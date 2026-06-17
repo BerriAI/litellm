@@ -17,6 +17,6 @@ guardrails:
     litellm_params:
       guardrail: deepkeep
       mode: [pre_call, post_call]
-      api_key: "1D-VOZhxhsgG2o8pnbDcXaDmzLOWSwZpgkGZPDyVQBk"
+      api_key: os.environ/DEEPKEEP_API_KEY
       api_base: "http://localhost:8081/api"
       deepkeep_firewall_id: "063e4e5ba5c2be55"
