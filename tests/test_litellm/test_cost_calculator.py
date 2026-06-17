@@ -2233,6 +2233,63 @@ def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate():
     assert cost == pytest.approx(expected_priority)
 
 
+def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier():
+    """
+    Regression for the cache/tier interaction in the Anthropic geo/speed path.
+
+    When a request is served at "priority" and also carries a geo/speed
+    multiplier (here ``speed="fast"``), the cache portion is held out of the
+    multiplier so it is not scaled. That held-out cache cost must use the
+    served tier's cache rate; pricing it at the standard rate while the cache
+    embedded in ``prompt_cost`` is priced at the priority rate leaves a
+    ``(cache_priority - cache_standard)(multiplier - 1)`` billing error.
+    """
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-priority-cache-fast-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "cache_read_input_token_cost": 0.3e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "cache_read_input_token_cost_priority": 0.6e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+                "provider_specific_entry": {"fast": 2.0},
+            }
+        }
+    )
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200),
+    )
+    usage.speed = "fast"
+
+    prompt_cost, completion_cost = anthropic_cost_per_token(
+        model=model, usage=usage, service_tier="priority"
+    )
+
+    # non-cache input priced at the priority rate and scaled by the fast
+    # multiplier; the 200 cache-hit tokens priced at the priority cache rate
+    # and held out of the multiplier
+    expected_prompt = (1000 - 200) * 6e-6 * 2 + 200 * 0.6e-6
+    expected_completion = 500 * 30e-6 * 2
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost == pytest.approx(expected_completion)
+
+
 def test_gemini_cache_tokens_details_no_negative_values():
     """
     Test for Issue #18750: Negative text_tokens with Gemini caching
