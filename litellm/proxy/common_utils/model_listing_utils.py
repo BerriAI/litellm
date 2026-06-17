@@ -76,25 +76,51 @@ class TeamModelNameTranslator:
         )
 
     @staticmethod
-    def translate_listing(
+    def listing_entries(
         model_names: list[str],
         llm_router: "Router | None",
         general_settings: Mapping[str, object],
-    ) -> list[str]:
-        """Swap internal team routing keys for public names in a list response.
+    ) -> list[tuple[str, str]]:
+        """`(response_id, metadata_lookup_id)` for each listed model, de-duplicated
+        by response_id while preserving order.
 
-        Sibling deployments sharing a public name collapse to one entry while
-        preserving order; unmapped names (globals, access-group keys) pass through.
+        For team-scoped rows `response_id` is the public name shown to the client,
+        while `metadata_lookup_id` stays the internal routing key so downstream
+        metadata/fallback lookups (keyed by the routing name) still resolve. Both
+        ids are identical for unmapped names (globals, access-group keys).
         """
         internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(
             llm_router, general_settings
         )
         if not internal_to_public:
-            return model_names
-        deduped: dict[str, None] = {
-            internal_to_public.get(n, n): None for n in model_names
+            return [(name, name) for name in model_names]
+        public_to_internal = {
+            public: internal for internal, public in internal_to_public.items()
         }
-        return list(deduped)
+        ordered_response_ids: dict[str, None] = {
+            internal_to_public.get(name, name): None for name in model_names
+        }
+        return [
+            (response_id, public_to_internal.get(response_id, response_id))
+            for response_id in ordered_response_ids
+        ]
+
+    @staticmethod
+    def translate_listing(
+        model_names: list[str],
+        llm_router: "Router | None",
+        general_settings: Mapping[str, object],
+    ) -> list[str]:
+        """Public-name view of `model_names` (the `response_id` of each listing
+        entry). Sibling deployments sharing a public name collapse to one entry
+        while preserving order; unmapped names pass through.
+        """
+        return [
+            entry[0]
+            for entry in TeamModelNameTranslator.listing_entries(
+                model_names, llm_router, general_settings
+            )
+        ]
 
     @staticmethod
     def resolve_public_name(
