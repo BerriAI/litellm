@@ -499,3 +499,21 @@ async def test_run_model_health_check_threads_resolved_mode_to_ahealth_check():
     assert "max_tokens" not in probed_params
     assert probed_params["custom_llm_provider"] == "bedrock"
     assert probed_params["model"] == "amazon.titan-embed-text-v2:0"
+
+
+def test_autodetected_embedding_skips_reasoning_effort():
+    """reasoning_effort must not leak into an embedding probe whose mode is auto-detected.
+
+    Same bug class as the max_tokens fix: with no explicit `model_info.mode`, the
+    reasoning-effort gate used to read the raw (missing) mode and treat it as
+    chat-like, so a configured `health_check_reasoning_effort` was injected into a
+    Bedrock embedding probe, which embeddings reject as an unknown field. The mode
+    is now resolved from the cost map, so embeddings are excluded.
+    """
+    updated = _update_litellm_params_for_health_check(
+        {"health_check_reasoning_effort": "low"},
+        {"model": "bedrock/amazon.titan-embed-text-v2:0"},
+    )
+
+    assert "reasoning_effort" not in updated
+    assert "max_tokens" not in updated

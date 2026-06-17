@@ -73,7 +73,7 @@ def _resolve_health_check_mode(
 
 
 def _should_inject_health_check_max_tokens(
-    model_info: Mapping[str, object], litellm_params: Mapping[str, object]
+    model_info: Mapping[str, object], mode: str | None
 ) -> bool:
     """
     Whether the health-check probe should include `max_tokens`.
@@ -86,7 +86,6 @@ def _should_inject_health_check_max_tokens(
     explicit = model_info.get("health_check_supports_max_tokens")
     if explicit is not None:
         return bool(explicit)
-    mode = _resolve_health_check_mode(model_info, litellm_params)
     return (mode or "chat") in _MAX_TOKEN_SUPPORT_MODES
 
 
@@ -454,9 +453,12 @@ def _update_litellm_params_for_health_check(
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
     """
+    mode = _resolve_health_check_mode(
+        model_info, litellm_params  # any-ok: untyped router config dict
+    )
     litellm_params["messages"] = _get_random_llm_message()
     if _should_inject_health_check_max_tokens(
-        model_info, litellm_params  # any-ok: untyped router config dict
+        model_info, mode  # any-ok: untyped router config dict
     ):
         _resolved_max_tokens = _resolve_health_check_max_tokens(
             model_info, litellm_params
@@ -465,7 +467,7 @@ def _update_litellm_params_for_health_check(
             litellm_params["max_tokens"] = _resolved_max_tokens
 
     # Per-model reasoning effort for health checks only (e.g. reasoning_effort=none).
-    if model_info.get("mode", None) in _HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT:
+    if mode in _HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT:
         _hc_reasoning_effort = model_info.get("health_check_reasoning_effort", None)
         if _hc_reasoning_effort is not None:
             litellm_params["reasoning_effort"] = _hc_reasoning_effort
@@ -473,7 +475,7 @@ def _update_litellm_params_for_health_check(
     _health_check_model = model_info.get("health_check_model", None)
     if _health_check_model is not None:
         litellm_params["model"] = _health_check_model
-    if model_info.get("mode", None) == "audio_speech":
+    if mode == "audio_speech":
         litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
 
     # Handle Bedrock region routing format: bedrock/region/model
