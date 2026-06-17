@@ -274,8 +274,8 @@ class Router:
         ] = None,  # max fallbacks to try before exiting the call. Defaults to 5.
         timeout: Optional[float] = None,
         stream_timeout: Optional[float] = None,
-        ttft_timeout: Optional[float] = None,
-        stream_idle_timeout: Optional[float] = None,
+        ttft_timeout: float | None = None,
+        stream_idle_timeout: float | None = None,
         default_litellm_params: Optional[
             dict
         ] = None,  # default params for Router.chat.completion.create
@@ -2894,13 +2894,13 @@ class Router:
     async def _collect_stream_with_ttft_timeout(
         self,
         response: CustomStreamWrapper,
-        messages: List[Dict[str, str]],
-        ttft_timeout: Optional[float],
-        stream_idle_timeout: Optional[float] = None,
+        messages: list[dict[str, str]],
+        ttft_timeout: float | None,
+        stream_idle_timeout: float | None = None,
     ) -> ModelResponse:
         from litellm.main import stream_chunk_builder
 
-        chunks: List = []
+        chunks: list = []
         aiter = response.__aiter__()
 
         try:
@@ -3452,7 +3452,7 @@ class Router:
         )
         return timeout
 
-    def _get_ttft_timeout(self, kwargs: dict, data: dict) -> Optional[float]:
+    def _get_ttft_timeout(self, kwargs: dict, data: dict) -> float | None:
         for source in (
             kwargs.get("ttft_timeout"),
             data.get("ttft_timeout"),
@@ -3463,7 +3463,7 @@ class Router:
                 return source
         return None
 
-    def _get_stream_idle_timeout(self, kwargs: dict, data: dict) -> Optional[float]:
+    def _get_stream_idle_timeout(self, kwargs: dict, data: dict) -> float | None:
         for source in (
             kwargs.get("stream_idle_timeout"),
             data.get("stream_idle_timeout"),
