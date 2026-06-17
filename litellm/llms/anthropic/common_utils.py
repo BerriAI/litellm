@@ -3,11 +3,13 @@ This file contains common utils for anthropic calls.
 """
 
 import copy
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
 import litellm
+from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
@@ -1014,3 +1016,35 @@ def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:
 
     additional_headers = {**llm_response_headers, **openai_headers}
     return additional_headers
+
+
+def create_anthropic_model_list_response(model_ids: List[str]) -> dict:
+    """Build the Anthropic-native /v1/models envelope for Claude Code gateway discovery.
+
+    Claude Code 2.1.126+ queries the gateway root's /v1/models with an
+    anthropic-version header and only parses the Anthropic Models API shape
+    (type/display_name/created_at plus has_more/first_id/last_id). It keeps
+    models whose id starts with claude/anthropic, so the full list is returned
+    here and the client filters. display_name falls back to the id, which is
+    the stable label a gateway can offer for arbitrary upstream models.
+    """
+    created_at = (
+        datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    data = [
+        {
+            "type": "model",
+            "id": model_id,
+            "display_name": model_id,
+            "created_at": created_at,
+        }
+        for model_id in model_ids
+    ]
+    return {
+        "data": data,
+        "has_more": False,
+        "first_id": model_ids[0] if model_ids else None,
+        "last_id": model_ids[-1] if model_ids else None,
+    }
