@@ -175,6 +175,75 @@ class TestJSONProviderLoader:
         assert config.custom_llm_provider == "publicai"
 
 
+class TestPinstripes:
+    """Tests for Pinstripes JSON-configured provider"""
+
+    def test_pinstripes_json_config_exists(self):
+        """Test that pinstripes is configured in providers.json"""
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        assert JSONProviderRegistry.exists("pinstripes")
+
+        pinstripes = JSONProviderRegistry.get("pinstripes")
+        assert pinstripes is not None
+        assert pinstripes.base_url == "https://pinstripes.io/v1"
+        assert pinstripes.api_key_env == "PINSTRIPES_API_KEY"
+        assert pinstripes.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_pinstripes_provider_resolution(self):
+        """Test that provider resolution finds pinstripes and returns the default base URL"""
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="pinstripes/ps/glm-4.5-air",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "ps/glm-4.5-air"
+        assert provider == "pinstripes"
+        assert api_base == "https://pinstripes.io/v1"
+
+    def test_pinstripes_dynamic_config(self):
+        """Test dynamic config class creation for pinstripes"""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("pinstripes")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://pinstripes.io/v1"
+
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "https://custom.pinstripes.io/v1", "test-key"
+        )
+        assert api_base == "https://custom.pinstripes.io/v1"
+        assert api_key == "test-key"
+
+    def test_pinstripes_parameter_mapping(self):
+        """Test that max_completion_tokens is mapped to max_tokens for pinstripes"""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("pinstripes")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        optional_params = {}
+        non_default_params = {"max_completion_tokens": 100, "temperature": 0.7}
+        result = config.map_openai_params(
+            non_default_params, optional_params, "ps/glm-4.5-air", False
+        )
+
+        assert "max_tokens" in result
+        assert result["max_tokens"] == 100
+        assert "max_completion_tokens" not in result
+        assert result["temperature"] == 0.7
+
+
 class TestPublicAIIntegration:
     """Integration tests for PublicAI provider"""
 
