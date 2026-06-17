@@ -176,7 +176,7 @@ async def record_container_owners_from_responses_response(
             )
 
 
-def _resolve_container_team_id(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+def _resolve_container_team_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     """Return the team to share a newly-created container with, or ``None`` to
     keep it private to its creator. A container is team-visible only when the
     creator belongs to a team whose metadata opts in
@@ -295,7 +295,7 @@ async def record_container_owner(
 
 async def _get_container_owner_and_team(
     original_container_id: str, custom_llm_provider: str
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """Return ``(created_by, team_id)`` for a container in a single DB read.
 
     Both values live on the same row, so the access check fetches them together
@@ -347,7 +347,7 @@ async def _get_container_owner_and_team(
 
 async def _get_container_owner(
     original_container_id: str, custom_llm_provider: str
-) -> Optional[str]:
+) -> str | None:
     owner, _ = await _get_container_owner_and_team(
         original_container_id, custom_llm_provider
     )
@@ -477,7 +477,7 @@ async def _get_allowed_container_ids(
     # A caller sees containers they own (created_by in their scopes) plus any
     # team-visible container shared with their team. ``owner_scopes`` already
     # varies by team, so the cache key stays correct.
-    where_filter: Dict[str, Any] = {"file_purpose": CONTAINER_OBJECT_PURPOSE}
+    where_filter: dict[str, Any] = {"file_purpose": CONTAINER_OBJECT_PURPOSE}
     caller_team_id = getattr(user_api_key_dict, "team_id", None)
     if caller_team_id:
         where_filter["OR"] = [

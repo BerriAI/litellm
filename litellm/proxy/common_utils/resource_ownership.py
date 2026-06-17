@@ -93,9 +93,9 @@ def user_can_access_resource_owner(
 
 
 def user_can_access_resource_owner_or_team(
-    owner: Optional[str],
-    resource_team_id: Optional[str],
-    user_api_key_dict: Optional[UserAPIKeyAuth],
+    owner: str | None,
+    resource_team_id: str | None,
+    user_api_key_dict: UserAPIKeyAuth | None,
 ) -> bool:
     """Owner-scope access, widened to members of a team the resource is
     shared with. ``resource_team_id`` is only set when the creator opted the
