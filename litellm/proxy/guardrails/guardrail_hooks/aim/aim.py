@@ -129,9 +129,7 @@ class AimGuardrail(CustomGuardrail):
         return data
 
     @staticmethod
-    def _rejection(
-        message: str, *, openai_code: str | None = None
-    ) -> ProxyException:
+    def _rejection(message: str, *, openai_code: str | None = None) -> ProxyException:
         return ProxyException(
             message=message,
             type="invalid_request_error",
