@@ -6043,8 +6043,14 @@ def _get_model_info_helper(
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
                 ),
+                cache_read_input_token_cost_above_200k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "cache_read_input_token_cost_above_200k_tokens_priority", None
+                ),
                 cache_read_input_token_cost_above_272k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens", None
+                ),
+                cache_read_input_token_cost_above_272k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "cache_read_input_token_cost_above_272k_tokens_priority", None
                 ),
                 cache_read_input_token_cost_above_512k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_512k_tokens", None
@@ -6067,8 +6073,14 @@ def _get_model_info_helper(
                 input_cost_per_token_above_200k_tokens=_model_info.get(
                     "input_cost_per_token_above_200k_tokens", None
                 ),
+                input_cost_per_token_above_200k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "input_cost_per_token_above_200k_tokens_priority", None
+                ),
                 input_cost_per_token_above_272k_tokens=_model_info.get(
                     "input_cost_per_token_above_272k_tokens", None
+                ),
+                input_cost_per_token_above_272k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "input_cost_per_token_above_272k_tokens_priority", None
                 ),
                 input_cost_per_token_above_512k_tokens=_model_info.get(
                     "input_cost_per_token_above_512k_tokens", None
@@ -6125,8 +6137,14 @@ def _get_model_info_helper(
                 output_cost_per_token_above_200k_tokens=_model_info.get(
                     "output_cost_per_token_above_200k_tokens", None
                 ),
+                output_cost_per_token_above_200k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "output_cost_per_token_above_200k_tokens_priority", None
+                ),
                 output_cost_per_token_above_272k_tokens=_model_info.get(
                     "output_cost_per_token_above_272k_tokens", None
+                ),
+                output_cost_per_token_above_272k_tokens_priority=_model_info.get(  # any-ok: untyped cost map
+                    "output_cost_per_token_above_272k_tokens_priority", None
                 ),
                 output_cost_per_token_above_512k_tokens=_model_info.get(
                     "output_cost_per_token_above_512k_tokens", None

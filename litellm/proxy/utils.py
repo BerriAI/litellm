@@ -2089,7 +2089,7 @@ class ProxyLogging:
             litellm_call_id=request_data.get("litellm_call_id", ""), status="fail"
         )
         if AlertType.llm_exceptions in self.alert_types and not isinstance(
-            original_exception, HTTPException
+            original_exception, (HTTPException, ProxyException)
         ):
             """
             Just alert on LLM API exceptions. Do not alert on user errors
@@ -2193,6 +2193,7 @@ class ProxyLogging:
         e.g should only return True for:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
+            - ProxyException (guardrail blocks, budget / rate-limit errors)
         """
 
         #########################################################
@@ -2209,7 +2210,7 @@ class ProxyLogging:
         ):
             return False
 
-        return isinstance(original_exception, HTTPException) or (
+        return isinstance(original_exception, (HTTPException, ProxyException)) or (
             error_type == ProxyErrorTypes.auth_error
         )
 
