@@ -591,3 +591,108 @@ async def test_advisor_creds_honored_when_proxy_opt_in_enabled():
         captured = await _run_advisor_and_capture_subcall_kwargs()
     assert captured["api_key"] == "sk-attacker"
     assert captured["api_base"] == "https://attacker.example"
+
+
+# ---------------------------------------------------------------------------
+# 13. The proxy gate itself: _allow_client_side_advisor_credentials() and the
+#     full handle() driven by the real proxy general_settings flag.
+# ---------------------------------------------------------------------------
+
+
+def _fake_proxy_server(general_settings: Dict):
+    """A stand-in litellm.proxy.proxy_server module exposing general_settings.
+
+    The real proxy_server pulls in heavy optional deps that may be absent in a
+    unit-test environment, so the gate's
+    ``from litellm.proxy.proxy_server import general_settings`` is satisfied by
+    injecting this lightweight module into sys.modules.
+    """
+    import types
+
+    module = types.ModuleType("litellm.proxy.proxy_server")
+    module.general_settings = general_settings  # type: ignore[attr-defined]
+    return module
+
+
+def test_allow_client_side_advisor_credentials_reads_proxy_flag():
+    """The gate mirrors the proxy's allow_client_side_credentials opt-in."""
+    import sys
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        _allow_client_side_advisor_credentials,
+    )
+
+    cases = (
+        ({"allow_client_side_credentials": True}, True),
+        ({"allow_client_side_credentials": False}, False),
+        # Flag absent entirely -> default deny on the proxy.
+        ({}, False),
+    )
+    for settings, expected in cases:
+        with patch.dict(
+            sys.modules,
+            {"litellm.proxy.proxy_server": _fake_proxy_server(settings)},
+        ):
+            assert _allow_client_side_advisor_credentials() is expected
+
+
+def test_allow_client_side_advisor_credentials_defaults_true_outside_proxy():
+    """Outside the proxy (proxy_server import unavailable), there is no admin
+    boundary, so the gate permits client-supplied routing."""
+    import builtins
+    import sys
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        _allow_client_side_advisor_credentials,
+    )
+
+    real_import = builtins.__import__
+
+    def _blocked_import(name, *args, **kwargs):
+        if name == "litellm.proxy.proxy_server":
+            raise ImportError("proxy server unavailable")
+        return real_import(name, *args, **kwargs)
+
+    with patch.dict(sys.modules):
+        sys.modules.pop("litellm.proxy.proxy_server", None)
+        with patch.object(builtins, "__import__", _blocked_import):
+            assert _allow_client_side_advisor_credentials() is True
+
+
+@pytest.mark.asyncio
+async def test_advisor_ignores_tool_credentials_when_clientside_disabled():
+    """Driven by the real proxy flag (not a patched gate): with
+    allow_client_side_credentials False, the tool-supplied api_base/api_key must
+    not reach the advisor sub-call."""
+    import sys
+
+    with patch.dict(
+        sys.modules,
+        {
+            "litellm.proxy.proxy_server": _fake_proxy_server(
+                {"allow_client_side_credentials": False}
+            )
+        },
+    ):
+        captured = await _run_advisor_and_capture_subcall_kwargs()
+    assert captured["api_key"] is None
+    assert captured["api_base"] is None
+
+
+@pytest.mark.asyncio
+async def test_advisor_uses_tool_credentials_when_clientside_enabled():
+    """Driven by the real proxy flag: with allow_client_side_credentials True,
+    the tool-supplied api_base/api_key flow through to the advisor sub-call."""
+    import sys
+
+    with patch.dict(
+        sys.modules,
+        {
+            "litellm.proxy.proxy_server": _fake_proxy_server(
+                {"allow_client_side_credentials": True}
+            )
+        },
+    ):
+        captured = await _run_advisor_and_capture_subcall_kwargs()
+    assert captured["api_key"] == "sk-attacker"
+    assert captured["api_base"] == "https://attacker.example"
