@@ -39,8 +39,10 @@ async def list_plugins(
 ) -> list:
     """Return registered plugins for authenticated UI callers.
 
-    plugin_key is only returned to callers with a valid litellm token.
+    plugin_key is only returned to proxy admins — not to regular users —
+    so plugin credentials cannot be extracted by non-admin callers.
     """
+    is_admin = getattr(user_api_key_dict, "user_role", None) == "proxy_admin"
     result = []
     for name, plugin in _plugin_registry.items():
         entry: dict = {
@@ -48,7 +50,7 @@ async def list_plugins(
             "display_name": plugin.get("display_name", name),
             "url": plugin.get("url", ""),
         }
-        if plugin.get("plugin_key"):
+        if is_admin and plugin.get("plugin_key"):
             entry["plugin_key"] = plugin["plugin_key"]
         result.append(entry)
     return result
