@@ -1,8 +1,8 @@
-"""Thin dry-run wrappers around every Agent Shin GitHub mutation.
+"""Dry-run wrapper(s) around Agent Shin GitHub mutations.
 
-Every destructive operation the rollout scripts perform is funneled through a
-``maybe_*`` helper here. The helpers take a single ``dry_run: bool`` keyword
-argument and the body is intentionally trivial:
+The rollout scripts currently need only one mutation wrapped, so this module
+exposes a single ``maybe_post_comment`` helper. It takes a ``dry_run: bool``
+keyword argument and the body is intentionally trivial:
 
     if dry_run:
         print(...)        # log what we would do, return
@@ -13,12 +13,14 @@ That shape means a dry-run preview differs from the real run in exactly one
 line per side effect: the call site. So when you `python3 script.py` locally
 without ``--close``, you can be confident the actions printed are the ones the
 GitHub Action would have performed (modulo ordering on retry/error paths,
-which are deliberately simple).
+which are deliberately simple). Any further mutation a rollout script needs
+should get the same ``maybe_*`` treatment instead of calling the raw
+``triage_with_llm`` mutation directly.
 
-Importing from this module pulls in the real mutations from
-``triage_with_llm`` — call sites in the rollout scripts should NEVER import
-``post_comment`` / ``close_pr`` / etc. directly; that would skip the dry-run
-gate and is the bug class this module exists to prevent.
+Importing from this module pulls in the real mutation from ``triage_with_llm``
+— call sites in the rollout scripts should NEVER import ``post_comment``
+directly; that would skip the dry-run gate and is the bug class this module
+exists to prevent.
 """
 
 from __future__ import annotations
