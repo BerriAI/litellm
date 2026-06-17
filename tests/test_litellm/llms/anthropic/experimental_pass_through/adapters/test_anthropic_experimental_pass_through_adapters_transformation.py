@@ -1686,6 +1686,43 @@ def test_cache_control_not_preserved_in_tools_for_non_claude():
     assert "cache_control" not in result[0]
 
 
+def test_translate_anthropic_tools_to_openai_does_not_leak_top_level_type():
+    """Anthropic's top-level ``type`` (e.g. ``"custom"``) must not leak into the
+    OpenAI function ``parameters.type`` field. Backends (OpenAI, Azure, Bedrock)
+    reject a parameters schema with ``type: "custom"`` because it is not a valid
+    JSON-Schema type. The top-level ``type`` is an Anthropic-specific tool
+    discriminator and has no equivalent in the OpenAI function-calling schema.
+    Regression test for #30557.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    tools = [
+        {
+            "type": "custom",  # Anthropic client tool type, not an OpenAI field
+            "name": "get_weather",
+            "description": "Get weather",
+            "input_schema": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+            },
+        }
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, _ = adapter.translate_anthropic_tools_to_openai(tools=tools, model=None)
+
+    assert len(result) == 1
+    translated = result[0]
+    # Top-level type must not leak into the function parameters schema.
+    params = translated["function"]["parameters"]
+    assert params["type"] == "object", (
+        f"top-level Anthropic tool 'type' leaked into OpenAI function parameters.type "
+        f"(got {params['type']!r}, expected 'object')"
+    )
+
+
 def test_translate_anthropic_tools_to_openai_fills_missing_tool_name():
     """Schema-only tools (no ``name``) must not crash the Converse adapter path."""
     tools = [

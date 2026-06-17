@@ -859,7 +859,14 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         new_tools: List[ChatCompletionToolParam] = []
         tool_name_mapping: Dict[str, str] = {}
-        mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
+        # Note: "type" is intentionally listed here even though it is read
+        # above (line 866) to check for Anthropic-hosted tools. For non-hosted
+        # tools the top-level `type` (e.g. Anthropic's "custom") is an
+        # Anthropic-specific field that does not map to OpenAI's function
+        # tool parameters schema — leaking it into `parameters` corrupts
+        # the schema (backends reject `type: "custom"` since it is not a
+        # valid JSON-Schema type). See #30557.
+        mapped_tool_params = ["name", "input_schema", "description", "cache_control", "type"]
 
         for idx, tool in enumerate(tools):
             # Check if this is an Anthropic-native tool that should be kept as-is
