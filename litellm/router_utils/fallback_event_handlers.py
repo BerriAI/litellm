@@ -40,11 +40,11 @@ def _prefill_explicitly_unsupported(model_group: Optional[str]) -> bool:
 
 
 def build_mid_stream_continuation_messages(
-    messages: List[Any],
+    messages: list[Any],
     generated_content: str,
     model_group: Optional[str],
-    fallbacks: Optional[List[Any]] = None,
-) -> List[Any]:
+    fallbacks: Optional[list[Any]] = None,
+) -> list[Any]:
     """Build the message list a mid-stream fallback uses to resume an interrupted stream.
 
     By default the partial response is appended as a prefixed assistant message,
@@ -63,7 +63,7 @@ def build_mid_stream_continuation_messages(
     configured fallback target for this model group is explicitly marked as
     not supporting prefill.
     """
-    candidate_models: List[Optional[str]] = [model_group]
+    candidate_models: list[Optional[str]] = [model_group]
     if fallbacks is not None and model_group is not None:
         try:
             # Shallow copy: get_fallback_model_group POPS a matching entry from
