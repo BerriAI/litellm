@@ -8537,6 +8537,8 @@ async def model_list(
 async def model_info(
     model_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    team_id: Optional[str] = None,
+    healthy_only: Optional[bool] = False,
 ):
     """
     Retrieve information about a specific model accessible to your API key.
@@ -8546,6 +8548,10 @@ async def model_info(
 
     Follows OpenAI API specification for individual model retrieval.
     https://platform.openai.com/docs/api-reference/models/retrieve
+
+    Query parameters mirror `/v1/models` so the same caller context (team
+    scoping, health filtering, paused deployments) drives both endpoints; the
+    listing's public id must resolve to the same internal deployment here.
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
@@ -8557,7 +8563,6 @@ async def model_info(
         validate_model_access,
     )
 
-    # Get available models for the user
     all_models = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
@@ -8565,15 +8570,25 @@ async def model_info(
         user_model=user_model,
         prisma_client=prisma_client,
         proxy_logging_obj=proxy_logging_obj,
-        team_id=None,
+        team_id=team_id,
         include_model_access_groups=False,
         only_model_access_groups=False,
         return_wildcard_routes=False,
         user_api_key_cache=user_api_key_cache,
     )
 
-    # Resolve a public team name back to the internal routing key for lookup,
-    # while the response keeps the public name so listing and retrieve agree.
+    # Mirror /v1/models' visibility filter so first-occurrence resolution
+    # cannot land on a deployment the listing had hidden.
+    blocked_names = (
+        llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
+    )
+    unhealthy_names: Set[str] = set()
+    if healthy_only and llm_router is not None:
+        unhealthy_names = await llm_router.async_get_fully_unhealthy_model_names()
+    hidden_names = blocked_names | unhealthy_names
+    if hidden_names:
+        all_models = [m for m in all_models if m not in hidden_names]
+
     resolved_model_id = TeamModelNameTranslator.resolve_public_name(
         model_id=model_id,
         available_models=all_models,
