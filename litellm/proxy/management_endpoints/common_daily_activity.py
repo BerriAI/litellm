@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
@@ -390,38 +390,24 @@ def _adjust_dates_for_timezone(
     timezone_offset_minutes: Optional[int],
 ) -> Tuple[str, str]:
     """
-    Adjust date range to account for timezone differences.
+    Pass-through for the local date range; the timezone offset is intentionally ignored here.
 
-    The database stores dates in UTC. When a user in a different timezone
-    selects a local date range, we need to expand the UTC query range to
-    capture all records that fall within their local date range.
+    The aggregation table (e.g. LiteLLM_DailyUserSpend) stores spend in whole-UTC-day
+    buckets keyed on date as YYYY-MM-DD. Any conversion from a local date range to a
+    UTC date range using only date arithmetic must round to whole UTC days, allowing up
+    to 24h of slop at each boundary. The previous implementation expanded the SQL range
+    by an extra full UTC day on whichever side the offset pointed, which pulled in 24h
+    of unrelated bucket data per boundary and produced approximately 100% over-counting
+    on single-day queries (e.g. IST May 29 returning UTC May 28 + UTC May 29 in full).
+    Sums of single-day queries then exceeded the equivalent multi-day aggregate, which
+    is mathematically impossible.
 
-    Args:
-        start_date: Start date in YYYY-MM-DD format (user's local date)
-        end_date: End date in YYYY-MM-DD format (user's local date)
-        timezone_offset_minutes: Minutes behind UTC (positive = west of UTC)
-            This matches JavaScript's Date.getTimezoneOffset() convention.
-            For example: PST = +480 (8 hours * 60 = 480 minutes behind UTC)
-
-    Returns:
-        Tuple of (adjusted_start_date, adjusted_end_date) in YYYY-MM-DD format
+    Treating the local date as the UTC date trades a small one-time boundary slop for
+    correct, monotonic, additive results across single-day and multi-day queries. A
+    later fix can introduce hour-level buckets or pro-rata weighting on adjacent UTC
+    days; both require data the current schema does not store.
     """
-    if timezone_offset_minutes is None or timezone_offset_minutes == 0:
-        return start_date, end_date
-
-    start = datetime.strptime(start_date, "%Y-%m-%d")
-    end = datetime.strptime(end_date, "%Y-%m-%d")
-
-    if timezone_offset_minutes > 0:
-        # West of UTC (Americas): local evening extends into next UTC day
-        # e.g., Feb 4 23:59 PST = Feb 5 07:59 UTC
-        end = end + timedelta(days=1)
-    else:
-        # East of UTC (Asia/Europe): local morning starts in previous UTC day
-        # e.g., Feb 4 00:00 IST = Feb 3 18:30 UTC
-        start = start - timedelta(days=1)
-
-    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+    return start_date, end_date
 
 
 def _build_where_conditions(

@@ -1421,8 +1421,11 @@ class MCPServerManager:
                     "No allowed MCP Servers found for user api key auth."
                 )
             return list(combined_servers)
-        except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}.")
+        except Exception:  # noqa: BLE001
+            verbose_logger.exception(
+                "Failed to get allowed MCP servers; team-level object_permission "
+                "grants may be dropped. Falling back to global servers only."
+            )
             return allow_all_server_ids
 
     async def resolve_toolset_tool_permissions(

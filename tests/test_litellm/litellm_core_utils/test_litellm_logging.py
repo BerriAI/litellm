@@ -3115,6 +3115,71 @@ class TestFirstApiCallStartTimeSetOnce:
         assert user_meta == {}
 
 
+def test_get_error_information_for_logging_payload_ignores_spoofed_disconnect_without_flag():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    baseline = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=ValueError("provider failure"),
+    )
+    error_information, error_str = (
+        StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
+            metadata={
+                "error_information": {
+                    "error_code": "499",
+                    "error_message": "Client disconnected the request",
+                    "error_class": "ClientDisconnected",
+                }
+            },
+            original_exception=ValueError("provider failure"),
+            error_str="provider failure",
+        )
+    )
+    assert error_information == baseline
+    assert error_str == "provider failure"
+
+
+def test_get_error_information_for_logging_payload_client_disconnect():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    custom_error = {
+        "error_code": "499",
+        "error_message": "Client disconnected the request",
+        "error_class": "ClientDisconnected",
+    }
+    error_information, error_str = (
+        StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
+            metadata={"client_disconnected": True, "error_information": custom_error},
+            original_exception=None,
+            error_str=None,
+        )
+    )
+    assert error_information == custom_error
+    assert error_str == "Client disconnected the request"
+
+    error_information, error_str = (
+        StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
+            metadata={"client_disconnected": True},
+            original_exception=None,
+            error_str="existing error",
+        )
+    )
+    assert error_information["error_code"] == "499"
+    assert error_str == "existing error"
+
+    baseline = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=None,
+    )
+    error_information, error_str = (
+        StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
+            metadata={},
+            original_exception=None,
+            error_str=None,
+        )
+    )
+    assert error_information == baseline
+    assert error_str is None
+
+
 def test_get_error_information_proxy_exception_preserves_message():
     """ProxyException keeps its text in ``.message`` (str() was empty pre-fix),
     so error_information must still surface the message and code."""
