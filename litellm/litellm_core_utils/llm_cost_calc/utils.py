@@ -191,6 +191,21 @@ def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> st
     return base_key
 
 
+def _parse_above_threshold_tokens(key: str) -> float:
+    """Numeric token threshold encoded in an ``..._above_<N>[k]_tokens`` cost key.
+
+    Returns ``-inf`` for unparseable keys so they sort last and are skipped by the
+    selection loop's own error handling.
+    """
+    try:
+        threshold_str = key.split("_above_")[1].split("_tokens")[0]
+        return float(threshold_str.replace("k", "")) * (
+            1000 if "k" in threshold_str else 1
+        )
+    except (IndexError, ValueError):
+        return float("-inf")
+
+
 def _get_token_base_cost(
     model_info: ModelInfo, usage: Usage, service_tier: Optional[str] = None
 ) -> Tuple[float, float, float, float, float]:
@@ -254,18 +269,19 @@ def _get_token_base_cost(
             cache_read_cost,
         )
 
-    # Only sort the threshold keys (typically 1-2 keys instead of 66+)
+    # Sort by the parsed numeric threshold (descending), not the raw key string. A lexicographic
+    # sort orders tiers of different digit lengths wrong (e.g. "..._above_90k_tokens" would precede
+    # "..._above_128k_tokens"), so a request crossing both could be billed at the lower 90k tier
+    # instead of the highest 128k tier it actually crosses.
     threshold: Optional[float] = None
-    for key in sorted(threshold_keys, reverse=True):
+    for key in sorted(threshold_keys, key=_parse_above_threshold_tokens, reverse=True):
         value = model_info.get(key)
         if value is not None:
             try:
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
+                threshold = _parse_above_threshold_tokens(key)
                 threshold_str = key.split("_above_")[1].split("_tokens")[0]
-                threshold = float(threshold_str.replace("k", "")) * (
-                    1000 if "k" in threshold_str else 1
-                )
-                if usage.prompt_tokens > threshold:
+                if threshold != float("-inf") and usage.prompt_tokens > threshold:
                     # Prefer a service_tier-specific above-threshold key when available,
                     # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
                     # ON_DEMAND_PRIORITY.  Falls back to the standard key automatically
