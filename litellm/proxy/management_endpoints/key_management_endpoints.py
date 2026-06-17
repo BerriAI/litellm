@@ -3239,10 +3239,8 @@ async def _get_model_max_budget_current_spend(
         f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:"
         f"{api_key_hash}:{model}:{budget_config.budget_duration}"
     )
-    current_spend: float | None = (
-        await user_api_key_cache.async_get_cache(  # any-ok: untyped dump
-            key=virtual_key_model_spend_cache_key,
-        )
+    current_spend: float | None = await user_api_key_cache.async_get_cache(
+        key=virtual_key_model_spend_cache_key,
     )
     if current_spend is None:
         model_without_prefix = model.split("/")[-1] if "/" in model else model
@@ -3250,13 +3248,11 @@ async def _get_model_max_budget_current_spend(
             f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:"
             f"{api_key_hash}:{model_without_prefix}:{budget_config.budget_duration}"
         )
-        current_spend = (
-            await user_api_key_cache.async_get_cache(  # any-ok: untyped dump
-                key=virtual_key_model_spend_cache_key,
-            )
+        current_spend = await user_api_key_cache.async_get_cache(
+            key=virtual_key_model_spend_cache_key,
         )
     try:
-        return float(current_spend or 0.0)  # any-ok: untyped dump
+        return float(current_spend or 0.0)
     except (TypeError, ValueError):
         return 0.0
 
@@ -3365,27 +3361,17 @@ async def info_key_fn_v2(
                 k_dict = k.model_dump()
             except Exception:
                 k_dict = k.dict()
-            k_token_hash = k_dict.pop("token", None)  # any-ok: untyped dump
+            k_token_hash = k_dict.pop("token", None)
 
-            model_max_budget = (
-                k_dict.get("model_max_budget") or {}  # any-ok: untyped dump
-            )
-            budget_table = (
-                k_dict.get("litellm_budget_table") or {}  # any-ok: untyped dump
-            )
-            if not model_max_budget and isinstance(  # any-ok: untyped dump
-                budget_table, dict  # any-ok: untyped dump
-            ):
-                model_max_budget = (
-                    budget_table.get("model_max_budget") or {}  # any-ok: untyped dump
-                )
-            if model_max_budget and k_token_hash:  # any-ok: untyped dump
-                k_dict["model_max_budget_usage"] = (  # any-ok: untyped dump
-                    await _build_model_max_budget_usage(  # any-ok: untyped dump
-                        api_key_hash=k_token_hash,  # any-ok: untyped dump
-                        model_max_budget=model_max_budget,  # any-ok: untyped dump
-                        user_api_key_cache=user_api_key_cache,
-                    )
+            model_max_budget = k_dict.get("model_max_budget") or {}
+            budget_table = k_dict.get("litellm_budget_table") or {}
+            if not model_max_budget and isinstance(budget_table, dict):
+                model_max_budget = budget_table.get("model_max_budget") or {}
+            if model_max_budget and k_token_hash:
+                k_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
+                    api_key_hash=k_token_hash,
+                    model_max_budget=model_max_budget,
+                    user_api_key_cache=user_api_key_cache,
                 )
 
             filtered_key_info.append(k_dict)
@@ -3470,27 +3456,17 @@ async def info_key_fn(
         except Exception:
             # if using pydantic v1
             key_info = key_info.dict()
-        key_token_hash = key_info.pop("token")  # any-ok: untyped dump
+        key_token_hash = key_info.pop("token")
 
-        model_max_budget = (
-            key_info.get("model_max_budget") or {}  # any-ok: untyped dump
-        )
-        budget_table = (
-            key_info.get("litellm_budget_table") or {}  # any-ok: untyped dump
-        )
-        if not model_max_budget and isinstance(  # any-ok: untyped dump
-            budget_table, dict  # any-ok: untyped dump
-        ):
-            model_max_budget = (
-                budget_table.get("model_max_budget") or {}  # any-ok: untyped dump
-            )
-        if model_max_budget and key_token_hash:  # any-ok: untyped dump
-            key_info["model_max_budget_usage"] = (  # any-ok: untyped dump
-                await _build_model_max_budget_usage(  # any-ok: untyped dump
-                    api_key_hash=key_token_hash,  # any-ok: untyped dump
-                    model_max_budget=model_max_budget,  # any-ok: untyped dump
-                    user_api_key_cache=user_api_key_cache,
-                )
+        model_max_budget = key_info.get("model_max_budget") or {}
+        budget_table = key_info.get("litellm_budget_table") or {}
+        if not model_max_budget and isinstance(budget_table, dict):
+            model_max_budget = budget_table.get("model_max_budget") or {}
+        if model_max_budget and key_token_hash:
+            key_info["model_max_budget_usage"] = await _build_model_max_budget_usage(
+                api_key_hash=key_token_hash,
+                model_max_budget=model_max_budget,
+                user_api_key_cache=user_api_key_cache,
             )
 
         # Attach object_permission if object_permission_id is set

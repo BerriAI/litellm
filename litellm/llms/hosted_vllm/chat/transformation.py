@@ -205,53 +205,40 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     tool_calls: list[ChatCompletionAssistantToolCall] = []
                     content_blocks: list[object] = []
                     has_structured_content = False
-                    for c in existing_content:  # any-ok: untyped content
-                        if (
-                            isinstance(c, dict)  # any-ok: untyped content
-                            and c.get("type") == "text"  # any-ok: untyped content
-                        ):
-                            text_parts.append(  # any-ok: untyped content
-                                c.get("text", "")  # any-ok: untyped content
-                            )
-                            content_blocks.append(c)  # any-ok: untyped content
-                        elif (
-                            isinstance(c, dict)  # any-ok: untyped content
-                            and c.get("type") == "tool_use"  # any-ok: untyped content
-                        ):
-                            tool_input = c.get("input", {})  # any-ok: untyped content
+                    for c in existing_content:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            text_parts.append(c.get("text", ""))
+                            content_blocks.append(c)
+                        elif isinstance(c, dict) and c.get("type") == "tool_use":
+                            tool_input = c.get("input", {})
                             tool_calls.append(
                                 ChatCompletionAssistantToolCall(
-                                    id=c.get("id"),  # any-ok: untyped content
+                                    id=c.get("id"),
                                     type="function",
                                     function=ChatCompletionToolCallFunctionChunk(
-                                        name=c.get("name"),  # any-ok: untyped content
+                                        name=c.get("name"),
                                         arguments=(
                                             tool_input
                                             if isinstance(
-                                                tool_input,  # any-ok: untyped content
-                                                str,  # any-ok: untyped content
+                                                tool_input,
+                                                str,
                                             )
-                                            else json.dumps(
-                                                tool_input  # any-ok: untyped content
-                                            )
+                                            else json.dumps(tool_input)
                                         ),
                                     ),
                                 )
                             )
                         else:
-                            content_blocks.append(c)  # any-ok: untyped content
+                            content_blocks.append(c)
                             has_structured_content = True
                     if tool_calls:
                         existing_tool_calls = message.get("tool_calls")
                         if isinstance(existing_tool_calls, list):
                             existing_tool_call_ids = {
-                                tool_call.get("id")  # any-ok: untyped content
+                                tool_call.get("id")
                                 for tool_call in existing_tool_calls
-                                if isinstance(
-                                    tool_call, dict
-                                )  # any-ok: untyped content
-                                and tool_call.get("id")
-                                is not None  # any-ok: untyped content
+                                if isinstance(tool_call, dict)
+                                and tool_call.get("id") is not None
                             }
                             new_tool_calls = [
                                 tool_call
@@ -264,7 +251,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                                 )
                         else:
                             message["tool_calls"] = tool_calls
-                    content_str = "\n".join(text_parts)  # any-ok: untyped content
+                    content_str = "\n".join(text_parts)
                     new_content = (
                         content_blocks if has_structured_content else content_str
                     )

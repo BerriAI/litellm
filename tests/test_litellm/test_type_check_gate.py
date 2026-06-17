@@ -10,22 +10,6 @@ _spec.loader.exec_module(gate)
 ROOT = gate.REPO_ROOT
 
 
-def test_mypy_counts_per_code_ignoring_lines_notes_and_summary():
-    text = "\n".join(
-        [
-            f"{ROOT}/litellm/utils.py:10: error: missing annotation  [no-untyped-def]",
-            f"{ROOT}/litellm/utils.py:9999: error: missing annotation  [no-untyped-def]",
-            f"{ROOT}/litellm/main.py:5: error: Returning Any  [no-any-return]",
-            f"{ROOT}/litellm/main.py:5: note: see here",
-            "Found 3 errors in 2 files (checked 100 source files)",
-        ]
-    )
-    assert gate.count_errors(text, "mypy") == {
-        "no-untyped-def": 2,
-        "no-any-return": 1,
-    }
-
-
 def _bpr(file, severity, rule):
     diag = {"file": str(file), "severity": severity, "message": "msg"}
     if rule is not None:
@@ -46,7 +30,7 @@ def test_basedpyright_counts_per_rule_from_json_not_warnings():
             ]
         }
     )
-    assert gate.count_errors(payload, "basedpyright") == {
+    assert gate.count_basedpyright(payload) == {
         "reportUnknownVariableType": 2,
         "reportArgumentType": 1,
     }
@@ -56,17 +40,10 @@ def test_basedpyright_error_without_a_rule_is_bucketed():
     payload = json.dumps(
         {"generalDiagnostics": [_bpr(f"{ROOT}/litellm/x.py", "error", None)]}
     )
-    assert gate.count_errors(payload, "basedpyright") == {gate.UNCODED: 1}
-
-
-def test_mypy_error_without_a_code_is_bucketed_so_it_is_still_gated():
-    text = f"{ROOT}/litellm/x.py:1: error: something broke with no code"
-    assert gate.count_errors(text, "mypy") == {gate.UNCODED: 1}
+    assert gate.count_basedpyright(payload) == {gate.UNCODED: 1}
 
 
 def test_paths_outside_repo_are_skipped():
-    text = "/tmp/elsewhere.py:1: error: missing annotation  [no-untyped-def]"
-    assert gate.count_errors(text, "mypy") == {}
     payload = json.dumps(
         {
             "generalDiagnostics": [
@@ -74,7 +51,7 @@ def test_paths_outside_repo_are_skipped():
             ]
         }
     )
-    assert gate.count_errors(payload, "basedpyright") == {}
+    assert gate.count_basedpyright(payload) == {}
 
 
 def test_at_or_under_ceiling_passes():
@@ -124,10 +101,10 @@ def test_malformed_basedpyright_json_exits_loudly_not_as_zero_errors():
     import pytest
 
     with pytest.raises(SystemExit):
-        gate.count_errors("startup warning\n{not json", "basedpyright")
+        gate.count_basedpyright("startup warning\n{not json")
 
 
 def test_empty_basedpyright_payload_counts_zero():
     # Empty (not malformed) output parses to zero; the vacuous-run guard, not the
     # parser, is what rejects an empty run.
-    assert gate.count_errors("", "basedpyright") == {}
+    assert gate.count_basedpyright("") == {}

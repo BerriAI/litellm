@@ -48,24 +48,7 @@ def test_dropped_rule_is_a_regression():
 
 
 def test_new_rule_in_head_is_clean():
-    assert ratchet.regressions_for("b.json", {}, {"LIT009": _spec_of(5, 0)}) == []
-
-
-def test_dropped_file_in_the_any_budget_is_not_a_regression():
-    # any-discipline is file-keyed: an absent file means ceiling 0, so cleaning a
-    # file to zero (which drops its entry on --update) is a tightening, never the
-    # loosening a dropped rule is for the rule-keyed budgets.
-    base = {"litellm/x.py": _spec_of(10, 5)}
-    assert ratchet.regressions_for("any-discipline-budget.json", base, {}) == []
-
-
-def test_raised_ceiling_in_the_any_budget_is_still_a_regression():
-    base = {"litellm/x.py": _spec_of(10, 5)}  # ceiling 15
-    regs = ratchet.regressions_for(
-        "any-discipline-budget.json", base, {"litellm/x.py": _spec_of(20, 10)}  # ceiling 30
-    )
-    assert [r.rule for r in regs] == ["litellm/x.py"]
-    assert "15 -> 30" in regs[0].detail
+    assert ratchet.regressions_for("b.json", {}, {"new-rule": _spec_of(5, 0)}) == []
 
 
 def test_deleted_budget_file_is_a_regression():

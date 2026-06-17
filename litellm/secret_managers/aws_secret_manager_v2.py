@@ -321,13 +321,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         )
 
         try:
-            response = await async_client.post(  # any-ok: untyped httpx
+            response = await async_client.post(
                 url=endpoint_url,
-                headers=headers,  # any-ok: untyped httpx
-                data=body.decode("utf-8"),  # any-ok: untyped httpx
+                headers=headers,
+                data=body.decode("utf-8"),
             )
-            response.raise_for_status()  # any-ok: untyped httpx
-            create_response = response.json()  # any-ok: untyped httpx
+            response.raise_for_status()
+            create_response = response.json()
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -338,7 +338,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 await self.async_replicate_secret(
                     secret_name=secret_name,
                     replica_regions=self.replica_regions,
-                    optional_params=optional_params,  # any-ok: untyped httpx
+                    optional_params=optional_params,
                     timeout=timeout,
                 )
                 verbose_logger.debug(
@@ -354,7 +354,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                     str(replication_err),
                 )
 
-        return create_response  # any-ok: untyped httpx
+        return create_response
 
     async def async_replicate_secret(
         self,
@@ -392,7 +392,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             "AddReplicaRegions": [{"Region": r} for r in replica_regions],
         }
 
-        endpoint_url, headers, body = self._prepare_request(  # any-ok: untyped httpx
+        endpoint_url, headers, body = self._prepare_request(
             action="ReplicateSecretToRegions",
             secret_name=secret_name,
             optional_params=optional_params,
@@ -401,7 +401,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
 
         async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
-            params={"timeout": timeout},  # any-ok: untyped httpx
+            params={"timeout": timeout},
         )
 
         try:
