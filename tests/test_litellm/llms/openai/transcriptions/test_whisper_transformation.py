@@ -7,6 +7,8 @@ import io
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from litellm.llms.openai.transcriptions.whisper_transformation import (
     OpenAIWhisperAudioTranscriptionConfig,
 )
@@ -47,8 +49,9 @@ class TestWhisperTransformRequestResponseFormat:
 
 
 class TestWhisperTransformResponse:
-    def _make_response(self, *, text: str, is_json: bool):
+    def _make_response(self, *, text: str, content_type: str, is_json: bool):
         mock = MagicMock()
+        mock.headers = {"content-type": content_type}
         if is_json:
             mock.json.return_value = {"text": text}
         else:
@@ -60,7 +63,9 @@ class TestWhisperTransformResponse:
         """JSON body (verbose_json or json format) is parsed into TranscriptionResponse."""
         config = OpenAIWhisperAudioTranscriptionConfig()
         result = config.transform_audio_transcription_response(
-            self._make_response(text="Hello world", is_json=True)
+            self._make_response(
+                text="Hello world", content_type="application/json", is_json=True
+            )
         )
         assert result.text == "Hello world"
 
@@ -68,6 +73,22 @@ class TestWhisperTransformResponse:
         """Plain-text body (response_format=text) is returned as TranscriptionResponse without error."""
         config = OpenAIWhisperAudioTranscriptionConfig()
         result = config.transform_audio_transcription_response(
-            self._make_response(text="Four score and seven years ago", is_json=False)
+            self._make_response(
+                text="Four score and seven years ago",
+                content_type="text/plain",
+                is_json=False,
+            )
         )
         assert result.text == "Four score and seven years ago"
+
+    def test_malformed_json_body_with_json_content_type_raises(self):
+        """A non-JSON body labelled application/json is a genuine upstream error, not a transcription."""
+        config = OpenAIWhisperAudioTranscriptionConfig()
+        with pytest.raises(json.JSONDecodeError):
+            config.transform_audio_transcription_response(
+                self._make_response(
+                    text="<html>502 Bad Gateway</html>",
+                    content_type="application/json",
+                    is_json=False,
+                )
+            )

@@ -133,6 +133,9 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         try:
             raw_response_json = raw_response.json()
         except json.JSONDecodeError:
+            content_type = raw_response.headers.get("content-type", "")
+            if "application/json" in content_type:
+                raise
             return TranscriptionResponse(text=raw_response.text)
 
         if any(
