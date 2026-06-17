@@ -8758,7 +8758,7 @@ async def chat_completion(
                 completion_stream=_iterator,
                 model=e.model,
                 custom_llm_provider="cached_response",
-                logging_obj=data.get("litellm_logging_obj", None),
+                logging_obj=_data.get("litellm_logging_obj", None),
             )
             selected_data_generator = select_data_generator(
                 response=_streaming_response,
@@ -8793,7 +8793,7 @@ async def chat_completion(
                 completion_stream=_iterator,
                 model=data.get("model", ""),
                 custom_llm_provider="cached_response",
-                logging_obj=data.get("litellm_logging_obj", None),
+                logging_obj=_data.get("litellm_logging_obj", None),
             )
             selected_data_generator = select_data_generator(
                 response=_streaming_response,
