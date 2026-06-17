@@ -1,29 +1,40 @@
 #!/usr/bin/env python3
-"""Any-discipline gate: fail when a changed file exceeds its `Any` budget.
+"""Coarse-type discipline gate: fail when a changed file exceeds its budget.
 
-Where ruff, `mypy --strict`, and even basedpyright's `reportAny` stop short, this
-catches the case that actually bites: a *union* hiding an `Any`. For example
-`re.Match.group()` -> `str | Any`, `json.loads()` -> `Any`, and bare `list`/`dict`
--> `list[Any]`/`dict[..., Any]`. Any value whose inferred type *contains* `Any`
-(recursively, through unions / generics / tuples) is reported.
+Two coarse value types are caught, each with its own per-file budget:
+
+`Any` (LIT009)
+    Where ruff, `mypy --strict`, and even basedpyright's `reportAny` stop short,
+    this catches the case that actually bites: a *union* hiding an `Any`. For
+    example `re.Match.group()` -> `str | Any`, `json.loads()` -> `Any`, and bare
+    `list`/`dict` -> `list[Any]`/`dict[..., Any]`. `Any` is unsound -- it silently
+    disables checking -- so any value whose inferred type *contains* it is flagged.
+
+`object` (LIT010)
+    `object` is sound but coarse: you cannot do anything with an `object` value
+    until you narrow it. A *bare* `object` at an untyped boundary (e.g. a
+    `def f(x: object)` you immediately validate) is the disciplined alternative to
+    `Any` -- but `object` buried in a container (`dict[str, object]`,
+    `list[object]`) hands back an unnarrowable value on every read, so any value
+    whose inferred type is, or contains, `object` is flagged the same way.
 
 Scope: changed files, per-file budget
 -------------------------------------
-litellm carries a large amount of pre-existing `Any` (a single legacy file can
-have >100 findings). Rather than force every touched line clean (the original
-changed-lines rule, which tripped on merely *editing* a legacy `X | Any` line),
-this gate grandfathers each file: `any-discipline-budget.json` records every
-file's current count of Any-typed values, and a file fails only when its count
-exceeds `baseline + slack`, where `slack` is 50% headroom (rounded up). New or
-unbudgeted files have baseline 0, so they stay airtight.
+litellm carries a large amount of pre-existing coarse typing (a single legacy
+file can have >100 `Any` findings). Rather than force every touched line clean
+(the original changed-lines rule, which tripped on merely *editing* a legacy
+`X | Any` line), each gate grandfathers per file: a budget file records every
+file's current count, and a file fails only when its count exceeds
+`baseline + slack`, where `slack` is 50% headroom (rounded up). New or unbudgeted
+files have baseline 0, so they stay airtight.
 
 Only *changed* files (vs the merge-base with `--base`) are re-type-checked -- an
 unchanged file's count can't move from edits this branch didn't make -- so the
 per-PR cost equals re-checking just those files, exactly like the original
-changed-lines gate. The whole-tree scan needed to (re)capture the budget
+changed-lines gate. The whole-tree scan needed to (re)capture the budgets
 (~2 min, ~3 GB) runs only under `--update`.
 
-The budget is a one-way ratchet (the same `{baseline, slack}` shape as the
+Each budget is a one-way ratchet (the same `{baseline, slack}` shape as the
 ruff / mypy / basedpyright budgets) guarded by `scripts/budget_ratchet_check.py`:
 a file's ceiling may fall but never rise. Drive a file's count down and rerun
 `--update` (`make lint-any-budget-update`) to lock in the lower ceiling.
@@ -33,8 +44,9 @@ How it works
 It loads `litellm/mypy.ini` (the same config `make lint-mypy` uses, so findings
 match what developers already see), builds the changed files with mypy asking for
 its exported expression->type map, and walks each file's AST applying a recursive
-"contains Any" predicate -- the test `mypy --disallow-any-expr` uses internally
-but applies inconsistently (python/mypy#12856).
+"contains a coarse leaf" predicate -- for `Any`, the test `mypy --disallow-any-expr`
+uses internally but applies inconsistently (python/mypy#12856); for `object`, the
+same walk asking instead whether a leaf is `builtins.object`.
 
 mypy only re-exports types for modules it re-type-checks, so for each target we
 invalidate just its cached hash (deps stay warm) to force a fast re-check against
@@ -47,20 +59,24 @@ Codes share the `LIT***` namespace with `scripts/check_type_discipline.py` (PR
 LIT009  A value expression's inferred type is, or contains, `Any`. Budgeted
         per file (a file fails when its count exceeds `baseline + slack`).
         Suppress an individual line with `# any-ok: <reason>`.
-LIT005  An `# any-ok` suppression without a reason (the shared
+LIT010  A value expression's inferred type is, or contains, `object`. Budgeted
+        per file in its own budget. Suppress an individual line with
+        `# object-ok: <reason>`.
+LIT005  An `# any-ok` / `# object-ok` suppression without a reason (the shared
         suppression-needs-a-reason code, same as `# cast-ok` / `# guard-ok`).
 LIT000  Setup failure: mypy could not build, or a target file could not be read.
 
 `Any`s produced purely by an already-reported error, and the special-form /
 implementation-artifact internal `Any`s, are ignored. A bound method *reference*
-whose signature mentions `Any` is not flagged -- only the value its call produces.
+whose signature mentions a coarse type is not flagged -- only the value its call
+produces.
 
 Usage
 -----
-    # gate mode (CI / pre-push): per-file Any budget on changed files
+    # gate mode (CI / pre-push): per-file budgets on changed files
     uv run --no-sync python scripts/check_any_discipline.py --changed --base origin/litellm_internal_staging
 
-    # re-capture the per-file budget across the whole tree (ratchet)
+    # re-capture the per-file budgets across the whole tree (ratchet)
     uv run --no-sync python scripts/check_any_discipline.py --update
 
     # whole-file spot-check (no budget, no line filter), paths relative to repo root
@@ -95,6 +111,7 @@ try:
         CallableType,
         Instance,
         Overloaded,
+        ProperType,
         TupleType,
         Type,
         TypeOfAny,
@@ -116,15 +133,27 @@ MYPY_INI = LITELLM_DIR / "mypy.ini"
 CACHE_DIR = REPO_ROOT / ".mypy_cache_any"
 PY_TAG = f"{sys.version_info.major}.{sys.version_info.minor}"
 DEFAULT_BASE = "origin/litellm_internal_staging"
-BUDGET_PATH = REPO_ROOT / "any-discipline-budget.json"
+ANY_BUDGET_PATH = REPO_ROOT / "any-discipline-budget.json"
+OBJECT_BUDGET_PATH = REPO_ROOT / "object-discipline-budget.json"
+
+# Kept as the public name the budget tests + Any-centric callers reference.
+BUDGET_PATH = ANY_BUDGET_PATH
 
 MIN_REASON_LEN = 3
-ANY_OK_RE = re.compile(r"#\s*any-ok(?::\s*(?P<reason>.*))?")
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
-# Files allowed to surface `Any` (the typed/untyped boundary). A finding is
-# skipped if any fragment below is a substring of the file's posix path. Keep
-# this tight -- prefer a line-level `# any-ok: <reason>` over a blanket exemption.
+
+def _ok_re(keyword: str) -> re.Pattern[str]:
+    return re.compile(rf"#\s*{re.escape(keyword)}(?::\s*(?P<reason>.*))?")
+
+
+ANY_OK_RE = _ok_re("any-ok")
+OBJECT_OK_RE = _ok_re("object-ok")
+
+# Files allowed to surface a coarse type (the typed/untyped boundary). A finding
+# is skipped if any fragment below is a substring of the file's posix path. Keep
+# this tight -- prefer a line-level `# any-ok` / `# object-ok: <reason>` over a
+# blanket exemption.
 BOUNDARY_PATHS: frozenset[str] = frozenset()
 
 # `Any` kinds that are not actionable: produced by an already-reported error, or
@@ -152,8 +181,8 @@ _NON_SYNTACTIC_ATTRS = frozenset({"node", "info"})
 # produces `Coroutine[Any, Any, float]`, so the bare call expression `f()` would
 # be flagged even though the awaited value is a clean `float`. Only the args that
 # hold a value the caller observes (the awaited result, the yielded item) are
-# meaningful; a real `Any` there -- e.g. a coroutine that returns `Any` -- is
-# still caught because that index is still checked.
+# meaningful; a real coarse type there -- e.g. a coroutine that returns `Any` --
+# is still caught because that index is still checked.
 _SYNTHETIC_SEND_YIELD_VALUE_ARGS: dict[str, tuple[int, ...]] = {
     "typing.Coroutine": (2,),
     "typing.Generator": (0, 2),
@@ -173,21 +202,34 @@ class Violation(NamedTuple):
 
 
 # --------------------------------------------------------------------------- #
-# The "contains Any" predicate
+# The "contains a coarse leaf" predicate
 # --------------------------------------------------------------------------- #
 
 
 # Recursive type aliases (e.g. a JSON-like `T = Union[..., list[T], dict[str, T]]`)
 # make `get_proper_type` yield a fresh object at every unfold, so an id()-based
 # cycle guard never trips and a naive recursion overflows the stack. We walk
-# iteratively and cap the depth: a real `Any` lives at shallow depth in the
+# iteratively and cap the depth: a real coarse leaf lives at shallow depth in the
 # alias's definition, so a deep alias that has not produced one by `_MAX_DEPTH`
 # never will. (The changed-lines gate never hit this; a whole-tree scan does.)
 _MAX_DEPTH = 100
 
 
-def contains_any(t: Type) -> bool:
-    """True if a *value* of type ``t`` carries `Any` anywhere meaningful."""
+def _is_actionable_any(p: ProperType) -> bool:
+    """A real, unsound `Any` -- not one mypy emitted purely from an error."""
+    return isinstance(p, AnyType) and p.type_of_any not in _HARMLESS_ANY
+
+
+def _is_object(p: ProperType) -> bool:
+    """The bare top type `object` (not a subclass -- `str` is not flagged)."""
+    return isinstance(p, Instance) and p.type.fullname == "builtins.object"
+
+
+def _contains(t: Type, is_hit: Callable[[ProperType], bool]) -> bool:
+    """True if a *value* of type ``t`` has, anywhere meaningful, a proper-type leaf
+    satisfying ``is_hit``. Walks unions / generics / tuples iteratively, sharing one
+    depth cap, cycle guard, function-reference skip, and synthetic send/yield
+    handling across the `Any` and `object` predicates."""
     seen: set[int] = set()
     stack: list[tuple[Type, int]] = [(t, 0)]
     while stack:
@@ -199,14 +241,12 @@ def contains_any(t: Type) -> bool:
             continue
         seen.add(id(p))
 
-        # A function/method *reference* whose signature mentions Any is not itself
-        # an unsafe value -- only its eventual call result is. Don't recurse in.
+        # A function/method *reference* whose signature mentions a coarse type is
+        # not itself an unsafe value -- only its eventual call result is.
         if isinstance(p, (CallableType, Overloaded)):
             continue
-        if isinstance(p, AnyType):
-            if p.type_of_any not in _HARMLESS_ANY:
-                return True
-            continue
+        if is_hit(p):
+            return True
         if isinstance(p, UnionType):
             stack.extend((item, depth + 1) for item in p.items)
         elif isinstance(p, Instance):
@@ -224,6 +264,46 @@ def contains_any(t: Type) -> bool:
     return False
 
 
+def contains_any(t: Type) -> bool:
+    """True if a *value* of type ``t`` carries `Any` anywhere meaningful."""
+    return _contains(t, _is_actionable_any)
+
+
+def contains_object(t: Type) -> bool:
+    """True if a *value* of type ``t`` is, or carries, `object` anywhere meaningful."""
+    return _contains(t, _is_object)
+
+
+class Discipline(NamedTuple):
+    """One coarse-type rule: its code, the noun for its messages, the per-file
+    budget it ratchets, the `# <keyword>: <reason>` line suppression, and the
+    proper-type leaf test that defines it."""
+
+    code: str
+    noun: str
+    budget_path: Path
+    ok_keyword: str
+    ok_re: re.Pattern[str]
+    is_hit: Callable[[ProperType], bool]
+
+    def message(self, rendered_type: str) -> str:
+        return f"value type contains {self.noun} -> {rendered_type}"
+
+    def reasonless_message(self) -> str:
+        return f"{self.ok_keyword} requires a reason: `# {self.ok_keyword}: <reason>`"
+
+
+DISCIPLINES: tuple[Discipline, ...] = (
+    Discipline(
+        "LIT009", "Any", ANY_BUDGET_PATH, "any-ok", ANY_OK_RE, _is_actionable_any
+    ),
+    Discipline(
+        "LIT010", "object", OBJECT_BUDGET_PATH, "object-ok", OBJECT_OK_RE, _is_object
+    ),
+)
+_DISCIPLINE_BY_CODE: dict[str, Discipline] = {d.code: d for d in DISCIPLINES}
+
+
 # --------------------------------------------------------------------------- #
 # Generic, leak-free AST walk (works under a mypyc-compiled mypy, which forbids
 # subclassing TraverserVisitor)
@@ -236,7 +316,7 @@ def _walk_file(tree: Node) -> tuple[list[Expression], set[int]]:
     The walk follows only syntactic children (every attribute except the two
     non-syntactic back-references), so it never escapes the module. Simple
     ``x = <expr>`` name targets are collected separately so we don't double-report
-    the assigned name as an echo of an Any rvalue.
+    the assigned name as an echo of a coarse rvalue.
     """
     exprs: list[Expression] = []
     skip_lvalues: set[int] = set()
@@ -270,9 +350,14 @@ def _walk_file(tree: Node) -> tuple[list[Expression], set[int]]:
     return exprs, skip_lvalues
 
 
-def find_any_in_tree(tree: Node, idmap: dict[int, Type]) -> list[tuple[int, int, str]]:
+def find_coarse_in_tree(
+    tree: Node, idmap: dict[int, Type]
+) -> list[tuple[int, int, str, str]]:
+    """Return (line, col, code, rendered-type) for every value expression whose
+    inferred type trips a discipline's predicate. A single expression can trip more
+    than one discipline (e.g. ``dict[object, Any]`` is both LIT009 and LIT010)."""
     exprs, skip_lvalues = _walk_file(tree)
-    findings: list[tuple[int, int, str]] = []
+    findings: list[tuple[int, int, str, str]] = []
     for expr in exprs:
         # A TempNode is mypy's synthetic placeholder for a position with no real
         # expression -- e.g. the rvalue of an annotation-only `field: T` in a
@@ -281,21 +366,25 @@ def find_any_in_tree(tree: Node, idmap: dict[int, Type]) -> list[tuple[int, int,
         if id(expr) in skip_lvalues or isinstance(expr, TempNode):
             continue
         t = idmap.get(id(expr))
-        if t is not None and contains_any(t):
-            findings.append((expr.line, expr.column, str(get_proper_type(t))))
-
-    out: list[tuple[int, int, str]] = []
-    seen_pos: set[tuple[int, int]] = set()
-    for line, col, typ in sorted(findings):
-        if line < 1 or (line, col) in seen_pos:
+        if t is None:
             continue
-        seen_pos.add((line, col))
-        out.append((line, col, typ))
+        rendered = str(get_proper_type(t))
+        for disc in DISCIPLINES:
+            if _contains(t, disc.is_hit):
+                findings.append((expr.line, expr.column, disc.code, rendered))
+
+    out: list[tuple[int, int, str, str]] = []
+    seen_pos: set[tuple[int, int, str]] = set()
+    for line, col, code, typ in sorted(findings):
+        if line < 1 or (line, col, code) in seen_pos:
+            continue
+        seen_pos.add((line, col, code))
+        out.append((line, col, code, typ))
     return out
 
 
 # --------------------------------------------------------------------------- #
-# Comment scanning (LIT005 + any-ok suppression)
+# Comment scanning (LIT005 + any-ok / object-ok suppression)
 # --------------------------------------------------------------------------- #
 
 
@@ -303,10 +392,13 @@ def _reason_ok(reason: str | None) -> bool:
     return reason is not None and len(reason.strip()) >= MIN_REASON_LEN
 
 
-def scan_any_ok(
+def scan_suppressions(
     path: Path, source: str
-) -> tuple[frozenset[int], tuple[Violation, ...]]:
-    """Return (lines with a valid any-ok suppression, LIT005 violations)."""
+) -> tuple[dict[int, frozenset[str]], tuple[Violation, ...]]:
+    """Return (line -> codes suppressed there, LIT005 violations).
+
+    `# any-ok: <reason>` suppresses LIT009 on its line; `# object-ok: <reason>`
+    suppresses LIT010. A suppression without a reason is itself a LIT005."""
     try:
         tokens = tokenize.generate_tokens(
             iter(source.splitlines(keepends=True)).__next__
@@ -315,27 +407,23 @@ def scan_any_ok(
             (t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT
         )
     except tokenize.TokenError:
-        return frozenset(), ()
+        return {}, ()
 
-    ok_lines: set[int] = set()
+    suppressed: dict[int, set[str]] = {}
     violations: list[Violation] = []
     for line, text in comments:
-        m = ANY_OK_RE.search(text)
-        if m is None:
-            continue
-        if _reason_ok(m.group("reason")):
-            ok_lines.add(line)
-        else:
-            violations.append(
-                Violation(
-                    path,
-                    line,
-                    0,
-                    "LIT005",
-                    "any-ok requires a reason: `# any-ok: <reason>`",
+        for disc in DISCIPLINES:
+            m = disc.ok_re.search(text)
+            if m is None:
+                continue
+            if _reason_ok(m.group("reason")):
+                suppressed.setdefault(line, set()).add(disc.code)
+            else:
+                violations.append(
+                    Violation(path, line, 0, "LIT005", disc.reasonless_message())
                 )
-            )
-    return frozenset(ok_lines), tuple(violations)
+    frozen = {line: frozenset(codes) for line, codes in suppressed.items()}
+    return frozen, tuple(violations)
 
 
 # --------------------------------------------------------------------------- #
@@ -429,21 +517,17 @@ def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
             )
             continue
 
-        ok_lines, ok_violations = scan_any_ok(report_path, source)
+        suppressed, ok_violations = scan_suppressions(report_path, source)
         out.extend(ok_violations)
         tree = trees.get(os.path.realpath(abs_path))
         if tree is None:
             continue
-        for line, col, typ in find_any_in_tree(tree, idmap):
-            if line in ok_lines:
+        for line, col, code, typ in find_coarse_in_tree(tree, idmap):
+            if code in suppressed.get(line, frozenset()):
                 continue
             out.append(
                 Violation(
-                    report_path,
-                    line,
-                    col,
-                    "LIT009",
-                    f"value type contains Any -> {typ}",
+                    report_path, line, col, code, _DISCIPLINE_BY_CODE[code].message(typ)
                 )
             )
     return tuple(out)
@@ -549,12 +633,13 @@ def _in_scope(v: Violation, line_map: dict[str, LineScope] | None) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# Per-file Any budget (one-way ratchet, 50% headroom; ratchet-checked)
+# Per-file budgets (one-way ratchet, 50% headroom; ratchet-checked), one per
+# discipline (Any, object)
 # --------------------------------------------------------------------------- #
 
 
 def _slack_for(baseline: int) -> int:
-    """50% headroom, rounded up so even a 1-Any file gets a little room."""
+    """50% headroom, rounded up so even a 1-finding file gets a little room."""
     return (baseline + 1) // 2
 
 
@@ -563,38 +648,44 @@ def _ceiling(spec: dict[str, int]) -> int:
     return int(spec.get("baseline", 0)) + int(spec.get("slack", 0))
 
 
-def load_budget() -> dict[str, dict[str, int]]:
-    """Read ``any-discipline-budget.json`` ({path: {baseline, slack}}); {} if absent."""
-    if not BUDGET_PATH.exists():
+def load_budget(path: Path) -> dict[str, dict[str, int]]:
+    """Read a budget file ({path: {baseline, slack}}); {} if absent/malformed."""
+    if not path.exists():
         return {}
     try:
-        data = json.loads(BUDGET_PATH.read_text())
+        data = json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
 
 
-def save_budget(counts: dict[str, int]) -> None:
+def save_budget(path: Path, counts: dict[str, int]) -> None:
     """Write a fresh budget from per-file counts, with 50% headroom each.
 
-    Files with zero Any are omitted: an absent entry means baseline 0, so a
-    file's first Any always trips the gate until it is deliberately baselined."""
+    Files with zero findings are omitted: an absent entry means baseline 0, so a
+    file's first coarse value always trips the gate until it is deliberately
+    baselined."""
     budget = {
-        path: {"baseline": n, "slack": _slack_for(n)}
-        for path, n in counts.items()
+        file: {"baseline": n, "slack": _slack_for(n)}
+        for file, n in counts.items()
         if n > 0
     }
-    BUDGET_PATH.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
+    path.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
+
+
+def counts_for_code(violations: Iterable[Violation], code: str) -> dict[str, int]:
+    """Count `code` findings per repo-relative file path."""
+    counts: dict[str, int] = {}
+    for v in violations:
+        if v.code == code:
+            key = v.path.as_posix()
+            counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def lit009_counts(violations: Iterable[Violation]) -> dict[str, int]:
     """Count LIT009 (Any-typed value) findings per repo-relative file path."""
-    counts: dict[str, int] = {}
-    for v in violations:
-        if v.code == "LIT009":
-            key = v.path.as_posix()
-            counts[key] = counts.get(key, 0) + 1
-    return counts
+    return counts_for_code(violations, "LIT009")
 
 
 def all_litellm_py_files() -> list[str] | None:
@@ -612,7 +703,7 @@ def all_litellm_py_files() -> list[str] | None:
 def update_budget(
     list_files: Callable[[], list[str] | None] = all_litellm_py_files,
 ) -> int:
-    """Whole-tree scan: recapture every file's Any count into the budget."""
+    """Whole-tree scan: recapture every file's count into each discipline's budget."""
     rel_paths = list_files()
     if rel_paths is None:
         print(
@@ -629,44 +720,54 @@ def update_budget(
         for v in build_errors:
             print(v.render(), file=sys.stderr)
         print(
-            "FAIL: mypy could not build the tree; budget left unchanged.",
+            "FAIL: mypy could not build the tree; budgets left unchanged.",
             file=sys.stderr,
         )
         return 2
-    counts = lit009_counts(violations)
-    save_budget(counts)
-    print(
-        f"Wrote {BUDGET_PATH.name}: "
-        f"{sum(1 for n in counts.values() if n > 0)} file(s), "
-        f"{sum(counts.values())} Any-typed value(s) baselined (50% headroom each)."
-    )
+    for disc in DISCIPLINES:
+        counts = counts_for_code(violations, disc.code)
+        save_budget(disc.budget_path, counts)
+        print(
+            f"Wrote {disc.budget_path.name}: "
+            f"{sum(1 for n in counts.values() if n > 0)} file(s), "
+            f"{sum(counts.values())} {disc.noun}-typed value(s) baselined "
+            "(50% headroom each)."
+        )
     return 0
 
 
 def _report_over_budget(
+    disc: Discipline,
     path: str,
     count: int,
     spec: dict[str, int] | None,
-    lit009: list[Violation],
+    findings: list[Violation],
     line_map: dict[str, LineScope],
 ) -> None:
-    """Print one over-budget file plus the Any findings on its changed lines."""
+    """Print one over-budget file plus the findings on its changed lines."""
     ceiling = _ceiling(spec or {})
     if spec:
         why = f"baseline {spec['baseline']} + 50% slack {spec['slack']} = ceiling {ceiling}"
     else:
-        why = "no budget entry -> baseline 0 (a new/unbudgeted file must be Any-free)"
-    print(f"{path}: {count} Any-typed value(s) total, over budget ({why})")
+        why = f"no budget entry -> baseline 0 (a new/unbudgeted file must be {disc.noun}-free)"
+    print(f"{path}: {count} {disc.noun}-typed value(s) total, over budget ({why})")
     # Surface the findings on changed lines first: the ones this branch most
     # likely just added, and the cheapest path back under the ceiling.
     scope = line_map.get(path)
-    for v in sorted(lit009):
+    for v in sorted(findings):
         if scope is ALL_LINES or (isinstance(scope, set) and v.line in scope):
-            print(f"  changed-line Any  {v.line}:{v.col} {v.message}")
+            print(f"  changed-line {disc.noun}  {v.line}:{v.col} {v.message}")
+
+
+class _OverBudget(NamedTuple):
+    disc: Discipline
+    path: str
+    count: int
+    spec: dict[str, int] | None
 
 
 def run_gate(base: str) -> int:
-    """Gate changed files under litellm/ against the committed per-file budget."""
+    """Gate changed files under litellm/ against the committed per-file budgets."""
     line_map = changed_line_map(base)
     if line_map is None:
         print(
@@ -680,46 +781,52 @@ def run_gate(base: str) -> int:
         return 0
 
     violations = check_files(rel_paths)
-    budget = load_budget()
 
-    # Hard rules, independent of the budget: a build/read failure (always), and a
-    # reasonless `# any-ok` on a line this branch touched.
+    # Hard rules, independent of any budget: a build/read failure (always), and a
+    # reasonless `# any-ok` / `# object-ok` on a line this branch touched.
     hard = sorted(
         v
         for v in violations
         if v.code == "LIT000" or (v.code == "LIT005" and _in_scope(v, line_map))
     )
 
-    # Per-file Any budget: a changed file fails when its total Any count exceeds
-    # its ceiling. Unchanged files keep their committed baseline (never re-scanned).
-    counts = lit009_counts(violations)
-    lit009_by_file: dict[str, list[Violation]] = {}
+    # Per-file budget per discipline: a changed file fails when its total count of
+    # that code exceeds its ceiling. Unchanged files keep their committed baseline.
+    findings_by: dict[tuple[str, str], list[Violation]] = {}
     for v in violations:
-        if v.code == "LIT009":
-            lit009_by_file.setdefault(v.path.as_posix(), []).append(v)
+        if v.code in _DISCIPLINE_BY_CODE:
+            findings_by.setdefault((v.code, v.path.as_posix()), []).append(v)
     over_budget = [
-        (path, count)
-        for path, count in sorted(counts.items())
+        _OverBudget(disc, path, count, budget.get(path))
+        for disc in DISCIPLINES
+        for budget in (load_budget(disc.budget_path),)
+        for path, count in sorted(counts_for_code(violations, disc.code).items())
         if count > _ceiling(budget.get(path, {}))
     ]
 
     if not hard and not over_budget:
         print(
-            f"OK: {len(rel_paths)} changed file(s) under litellm/ are within their Any budget"
+            f"OK: {len(rel_paths)} changed file(s) under litellm/ are within their "
+            "Any/object budgets"
         )
         return 0
 
     for v in hard:
         print(v.render())
-    for path, count in over_budget:
+    for ob in over_budget:
         _report_over_budget(
-            path, count, budget.get(path), lit009_by_file.get(path, []), line_map
+            ob.disc,
+            ob.path,
+            ob.count,
+            ob.spec,
+            findings_by.get((ob.disc.code, ob.path), []),
+            line_map,
         )
 
     print(
-        f"\nFAIL: {len(hard)} hard violation(s), {len(over_budget)} file(s) over their Any budget.\n"
+        f"\nFAIL: {len(hard)} hard violation(s), {len(over_budget)} file(s) over a budget.\n"
         "Give the new values concrete types (validate untyped input with Pydantic) to get back\n"
-        "under the file's ceiling, or annotate a genuine boundary line `# any-ok: <reason>`.\n"
+        "under the file's ceiling, or annotate a genuine boundary line `# any-ok` / `# object-ok: <reason>`.\n"
         "Re-baseline with `make lint-any-budget-update` only to lock in a reduction.",
         file=sys.stderr,
     )
@@ -732,15 +839,18 @@ def spot_check(rel_paths: Sequence[str]) -> int:
     for v in violations:
         print(v.render())
     if violations:
-        print(f"\nFAIL: {len(violations)} Any-discipline finding(s).", file=sys.stderr)
+        print(
+            f"\nFAIL: {len(violations)} coarse-type discipline finding(s).",
+            file=sys.stderr,
+        )
         return 1
-    print(f"OK: {len(rel_paths)} file(s) have no Any-typed values")
+    print(f"OK: {len(rel_paths)} file(s) have no Any/object-typed values")
     return 0
 
 
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Any-discipline gate (changed files, per-file Any budget)."
+        description="Coarse-type discipline gate (changed files, per-file Any/object budgets)."
     )
     parser.add_argument(
         "paths",
@@ -750,12 +860,12 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument(
         "--changed",
         action="store_true",
-        help="gate changed files under litellm/ vs --base against the per-file budget",
+        help="gate changed files under litellm/ vs --base against the per-file budgets",
     )
     parser.add_argument(
         "--update",
         action="store_true",
-        help="recapture the whole-tree per-file budget (any-discipline-budget.json)",
+        help="recapture the whole-tree per-file budgets (any/object-discipline-budget.json)",
     )
     parser.add_argument("--base", default=os.environ.get("ANY_GATE_BASE", DEFAULT_BASE))
     args = parser.parse_args(list(argv))

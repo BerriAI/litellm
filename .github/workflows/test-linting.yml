@@ -177,7 +177,7 @@ jobs:
           restore-keys: |
             any-mypy-cache-${{ runner.os }}-py3.12-
 
-      - name: Check Any discipline (per-file budget on changed files)
+      - name: Check Any/object discipline (per-file budgets on changed files)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
