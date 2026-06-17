@@ -258,16 +258,14 @@ async def test_s3_cache_async_set_cache_pipeline(mock_s3_dependencies):
 
     await cache.async_set_cache_pipeline(cache_list)
 
-    # Should have called put_object 3 times
     assert cache.s3_client.put_object.call_count == 3
 
-    # Verify each call
-    calls = cache.s3_client.put_object.call_args_list
-    for i, (key, value) in enumerate(cache_list):
-        call_args = calls[i][1]
-        assert call_args["Bucket"] == "test-bucket"
-        assert call_args["Key"] == key
-        assert call_args["Body"] == json.dumps(value)
+    calls_by_key = {
+        call[1]["Key"]: call[1] for call in cache.s3_client.put_object.call_args_list
+    }
+    for key, value in cache_list:
+        assert calls_by_key[key]["Bucket"] == "test-bucket"
+        assert calls_by_key[key]["Body"] == json.dumps(value)
 
 
 @pytest.mark.asyncio
@@ -285,15 +283,13 @@ async def test_s3_cache_concurrent_async_operations(mock_s3_dependencies):
     # Execute all tasks concurrently
     await asyncio.gather(*tasks)
 
-    # Verify all operations were called
     assert cache.s3_client.put_object.call_count == 5
 
-    # Verify each call had correct parameters
     calls = cache.s3_client.put_object.call_args_list
-    for i, call in enumerate(calls):
-        call_args = call[1]
-        assert call_args["Bucket"] == "test-bucket"
-        assert f"concurrent_key_{i}" == call_args["Key"]
+    assert {call[1]["Bucket"] for call in calls} == {"test-bucket"}
+    assert {call[1]["Key"] for call in calls} == {
+        f"concurrent_key_{i}" for i in range(5)
+    }
 
 
 @pytest.mark.asyncio
