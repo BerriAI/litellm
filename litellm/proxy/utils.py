@@ -6444,7 +6444,6 @@ async def get_available_models_for_user(
     all_models = await _apply_user_models_filter(
         all_models=all_models,
         user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
         prisma_client=prisma_client,
         proxy_logging_obj=proxy_logging_obj,
@@ -6457,7 +6456,6 @@ async def get_available_models_for_user(
 async def _apply_user_models_filter(
     all_models: List[str],
     user_api_key_dict: "UserAPIKeyAuth",
-    proxy_model_list: List[str],
     model_access_groups: Dict[str, List[str]],
     prisma_client: Optional["PrismaClient"],
     proxy_logging_obj: Optional["ProxyLogging"],
@@ -6534,9 +6532,14 @@ async def _apply_user_models_filter(
     if SpecialModelNames.all_proxy_models.value in user_models:
         return all_models
 
+    # The `all-proxy-models` short-circuit above returned already, so
+    # `user_models` here never contains it; `get_user_models` reads
+    # `proxy_model_list` only on that branch, so passing [] is a no-op
+    # here and lets the caller skip a `llm_router.get_model_names()` call
+    # on every /v1/models and /v2/model/info request.
     user_allowed = get_user_models(
         user_models=user_models,
-        proxy_model_list=proxy_model_list,
+        proxy_model_list=[],
         model_access_groups=model_access_groups,
     )
     return filter_models_by_user_access(
@@ -6579,10 +6582,8 @@ async def apply_user_models_filter_to_deployments(
         return deployments
 
     if llm_router is None:
-        proxy_model_list: List[str] = []
         model_access_groups: Dict[str, List[str]] = {}
     else:
-        proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
 
     distinct_model_names = list(
@@ -6591,7 +6592,6 @@ async def apply_user_models_filter_to_deployments(
     allowed_model_names = await _apply_user_models_filter(
         all_models=distinct_model_names,
         user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
         prisma_client=prisma_client,
         proxy_logging_obj=proxy_logging_obj,
