@@ -41425,7 +41425,7 @@ export interface operations {
                 page?: number;
                 /** @description Page size */
                 size?: number;
-                /** @description Filter keys by user ID. Supports partial matching (substring, case-insensitive). */
+                /** @description Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 user_id?: string | null;
                 /** @description Filter keys by team ID */
                 team_id?: string | null;
@@ -41433,7 +41433,7 @@ export interface operations {
                 organization_id?: string | null;
                 /** @description Filter keys by key hash */
                 key_hash?: string | null;
-                /** @description Filter keys by key alias. Supports partial matching (substring, case-insensitive). */
+                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 key_alias?: string | null;
                 /** @description Return full key object */
                 return_full_object?: boolean;
@@ -41453,6 +41453,8 @@ export interface operations {
                 project_id?: string | null;
                 /** @description Filter keys by access group ID */
                 access_group_id?: string | null;
+                /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
+                substring_matching?: boolean;
             };
             header?: never;
             path?: never;
