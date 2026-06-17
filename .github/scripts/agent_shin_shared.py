@@ -48,6 +48,15 @@ AGENT_SHIN_DEFAULT_BOT_LOGIN = "github-actions[bot]"
 
 IMMEDIATE_CLOSE_LOGINS = frozenset({"swiftwinds"})
 
+# Dogfood rollout gate. While this set is non-empty, Agent Shin acts ONLY on
+# PRs/issues authored by these logins and skips everyone else. For an
+# allowlisted author the usual internal/external classification is bypassed, so
+# an internal account (e.g. a maintainer's own work login) still gets triaged
+# while the bot is being tested on a small set of accounts. Empty the set to
+# lift the restriction and restore full triage for the public rollout. Logins
+# are compared case-insensitively.
+ALLOWLIST_LOGINS = frozenset({"mateo-berri", "swiftwinds"})
+
 # `gh {pr,issue} list` has no "fetch everything" flag — `--limit` is the only
 # control and it defaults to 30. Pass a ceiling far above any realistic open
 # backlog (low thousands today) so gh paginates the API until the queue is

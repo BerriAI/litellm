@@ -79,7 +79,7 @@ def _make_pr(**overrides):
         "body": "some body without a linked issue or QA proof",
         "state": "open",
         "author_association": "NONE",
-        "user": {"login": "outside-dev"},
+        "user": {"login": "mateo-berri"},
         "labels": [],
         "created_at": JUST_NOW,
     }
@@ -392,7 +392,9 @@ class TestReviewGateGuards:
         pr = _make_pr(author_association="MEMBER", user={"login": "krrish"})
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
         result = _gate(
-            triage_module, judge=lambda p: pytest.fail("no LLM for internal")
+            triage_module,
+            judge=lambda p: pytest.fail("no LLM for internal"),
+            allowlist=frozenset(),
         )
         assert result["action"] == "skip-internal-author"
 
@@ -464,3 +466,39 @@ class TestReviewGateGuards:
         assert r3["action"] == "labeled-ready"
         assert any(lbl["name"] == "ready for review" for lbl in state["labels"])
         assert "all clear" in state["comments"][-1]["body"].lower()
+
+
+class TestReviewGateAllowlist:
+    """While the dogfood allowlist is active it is the sole author gate:
+    only the named accounts pass, and for them the internal-author exemption
+    is bypassed. Emptying it restores the normal internal-author skip."""
+
+    def test_should_skip_author_not_on_allowlist(self, triage_module, monkeypatch):
+        pr = _make_pr(user={"login": "random-oss-dev"})
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        rec = _Recorder(triage_module, monkeypatch)
+        result = _gate(
+            triage_module, judge=lambda p: pytest.fail("no LLM for non-allowlisted")
+        )
+        assert result["action"] == "skip-not-allowlisted"
+        assert rec.added == [] and rec.comments == [] and rec.closed == []
+
+    def test_should_act_on_allowlisted_internal_author(
+        self, triage_module, monkeypatch
+    ):
+        pr = _make_pr(author_association="MEMBER", user={"login": "mateo-berri"})
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        rec = _Recorder(triage_module, monkeypatch)
+        result = _gate(triage_module, judge=_pass, greptile_score=5)
+        assert result["action"] == "labeled-ready"
+        assert rec.added == [triage_module.READY_FOR_REVIEW_LABEL]
+
+    def test_empty_allowlist_restores_internal_skip(self, triage_module, monkeypatch):
+        pr = _make_pr(author_association="MEMBER", user={"login": "krrish"})
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        result = _gate(
+            triage_module,
+            judge=lambda p: pytest.fail("no LLM for internal"),
+            allowlist=frozenset(),
+        )
+        assert result["action"] == "skip-internal-author"

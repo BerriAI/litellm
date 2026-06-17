@@ -125,7 +125,7 @@ class TestEvaluatePr:
         created_days_ago: int = 10,
         is_draft: bool = False,
         labels: list[str] | None = None,
-        author_login: str = "someone",
+        author_login: str = "mateo-berri",
     ) -> dict:
         created = dt.datetime(2026, 5, 17, tzinfo=dt.timezone.utc) - dt.timedelta(
             days=created_days_ago
@@ -439,12 +439,13 @@ class TestEvaluatePr:
             lambda *a, **kw: pytest.fail("should not fetch comments for internal"),
         )
         action, score, _ = closer_module.evaluate_pr(
-            self._make_pr(created_days_ago=14),
+            self._make_pr(created_days_ago=14, author_login="krrishdholakia"),
             now=_now,
             min_age_days=7,
             min_score=4,
             repo=None,
             optout_labels=set(),
+            allowlist=frozenset(),
         )
         assert action == "skip-internal"
         assert score is None
@@ -732,3 +733,95 @@ class TestListOpenItemsNoCap:
         assert args[args.index("--limit") + 1] == str(shared.GH_LIST_ALL_LIMIT)
         # Still requests every field downstream evaluate_pr / labels logic needs.
         assert "createdAt" in args[args.index("--json") + 1]
+
+
+class TestEvaluatePrAllowlist:
+    """While the dogfood allowlist is active `evaluate_pr` only acts on the
+    named accounts and bypasses the external-only restriction for them.
+    Emptying it restores the internal-author skip."""
+
+    @pytest.fixture(autouse=True)
+    def _now(self):
+        return dt.datetime(2026, 5, 17, tzinfo=dt.timezone.utc)
+
+    def _make_pr(self, *, author_login: str, created_days_ago: int = 10) -> dict:
+        created = dt.datetime(2026, 5, 17, tzinfo=dt.timezone.utc) - dt.timedelta(
+            days=created_days_ago
+        )
+        return {
+            "number": 1,
+            "title": "PR #1",
+            "createdAt": created.isoformat().replace("+00:00", "Z"),
+            "isDraft": False,
+            "labels": [],
+            "author": {"login": author_login},
+            "url": "https://example.com/pr/1",
+        }
+
+    def test_should_skip_author_not_on_allowlist(
+        self, closer_module, _now, monkeypatch
+    ):
+        monkeypatch.setattr(
+            closer_module,
+            "fetch_pr_comments",
+            lambda *a, **kw: pytest.fail("must not fetch comments for non-allowlisted"),
+        )
+        action, score, _ = closer_module.evaluate_pr(
+            self._make_pr(author_login="random-oss-dev"),
+            now=_now,
+            min_age_days=0,
+            min_score=4,
+            repo=None,
+            optout_labels=set(),
+        )
+        assert action == "skip-not-allowlisted"
+        assert score is None
+
+    def test_should_act_on_allowlisted_internal_author(
+        self, closer_module, _now, monkeypatch
+    ):
+        monkeypatch.setattr(
+            closer_module, "is_external_pr_author", lambda pr, repo: False
+        )
+        monkeypatch.setattr(
+            closer_module,
+            "fetch_pr_comments",
+            lambda *a, **kw: [_greptile_comment("Confidence Score: 2/5")],
+        )
+        action, score, _ = closer_module.evaluate_pr(
+            self._make_pr(author_login="mateo-berri", created_days_ago=0),
+            now=_now,
+            min_age_days=0,
+            min_score=4,
+            repo=None,
+            optout_labels=set(),
+        )
+        assert action == "warn-grace"
+        assert score == 2
+
+    def test_empty_allowlist_restores_internal_skip(
+        self, closer_module, _now, monkeypatch
+    ):
+        monkeypatch.setattr(
+            closer_module, "is_external_pr_author", lambda pr, repo: False
+        )
+        monkeypatch.setattr(
+            closer_module,
+            "fetch_pr_comments",
+            lambda *a, **kw: pytest.fail("must not fetch comments for internal"),
+        )
+        action, score, _ = closer_module.evaluate_pr(
+            self._make_pr(author_login="krrishdholakia"),
+            now=_now,
+            min_age_days=0,
+            min_score=4,
+            repo=None,
+            optout_labels=set(),
+            allowlist=frozenset(),
+        )
+        assert action == "skip-internal"
+
+    def test_allowlist_constant_is_the_two_dogfood_accounts(self, closer_module):
+        assert closer_module.ALLOWLIST_LOGINS == frozenset(
+            {"mateo-berri", "swiftwinds"}
+        )

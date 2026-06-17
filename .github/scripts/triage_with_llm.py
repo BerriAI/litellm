@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
     AGENT_SHIN_DEFAULT_BOT_LOGIN,
+    ALLOWLIST_LOGINS,
     GRACE_COMMENT_MARKER,
     GRACE_PERIOD_SECONDS,
     GREPTILE_BOT_LOGINS,
@@ -1106,6 +1107,7 @@ def review_gate(
     grace_days: int = DEFAULT_GRACE_DAYS,
     min_greptile_score: int = DEFAULT_MIN_GREPTILE_SCORE,
     label: str = READY_FOR_REVIEW_LABEL,
+    allowlist: frozenset[str] = ALLOWLIST_LOGINS,
 ) -> dict:
     """Reconcile the `ready for review` label with a PR's current quality.
 
@@ -1157,7 +1159,10 @@ def review_gate(
     if state != "open":
         return {**base_result, "action": "skip-not-open"}
 
-    if is_internal_contributor(item):
+    if allowlist:
+        if login.lower() not in allowlist:
+            return {**base_result, "action": "skip-not-allowlisted"}
+    elif is_internal_contributor(item):
         return {**base_result, "action": "skip-internal-author"}
 
     # Resolve the comment list once — used for both the Greptile score and the
@@ -1304,6 +1309,7 @@ def triage(
     judge: Any = None,
     print_prompt: bool = False,
     reconsider: bool = False,
+    allowlist: frozenset[str] = ALLOWLIST_LOGINS,
 ) -> dict:
     """Triage a single PR or issue. Returns a result dict for logging/tests.
 
@@ -1360,7 +1366,10 @@ def triage(
         if state != "open":
             return {**base_result, "action": "skip-not-open"}
 
-    if is_internal_contributor(item):
+    if allowlist:
+        if login.lower() not in allowlist:
+            return {**base_result, "action": "skip-not-allowlisted"}
+    elif is_internal_contributor(item):
         return {**base_result, "action": "skip-internal-author"}
 
     # Reconsider-only guards — these run BEFORE the LLM call so a
