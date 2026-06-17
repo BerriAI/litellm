@@ -36,6 +36,7 @@ def _make_guardrail(
     api_base=_ENDPOINT,
     api_key="thirdlaw_secret",
     guardrail_name="thirdlaw-guard",
+    additional_headers=None,
 ) -> ThirdlawGuardrail:
     return ThirdlawGuardrail(
         api_base=api_base,
@@ -44,6 +45,7 @@ def _make_guardrail(
         guardrail_name=guardrail_name,
         event_hook="pre_call",
         default_on=True,
+        additional_headers=additional_headers,
     )
 
 
@@ -69,6 +71,9 @@ def test_env_fallback(monkeypatch):
     assert g.api_base == "https://env.thirdlaw.test/evaluate/beta/litellm_basic_guardrail_api"
     assert g.headers["x-api-key"] == "env_key"
 
+def test_additional_headers():
+    g = _make_guardrail(additional_headers="x-request-id ,x-correlation-id")
+    assert g.extra_headers == ["x-request-id", "x-correlation-id"]
 
 async def test_none_action_passthrough():
     g = _make_guardrail()
