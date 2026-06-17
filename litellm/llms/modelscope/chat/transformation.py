@@ -64,7 +64,7 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[Optional[str], Optional[str]]:
         api_base = (
             api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
         )  # type: ignore

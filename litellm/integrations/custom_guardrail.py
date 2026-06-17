@@ -472,7 +472,7 @@ class CustomGuardrail(CustomLogger):
             return None
         return f"{_PRE_CALL_EXECUTED_TOKEN}:{name}"
 
-    def mark_pre_call_hook_ran(self, data: Dict[str, Any]) -> None:
+    def mark_pre_call_hook_ran(self, data: dict[str, Any]) -> None:
         """
         Record that this guardrail's ``async_pre_call_hook`` already ran for this
         request, so the deployment-level hook does not run it a second time.
@@ -497,7 +497,7 @@ class CustomGuardrail(CustomLogger):
                 return
         data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
 
-    def _pre_call_hook_already_ran(self, data: Dict[str, Any]) -> bool:
+    def _pre_call_hook_already_ran(self, data: dict[str, Any]) -> bool:
         marker = self._pre_call_marker()
         if marker is None:
             return False

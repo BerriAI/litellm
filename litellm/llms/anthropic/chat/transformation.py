@@ -2214,7 +2214,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if "inference_geo" in _usage and _usage["inference_geo"] is not None:
             inference_geo = _usage["inference_geo"]
 
-        iterations: Optional[List[Any]] = _usage.get("iterations")
+        iterations: Optional[list[Any]] = _usage.get("iterations")
         if iterations:
             prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
             completion_tokens = sum(

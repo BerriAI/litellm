@@ -666,7 +666,7 @@ class InMemoryGuardrailHandler:
     @staticmethod
     def _normalize_litellm_params_for_comparison(
         params: Optional[Any],
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """
         Render litellm_params to a canonical dict so an in-memory LitellmParams and
         the raw dict loaded from the DB compare equal when they describe the same
