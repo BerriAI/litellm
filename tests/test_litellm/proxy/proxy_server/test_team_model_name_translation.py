@@ -790,3 +790,158 @@ def test_translate_team_model_names_for_listing_respects_legacy_flag(monkeypatch
     assert _translate_team_model_names_for_listing(
         ["model_name_teamX_uuidA"], router
     ) == ["model_name_teamX_uuidA"]
+
+
+def _public_named_router(*team_rows: dict) -> MagicMock:
+    router = MagicMock()
+    router.get_model_list.return_value = list(team_rows)
+    return router
+
+
+def test_resolve_public_name_to_internal_routing_key(monkeypatch):
+    """A public team name resolves back to the internal routing key the router
+    indexes by, so `GET /v1/models/{public_name}` can find the deployment."""
+    from litellm.proxy.proxy_server import _resolve_team_public_model_name
+
+    monkeypatch.setattr(ps, "general_settings", {})
+    router = _public_named_router(_team_row())
+
+    assert (
+        _resolve_team_public_model_name(
+            model_id="team-claude-sonnet",
+            available_models=["model_name_team-abc-123_4a6b8"],
+            llm_router=router,
+        )
+        == "model_name_team-abc-123_4a6b8"
+    )
+
+
+def test_resolve_public_name_is_access_scoped_across_teams(monkeypatch):
+    """Two teams can publish the SAME public name. A caller's query must resolve
+    to the internal key they can actually access, never another team's."""
+    from litellm.proxy.proxy_server import _resolve_team_public_model_name
+
+    monkeypatch.setattr(ps, "general_settings", {})
+    # both rows share public name "team-claude-sonnet"
+    router = _public_named_router(_team_row(), _other_team_row())
+
+    # caller only has access to their own team's internal key
+    resolved = _resolve_team_public_model_name(
+        model_id="team-claude-sonnet",
+        available_models=["model_name_team-abc-123_4a6b8"],
+        llm_router=router,
+    )
+    assert resolved == "model_name_team-abc-123_4a6b8"
+    assert resolved != "model_name_team-other_9f2c1"
+
+
+def test_resolve_public_name_unmapped_passes_through(monkeypatch):
+    """A public name with no accessible internal mapping is returned unchanged so
+    the caller hits the normal 404/access path; internal names pass through too."""
+    from litellm.proxy.proxy_server import _resolve_team_public_model_name
+
+    monkeypatch.setattr(ps, "general_settings", {})
+    router = _public_named_router(_team_row())
+
+    # not accessible -> unchanged (downstream validate_model_access will 404)
+    assert (
+        _resolve_team_public_model_name(
+            model_id="team-claude-sonnet",
+            available_models=[],
+            llm_router=router,
+        )
+        == "team-claude-sonnet"
+    )
+    # already an internal routing key -> unchanged
+    assert (
+        _resolve_team_public_model_name(
+            model_id="model_name_team-abc-123_4a6b8",
+            available_models=["model_name_team-abc-123_4a6b8"],
+            llm_router=router,
+        )
+        == "model_name_team-abc-123_4a6b8"
+    )
+
+
+def test_resolve_public_name_respects_legacy_flag(monkeypatch):
+    """With the legacy flag set, no public-name resolution happens."""
+    from litellm.proxy.proxy_server import _resolve_team_public_model_name
+
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
+    router = _public_named_router(_team_row())
+
+    assert (
+        _resolve_team_public_model_name(
+            model_id="team-claude-sonnet",
+            available_models=["model_name_team-abc-123_4a6b8"],
+            llm_router=router,
+        )
+        == "team-claude-sonnet"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
+    """Regression: `GET /v1/models/{public_name}` must NOT 404. The listing
+    advertises the public team name, so retrieve must accept the same name,
+    resolve it to the internal routing key for lookup, and echo the public name
+    back as the model id."""
+    import litellm
+    import litellm.proxy.utils as proxy_utils
+
+    team_row = _team_row()
+    router = _public_named_router(team_row)
+    deployment = MagicMock()
+    deployment.litellm_params.model = "azure/gpt-5.2-low-rpm-testing"
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        AsyncMock(return_value=["model_name_team-abc-123_4a6b8"]),
+    )
+    monkeypatch.setattr(
+        litellm, "get_llm_provider", lambda model: (model, "openai", None, None)
+    )
+
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", team_models=[])
+    resp = await ps.model_info(model_id="team-claude-sonnet", user_api_key_dict=key)
+
+    assert resp["id"] == "team-claude-sonnet"
+    # lookup happened by the internal routing key, not the public name
+    router.get_deployment_by_model_group_name.assert_called_once_with(
+        "model_name_team-abc-123_4a6b8"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrieve_model_by_inaccessible_public_name_404s(monkeypatch):
+    """A caller without access to a team model still gets 404 when retrieving by
+    its public name; resolution never crosses the access boundary."""
+    import litellm
+    import litellm.proxy.utils as proxy_utils
+
+    router = _public_named_router(_team_row())
+    deployment = MagicMock()
+    deployment.litellm_params.model = "azure/gpt-5.2-low-rpm-testing"
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        AsyncMock(return_value=[]),  # caller has no access
+    )
+    monkeypatch.setattr(
+        litellm, "get_llm_provider", lambda model: (model, "openai", None, None)
+    )
+
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", team_models=[])
+    with pytest.raises(ps.HTTPException) as exc_info:
+        await ps.model_info(model_id="team-claude-sonnet", user_api_key_dict=key)
+
+    assert exc_info.value.status_code == 404
+    router.get_deployment_by_model_group_name.assert_not_called()
