@@ -55,8 +55,11 @@ _spike_exhaustiveness.py:44:18 - error: Argument of type "Literal[AuthSpecKind.a
     assigned to parameter "arg" of type "Never" in function "assert_never"  (reportArgumentType)
 ```
 
-Restore the arm and the errors disappear. This is why adding a sixth `AuthSpecKind` member without a
-`resolve()` arm fails the type gate rather than failing at runtime.
+Restore the arm and the errors disappear. This is why adding a new `AuthSpecKind` member without a
+`resolve()` arm fails the type gate rather than failing at runtime. `AuthSpecKind` covers v1's full
+`MCPAuth` surface: the three OAuth grants (`authorization_code`, `client_credentials`,
+`token_exchange`), the collapsed static-header family (`api_key`), client `passthrough`, `none`
+(no upstream auth), and `aws_sigv4` (per-request signing).
 
 ## Toolchain notes
 

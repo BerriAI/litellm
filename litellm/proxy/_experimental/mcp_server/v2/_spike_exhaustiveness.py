@@ -41,6 +41,10 @@ def label_enum(kind: AuthSpecKind) -> str:
             return "static header"
         case AuthSpecKind.passthrough:
             return "client-forwarded"
+        case AuthSpecKind.none:
+            return "no upstream auth"
+        case AuthSpecKind.aws_sigv4:
+            return "aws sigv4 signing"
     # Reached only if an enum member has no arm above. basedpyright then narrows `kind` to that
     # uncovered member (not `Never`), so this `assert_never` is a type error => the gate bit.
     assert_never(kind)

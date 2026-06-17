@@ -37,9 +37,12 @@ from ..result import Error, Ok, Result
 class AuthSpecKind(str, Enum):
     """The server's statically-declared upstream-auth mode — the single source of truth.
 
-    Canonical names follow the OAuth-grant vocabulary (see the Notion "resolve() Per-Mode
-    Behavior" page). BYOK is *not* a member: it is the `api_key` mode seeded per-user, a
-    source selector inside that arm.
+    Covers v1's full `MCPAuth` surface, not only OAuth grants: the three grant modes, the
+    collapsed static-header family, client passthrough, no-auth, and AWS request signing.
+    BYOK is *not* a member: it is the `api_key` mode seeded per-user, a source selector
+    inside that arm. The static-header schemes v1 splits into separate `MCPAuth` values
+    (`bearer_token`/`api_key`/`basic`/`token`/`authorization`) collapse into `api_key`; the
+    scheme is a parameter the arm carries, not its own mode.
     """
 
     authorization_code = (
@@ -47,8 +50,10 @@ class AuthSpecKind(str, Enum):
     )
     client_credentials = "client_credentials"  # gateway service account (M2M)
     token_exchange = "token_exchange"  # RFC 8693 on-behalf-of
-    api_key = "api_key"  # fixed/static header (BYOK = per-user-seeded source)
+    api_key = "api_key"  # static header, any scheme (BYOK = per-user-seeded source)
     passthrough = "passthrough"  # client forwards an upstream-audience token
+    none = "none"  # no upstream credential; resolve yields a no-op auth, never an error
+    aws_sigv4 = "aws_sigv4"  # AWS SigV4 per-request signing (e.g. Bedrock AgentCore)
 
 
 @tagged_union(frozen=True)
@@ -163,6 +168,10 @@ class UpstreamCredentialProvider:
                 return self._api_key(subject, server)
             case AuthSpecKind.passthrough:
                 return self._passthrough(subject, server)
+            case AuthSpecKind.none:
+                return self._none(subject, server)
+            case AuthSpecKind.aws_sigv4:
+                return self._aws_sigv4(subject, server)
 
     # --- arms: Phase 0 stubs (errors-as-values, no raise). Filled in Phase 1. -------------
     def _authorization_code(
@@ -189,6 +198,16 @@ class UpstreamCredentialProvider:
         self, subject: Subject, server: ServerSpec
     ) -> Result[httpx.Auth, CredError]:
         return _todo(AuthSpecKind.passthrough)
+
+    def _none(
+        self, subject: Subject, server: ServerSpec
+    ) -> Result[httpx.Auth, CredError]:
+        return _todo(AuthSpecKind.none)
+
+    def _aws_sigv4(
+        self, subject: Subject, server: ServerSpec
+    ) -> Result[httpx.Auth, CredError]:
+        return _todo(AuthSpecKind.aws_sigv4)
 
 
 def _todo(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
