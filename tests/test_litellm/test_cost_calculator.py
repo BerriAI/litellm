@@ -2181,6 +2181,58 @@ def test_completion_cost_service_tier_for_anthropic():
     assert priority_cost == pytest.approx(2 * standard_cost)
 
 
+def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate():
+    """
+    Proxy billing path regression for LIT-3771.
+
+    Priority is opted into with ``service_tier="auto"``; Anthropic then serves
+    "priority" and reports it on the response usage. The proxy forwards the
+    request-level "auto" into ``completion_cost`` (via ``_response_cost_calculator``),
+    and that preference must not shadow the served tier, otherwise priority
+    requests are silently billed at the standard rate.
+    """
+    from litellm import completion_cost
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-auto-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "service_tier": "priority",
+        },
+        reasoning_content=None,
+    )
+    response = ModelResponse(usage=usage, model=model)
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="anthropic",
+        service_tier="auto",
+        optional_params={"service_tier": "auto"},
+    )
+
+    expected_priority = 1000 * 6e-6 + 500 * 30e-6
+    assert cost == pytest.approx(expected_priority)
+
+
 def test_gemini_cache_tokens_details_no_negative_values():
     """
     Test for Issue #18750: Negative text_tokens with Gemini caching

@@ -3657,6 +3657,7 @@ class SpecialEnums(Enum):
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
 
+    AUTO = "auto"
     FLEX = "flex"
     PRIORITY = "priority"
 
