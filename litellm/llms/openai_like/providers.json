@@ -166,6 +166,7 @@
     "api_base_env": "PINSTRIPES_API_BASE",
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
-    }
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }
