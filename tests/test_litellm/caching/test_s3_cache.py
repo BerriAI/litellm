@@ -1,5 +1,6 @@
 import os
 import sys
+from collections import Counter
 from unittest.mock import MagicMock, patch
 import json
 import datetime
@@ -7,9 +8,7 @@ import asyncio
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.caching.s3_cache import S3Cache
 
@@ -66,9 +65,7 @@ def test_s3_cache_get_cache_no_expires_info_in_response(mock_s3_dependencies):
 
     result = cache.get_cache("test_key")
 
-    cache.s3_client.get_object.assert_called_once_with(
-        Bucket="test-bucket", Key="test_key"
-    )
+    cache.s3_client.get_object.assert_called_once_with(Bucket="test-bucket", Key="test_key")
 
     assert result == {"key": "value", "number": 42}
 
@@ -78,9 +75,7 @@ def test_s3_cache_get_cache_with_expires_valid(mock_s3_dependencies):
     cache = S3Cache("test-bucket")
 
     # Create a future expiration time (1 hour from now)
-    future_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
-        hours=1
-    )
+    future_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
 
     mock_response = {"Body": MagicMock(), "Expires": future_time}
     mock_response["Body"].read.return_value = b'{"key": "value", "number": 42}'
@@ -88,9 +83,7 @@ def test_s3_cache_get_cache_with_expires_valid(mock_s3_dependencies):
 
     result = cache.get_cache("test_key")
 
-    cache.s3_client.get_object.assert_called_once_with(
-        Bucket="test-bucket", Key="test_key"
-    )
+    cache.s3_client.get_object.assert_called_once_with(Bucket="test-bucket", Key="test_key")
 
     # Should return the cached value since it's not expired
     assert result == {"key": "value", "number": 42}
@@ -101,9 +94,7 @@ def test_s3_cache_get_cache_with_expires_expired(mock_s3_dependencies):
     cache = S3Cache("test-bucket")
 
     # Create a past expiration time (1 hour ago)
-    past_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
-        hours=1
-    )
+    past_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
 
     mock_response = {"Body": MagicMock(), "Expires": past_time}
     mock_response["Body"].read.return_value = b'{"key": "value", "number": 42}'
@@ -111,9 +102,7 @@ def test_s3_cache_get_cache_with_expires_expired(mock_s3_dependencies):
 
     result = cache.get_cache("test_key")
 
-    cache.s3_client.get_object.assert_called_once_with(
-        Bucket="test-bucket", Key="test_key"
-    )
+    cache.s3_client.get_object.assert_called_once_with(Bucket="test-bucket", Key="test_key")
 
     # Should return None since the cache entry is expired
     assert result is None
@@ -126,15 +115,11 @@ def test_s3_cache_get_cache_not_found(mock_s3_dependencies):
     cache = S3Cache("test-bucket")
 
     error_response = {"Error": {"Code": "NoSuchKey"}}
-    cache.s3_client.get_object.side_effect = botocore.exceptions.ClientError(
-        error_response, "GetObject"
-    )
+    cache.s3_client.get_object.side_effect = botocore.exceptions.ClientError(error_response, "GetObject")
 
     result = cache.get_cache("nonexistent_key")
 
-    cache.s3_client.get_object.assert_called_once_with(
-        Bucket="test-bucket", Key="nonexistent_key"
-    )
+    cache.s3_client.get_object.assert_called_once_with(Bucket="test-bucket", Key="nonexistent_key")
     assert result is None
 
 
@@ -218,9 +203,7 @@ async def test_s3_cache_async_get_cache(mock_s3_dependencies):
 
     result = await cache.async_get_cache("test_key")
 
-    cache.s3_client.get_object.assert_called_once_with(
-        Bucket="test-bucket", Key="test_key"
-    )
+    cache.s3_client.get_object.assert_called_once_with(Bucket="test-bucket", Key="test_key")
 
     assert result == {"key": "value", "number": 42}
 
@@ -233,15 +216,11 @@ async def test_s3_cache_async_get_cache_not_found(mock_s3_dependencies):
     cache = S3Cache("test-bucket")
 
     error_response = {"Error": {"Code": "NoSuchKey"}}
-    cache.s3_client.get_object.side_effect = botocore.exceptions.ClientError(
-        error_response, "GetObject"
-    )
+    cache.s3_client.get_object.side_effect = botocore.exceptions.ClientError(error_response, "GetObject")
 
     result = await cache.async_get_cache("nonexistent_key")
 
-    cache.s3_client.get_object.assert_called_once_with(
-        Bucket="test-bucket", Key="nonexistent_key"
-    )
+    cache.s3_client.get_object.assert_called_once_with(Bucket="test-bucket", Key="nonexistent_key")
     assert result is None
 
 
@@ -261,14 +240,12 @@ async def test_s3_cache_async_set_cache_pipeline(mock_s3_dependencies):
     # Should have called put_object 3 times
     assert cache.s3_client.put_object.call_count == 3
 
-    calls_by_key = {
-        call.kwargs["Key"]: call.kwargs
+    actual_calls = Counter(
+        (call.kwargs["Key"], call.kwargs["Bucket"], call.kwargs["Body"])
         for call in cache.s3_client.put_object.call_args_list
-    }
-    assert calls_by_key.keys() == {key for key, _ in cache_list}
-    for key, value in cache_list:
-        assert calls_by_key[key]["Bucket"] == "test-bucket"
-        assert calls_by_key[key]["Body"] == json.dumps(value)
+    )
+    expected_calls = Counter((key, "test-bucket", json.dumps(value)) for key, value in cache_list)
+    assert actual_calls == expected_calls
 
 
 @pytest.mark.asyncio
@@ -289,13 +266,11 @@ async def test_s3_cache_concurrent_async_operations(mock_s3_dependencies):
     # Verify all operations were called
     assert cache.s3_client.put_object.call_count == 5
 
-    calls_by_key = {
-        call.kwargs["Key"]: call.kwargs
-        for call in cache.s3_client.put_object.call_args_list
-    }
-    assert calls_by_key.keys() == {f"concurrent_key_{i}" for i in range(5)}
-    for call_args in calls_by_key.values():
-        assert call_args["Bucket"] == "test-bucket"
+    actual_calls = Counter(
+        (call.kwargs["Key"], call.kwargs["Bucket"]) for call in cache.s3_client.put_object.call_args_list
+    )
+    expected_calls = Counter((f"concurrent_key_{i}", "test-bucket") for i in range(5))
+    assert actual_calls == expected_calls
 
 
 @pytest.mark.asyncio

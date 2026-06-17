@@ -61,6 +61,23 @@ jobs:
               importlib.import_module(module)
           PY
 
+      - name: Datadog tracing smoke
+        run: |
+          DD_TRACE_ENABLED=false USE_DDTRACE=true uv run --no-sync python - <<'PY'
+          from litellm.litellm_core_utils import dd_tracing
+
+          with dd_tracing.tracer.trace("litellm.python314.smoke") as span:
+              assert span is not None
+              span.set_tag("litellm.python", "3.14")
+              assert dd_tracing.get_active_span() is not None
+
+          @dd_tracing.tracer.wrap(name="litellm.python314.wrap_smoke")
+          def wrapped():
+              return "ok"
+
+          assert wrapped() == "ok"
+          PY
+
       - name: Run targeted regression tests
         run: |
           uv run --no-sync pytest \
