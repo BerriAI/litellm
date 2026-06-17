@@ -717,6 +717,52 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     ]
 
 
+@pytest.mark.asyncio
+async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch):
+    """Regression: with include_metadata=true, fallbacks configured for a team
+    model under its internal routing key must still surface. The metadata lookup
+    has to run against the internal name, not the translated public name (which
+    the router's fallback config never keys on) -- otherwise fallbacks silently
+    drop to []."""
+    team_dep = {
+        "model_name": "model_name_teamX_uuid9",
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {
+            "id": "id1",
+            "team_id": "teamX",
+            "team_public_model_name": "tushar-gpt-4.1",
+            "access_groups": ["grp-a"],
+        },
+    }
+    router = MagicMock()
+    router.get_model_names.return_value = ["model_name_teamX_uuid9"]
+    router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_fully_blocked_model_names.return_value = set()
+    router.model_list = [team_dep]
+    router.get_model_list.return_value = [team_dep]
+    # Fallbacks are keyed on the internal routing name, as the router stores them.
+    router.fallbacks = [{"model_name_teamX_uuid9": ["gpt-4o-backup"]}]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {})
+
+    key = UserAPIKeyAuth(
+        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
+    )
+    resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
+
+    assert resp["data"] == [
+        {
+            "id": "tushar-gpt-4.1",
+            "object": "model",
+            "created": 1677610602,
+            "owned_by": "openai",
+            "metadata": {"fallbacks": ["gpt-4o-backup"]},
+        }
+    ]
+
+
 def test_translate_team_model_names_for_listing_swaps_and_dedupes():
     """Internal team routing keys -> public name; sibling deployments sharing a
     public name collapse to one entry (order preserved); globals untouched."""
@@ -745,6 +791,49 @@ def test_translate_team_model_names_for_listing_swaps_and_dedupes():
         {},
     )
     assert out == ["tushar-gpt-4.1", "gpt-4o"]
+
+
+def test_listing_entries_keep_internal_lookup_id_for_team_rows():
+    """`listing_entries` returns (public response id, internal lookup id) so the
+    response shows the public name while metadata lookups keep the routing key.
+    Sibling deployments collapse to one entry; globals map to themselves."""
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {
+            "model_name": "model_name_teamX_uuidA",
+            "model_info": {
+                "team_id": "teamX",
+                "team_public_model_name": "tushar-gpt-4.1",
+            },
+        },
+        {
+            "model_name": "model_name_teamX_uuidB",  # sibling: same public name
+            "model_info": {
+                "team_id": "teamX",
+                "team_public_model_name": "tushar-gpt-4.1",
+            },
+        },
+        {"model_name": "gpt-4o", "model_info": {"db_model": False}},
+    ]
+
+    entries = TeamModelNameTranslator.listing_entries(
+        ["model_name_teamX_uuidA", "model_name_teamX_uuidB", "gpt-4o"],
+        router,
+        {},
+    )
+    # public id for the client; an internal routing key for the metadata lookup
+    assert entries[0][0] == "tushar-gpt-4.1"
+    assert entries[0][1].startswith("model_name_teamX_uuid")
+    assert entries[1] == ("gpt-4o", "gpt-4o")
+    assert len(entries) == 2
+
+
+def test_listing_entries_passthrough_when_disabled():
+    """Legacy flag / no router -> response id equals lookup id (no translation)."""
+    assert TeamModelNameTranslator.listing_entries(["a", "b"], None, {}) == [
+        ("a", "a"),
+        ("b", "b"),
+    ]
 
 
 def test_translate_team_model_names_for_listing_leaves_unmapped_names():
