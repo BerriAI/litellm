@@ -92,3 +92,15 @@ class TestWhisperTransformResponse:
                     is_json=False,
                 )
             )
+
+    def test_json_content_type_match_is_case_insensitive(self):
+        """Media types are case-insensitive (RFC 7231), so a mixed-case application/json still re-raises."""
+        config = OpenAIWhisperAudioTranscriptionConfig()
+        with pytest.raises(json.JSONDecodeError):
+            config.transform_audio_transcription_response(
+                self._make_response(
+                    text="<html>502 Bad Gateway</html>",
+                    content_type="Application/JSON; charset=utf-8",
+                    is_json=False,
+                )
+            )
