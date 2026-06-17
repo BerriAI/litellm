@@ -20,7 +20,9 @@ import pytest
 
 @pytest.fixture
 def non_activated_env():
-    venv_root = sysconfig.get_path("data") or os.path.dirname(sysconfig.get_path("scripts") or "")
+    venv_root = sysconfig.get_path("data") or os.path.dirname(
+        sysconfig.get_path("scripts") or ""
+    )
     env = os.environ.copy()
     env.pop("VIRTUAL_ENV", None)
     env.pop("VIRTUAL_ENV_PROMPT", None)
@@ -36,7 +38,7 @@ def fake_prisma_bin(tmp_path):
     fake_bin = tmp_path / "fake_bin"
     fake_bin.mkdir()
     prisma = fake_bin / "prisma"
-    prisma.write_text("#!/bin/sh\necho \"fake-prisma called: $@\"\nexit 0\n")
+    prisma.write_text('#!/bin/sh\necho "fake-prisma called: $@"\nexit 0\n')
     prisma.chmod(prisma.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return fake_bin
 

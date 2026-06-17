@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 from litellm_proxy_extras.utils import ProxyExtrasDBManager, _get_prisma_env
 
-
 # ---------------------------------------------------------------------------
 # Unit tests for _get_prisma_env() PATH injection
 # ---------------------------------------------------------------------------
@@ -23,15 +22,13 @@ def test_get_prisma_env_injects_scripts_dir_at_index_0(monkeypatch):
     # Remove scripts dir from PATH so it's not already there
     stripped_path = "/usr/local/bin:/usr/bin:/bin"
     monkeypatch.setenv("PATH", stripped_path)
-    with (
-        patch("sysconfig.get_path", return_value=fake_scripts),
-    ):
+    with (patch("sysconfig.get_path", return_value=fake_scripts),):
         env = _get_prisma_env()
 
     path_entries = env["PATH"].split(os.pathsep)
-    assert path_entries[0] == fake_scripts, (
-        f"Expected scripts dir at index 0, got: {env['PATH']}"
-    )
+    assert (
+        path_entries[0] == fake_scripts
+    ), f"Expected scripts dir at index 0, got: {env['PATH']}"
     # Original PATH entries preserved after the injected dir
     assert "/usr/local/bin" in path_entries
     assert "/usr/bin" in path_entries
@@ -59,7 +56,9 @@ def test_get_prisma_env_handles_empty_path(monkeypatch):
         env = _get_prisma_env()
 
     assert env["PATH"] == fake_scripts
-    assert os.pathsep not in env["PATH"] or env["PATH"].rstrip(os.pathsep) == fake_scripts
+    assert (
+        os.pathsep not in env["PATH"] or env["PATH"].rstrip(os.pathsep) == fake_scripts
+    )
 
 
 def test_get_prisma_env_falls_back_to_dirname_when_sysconfig_falsy(monkeypatch):
@@ -129,14 +128,18 @@ def test_db_push_subprocess_receives_scripts_dir_on_path(monkeypatch, tmp_path):
 
     with (
         patch("sysconfig.get_path", return_value=fake_scripts),
-        patch.object(ProxyExtrasDBManager, "_get_prisma_dir", return_value=str(tmp_path)),
+        patch.object(
+            ProxyExtrasDBManager, "_get_prisma_dir", return_value=str(tmp_path)
+        ),
         patch("litellm_proxy_extras.utils._get_prisma_command", return_value="prisma"),
         patch("subprocess.run", side_effect=fake_subprocess_run),
     ):
         result = ProxyExtrasDBManager.setup_database(use_migrate=False)
 
     assert result is True, "setup_database should return True on success"
-    assert len(captured_calls) == 1, f"Expected 1 subprocess call, got {len(captured_calls)}"
+    assert (
+        len(captured_calls) == 1
+    ), f"Expected 1 subprocess call, got {len(captured_calls)}"
 
     received_env = captured_calls[0]["env"]
     assert received_env is not None, "subprocess.run must be called with env="

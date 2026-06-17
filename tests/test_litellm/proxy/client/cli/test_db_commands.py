@@ -39,8 +39,13 @@ def test_db_generate_success(cli_runner):
             "litellm.proxy.client.cli.commands.db.PrismaManager._get_prisma_dir",
             return_value="/fake/prisma/dir",
         ),
-        patch("litellm.proxy.client.cli.commands.db._get_prisma_command", return_value="prisma"),
-        patch("litellm.proxy.client.cli.commands.db._get_prisma_env", return_value=None),
+        patch(
+            "litellm.proxy.client.cli.commands.db._get_prisma_command",
+            return_value="prisma",
+        ),
+        patch(
+            "litellm.proxy.client.cli.commands.db._get_prisma_env", return_value=None
+        ),
         patch("litellm.proxy.client.cli.commands.db.os.path.exists", return_value=True),
         patch("litellm.proxy.client.cli.commands.db.subprocess.run", mock_run),
     ):
@@ -63,8 +68,13 @@ def test_db_generate_schema_path_uses_get_prisma_dir(cli_runner):
             "litellm.proxy.client.cli.commands.db.PrismaManager._get_prisma_dir",
             return_value="/custom/litellm/proxy/dir",
         ),
-        patch("litellm.proxy.client.cli.commands.db._get_prisma_command", return_value="prisma"),
-        patch("litellm.proxy.client.cli.commands.db._get_prisma_env", return_value=None),
+        patch(
+            "litellm.proxy.client.cli.commands.db._get_prisma_command",
+            return_value="prisma",
+        ),
+        patch(
+            "litellm.proxy.client.cli.commands.db._get_prisma_env", return_value=None
+        ),
         patch("litellm.proxy.client.cli.commands.db.os.path.exists", return_value=True),
         patch("litellm.proxy.client.cli.commands.db.subprocess.run", mock_run),
     ):
@@ -83,8 +93,13 @@ def test_db_generate_prisma_failure(cli_runner):
             "litellm.proxy.client.cli.commands.db.PrismaManager._get_prisma_dir",
             return_value="/fake/prisma/dir",
         ),
-        patch("litellm.proxy.client.cli.commands.db._get_prisma_command", return_value="prisma"),
-        patch("litellm.proxy.client.cli.commands.db._get_prisma_env", return_value=None),
+        patch(
+            "litellm.proxy.client.cli.commands.db._get_prisma_command",
+            return_value="prisma",
+        ),
+        patch(
+            "litellm.proxy.client.cli.commands.db._get_prisma_env", return_value=None
+        ),
         patch("litellm.proxy.client.cli.commands.db.os.path.exists", return_value=True),
         patch("litellm.proxy.client.cli.commands.db.subprocess.run", mock_run),
     ):
@@ -100,9 +115,16 @@ def test_db_generate_schema_missing(cli_runner):
             "litellm.proxy.client.cli.commands.db.PrismaManager._get_prisma_dir",
             return_value="/fake/prisma/dir",
         ),
-        patch("litellm.proxy.client.cli.commands.db._get_prisma_command", return_value="prisma"),
-        patch("litellm.proxy.client.cli.commands.db._get_prisma_env", return_value=None),
-        patch("litellm.proxy.client.cli.commands.db.os.path.exists", return_value=False),
+        patch(
+            "litellm.proxy.client.cli.commands.db._get_prisma_command",
+            return_value="prisma",
+        ),
+        patch(
+            "litellm.proxy.client.cli.commands.db._get_prisma_env", return_value=None
+        ),
+        patch(
+            "litellm.proxy.client.cli.commands.db.os.path.exists", return_value=False
+        ),
     ):
         result = cli_runner.invoke(cli, ["db", "generate"])
 
@@ -119,7 +141,9 @@ def test_db_generate_proxy_extras_not_installed(cli_runner):
         },
     ):
         # Patch the module-level flag directly since the import already happened
-        with patch("litellm.proxy.client.cli.commands.db._PROXY_EXTRAS_AVAILABLE", False):
+        with patch(
+            "litellm.proxy.client.cli.commands.db._PROXY_EXTRAS_AVAILABLE", False
+        ):
             result = cli_runner.invoke(cli, ["db", "generate"])
 
     assert result.exit_code != 0
@@ -179,7 +203,9 @@ def test_db_generate_env_includes_scripts_dir_on_path(cli_runner):
             return_value=injected_env,
         ),
         patch("litellm.proxy.client.cli.commands.db.os.path.exists", return_value=True),
-        patch("litellm.proxy.client.cli.commands.db.subprocess.run", side_effect=_capture),
+        patch(
+            "litellm.proxy.client.cli.commands.db.subprocess.run", side_effect=_capture
+        ),
     ):
         result = cli_runner.invoke(cli, ["db", "generate"])
 
@@ -225,7 +251,9 @@ def test_db_generate_env_does_not_duplicate_scripts_dir(cli_runner):
             return_value={"PATH": scripts_dir + os.pathsep + "/usr/bin"},
         ),
         patch("litellm.proxy.client.cli.commands.db.os.path.exists", return_value=True),
-        patch("litellm.proxy.client.cli.commands.db.subprocess.run", side_effect=_capture),
+        patch(
+            "litellm.proxy.client.cli.commands.db.subprocess.run", side_effect=_capture
+        ),
     ):
         result = cli_runner.invoke(cli, ["db", "generate"])
 

@@ -7,7 +7,10 @@ from unittest.mock import patch
 
 import pytest
 
-from litellm.proxy.client.cli.commands.db import _get_generate_env, _get_venv_scripts_dir
+from litellm.proxy.client.cli.commands.db import (
+    _get_generate_env,
+    _get_venv_scripts_dir,
+)
 
 _DB_MODULE = "litellm.proxy.client.cli.commands.db"
 
@@ -100,15 +103,20 @@ def test_prisma_client_py_resolvable_via_path():
         fake_exe = os.path.join(tmpdir, "prisma-client-py")
         with open(fake_exe, "w") as f:
             f.write("#!/bin/sh\necho fake\n")
-        os.chmod(fake_exe, os.stat(fake_exe).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        os.chmod(
+            fake_exe,
+            os.stat(fake_exe).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
+        )
 
-        with patch(f"{_DB_MODULE}._get_prisma_env", return_value={"PATH": f"{tmpdir}:/usr/bin"}):
+        with patch(
+            f"{_DB_MODULE}._get_prisma_env", return_value={"PATH": f"{tmpdir}:/usr/bin"}
+        ):
             env = _get_generate_env()
 
         path_entries = env["PATH"].split(os.pathsep)
-        assert path_entries[0] == tmpdir, (
-            f"scripts dir must be first on PATH; got {path_entries!r}"
-        )
+        assert (
+            path_entries[0] == tmpdir
+        ), f"scripts dir must be first on PATH; got {path_entries!r}"
         found = shutil.which("prisma-client-py", path=env["PATH"])
         assert found is not None, "prisma-client-py not findable via PATH lookup"
         assert os.path.dirname(found) == tmpdir
@@ -125,12 +133,14 @@ def test_prisma_client_py_resolvable_via_path():
 
 def test_scripts_dir_promoted_to_index_zero_when_at_later_position():
     fake_scripts = "/home/user/venv/bin"
-    promoted_path = os.pathsep.join([
-        fake_scripts,
-        "/usr/bin",
-        "/opt/other",
-        "/bin",
-    ])
+    promoted_path = os.pathsep.join(
+        [
+            fake_scripts,
+            "/usr/bin",
+            "/opt/other",
+            "/bin",
+        ]
+    )
     promoted_env = {"PATH": promoted_path}
 
     with patch(f"{_DB_MODULE}._get_prisma_env", return_value=promoted_env):
@@ -143,9 +153,7 @@ def test_scripts_dir_promoted_to_index_zero_when_at_later_position():
         f"_get_prisma_env() is responsible for the promotion; "
         f"_get_generate_env() must faithfully delegate."
     )
-    assert path_entries.count(fake_scripts) == 1, (
-        "scripts_dir must not be duplicated"
-    )
+    assert path_entries.count(fake_scripts) == 1, "scripts_dir must not be duplicated"
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +175,10 @@ def test_get_generate_env_delegation_chain_returns_scripts_dir_at_index_0():
     fake_scripts = "/fake/venv/bin"
     base_env = {"PATH": "/usr/bin:/bin"}
     with (
-        patch(f"{_DB_MODULE}._get_prisma_env", return_value={**base_env, "PATH": f"{fake_scripts}:/usr/bin:/bin"}),
+        patch(
+            f"{_DB_MODULE}._get_prisma_env",
+            return_value={**base_env, "PATH": f"{fake_scripts}:/usr/bin:/bin"},
+        ),
     ):
         env = _get_generate_env()
 
@@ -190,4 +201,3 @@ def test_get_generate_env_falls_back_to_os_environ_when_prisma_env_is_none():
     # Must return a dict (a copy of os.environ) without raising
     assert isinstance(env, dict)
     assert len(env) > 0
-
