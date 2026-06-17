@@ -1,0 +1,22 @@
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake-model
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+general_settings:
+  master_key: sk-1234
+
+litellm_settings:
+  drop_params: True
+  telemetry: False
+
+guardrails:
+  - guardrail_name: deepkeep-firewall
+    litellm_params:
+      guardrail: deepkeep
+      mode: [pre_call, post_call]
+      api_key: "1D-VOZhxhsgG2o8pnbDcXaDmzLOWSwZpgkGZPDyVQBk"
+      api_base: "http://localhost:8081/api"
+      deepkeep_firewall_id: "063e4e5ba5c2be55"

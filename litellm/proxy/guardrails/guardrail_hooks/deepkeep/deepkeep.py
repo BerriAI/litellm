@@ -6,7 +6,7 @@
 # +-------------------------------------------------------------+
 
 import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
 
@@ -68,11 +68,11 @@ class DeepKeepGuardrail(CustomGuardrail):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        firewall_id: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        firewall_id: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: dict[str, str] | None = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -114,7 +114,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             unreachable_fallback
         )
-        self.extra_headers: Dict[str, str] = extra_headers or {}
+        self.extra_headers: dict[str, str] = extra_headers or {}
 
         # Set supported event hooks
         if "supported_event_hooks" not in kwargs:
@@ -133,7 +133,7 @@ class DeepKeepGuardrail(CustomGuardrail):
             self.firewall_id,
         )
 
-    def _extract_user_api_key_metadata(self, request_data: dict) -> Dict[str, Any]:
+    def _extract_user_api_key_metadata(self, request_data: dict) -> dict[str, Any]:
         """
         Extract user API key metadata from request_data for the DeepKeep API.
 
@@ -143,7 +143,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         Returns:
             Dictionary with user API key metadata fields.
         """
-        result_metadata: Dict[str, Any] = {}
+        result_metadata: dict[str, Any] = {}
 
         litellm_metadata = request_data.get("litellm_metadata", {})
         top_level_metadata = request_data.get("metadata", {})
@@ -177,9 +177,9 @@ class DeepKeepGuardrail(CustomGuardrail):
 
         return result_metadata
 
-    def _build_request_headers(self) -> Dict[str, str]:
+    def _build_request_headers(self) -> dict[str, str]:
         """Build HTTP headers for the DeepKeep API request."""
-        headers: Dict[str, str] = {
+        headers: dict[str, str] = {
             "Content-Type": "application/json",
             "X-API-Key": self.deepkeep_api_key,
         }
@@ -194,7 +194,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"],
         error: Exception,
-        http_status_code: Optional[int] = None,
+        http_status_code: int | None = None,
     ) -> GenericGuardrailAPIInputs:
         """Allow the request to proceed when the guardrail is unreachable (fail-open mode)."""
         status_suffix = (
@@ -241,12 +241,12 @@ class DeepKeepGuardrail(CustomGuardrail):
     @staticmethod
     def _build_return_inputs(
         *,
-        response_json: Dict[str, Any],
+        response_json: dict[str, Any],
         texts: list,
-        images: Optional[Any],
-        tools: Optional[Any],
-        tool_calls: Optional[Any],
-        structured_messages: Optional[Any],
+        images: Any | None,
+        tools: Any | None,
+        tool_calls: Any | None,
+        structured_messages: Any | None,
     ) -> GenericGuardrailAPIInputs:
         """Merge original inputs with any guardrail-modified values from the API response."""
         return_inputs = GenericGuardrailAPIInputs(texts=texts)
@@ -311,7 +311,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         request_body = request_data.get("body") or {}
 
         # Merge additional provider-specific params from config and dynamic params
-        additional_params: Dict[str, Any] = {"firewall_id": self.firewall_id}
+        additional_params: dict[str, Any] = {"firewall_id": self.firewall_id}
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_body)
         if dynamic_params:
             additional_params.update(
@@ -322,7 +322,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         user_metadata = self._extract_user_api_key_metadata(request_data)
 
         # Build request payload
-        guardrail_request: Dict[str, Any] = {
+        guardrail_request: dict[str, Any] = {
             "litellm_call_id": (logging_obj.litellm_call_id if logging_obj else None),
             "litellm_trace_id": (logging_obj.litellm_trace_id if logging_obj else None),
             "texts": texts,
@@ -397,7 +397,7 @@ class DeepKeepGuardrail(CustomGuardrail):
             )
 
     @staticmethod
-    def get_config_model() -> Optional[type]:
+    def get_config_model() -> type | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.deepkeep import (
             DeepKeepGuardrailConfigModel,
         )

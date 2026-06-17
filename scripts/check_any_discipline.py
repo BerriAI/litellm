@@ -151,8 +151,16 @@ class Violation(NamedTuple):
 # --------------------------------------------------------------------------- #
 
 
-def contains_any(t: Type, _seen: set[int] | None = None) -> bool:
+_MAX_CONTAINS_ANY_DEPTH = 64
+
+
+def contains_any(t: Type, _seen: set[int] | None = None, _depth: int = 0) -> bool:
     """True if a *value* of type ``t`` carries `Any` anywhere meaningful."""
+    if _depth > _MAX_CONTAINS_ANY_DEPTH:
+        # Bail out on deeply-nested / potentially-circular types rather than
+        # overflowing the Python call stack.  A type this deep is unlikely to
+        # carry a *meaningful* Any that the developer could actually fix.
+        return False
     seen = _seen if _seen is not None else set()
     p = get_proper_type(t)
     if id(p) in seen:
@@ -166,11 +174,11 @@ def contains_any(t: Type, _seen: set[int] | None = None) -> bool:
     if isinstance(p, AnyType):
         return p.type_of_any not in _HARMLESS_ANY
     if isinstance(p, UnionType):
-        return any(contains_any(item, seen) for item in p.items)
+        return any(contains_any(item, seen, _depth + 1) for item in p.items)
     if isinstance(p, Instance):
-        return any(contains_any(arg, seen) for arg in p.args)
+        return any(contains_any(arg, seen, _depth + 1) for arg in p.args)
     if isinstance(p, TupleType):
-        return any(contains_any(item, seen) for item in p.items)
+        return any(contains_any(item, seen, _depth + 1) for item in p.items)
     return False
 
 
@@ -249,17 +257,11 @@ def _reason_ok(reason: str | None) -> bool:
     return reason is not None and len(reason.strip()) >= MIN_REASON_LEN
 
 
-def scan_any_ok(
-    path: Path, source: str
-) -> tuple[frozenset[int], tuple[Violation, ...]]:
+def scan_any_ok(path: Path, source: str) -> tuple[frozenset[int], tuple[Violation, ...]]:
     """Return (lines with a valid any-ok suppression, LIT005 violations)."""
     try:
-        tokens = tokenize.generate_tokens(
-            iter(source.splitlines(keepends=True)).__next__
-        )
-        comments = tuple(
-            (t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT
-        )
+        tokens = tokenize.generate_tokens(iter(source.splitlines(keepends=True)).__next__)
+        comments = tuple((t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT)
     except tokenize.TokenError:
         return frozenset(), ()
 
@@ -370,9 +372,7 @@ def check_files(rel_paths: Sequence[str]) -> tuple[Violation, ...]:
         try:
             source = abs_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
-            out.append(
-                Violation(report_path, 0, 0, "LIT000", f"could not read file: {exc}")
-            )
+            out.append(Violation(report_path, 0, 0, "LIT000", f"could not read file: {exc}"))
             continue
 
         ok_lines, ok_violations = scan_any_ok(report_path, source)
@@ -495,9 +495,7 @@ def _in_scope(v: Violation, line_map: dict[str, LineScope] | None) -> bool:
 
 
 def main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="Any-discipline gate (changed-only, changed-lines)."
-    )
+    parser = argparse.ArgumentParser(description="Any-discipline gate (changed-only, changed-lines).")
     parser.add_argument(
         "paths",
         nargs="*",
@@ -520,9 +518,7 @@ def main(argv: Sequence[str]) -> int:
                 file=sys.stderr,
             )
             return 0
-        rel_paths = _to_litellm_relative(
-            (REPO_ROOT / name).resolve() for name in line_map
-        )
+        rel_paths = _to_litellm_relative((REPO_ROOT / name).resolve() for name in line_map)
     elif args.paths:
         rel_paths = _to_litellm_relative((REPO_ROOT / p).resolve() for p in args.paths)
     else:
@@ -546,9 +542,7 @@ def main(argv: Sequence[str]) -> int:
             file=sys.stderr,
         )
         return 1
-    print(
-        f"OK: {len(rel_paths)} changed file(s) under litellm/ have no Any-typed values on changed lines"
-    )
+    print(f"OK: {len(rel_paths)} changed file(s) under litellm/ have no Any-typed values on changed lines")
     return 0
 
 
