@@ -2979,6 +2979,8 @@ class StandardLoggingPayload(TypedDict):
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
     startTime: float  # Note: making this camelCase was a mistake, everything should be snake case
     endTime: float
     completionStartTime: float

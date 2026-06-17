@@ -229,6 +229,12 @@ class PostHogLogger(CustomBatchLogger):
             properties["$ai_output_tokens"] = self._safe_get(
                 standard_logging_object, "completion_tokens", 0
             )
+        cache_read = self._safe_get(standard_logging_object, "cache_read_input_tokens", 0) or 0
+        cache_creation = self._safe_get(standard_logging_object, "cache_creation_input_tokens", 0) or 0
+        if cache_read:
+            properties["$ai_cache_read_input_tokens"] = cache_read
+        if cache_creation:
+            properties["$ai_cache_creation_input_tokens"] = cache_creation
 
         # Cost and performance
         response_cost = self._safe_get(standard_logging_object, "response_cost")

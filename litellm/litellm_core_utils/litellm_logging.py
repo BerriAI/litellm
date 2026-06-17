@@ -5174,7 +5174,10 @@ class StandardLoggingPayloadSetup:
         """
         _empty: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         if combined_usage_object is not None:
-            return combined_usage_object.model_dump()
+            d = combined_usage_object.model_dump()
+            d["cache_read_input_tokens"] = combined_usage_object._cache_read_input_tokens
+            d["cache_creation_input_tokens"] = combined_usage_object._cache_creation_input_tokens
+            return d
         if not response_obj:
             return _empty
         _raw = response_obj.get("usage", None)
@@ -5193,7 +5196,10 @@ class StandardLoggingPayloadSetup:
                 )
             return _raw
         if isinstance(_raw, Usage):
-            return _raw.model_dump()
+            d = _raw.model_dump()
+            d["cache_read_input_tokens"] = _raw._cache_read_input_tokens
+            d["cache_creation_input_tokens"] = _raw._cache_creation_input_tokens
+            return d
         return _empty
 
     @staticmethod
@@ -5890,6 +5896,8 @@ def get_standard_logging_object_payload(
             total_tokens=usage_dict.get("total_tokens", 0),
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),
+            cache_read_input_tokens=usage_dict.get("cache_read_input_tokens", 0),
+            cache_creation_input_tokens=usage_dict.get("cache_creation_input_tokens", 0),
             request_tags=request_tags,
             end_user=end_user_id or "",
             api_base=StandardLoggingPayloadSetup.strip_trailing_slash(
