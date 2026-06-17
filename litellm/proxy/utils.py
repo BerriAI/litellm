@@ -2859,7 +2859,7 @@ class PrismaClient:
                 # `PrismaWrapper.__getattr__`, which deadlocks the event loop
                 # and times out after 30s.
                 if token_auth_enabled and reader_iam_endpoint is not None:
-                    read_replica_url, _ = build_database_token_auth_url(
+                    read_replica_url = build_database_token_auth_url(
                         reader_iam_endpoint,
                         azure_postgresql_auth=azure_postgresql_auth,
                     )

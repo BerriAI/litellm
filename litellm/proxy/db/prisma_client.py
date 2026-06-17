@@ -84,21 +84,20 @@ def build_database_token_auth_url(
     endpoint: IAMEndpoint,
     *,
     azure_postgresql_auth: bool = False,
-) -> tuple[str, int | None]:
+) -> str:
     if azure_postgresql_auth:
         from litellm.proxy.auth.azure_postgres_token import (
             generate_azure_postgres_auth_token,
         )
 
-        token_response = generate_azure_postgres_auth_token()
-        return endpoint.build_url(token_response.token), token_response.expires_on
+        return endpoint.build_url(generate_azure_postgres_auth_token())
 
     from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
     token = generate_iam_auth_token(
         db_host=endpoint.host, db_port=endpoint.port, db_user=endpoint.user
     )
-    return endpoint.build_url(token), None
+    return endpoint.build_url(token)
 
 
 class PrismaWrapper:
@@ -154,7 +153,6 @@ class PrismaWrapper:
         self._token_refresh_task: asyncio.Task | None = None
         self._reconnection_lock = asyncio.Lock()
         self._last_refresh_time: datetime | None = None
-        self._last_token_expires_on: int | None = None
 
         # Coordination for planned engine restarts (issue #29176). Every
         # `recreate_prisma_client` SIGTERMs the running query-engine on
@@ -305,14 +303,6 @@ class PrismaWrapper:
             verbose_proxy_logger.debug(f"Failed to parse JWT token expiration: {e}")
             return None
 
-    def _get_last_token_expiration(self) -> datetime | None:
-        if self._last_token_expires_on is None:
-            return None
-        try:
-            return datetime.utcfromtimestamp(int(self._last_token_expires_on))
-        except Exception:
-            return None
-
     def _calculate_seconds_until_refresh(self) -> float:
         """
         Calculate exactly how many seconds until we need to refresh the token.
@@ -328,8 +318,6 @@ class PrismaWrapper:
         db_url = os.getenv(self._db_url_env_var)
         token = self._extract_token_from_db_url(db_url)
         expiration_time = self._parse_token_expiration(token)
-        if expiration_time is None:
-            expiration_time = self._get_last_token_expiration()
 
         if expiration_time is None:
             # If we can't parse the token, use fallback interval
@@ -356,8 +344,6 @@ class PrismaWrapper:
 
         token = self._extract_token_from_db_url(token_url)
         expiration_time = self._parse_token_expiration(token)
-        if expiration_time is None:
-            expiration_time = self._get_last_token_expiration()
 
         if expiration_time is None:
             # If we can't parse the token, assume it's expired to trigger refresh
@@ -382,11 +368,9 @@ class PrismaWrapper:
         else:
             endpoint = get_database_auth_endpoint_from_env()
 
-        _db_url, expires_on = build_database_token_auth_url(
+        _db_url = build_database_token_auth_url(
             endpoint, azure_postgresql_auth=self._azure_postgresql_auth
         )
-        if expires_on is not None:
-            self._last_token_expires_on = expires_on
 
         os.environ[self._db_url_env_var] = _db_url
         return _db_url

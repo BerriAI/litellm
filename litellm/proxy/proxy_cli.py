@@ -1016,18 +1016,17 @@ def run_server(
                 get_database_auth_endpoint_from_env,
             )
 
-            _db_url, _ = build_database_token_auth_url(
+            _db_url = build_database_token_auth_url(
                 get_database_auth_endpoint_from_env(),
                 azure_postgresql_auth=azure_postgresql_auth_enabled,
             )
             os.environ["DATABASE_URL"] = _db_url
-            os.environ[
-                (
-                    "AZURE_POSTGRESQL_AUTH"
-                    if azure_postgresql_auth_enabled
-                    else "IAM_TOKEN_DB_AUTH"
-                )
-            ] = "True"
+            auth_env_var = (
+                "AZURE_POSTGRESQL_AUTH"
+                if azure_postgresql_auth_enabled
+                else "IAM_TOKEN_DB_AUTH"
+            )
+            os.environ[auth_env_var] = "True"
 
         ### DECRYPT ENV VAR ###
 

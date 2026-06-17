@@ -1,16 +1,9 @@
 import os
-from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.parse import quote
 
 
 AZURE_POSTGRES_SCOPE = "https://ossrdbms-aad.database.windows.net/.default"
-
-
-@dataclass(frozen=True)
-class AzurePostgresAuthToken:
-    token: str
-    expires_on: int
 
 
 def _build_azure_postgres_credential(
@@ -50,7 +43,7 @@ def generate_azure_postgres_auth_token(
     azure_client_id: Optional[str] = None,
     azure_tenant_id: Optional[str] = None,
     azure_client_secret: Optional[str] = None,
-) -> AzurePostgresAuthToken:
+) -> str:
     if credential is None:
         credential = _build_azure_postgres_credential(
             azure_client_id=azure_client_id,
@@ -58,8 +51,4 @@ def generate_azure_postgres_auth_token(
             azure_client_secret=azure_client_secret,
         )
 
-    token = credential.get_token(AZURE_POSTGRES_SCOPE)
-    return AzurePostgresAuthToken(
-        token=quote(token.token, safe=""),
-        expires_on=int(token.expires_on),
-    )
+    return quote(credential.get_token(AZURE_POSTGRES_SCOPE).token, safe="")

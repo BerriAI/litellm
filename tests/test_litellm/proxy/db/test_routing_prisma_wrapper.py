@@ -775,14 +775,13 @@ def test_azure_postgres_token_helper_uses_entra_scope(monkeypatch):
             return type(
                 "Token",
                 (),
-                {"token": "raw/token?with&chars=1", "expires_on": 1893456000},
+                {"token": "raw/token?with&chars=1"},
             )()
 
     token = generate_azure_postgres_auth_token(credential=FakeCredential())
 
     assert captured["scope"] == AZURE_POSTGRES_SCOPE
-    assert token.token == "raw%2Ftoken%3Fwith%26chars%3D1"
-    assert token.expires_on == 1893456000
+    assert token == "raw%2Ftoken%3Fwith%26chars%3D1"
 
 
 def test_writer_get_azure_postgres_token_uses_database_env_vars(monkeypatch):
@@ -799,9 +798,7 @@ def test_writer_get_azure_postgres_token_uses_database_env_vars(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
     fake_module = MagicMock()
-    fake_module.generate_azure_postgres_auth_token.return_value = type(
-        "AzureToken", (), {"token": "AZURE%2FTOKEN", "expires_on": 1893456000}
-    )()
+    fake_module.generate_azure_postgres_auth_token.return_value = "AZURE%2FTOKEN"
     monkeypatch.setitem(
         sys.modules, "litellm.proxy.auth.azure_postgres_token", fake_module
     )
