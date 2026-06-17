@@ -25,9 +25,13 @@ _plugin_registry: dict = {}
 
 
 def register_plugins_from_config(general_settings: dict) -> None:
-    """Call at startup to load plugin config from general_settings."""
-    plugins = general_settings.get("plugins", [])
-    for plugin in plugins:
+    """Replace the plugin registry from general_settings.
+
+    Replaces (not merges) so plugins removed from config are immediately
+    unreachable without requiring a process restart.
+    """
+    _plugin_registry.clear()
+    for plugin in general_settings.get("plugins", []):
         name = plugin.get("name")
         if name:
             _plugin_registry[name] = plugin
