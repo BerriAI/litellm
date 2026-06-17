@@ -249,6 +249,10 @@ class MCPRequestHandler:
                 validated_user_api_key_auth = await user_api_key_auth(
                     api_key=litellm_api_key, request=request
                 )
+                # The Authorization header was consumed as LiteLLM/proxy auth
+                # (including JWT auth). Do not also treat it as an upstream
+                # OAuth token for MCP servers.
+                oauth2_headers = {}
             except (HTTPException, ProxyException) as e:
                 # HTTPException.status_code is int; ProxyException.code is
                 # normalized to str in its __init__ but can be ``"None"`` or any
