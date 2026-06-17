@@ -12707,6 +12707,24 @@ async def model_info_v2(
         user_models_override=user_models_for_filter,
     )
 
+    # Team BYOK deployments carry an internal routing key and other teams'
+    # public name / team_id / api_base; drop the ones the caller cannot
+    # access so a bare /v2/model/info (no user_models_only, no
+    # include_team_models) does not leak cross-team metadata when the
+    # caller's key/team/user lists are empty. Mirrors the v1 default
+    # branch behavior below.
+    allowed_team_ids = await _get_caller_byok_team_scope(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+    all_models = [
+        model
+        for model in all_models
+        if not _byok_row_outside_caller_teams(
+            model.get("model_info") or {}, allowed_team_ids
+        )
+    ]
+
     # Apply teamId filter if provided
     if teamId is not None and teamId.strip():
         all_models = await _filter_models_by_team_id(
@@ -13474,16 +13492,24 @@ async def model_info_v1(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
-        # Bound by LiteLLM_UserTable.models (Personal Models) using the
-        # same deployment-level filter as the listing branch. by-id used
-        # to short-circuit before this filter, letting a restricted user
-        # pull any deployment's litellm_params via /v1/model/info?litellm_model_id=
-        # — same leak BerriAI/litellm#26420 fixed for /v1/models.
-        #
-        # Filter (drop unauthorized deployments → empty list) instead of
-        # 403: matches the route_checks.py:189 spec comment "/model/info
-        # just shows models user has access to" and avoids leaking model
+        # Bound by the same filter chain as the listing branch below
+        # (key.models / team_models, then LiteLLM_UserTable.models, then
+        # BYOK team scope). by-id used to short-circuit before any of
+        # these, letting a restricted virtual key pull any deployment's
+        # litellm_params via /v1/model/info?litellm_model_id=. Filter
+        # (drop unauthorized deployments → empty list) instead of 403:
+        # matches the route_checks.py:189 spec comment "/model/info just
+        # shows models user has access to" and avoids leaking model
         # existence via 403-vs-404 enumeration.
+        allowed_model_names = _get_v1_model_info_allowed_model_names(
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+        )
+        single_model_list = _filter_v1_model_info_deployments(
+            all_models=single_model_list,
+            allowed_model_names=allowed_model_names,
+        )
+
         from litellm.proxy.utils import apply_user_models_filter_to_deployments
 
         single_model_list = await apply_user_models_filter_to_deployments(
@@ -13494,6 +13520,18 @@ async def model_info_v1(
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
         )
+
+        allowed_team_ids = await _get_caller_byok_team_scope(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+        single_model_list = [
+            model
+            for model in single_model_list
+            if not _byok_row_outside_caller_teams(
+                model.get("model_info") or {}, allowed_team_ids
+            )
+        ]
         return {"data": single_model_list}
 
     # Return router deployments (same source as /v2/model/info), not wildcard-
