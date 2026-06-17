@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { createApiClient } from "@/lib/http/client";
+import { getProxyBaseUrl } from "@/components/networking";
 
 export type PluginMode = "ai-gateway" | "litellm-platform-plugin";
 
@@ -41,7 +42,7 @@ const PluginModeContext = createContext<PluginModeContextValue>({
 });
 
 const STORAGE_KEY = "litellm_plugin_mode";
-const pluginApiClient = createApiClient({});
+const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
 function readStoredMode(): PluginMode {
   if (typeof window === "undefined") return "ai-gateway";
