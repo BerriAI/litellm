@@ -1,13 +1,11 @@
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type
+from typing import TYPE_CHECKING, Literal, Optional, Type
 
 import httpx
-import os
 from litellm.integrations.custom_guardrail import log_guardrail_information
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     GenericGuardrailAPI,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -43,7 +41,9 @@ class ThirdlawGuardrail(GenericGuardrailAPI):
         resolved_key = api_key or get_secret_str("THIRDLAW_API_KEY")
         thirdlaw_headers = []
         if additional_headers:
-            thirdlaw_headers.extend(additional_headers.split(","))
+            thirdlaw_headers.extend(
+                [h.strip() for h in additional_headers.split(",") if h.strip()]
+            )
         existing = kwargs.get("extra_headers") or []
         kwargs["extra_headers"] = thirdlaw_headers + [
             h for h in existing if h not in thirdlaw_headers
@@ -67,7 +67,9 @@ class ThirdlawGuardrail(GenericGuardrailAPI):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        inputs["structured_messages"] = inputs.get("structured_messages", request_data.get("messages", [])) or []
+        inputs["structured_messages"] = (
+            inputs.get("structured_messages", request_data.get("messages", [])) or []
+        )
         return await super().apply_guardrail(
             inputs=inputs,
             request_data=request_data,

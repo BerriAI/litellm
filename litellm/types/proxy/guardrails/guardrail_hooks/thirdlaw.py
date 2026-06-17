@@ -4,6 +4,7 @@ from pydantic import Field
 
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
+
 class ThirdlawGuardrailConfigModel(GuardrailConfigModel):
     api_base: Optional[str] = Field(
         default=None,
