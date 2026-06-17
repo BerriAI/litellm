@@ -168,3 +168,66 @@ async def test_evaluations_run_in_parallel_under_a_cap():
 
 def test_max_prompt_chars_is_positive():
     assert isinstance(MAX_PROMPT_CHARS, int) and MAX_PROMPT_CHARS > 0
+
+
+# ----------------------------- boundary overlap (detection across chunk splits) -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_block_phrase_split_across_chunk_boundary_is_detected():
+    """A blocked phrase straddling the chunk boundary is caught by the overlap
+    window even though neither disjoint chunk contains it whole. Fails on the
+    pre-overlap implementation (no boundary windows -> phrase evades)."""
+    segment = "aaaaa BLOCK ME zzzzz"
+    chunks = _split_text(segment, 12)
+    assert len(chunks) > 1
+    assert all("BLOCK ME" not in c for c in chunks)
+
+    async def evaluate(text):
+        return _result("BLOCK" if "BLOCK ME" in text else "")
+
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, overlap=6)
+    assert verdicts[0].action == "BLOCK"
+
+
+@pytest.mark.asyncio
+async def test_no_overlap_window_lets_boundary_phrase_evade():
+    """Control: with overlap disabled the same straddling phrase is not seen by
+    any disjoint chunk, demonstrating what the overlap window closes."""
+    segment = "aaaaa BLOCK ME zzzzz"
+
+    async def evaluate(text):
+        return _result("BLOCK" if "BLOCK ME" in text else "")
+
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, overlap=0)
+    assert verdicts[0].action == ""
+
+
+@pytest.mark.asyncio
+async def test_single_chunk_segment_evaluates_once_no_boundary_window():
+    calls = []
+
+    async def evaluate(text):
+        calls.append(text)
+        return _result("")
+
+    await evaluate_segments(["short benign text"], evaluate, max_chars=10000)
+    assert calls == ["short benign text"]
+
+
+@pytest.mark.asyncio
+async def test_boundary_window_mask_is_surfaced_as_detect_not_dropped():
+    """A boundary window can flag content we cannot redact across disjoint
+    chunks; it must surface as DETECT rather than pass silently."""
+    segment = "aaaaa SECRET HERE zzzzz"
+    chunks = _split_text(segment, 12)
+    assert len(chunks) > 1
+
+    async def evaluate(text):
+        # Only the boundary window sees the full "SECRET HERE".
+        return (
+            _result("MASK", action_text="[X]") if "SECRET HERE" in text else _result("")
+        )
+
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, overlap=6)
+    assert verdicts[0].action == "DETECT"
