@@ -82,3 +82,9 @@ def test_save_budget_omits_zero_count_files_and_round_trips(monkeypatch, tmp_pat
 def test_load_budget_missing_file_is_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "BUDGET_PATH", tmp_path / "nope.json")
     assert mod.load_budget() == {}
+
+
+def test_update_budget_reports_setup_error_when_git_is_unavailable():
+    # all_litellm_py_files returns None when git can't list files; --update must
+    # surface a clean setup error (exit 2), not crash with a raw traceback.
+    assert mod.update_budget(list_files=lambda: None) == 2

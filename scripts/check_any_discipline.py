@@ -78,7 +78,7 @@ import re
 import subprocess
 import sys
 import tokenize
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -572,17 +572,29 @@ def lit009_counts(violations: Iterable[Violation]) -> dict[str, int]:
     return counts
 
 
-def all_litellm_py_files() -> list[str]:
-    """Every tracked ``.py`` under litellm/, as litellm-package-relative paths."""
-    tracked = _git("ls-files", "--", "litellm")
+def all_litellm_py_files() -> list[str] | None:
+    """Every tracked ``.py`` under litellm/, as litellm-package-relative paths;
+    None if git is unavailable / not a repo (mirrors ``changed_line_map``)."""
+    try:
+        tracked = _git("ls-files", "--", "litellm")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
     return _to_litellm_relative(
         REPO_ROOT / name for name in tracked if name.endswith(".py")
     )
 
 
-def update_budget() -> int:
+def update_budget(
+    list_files: Callable[[], list[str] | None] = all_litellm_py_files,
+) -> int:
     """Whole-tree scan: recapture every file's Any count into the budget."""
-    rel_paths = all_litellm_py_files()
+    rel_paths = list_files()
+    if rel_paths is None:
+        print(
+            "check_any_discipline: not a git repository; cannot capture the budget",
+            file=sys.stderr,
+        )
+        return 2
     if not rel_paths:
         print("check_any_discipline: no litellm/*.py files found", file=sys.stderr)
         return 2
@@ -619,7 +631,7 @@ def _report_over_budget(
         why = f"baseline {spec['baseline']} + 50% slack {spec['slack']} = ceiling {ceiling}"
     else:
         why = "no budget entry -> baseline 0 (a new/unbudgeted file must be Any-free)"
-    print(f"{path}: {count} Any-typed value(s) over budget ({why})")
+    print(f"{path}: {count} Any-typed value(s) total, over budget ({why})")
     # Surface the findings on changed lines first: the ones this branch most
     # likely just added, and the cheapest path back under the ceiling.
     scope = line_map.get(path)
