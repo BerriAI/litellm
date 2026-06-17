@@ -187,32 +187,34 @@ function LoginPageContent() {
             <Text type="secondary">{t("login.subtitle")}</Text>
           </div>
 
-          <Alert
-            message={t("login.defaultCredentialsTitle")}
-            description={
-              <>
-                <Paragraph className="text-sm">
-                  <Trans
-                    i18nKey="login.defaultCredentialsBody"
-                    components={{ code: <code className="bg-gray-100 px-1 py-0.5 rounded text-xs" /> }}
-                  />
-                </Paragraph>
-                <Paragraph className="text-sm">
-                  <Trans
-                    i18nKey="login.docsHint"
-                    components={{
-                      docsLink: (
-                        <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank" rel="noopener noreferrer" />
-                      ),
-                    }}
-                  />
-                </Paragraph>
-              </>
-            }
-            type="info"
-            icon={<InfoCircleOutlined />}
-            showIcon
-          />
+          {!uiConfig?.hide_default_credentials_hint && (
+            <Alert
+              message={t("login.defaultCredentialsTitle")}
+              description={
+                <>
+                  <Paragraph className="text-sm">
+                    <Trans
+                      i18nKey="login.defaultCredentialsBody"
+                      components={{ code: <code className="bg-gray-100 px-1 py-0.5 rounded text-xs" /> }}
+                    />
+                  </Paragraph>
+                  <Paragraph className="text-sm">
+                    <Trans
+                      i18nKey="login.docsHint"
+                      components={{
+                        docsLink: (
+                          <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank" rel="noopener noreferrer" />
+                        ),
+                      }}
+                    />
+                  </Paragraph>
+                </>
+              }
+              type="info"
+              icon={<InfoCircleOutlined />}
+              showIcon
+            />
+          )}
 
           {error && <Alert message={error} type="error" showIcon />}
 

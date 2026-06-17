@@ -241,7 +241,7 @@ class Router:
     lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
     optional_callbacks: Optional[List[Union[CustomLogger, Callable, str]]] = None
 
-    def __init__(  # noqa: PLR0915
+    def __init__(
         self,
         model_list: Optional[
             Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
@@ -2521,9 +2521,21 @@ class Router:
         from litellm.exceptions import MidStreamFallbackError
         from litellm.responses.streaming_iterator import (
             BaseResponsesAPIStreamingIterator,
+            _get_openai_response_types,
         )
 
         source_iterator = response
+
+        # Pre-resolve the set of terminal stream event types so the
+        # per-chunk type check inside FallbackResponsesStreamWrapper
+        # stays cheap; mirrors the source-iterator filter at
+        # responses/streaming_iterator.py:243-247.
+        _openai_types = _get_openai_response_types()
+        _RESPONSES_TERMINAL_EVENT_TYPES = (
+            _openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            _openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            _openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
+        )
 
         class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
             """
@@ -2550,9 +2562,16 @@ class Router:
                 # is missing many of these attributes — use getattr fallbacks
                 # so wrapper construction never raises AttributeError. The
                 # bridge stores the logging object as `litellm_logging_obj`.
-                self.response = getattr(source_iterator, "response", None)
-                self.model = getattr(source_iterator, "model", None)
-                self.logging_obj = getattr(
+                # base class declares non-Optional types for these
+                # fields but the bridge path (LiteLLMCompletionStreamingIterator)
+                # can legitimately omit them at runtime — keep the None
+                # fallback. Same lines passed mypy on the pre-fix file
+                # because the surrounding function body wasn't fully
+                # type-narrowed; the new typed terminal-event tuple above
+                # is what made these surface.
+                self.response = getattr(source_iterator, "response", None)  # type: ignore[assignment]
+                self.model = getattr(source_iterator, "model", None)  # type: ignore[assignment]
+                self.logging_obj = getattr(  # type: ignore[assignment]
                     source_iterator,
                     "logging_obj",
                     getattr(source_iterator, "litellm_logging_obj", None),
@@ -2587,7 +2606,23 @@ class Router:
                 return self
 
             async def __anext__(self):
-                return await self._async_generator.__anext__()
+                chunk = await self._async_generator.__anext__()
+                # Sniff the terminal stream event off each forwarded chunk
+                # so ``self.completed_response`` is populated regardless of
+                # which inner iterator produced it (source_iterator,
+                # fallback_iterator, or any future wrapper). Without this
+                # the proxy's container-ownership hook (which reads
+                # ``getattr(stream_response, "completed_response", None)``
+                # via _extract_completed_responses_response) silently
+                # records nothing on streaming /v1/responses calls — every
+                # follow-up /v1/containers/<id>/files call then 403s for
+                # the very key that created the container (#30210).
+                if (
+                    self.completed_response is None
+                    and getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES
+                ):
+                    self.completed_response = chunk
+                return chunk
 
             async def aclose(self):
                 # async generators always expose aclose — no defensive check needed.
@@ -2691,7 +2726,7 @@ class Router:
 
         return FallbackResponsesStreamWrapper(stream_with_fallbacks())
 
-    def _completion_streaming_iterator(  # noqa: PLR0915
+    def _completion_streaming_iterator(
         self,
         model_response: CustomStreamWrapper,
         messages: List[Dict[str, str]],
@@ -2852,7 +2887,7 @@ class Router:
                 f"Silent experiment failed for model {silent_model}: {str(e)}"
             )
 
-    async def _acompletion(  # noqa: PLR0915
+    async def _acompletion(
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[
         ModelResponse,
@@ -5123,7 +5158,7 @@ class Router:
             )
             raise e
 
-    async def _acreate_file(  # noqa: PLR0915
+    async def _acreate_file(
         self,
         model: str,
         **kwargs,
@@ -6432,7 +6467,7 @@ class Router:
             # propagate so they remain visible.
             return None
 
-    async def async_function_with_fallbacks_common_utils(  # noqa: PLR0915
+    async def async_function_with_fallbacks_common_utils(
         self,
         e: Exception,
         disable_fallbacks: Optional[bool],
@@ -6808,7 +6843,7 @@ class Router:
             )
 
     @tracer.wrap()
-    async def async_function_with_retries(self, *args, **kwargs):  # noqa: PLR0915
+    async def async_function_with_retries(self, *args, **kwargs):
         verbose_router_logger.debug("Inside async function with retries.")
         original_function = kwargs.pop("original_function")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
@@ -9289,7 +9324,7 @@ class Router:
 
         return model_info
 
-    def _set_model_group_info(  # noqa: PLR0915
+    def _set_model_group_info(
         self, model_group: str, user_facing_model_group_name: str
     ) -> Optional[ModelGroupInfo]:
         """
@@ -10531,7 +10566,7 @@ class Router:
                 )
                 return client
 
-    def _pre_call_checks(  # noqa: PLR0915
+    def _pre_call_checks(
         self,
         model: str,
         healthy_deployments: List,

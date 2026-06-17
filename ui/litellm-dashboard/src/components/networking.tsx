@@ -286,6 +286,7 @@ export interface LiteLLMWellKnownUiConfig {
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
   sso_configured: boolean;
+  hide_default_credentials_hint?: boolean;
   is_control_plane?: boolean;
   workers?: WorkerInfo[];
 }

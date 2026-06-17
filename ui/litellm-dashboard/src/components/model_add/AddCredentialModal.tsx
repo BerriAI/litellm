@@ -5,6 +5,7 @@ import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
+import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 const { Link } = Typography;
 
 interface AddCredentialsModalProps {
@@ -61,8 +62,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
           <AntdSelect
             showSearch
             onChange={(value) => {
-              setSelectedProvider(value as Providers);
-              form.setFieldValue("custom_llm_provider", value);
+              resetCredentialFormOnProviderChange(form, value as Providers, setSelectedProvider);
             }}
           >
             {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (

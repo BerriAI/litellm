@@ -149,6 +149,23 @@ describe("useFilterLogic – filteredTotalCount", () => {
     expect(result.current.filteredTotalCount).toBeNull();
   });
 
+  it("should not enter an infinite update loop when keys is a fresh array reference on every render", () => {
+    const sourceKeys = [mockKey];
+    let renderCount = 0;
+
+    const { result } = renderHook(() => {
+      renderCount += 1;
+      const value = useFilterLogic({ keys: [...sourceKeys], teams: [], organizations: [] });
+      if (renderCount > 25) {
+        throw new Error(`useFilterLogic re-rendered ${renderCount} times; setFilteredKeys is looping`);
+      }
+      return value;
+    });
+
+    expect(result.current.filteredKeys).toEqual([mockKey]);
+    expect(renderCount).toBeLessThanOrEqual(25);
+  });
+
   it("should not trigger a debounced search when skipDebounce is true", async () => {
     const { result } = renderHook(() => useFilterLogic(defaultProps));
 

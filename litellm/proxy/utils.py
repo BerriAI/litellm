@@ -191,7 +191,7 @@ def print_verbose(print_statement):
 
     verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
-        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa
+        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa: T201
 
 
 def _get_email_logger_class():
@@ -1171,6 +1171,8 @@ class ProxyLogging:
                     response=response, data=data, call_type=call_type
                 )
 
+            callback.mark_pre_call_hook_ran(data)
+
         except SensitiveDataRouteException:
             status = "intervened"
             raise
@@ -2086,7 +2088,7 @@ class ProxyLogging:
             litellm_call_id=request_data.get("litellm_call_id", ""), status="fail"
         )
         if AlertType.llm_exceptions in self.alert_types and not isinstance(
-            original_exception, HTTPException
+            original_exception, (HTTPException, ProxyException)
         ):
             """
             Just alert on LLM API exceptions. Do not alert on user errors
@@ -2190,6 +2192,7 @@ class ProxyLogging:
         e.g should only return True for:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
+            - ProxyException (guardrail blocks, budget / rate-limit errors)
         """
 
         #########################################################
@@ -2206,7 +2209,7 @@ class ProxyLogging:
         ):
             return False
 
-        return isinstance(original_exception, HTTPException) or (
+        return isinstance(original_exception, (HTTPException, ProxyException)) or (
             error_type == ProxyErrorTypes.auth_error
         )
 
@@ -3345,7 +3348,7 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     @log_db_metrics
-    async def get_data(  # noqa: PLR0915
+    async def get_data(
         self,
         token: Optional[Union[str, list]] = None,
         user_id: Optional[str] = None,
@@ -3788,7 +3791,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def insert_data(  # noqa: PLR0915
+    async def insert_data(
         self,
         data: dict,
         table_name: Literal[
@@ -3938,7 +3941,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def update_data(  # noqa: PLR0915
+    async def update_data(
         self,
         token: Optional[str] = None,
         data: dict = {},
@@ -5514,7 +5517,7 @@ class ProxyUpdateSpend:
         return False
 
 
-async def update_spend(  # noqa: PLR0915
+async def update_spend(
     prisma_client: PrismaClient,
     db_writer_client: Optional[AsyncHTTPHandler],
     proxy_logging_obj: ProxyLogging,

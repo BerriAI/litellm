@@ -98,6 +98,8 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
 
   // Use the filter logic hook
 
+  const keyList = useMemo(() => keys?.keys ?? [], [keys]);
+
   const {
     filters,
     filteredKeys,
@@ -107,7 +109,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     handleFilterChange,
     handleFilterReset,
   } = useFilterLogic({
-    keys: keys?.keys || [],
+    keys: keyList,
     teams,
     organizations,
   });
