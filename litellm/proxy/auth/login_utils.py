@@ -103,7 +103,7 @@ class LoginResult:
         self.login_method = login_method
 
 
-async def authenticate_user(  # noqa: PLR0915
+async def authenticate_user(
     username: str,
     password: str,
     master_key: Optional[str],

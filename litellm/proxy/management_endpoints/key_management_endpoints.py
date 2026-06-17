@@ -675,7 +675,7 @@ def _enforce_upperbound_key_params(
                         )
 
 
-async def _common_key_generation_helper(  # noqa: PLR0915
+async def _common_key_generation_helper(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str],
@@ -2428,7 +2428,7 @@ async def _validate_update_key_data(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
 @management_endpoint_wrapper
-async def update_key_fn(  # noqa: PLR0915
+async def update_key_fn(
     request: Request,
     data: UpdateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -3377,7 +3377,7 @@ async def info_key_fn(
             )
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         try:
-            key_info = key_info.model_dump()  # noqa
+            key_info = key_info.model_dump()
         except Exception:
             # if using pydantic v1
             key_info = key_info.dict()
@@ -3419,7 +3419,7 @@ def _check_model_access_group(
     return True
 
 
-async def generate_key_helper_fn(  # noqa: PLR0915
+async def generate_key_helper_fn(
     request_type: Literal[
         "user", "key"
     ],  # identifies if this request is from /user/new or /key/generate
@@ -4070,7 +4070,7 @@ async def delete_key_aliases(
     )
 
 
-async def _rotate_master_key(  # noqa: PLR0915
+async def _rotate_master_key(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -4412,7 +4412,7 @@ async def _execute_virtual_key_regeneration(
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def regenerate_key_fn(  # noqa: PLR0915
+async def regenerate_key_fn(
     key: Optional[str] = None,
     data: Optional[RegenerateKeyRequest] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

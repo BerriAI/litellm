@@ -2,6 +2,8 @@
 baggage helpers, metrics, the typed coercion helpers, mapper branches, span-name
 builders, and the registry validator's failure paths. Needs the OTel SDK."""
 
+import json
+
 import pytest
 
 pytest.importorskip("opentelemetry")
@@ -223,6 +225,47 @@ def test_genai_mapper_all_request_params():
     assert attrs[GenAI.REQUEST_STOP_SEQUENCES] == ["STOP"]
     assert attrs[GenAI.REQUEST_SEED] == 42
     assert attrs["server.port"] == 443
+
+
+def test_genai_mapper_stamps_input_output_messages():
+    data = LLMCallSpanData(
+        operation=GenAIOperation.CHAT,
+        provider="openai",
+        request_model="gpt-4o",
+        response_model="gpt-4o-2024",
+        response_id="resp_1",
+        request_params=LLMRequestParams(),
+        usage=LLMUsage(),
+        finish_reasons=("stop",),
+        error=None,
+        response_cost=None,
+        server=None,
+        identity=RequestIdentity(call_id="c1"),
+        messages_in=(
+            {"role": "system", "content": "Be concise."},
+            {"role": "user", "content": "What's the weather?"},
+        ),
+        choices_out=(
+            {
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "Sunny."},
+            },
+        ),
+    )
+    attrs = GenAIMapper().map(data)
+    assert json.loads(attrs[GenAI.INPUT_MESSAGES]) == [
+        {"role": "system", "content": "Be concise."},
+        {"role": "user", "content": "What's the weather?"},
+    ]
+    assert json.loads(attrs[GenAI.OUTPUT_MESSAGES]) == [
+        {"role": "assistant", "content": "Sunny."}
+    ]
+
+
+def test_genai_mapper_omits_messages_when_content_not_captured():
+    attrs = GenAIMapper().map(_full_llm_call())
+    assert GenAI.INPUT_MESSAGES not in attrs
+    assert GenAI.OUTPUT_MESSAGES not in attrs
 
 
 def test_genai_mapper_cost_breakdown():

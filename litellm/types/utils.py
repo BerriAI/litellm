@@ -1572,7 +1572,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
-    def __init__(  # noqa: PLR0915
+    def __init__(
         self,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
@@ -1908,7 +1908,7 @@ class ModelResponse(ModelResponseBase):
     choices: List[Choices]
     """The list of completion choices the model generated for the input prompt."""
 
-    def __init__(  # noqa: PLR0915
+    def __init__(
         self,
         id=None,
         choices=None,
@@ -3338,6 +3338,7 @@ class LlmProviders(str, Enum):
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
+    MODELSCOPE = "modelscope"
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
     V0 = "v0"
@@ -3420,6 +3421,7 @@ class LlmProviders(str, Enum):
     PARASAIL = "parasail"
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
+    LIBERTAI = "libertai"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3455,6 +3457,7 @@ class SearchProviders(str, Enum):
     GOOGLE_PSE = "google_pse"
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"
+    FASTCRW = "fastcrw"
     SEARXNG = "searxng"
     LINKUP = "linkup"
     DUCKDUCKGO = "duckduckgo"
