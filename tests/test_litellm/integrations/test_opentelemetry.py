@@ -5789,3 +5789,15 @@ def test_set_attributes_does_not_crash_on_non_dict_response_obj():
     baseline = _set_attr_error_count({"id": "resp-1"})
     pydantic = _set_attr_error_count(PydanticLikeToolResult())
     assert pydantic <= baseline, (pydantic, baseline)
+
+    # also cover the fallbacks: model_dump raising, and an object with neither
+    # .get nor model_dump — both normalize to None without adding errors.
+    class _RaisingDump:
+        def model_dump(self):
+            raise RuntimeError("boom")
+
+    class _Opaque:
+        pass
+
+    assert _set_attr_error_count(_RaisingDump()) <= baseline
+    assert _set_attr_error_count(_Opaque()) <= baseline
