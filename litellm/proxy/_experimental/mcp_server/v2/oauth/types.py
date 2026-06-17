@@ -45,9 +45,7 @@ class AuthSpecKind(str, Enum):
     scheme is a parameter the arm carries, not its own mode.
     """
 
-    authorization_code = (
-        "authorization_code"  # per-user 3LO; gateway is the OAuth client
-    )
+    authorization_code = "authorization_code"  # per-user 3LO; gateway is the OAuth client
     client_credentials = "client_credentials"  # gateway service account (M2M)
     token_exchange = "token_exchange"  # RFC 8693 on-behalf-of
     api_key = "api_key"  # static header, any scheme (BYOK = per-user-seeded source)
