@@ -5676,7 +5676,7 @@ class BaseLLMHTTPHandler:
                 )
             raise
 
-    async def async_responses_websocket(  # noqa: PLR0915
+    async def async_responses_websocket(
         self,
         model: str,
         websocket: Any,

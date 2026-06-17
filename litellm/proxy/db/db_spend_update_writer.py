@@ -1128,7 +1128,7 @@ class DBSpendUpdateWriter:
                 "_flush_tool_discovery_queue error (non-blocking): %s", e
             )
 
-    async def _commit_spend_updates_to_db(  # noqa: PLR0915
+    async def _commit_spend_updates_to_db(
         self,
         prisma_client: PrismaClient,
         n_retry_times: int,

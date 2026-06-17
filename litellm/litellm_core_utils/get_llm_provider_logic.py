@@ -154,7 +154,7 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
-def get_llm_provider(  # noqa: PLR0915
+def get_llm_provider(
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -568,7 +568,7 @@ def get_llm_provider(  # noqa: PLR0915
             )
 
 
-def _get_openai_compatible_provider_info(  # noqa: PLR0915
+def _get_openai_compatible_provider_info(
     model: str,
     api_base: Optional[str],
     api_key: Optional[str],
