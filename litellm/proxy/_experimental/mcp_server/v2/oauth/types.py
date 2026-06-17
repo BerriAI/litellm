@@ -170,6 +170,7 @@ class UpstreamCredentialProvider:
                 return self._none(subject, server)
             case AuthSpecKind.aws_sigv4:
                 return self._aws_sigv4(subject, server)
+        assert_never(server.auth_spec_kind)
 
     # --- arms: Phase 0 stubs (errors-as-values, no raise). Filled in Phase 1. -------------
     def _authorization_code(
