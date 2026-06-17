@@ -1,18 +1,19 @@
-"""The OAuth / upstream-credential vocabulary — the v2 typed seam (Phase 0).
+"""The OAuth / upstream-credential vocabulary — the v2 typed seam.
 
-This module is the *contract* the Phase 1 build implements and the spec tests assert
-against. It ships types and one stub `resolve()`; no credential logic lands in Phase 0.
+This module is the *contract* the credential build implements and the spec tests assert
+against. It ships the data types only; the resolver lives in `upstream_credentials.py`.
 
 Design invariants encoded here:
 
-- **Mode is the single source of truth.** `resolve()` dispatches on the server's declared
-  `AuthSpecKind`, one arm per mode. No field-presence inference, no precedence cascade.
-- **Exhaustive dispatch, no wildcard.** `auth_spec_kind` is a closed enum, so the `match` in
-  `resolve()` has no `_` arm — basedpyright (`reportMatchNotExhaustive`) guarantees every mode
-  is handled. Adding a new mode without an arm fails the type gate, not at runtime.
-- **Fail-closed at the boundary.** An unknown mode string can only enter through
-  `parse_auth_spec_kind()`, which returns a typed `CredError`. Inside the core the mode is
-  always valid, so illegal states are unrepresentable.
+- **Mode is the single source of truth.** A server declares exactly one per-mode `config`
+  (the `AuthConfig` discriminated union); `auth_spec_kind` is *derived* from it, never a
+  second field that can drift. The resolver dispatches on the config variant, one arm per
+  mode. No field-presence inference, no precedence cascade.
+- **Illegal states unrepresentable.** Each mode's config is its own frozen model holding
+  only that mode's fields, all required — an `aws_sigv4` server cannot hold OAuth fields,
+  and bad config is rejected at construction, not at call time.
+- **Fail-closed at the boundary.** A raw mode string can only enter through
+  `parse_auth_spec_kind()`, which returns a typed `CredError`.
 - **Errors as values.** Every seam returns `Result[_, CredError]`; only edge adapters raise.
 - **Clean-room.** No imports from v1.
 
@@ -24,18 +25,17 @@ discriminated on a `Literal` `tag`, matched via `self.tag` with an `assert_never
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
-import httpx
 from expression import case, tag, tagged_union
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import assert_never
 
 from ..result import Error, Ok, Result
 
 
 class AuthSpecKind(str, Enum):
-    """The server's statically-declared upstream-auth mode — the single source of truth.
+    """The server's statically-declared upstream-auth mode — derived from its `config`.
 
     Covers v1's full `MCPAuth` surface, not only OAuth grants: the three grant modes, the
     collapsed static-header family, client passthrough, no-auth, and AWS request signing.
@@ -45,9 +45,9 @@ class AuthSpecKind(str, Enum):
     scheme is a parameter the arm carries, not its own mode.
     """
 
-    authorization_code = "authorization_code"  # per-user 3LO; gateway is OAuth client
+    authorization_code = "authorization_code"  # per-user 3LO; gateway-stored token
     client_credentials = "client_credentials"  # gateway service account (M2M)
-    token_exchange = "token_exchange"  # RFC 8693 on-behalf-of
+    token_exchange = "token_exchange"  # RFC 8693: token endpoint + subject_token (OBO)
     api_key = "api_key"  # static header, any scheme (BYOK = per-user-seeded source)
     passthrough = "passthrough"  # client forwards an upstream-audience token
     none = "none"  # no upstream credential; resolve yields a no-op auth, never an error
@@ -111,6 +111,108 @@ class CredError:
         assert_never(self.tag)
 
 
+ApiKeyScheme = Literal["bearer", "apikey", "basic", "token", "raw"]
+
+
+class AuthorizationCodeConfig(BaseModel):
+    """Per-user 3LO; the gateway is the OAuth client and stores the user's token."""
+
+    model_config = ConfigDict(frozen=True)
+    kind: Literal[AuthSpecKind.authorization_code] = AuthSpecKind.authorization_code
+    client_id: str
+    client_secret: str
+    authorization_url: str
+    token_url: str
+    scopes: tuple[str, ...] = ()
+
+
+class ClientCredentialsConfig(BaseModel):
+    """M2M service account; one upstream identity for every user."""
+
+    model_config = ConfigDict(frozen=True)
+    kind: Literal[AuthSpecKind.client_credentials] = AuthSpecKind.client_credentials
+    client_id: str
+    client_secret: str
+    token_url: str
+    scopes: tuple[str, ...] = ()
+
+
+class TokenExchangeConfig(BaseModel):
+    """RFC 8693 OBO; swap the caller's live subject_token for an upstream-audience token."""
+
+    model_config = ConfigDict(frozen=True)
+    kind: Literal[AuthSpecKind.token_exchange] = AuthSpecKind.token_exchange
+    token_exchange_endpoint: str
+    audience: str
+    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+
+
+class ApiKeyConfig(BaseModel):
+    """A fixed credential injected as a header. BYOK = the same arm, key seeded per-user."""
+
+    model_config = ConfigDict(frozen=True)
+    kind: Literal[AuthSpecKind.api_key] = AuthSpecKind.api_key
+    value: str
+    scheme: ApiKeyScheme = "bearer"
+
+    def header_value(self) -> str:
+        # Reconstructs v1's per-scheme Authorization prefixes (mcp_server_manager.py:877-884).
+        match self.scheme:
+            case "bearer":
+                return f"Bearer {self.value}"
+            case "apikey":
+                return f"ApiKey {self.value}"
+            case "basic":
+                return f"Basic {self.value}"
+            case "token":
+                return f"token {self.value}"
+            case "raw":
+                return self.value
+        assert_never(self.scheme)
+
+
+class PassthroughConfig(BaseModel):
+    """Client-driven upstream OAuth; the gateway forwards the client's upstream token."""
+
+    model_config = ConfigDict(frozen=True)
+    kind: Literal[AuthSpecKind.passthrough] = AuthSpecKind.passthrough
+
+
+class NoneConfig(BaseModel):
+    """No upstream credential; the request is sent unauthenticated."""
+
+    model_config = ConfigDict(frozen=True)
+    kind: Literal[AuthSpecKind.none] = AuthSpecKind.none
+
+
+class AwsSigV4Config(BaseModel):
+    """AWS SigV4 per-request signing. Creds come from static keys, an assumed role, or
+    the ambient environment; that source is left loose here and tightened when the arm lands.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    kind: Literal[AuthSpecKind.aws_sigv4] = AuthSpecKind.aws_sigv4
+    region: str
+    service: str = "bedrock-agentcore"
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+    session_token: str | None = None
+    role_arn: str | None = None
+    session_name: str | None = None
+
+
+AuthConfig = Annotated[
+    AuthorizationCodeConfig
+    | ClientCredentialsConfig
+    | TokenExchangeConfig
+    | ApiKeyConfig
+    | PassthroughConfig
+    | NoneConfig
+    | AwsSigV4Config,
+    Field(discriminator="kind"),
+]
+
+
 class Subject(BaseModel):
     """The validated inbound principal. NOT the v1 request object and NOT the LiteLLM key."""
 
@@ -128,90 +230,21 @@ class ServerSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     server_id: str
-    auth_spec_kind: AuthSpecKind
     resource: str  # RFC 8707 audience URI this upstream's tokens are bound to
+    config: AuthConfig
+
+    @property
+    def auth_spec_kind(self) -> AuthSpecKind:
+        return self.config.kind
 
 
 def parse_auth_spec_kind(raw: str) -> Result[AuthSpecKind, CredError]:
     """Boundary parser — the *only* place an unknown mode is handled, and it fails closed.
 
-    Inside the core the mode is always a valid `AuthSpecKind`, so `resolve()` never needs a
+    Inside the core the mode is always a valid `AuthSpecKind`, so the resolver never needs a
     wildcard arm and basedpyright can prove its `match` exhaustive.
     """
     try:
         return Ok(AuthSpecKind(raw))
     except ValueError:
         return Error(CredError.of_unsupported_mode(f"unknown auth_spec_kind: {raw!r}"))
-
-
-class UpstreamCredentialProvider:
-    """The ONE credential resolver. Phase 0 ships the seam; arms are stubs filled in Phase 1."""
-
-    def resolve(
-        self, subject: Subject, server: ServerSpec
-    ) -> Result[httpx.Auth, CredError]:
-        """Select exactly one provider off the declared mode, or fail closed.
-
-        The `match` is intentionally wildcard-free: every `AuthSpecKind` member must have an
-        arm or the type gate fails. This is the property the Phase 0 spike verifies.
-        """
-        match server.auth_spec_kind:
-            case AuthSpecKind.authorization_code:
-                return self._authorization_code(subject, server)
-            case AuthSpecKind.client_credentials:
-                return self._client_credentials(subject, server)
-            case AuthSpecKind.token_exchange:
-                return self._token_exchange(subject, server)
-            case AuthSpecKind.api_key:
-                return self._api_key(subject, server)
-            case AuthSpecKind.passthrough:
-                return self._passthrough(subject, server)
-            case AuthSpecKind.none:
-                return self._none(subject, server)
-            case AuthSpecKind.aws_sigv4:
-                return self._aws_sigv4(subject, server)
-        assert_never(server.auth_spec_kind)
-
-    # --- arms: Phase 0 stubs (errors-as-values, no raise). Filled in Phase 1. -------------
-    def _authorization_code(
-        self, subject: Subject, server: ServerSpec
-    ) -> Result[httpx.Auth, CredError]:
-        return _todo(AuthSpecKind.authorization_code)
-
-    def _client_credentials(
-        self, subject: Subject, server: ServerSpec
-    ) -> Result[httpx.Auth, CredError]:
-        return _todo(AuthSpecKind.client_credentials)
-
-    def _token_exchange(
-        self, subject: Subject, server: ServerSpec
-    ) -> Result[httpx.Auth, CredError]:
-        return _todo(AuthSpecKind.token_exchange)
-
-    def _api_key(
-        self, subject: Subject, server: ServerSpec
-    ) -> Result[httpx.Auth, CredError]:
-        return _todo(AuthSpecKind.api_key)
-
-    def _passthrough(
-        self, subject: Subject, server: ServerSpec
-    ) -> Result[httpx.Auth, CredError]:
-        return _todo(AuthSpecKind.passthrough)
-
-    def _none(
-        self, subject: Subject, server: ServerSpec
-    ) -> Result[httpx.Auth, CredError]:
-        return _todo(AuthSpecKind.none)
-
-    def _aws_sigv4(
-        self, subject: Subject, server: ServerSpec
-    ) -> Result[httpx.Auth, CredError]:
-        return _todo(AuthSpecKind.aws_sigv4)
-
-
-def _todo(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
-    return Error(
-        CredError.of_misconfigured(
-            f"{kind.value}: resolver arm not implemented (Phase 0 skeleton)"
-        )
-    )
