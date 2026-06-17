@@ -885,7 +885,9 @@ async def proxy_startup_event(app: FastAPI):
                 select_global_otel_v2_logger,
             )
 
-            _otel_v2_logger = select_global_otel_v2_logger(_in_memory_loggers)
+            _otel_v2_logger = select_global_otel_v2_logger(
+                cast(List[object], _in_memory_loggers)
+            )
             _otel_trace.set_tracer_provider(_otel_v2_logger._tracer_provider)
     except Exception as e:
         verbose_proxy_logger.debug("Skipping OTel V2 provider setup: %s", e)

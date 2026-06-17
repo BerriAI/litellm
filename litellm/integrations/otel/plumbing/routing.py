@@ -98,9 +98,10 @@ class TenantTracerCache:
         different backend.
         """
         header_str = ",".join(f"{key}={value}" for key, value in headers.items())
+        header_update: dict[str, str] = {"headers": header_str}
         exporters = [
             (
-                spec.model_copy(update={"headers": header_str})
+                spec.model_copy(update=header_update)
                 if spec.owner == self._callback_name
                 and spec.kind.lower() not in _NON_OTLP_KINDS
                 else spec

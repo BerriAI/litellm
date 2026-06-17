@@ -3,7 +3,7 @@
 from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Iterator, Mapping, cast
+from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, cast
 
 from opentelemetry.context import attach, get_current
 from opentelemetry.sdk.trace import TracerProvider
@@ -547,7 +547,7 @@ class OpenTelemetryV2(CustomLogger):
 
 
 def select_global_otel_v2_logger(
-    in_memory_loggers: "list[Any]",
+    in_memory_loggers: Sequence[object],
 ) -> "OpenTelemetryV2":
     """The single ``OpenTelemetryV2`` whose provider should become the OTel global.
 
