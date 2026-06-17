@@ -5130,7 +5130,8 @@ async def test_router_stream_idle_timeout_completes_when_not_stalled():
 async def test_router_stream_idle_timeout_does_not_fire_before_first_token():
     """When stream_idle_timeout is set without ttft_timeout, a slow first token must NOT be
     treated as a mid-stream stall: the idle clock only governs gaps after content has started.
-    A first token slower than stream_idle_timeout, followed by prompt chunks, must succeed."""
+    A first token slower than stream_idle_timeout, followed by prompt chunks, must succeed.
+    """
     import asyncio
     from unittest.mock import patch
 
@@ -5300,6 +5301,67 @@ async def test_router_semaphore_held_through_reconstruction():
 
     assert result is reconstructed
     assert locked_while_reconstructing["value"] is True
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_reconstructed_response_hits_content_policy():
+    """The reconstructed response from a promoted stream must flow through the same
+    content-policy check as the non-streaming path: a content_filter finish_reason with a
+    content-policy fallback available raises ContentPolicyViolationError."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm import ModelResponse
+    from litellm.types.utils import Choices, Message
+    from litellm.utils import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=5.0,
+        content_policy_fallbacks=[{"test-model": ["test-model"]}],
+    )
+
+    blocked = ModelResponse()
+    blocked.choices = [
+        Choices(
+            index=0,
+            finish_reason="content_filter",
+            message=Message(role="assistant", content="blocked"),
+        )
+    ]
+
+    fake_stream = MagicMock(spec=CustomStreamWrapper)
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+
+    with (
+        patch.object(
+            router,
+            "_collect_stream_with_ttft_timeout",
+            new_callable=AsyncMock,
+            return_value=blocked,
+        ),
+        patch.object(router, "async_get_available_deployment") as mock_dep,
+        patch.object(router, "_update_kwargs_with_deployment"),
+        patch.object(router, "_get_client", return_value=None),
+        patch.object(router, "_track_deployment_metrics"),
+        patch("litellm.acompletion", new_callable=AsyncMock, return_value=fake_stream),
+    ):
+        mock_dep.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+        }
+
+        with pytest.raises(litellm.ContentPolicyViolationError):
+            await router._acompletion(
+                model="test-model",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=False,
+            )
 
 
 @pytest.mark.asyncio
