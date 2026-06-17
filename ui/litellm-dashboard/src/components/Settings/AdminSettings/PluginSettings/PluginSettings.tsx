@@ -66,9 +66,7 @@ export default function PluginSettings() {
   const handleOk = async () => {
     const values = await form.validateFields();
     const updated =
-      editingIndex !== null
-        ? plugins.map((p, i) => (i === editingIndex ? values : p))
-        : [...plugins, values];
+      editingIndex !== null ? plugins.map((p, i) => (i === editingIndex ? values : p)) : [...plugins, values];
     await save(updated);
     setModalOpen(false);
   };
@@ -113,31 +111,18 @@ export default function PluginSettings() {
     <Card>
       <Title level={4}>Plugins</Title>
       <Paragraph>
-        Register external services as plugins. Once added, users can toggle to the plugin from the
-        mode switcher in the top-left of the sidebar.
+        Register external services as plugins. Once added, users can toggle to the plugin from the mode switcher in the
+        top-left of the sidebar.
       </Paragraph>
       <Paragraph type="secondary" style={{ fontSize: 12 }}>
-        Each plugin must expose <Text code>GET /api/plugin-manifest</Text> returning nav items and
-        capabilities.
+        Each plugin must expose <Text code>GET /api/plugin-manifest</Text> returning nav items and capabilities.
       </Paragraph>
 
-      <Button
-        type="primary"
-        icon={<PlusOutlined />}
-        onClick={openAdd}
-        style={{ marginBottom: 16 }}
-      >
+      <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ marginBottom: 16 }}>
         Add Plugin
       </Button>
 
-      <Table
-        dataSource={plugins}
-        columns={columns}
-        rowKey="name"
-        loading={loading}
-        pagination={false}
-        size="small"
-      />
+      <Table dataSource={plugins} columns={columns} rowKey="name" loading={loading} pagination={false} size="small" />
 
       <Modal
         title={editingIndex !== null ? "Edit Plugin" : "Add Plugin"}
@@ -156,17 +141,16 @@ export default function PluginSettings() {
           >
             <Input placeholder="litellm-platform-plugin" />
           </Form.Item>
-          <Form.Item
-            name="display_name"
-            label="Display Name"
-            rules={[{ required: true, message: "Required" }]}
-          >
+          <Form.Item name="display_name" label="Display Name" rules={[{ required: true, message: "Required" }]}>
             <Input placeholder="Agent Control Plane" />
           </Form.Item>
           <Form.Item
             name="url"
             label="URL"
-            rules={[{ required: true, message: "Required" }, { type: "url", message: "Must be a valid URL" }]}
+            rules={[
+              { required: true, message: "Required" },
+              { type: "url", message: "Must be a valid URL" },
+            ]}
             extra="Base URL of the plugin service"
           >
             <Input placeholder="https://your-plugin.example.com" />
