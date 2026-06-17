@@ -10,7 +10,7 @@ through BedrockMantleAuthMixin so the two paths can never drift apart.
 """
 
 import re
-from typing import Optional, Tuple
+from typing import Tuple
 
 from botocore.exceptions import (
     CredentialRetrievalError,
@@ -34,7 +34,7 @@ class BedrockMantleAuthMixin:
     _aws_signer: BaseAWSLLM
 
     @staticmethod
-    def _resolve_bearer_token(api_key: Optional[str]) -> Optional[str]:
+    def _resolve_bearer_token(api_key: str | None) -> str | None:
         return (
             api_key
             or get_secret_str("BEDROCK_MANTLE_API_KEY")
@@ -65,11 +65,11 @@ class BedrockMantleAuthMixin:
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> Tuple[dict, bytes | None]:
         bearer = self._resolve_bearer_token(api_key)
         if not bearer:
             # SigV4 path. Pin the credential-scope region to the region of the actual
