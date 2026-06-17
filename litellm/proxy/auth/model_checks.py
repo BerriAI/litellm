@@ -164,7 +164,7 @@ def get_team_models(
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
     """
-    all_models_set: Set[str] = set()
+    all_models_set: set[str] = set()
     if len(team_models) > 0:
         all_models_set.update(team_models)
         if SpecialModelNames.all_team_models.value in all_models_set:
@@ -194,11 +194,11 @@ def get_team_models(
 
 
 def get_user_models(
-    user_models: List[str],
-    proxy_model_list: List[str],
-    model_access_groups: Dict[str, List[str]],
-    include_model_access_groups: Optional[bool] = False,
-) -> List[str]:
+    user_models: list[str],
+    proxy_model_list: list[str],
+    model_access_groups: dict[str, list[str]],
+    include_model_access_groups: bool | None = False,
+) -> list[str]:
     """
     Returns:
     - List of model name strings allowed by `LiteLLM_UserTable.models`
@@ -211,7 +211,7 @@ def get_user_models(
     listing path so it stays consistent with `can_user_call_model` at
     inference time (see BerriAI/litellm#26420).
     """
-    all_models_set: Set[str] = set()
+    all_models_set: set[str] = set()
     if len(user_models) > 0:
         all_models_set.update(user_models)
         if SpecialModelNames.all_proxy_models.value in all_models_set:
@@ -233,9 +233,9 @@ def get_user_models(
 
 
 def filter_models_by_user_access(
-    models: List[str],
-    user_allowed_models: List[str],
-) -> List[str]:
+    models: list[str],
+    user_allowed_models: list[str],
+) -> list[str]:
     """
     Return the subset of `models` that the user is allowed to see, given
     the (already-expanded) `user_allowed_models` list. Supports exact
@@ -248,7 +248,7 @@ def filter_models_by_user_access(
     """
     exact = {m for m in user_allowed_models if "*" not in m}
     patterns = [m for m in user_allowed_models if "*" in m]
-    out: List[str] = []
+    out: list[str] = []
     for m in models:
         if m in exact:
             out.append(m)

@@ -6454,14 +6454,14 @@ async def get_available_models_for_user(
 
 
 async def _apply_user_models_filter(
-    all_models: List[str],
+    all_models: list[str],
     user_api_key_dict: "UserAPIKeyAuth",
-    model_access_groups: Dict[str, List[str]],
+    model_access_groups: dict[str, list[str]],
     prisma_client: Optional["PrismaClient"],
     proxy_logging_obj: Optional["ProxyLogging"],
     user_api_key_cache: Optional["DualCache"],
-    user_models_override: Optional[List[str]] = None,
-) -> List[str]:
+    user_models_override: list[str] | None = None,
+) -> list[str]:
     """
     Intersect `all_models` with `LiteLLM_UserTable.models` (Personal
     Models) for the user behind `user_api_key_dict`.
@@ -6549,14 +6549,14 @@ async def _apply_user_models_filter(
 
 
 async def apply_user_models_filter_to_deployments(
-    deployments: List[Dict[str, Any]],
+    deployments: list[dict[str, Any]],
     user_api_key_dict: "UserAPIKeyAuth",
     llm_router: Optional["Router"],
     prisma_client: Optional["PrismaClient"],
     proxy_logging_obj: Optional["ProxyLogging"],
     user_api_key_cache: Optional["DualCache"],
-    user_models_override: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+    user_models_override: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """
     Apply the `LiteLLM_UserTable.models` (Personal Models) filter to a
     deployment-shaped list (`List[Dict]` with `model_name` keys), reusing
@@ -6582,7 +6582,7 @@ async def apply_user_models_filter_to_deployments(
         return deployments
 
     if llm_router is None:
-        model_access_groups: Dict[str, List[str]] = {}
+        model_access_groups: dict[str, list[str]] = {}
     else:
         model_access_groups = llm_router.get_model_access_groups()
 
@@ -6604,10 +6604,10 @@ async def apply_user_models_filter_to_deployments(
 
 
 async def apply_key_team_models_filter_to_deployments(
-    deployments: List[Dict[str, Any]],
+    deployments: list[dict[str, Any]],
     user_api_key_dict: "UserAPIKeyAuth",
     llm_router: Optional["Router"],
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Bound deployments by the calling key's `models` and the key's
     team's `team_models`. Mirrors the listing-path filter that
@@ -6633,8 +6633,8 @@ async def apply_key_team_models_filter_to_deployments(
         return deployments
 
     if llm_router is None:
-        proxy_model_list: List[str] = []
-        model_access_groups: Dict[str, List[str]] = {}
+        proxy_model_list: list[str] = []
+        model_access_groups: dict[str, list[str]] = {}
     else:
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()

@@ -11431,11 +11431,11 @@ def _check_if_model_is_team_model(
 
 
 async def non_admin_all_models(
-    all_models: List[Dict],
+    all_models: list[dict],
     llm_router: Router,
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: Optional[PrismaClient],
-) -> Tuple[List[Dict], Optional[List[str]]]:
+    prisma_client: PrismaClient | None,
+) -> tuple[list[dict], list[str] | None]:
     """
     Check if model is in db
 
@@ -11467,7 +11467,7 @@ async def non_admin_all_models(
         prisma_client=prisma_client,
     )
 
-    user_models: Optional[List[str]] = None
+    user_models: list[str] | None = None
     if user_api_key_dict.user_id:
         try:
             user_row = await UserRepository(prisma_client).table.find_unique(
@@ -12653,7 +12653,7 @@ async def model_info_v2(
     # the user's `models` list here so the filter step below can
     # forward it as `user_models_override` and skip a second
     # `get_user_object` call on cache miss.
-    user_models_for_filter: Optional[List[str]] = None
+    user_models_for_filter: list[str] | None = None
     if user_models_only:
         all_models, user_models_for_filter = await non_admin_all_models(
             all_models=all_models,
