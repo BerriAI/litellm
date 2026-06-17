@@ -98,6 +98,7 @@ export enum Providers {
   VERTEX_AI_BETA = "Vertex Ai Beta",
   VLLM = "Vllm",
   VolcEngine = "VolcEngine",
+  TokenHub = "TokenHub (Tencent Cloud)",
   Voyage = "Voyage AI",
   WANDB = "Wandb",
   WATSONX = "Watsonx",
@@ -207,6 +208,7 @@ export const provider_map: Record<string, string> = {
   VERTEX_AI_BETA: "vertex_ai_beta",
   VLLM: "vllm",
   VolcEngine: "volcengine",
+  TokenHub: "tokenhub",
   Voyage: "voyage",
   WANDB: "wandb",
   WATSONX: "watsonx",
@@ -299,6 +301,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.VERTEX_AI_BETA]: `${asset_logos_folder}google.svg`,
   [Providers.VLLM]: `${asset_logos_folder}vllm.png`,
   [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
+  [Providers.TokenHub]: `${asset_logos_folder}tokenhub.png`,
   [Providers.Voyage]: `${asset_logos_folder}voyage.webp`,
   [Providers.WATSONX]: `${asset_logos_folder}watsonx.svg`,
   [Providers.WATSONX_TEXT]: `${asset_logos_folder}watsonx.svg`,
@@ -361,6 +364,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "jina_ai/";
   } else if (selectedProvider == Providers.VolcEngine) {
     return "volcengine/<any-model-on-volcengine>";
+  } else if (selectedProvider == Providers.TokenHub) {
+    return "tokenhub/<any-model-on-tokenhub>";
   } else if (selectedProvider == Providers.DeepInfra) {
     return "deepinfra/<any-model-on-deepinfra>";
   } else if (selectedProvider == Providers.FalAI) {

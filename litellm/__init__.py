@@ -649,6 +649,7 @@ cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
 volcengine_models: Set = set()
+tokenhub_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
@@ -910,6 +911,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             oci_models.add(key)
         elif value.get("litellm_provider") == "volcengine":
             volcengine_models.add(key)
+        elif value.get("litellm_provider") == "tokenhub":
+            tokenhub_models.add(key)
         elif value.get("litellm_provider") == "wandb":
             wandb_models.add(key)
         elif value.get("litellm_provider") == "ovhcloud":
@@ -1048,6 +1051,7 @@ model_list = list(
     | heroku_models
     | vercel_ai_gateway_models
     | volcengine_models
+    | tokenhub_models
     | wandb_models
     | ovhcloud_models
     | lemonade_models
@@ -1150,6 +1154,7 @@ models_by_provider: dict = {
     "cometapi": cometapi_models,
     "oci": oci_models,
     "volcengine": volcengine_models,
+    "tokenhub": tokenhub_models,
     "wandb": wandb_models,
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
@@ -1894,6 +1899,10 @@ if TYPE_CHECKING:
     from .llms.volcengine.chat.transformation import (
         VolcEngineChatConfig as VolcEngineChatConfig,
         VolcEngineChatConfig as VolcEngineConfig,
+    )
+    from .llms.tokenhub.chat.transformation import (
+        TokenHubChatConfig as TokenHubChatConfig,
+        TokenHubChatConfig as TokenHubConfig,
     )
     from .llms.codestral.completion.transformation import (
         CodestralTextCompletionConfig as CodestralTextCompletionConfig,
