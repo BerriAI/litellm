@@ -366,7 +366,7 @@ class AnthropicPassthroughLoggingHandler:
     )
 
     @staticmethod
-    def _collapse_pure_text_chunks(  # noqa: PLR0915
+    def _collapse_pure_text_chunks(
         all_chunks: Sequence[Union[str, bytes]],
     ) -> Optional[List[str]]:
         """
@@ -551,7 +551,7 @@ class AnthropicPassthroughLoggingHandler:
         return complete_streaming_response
 
     @staticmethod
-    def batch_creation_handler(  # noqa: PLR0915
+    def batch_creation_handler(
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,

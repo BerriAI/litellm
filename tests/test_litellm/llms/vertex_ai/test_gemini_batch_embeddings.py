@@ -8,11 +8,7 @@ This test ensures that:
 """
 
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
-
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import pytest
 
@@ -311,13 +307,16 @@ def test_gemini_multimodal_embedding_e2e():
     ):
         mock_get_token.return_value = (
             {"x-goog-api-key": "test-key"},
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:batchEmbedContents",
         )
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "embedding": {"values": [0.1, 0.2, 0.3, 0.4, 0.5]}
+            "embeddings": [
+                {"values": [0.1, 0.2, 0.3, 0.4, 0.5]},
+                {"values": [0.6, 0.7, 0.8, 0.9, 1.0]},
+            ]
         }
         mock_post.return_value = mock_response
 
@@ -338,17 +337,21 @@ def test_gemini_multimodal_embedding_e2e():
 
         request_body = json.loads(kwargs.get("data", "{}"))
 
-        assert "content" in request_body
-        assert "parts" in request_body["content"]
-        parts = request_body["content"]["parts"]
+        assert "requests" in request_body
+        assert len(request_body["requests"]) == 2
 
-        assert len(parts) == 2
-        assert parts[0]["text"] == "The food was delicious"
-        assert "inline_data" in parts[1]
-        assert parts[1]["inline_data"]["mime_type"] == "image/png"
+        text_parts = request_body["requests"][0]["content"]["parts"]
+        image_parts = request_body["requests"][1]["content"]["parts"]
 
-        assert len(response.data) == 1
+        assert len(text_parts) == 1
+        assert text_parts[0]["text"] == "The food was delicious"
+        assert len(image_parts) == 1
+        assert "inline_data" in image_parts[0]
+        assert image_parts[0]["inline_data"]["mime_type"] == "image/png"
+
+        assert len(response.data) == 2
         assert response.data[0].embedding == [0.1, 0.2, 0.3, 0.4, 0.5]
+        assert response.data[1].embedding == [0.6, 0.7, 0.8, 0.9, 1.0]
 
 
 def test_gemini_multimodal_embedding_with_audio():

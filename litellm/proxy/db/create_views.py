@@ -11,7 +11,7 @@ _db = Any
 _VIEW_NOT_FOUND_MARKERS = ("does not exist", "no such table", "undefined table")
 
 
-async def create_missing_views(db: _db):  # noqa: PLR0915
+async def create_missing_views(db: _db):
     """
     --------------------------------------------------
     NOTE: Copy of `litellm/db_scripts/create_views.py`.

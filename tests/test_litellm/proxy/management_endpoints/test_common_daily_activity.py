@@ -9,6 +9,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    _adjust_dates_for_timezone,
+    _build_aggregated_sql_query,
     _is_user_agent_tag,
     get_api_key_metadata,
     get_daily_activity,
@@ -632,6 +634,126 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     assert key_data.metrics.spend == 10.0
 
 
+class TestAdjustDatesForTimezone:
+    """
+    Regression tests for the timezone double-counting bug.
+
+    Background: the previous implementation expanded the SQL date range by a full
+    UTC day on whichever side a non-UTC timezone offset pointed. Because spend is
+    bucketed in whole UTC days in the aggregation table, that expansion caused
+    single-day queries from non-UTC timezones to include a second full UTC day's
+    worth of data, producing approximately 2x over-counting. The sum of single-day
+    spends across a window then exceeded the equivalent multi-day aggregate, which
+    is mathematically impossible.
+
+    These tests pin the function to a pass-through and assert the additivity
+    invariant that any future implementation must preserve.
+    """
+
+    @pytest.mark.parametrize(
+        "offset_minutes",
+        [
+            None,
+            0,
+            -330,  # IST UTC+5:30
+            -540,  # JST UTC+9
+            -60,  # CET UTC+1
+            240,  # AST UTC-4
+            300,  # EST UTC-5
+            480,  # PST UTC-8
+        ],
+    )
+    def test_returns_input_dates_unchanged_for_any_offset(self, offset_minutes):
+        start, end = _adjust_dates_for_timezone(
+            "2026-05-29", "2026-05-29", offset_minutes
+        )
+        assert start == "2026-05-29"
+        assert end == "2026-05-29"
+
+    def test_single_day_query_does_not_widen_to_two_utc_days(self):
+        """
+        Pins the boundary that caused the original 2x bug: a single IST day must
+        not be translated into a SQL filter covering two UTC days.
+        """
+        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-05-29", -330)
+        assert start == end == "2026-05-29", (
+            "Single-day IST query expanded to a multi-day UTC range; this is "
+            "the regression that produced approximately 2x over-counting."
+        )
+
+    def test_multi_day_range_endpoints_are_preserved(self):
+        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-06-02", -330)
+        assert (start, end) == ("2026-05-29", "2026-06-02")
+
+    @pytest.mark.parametrize("offset_minutes", [-330, 480])
+    def test_single_day_sums_match_multi_day_window(self, offset_minutes):
+        """
+        Additivity invariant: querying each day in a window separately and summing
+        the resulting SQL ranges must cover exactly the same range as querying the
+        whole window at once. The bug broke this; without it, single-day sums
+        exceeded the multi-day total by ~50% over a 5-day IST window.
+        """
+        days = ["2026-05-29", "2026-05-30", "2026-05-31", "2026-06-01", "2026-06-02"]
+        single_day_ranges = [
+            _adjust_dates_for_timezone(d, d, offset_minutes) for d in days
+        ]
+        multi_day_range = _adjust_dates_for_timezone(days[0], days[-1], offset_minutes)
+
+        per_day_starts = [r[0] for r in single_day_ranges]
+        per_day_ends = [r[1] for r in single_day_ranges]
+        assert min(per_day_starts) == multi_day_range[0]
+        assert max(per_day_ends) == multi_day_range[1]
+        assert per_day_starts == days
+        assert per_day_ends == days
+
+
+class TestBuildAggregatedSqlQuery:
+    """
+    Asserts the SQL emitted by the aggregated query path stays anchored to the
+    user-supplied date range. The original bug shipped a function that returned
+    expanded dates from _adjust_dates_for_timezone, so the regression surface is
+    not just the helper but the SQL it feeds into.
+    """
+
+    @pytest.mark.parametrize("offset_minutes", [None, 0, -330, 480])
+    def test_sql_date_bounds_are_user_supplied_dates(self, offset_minutes):
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-05-29",
+            end_date="2026-05-29",
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=offset_minutes,
+        )
+
+        assert params[0] == "2026-05-29"
+        assert params[1] == "2026-05-29"
+        assert "date >= $1" in sql
+        assert "date <= $2" in sql
+
+    def test_optional_filters_appear_in_params_in_order(self):
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-05-29",
+            end_date="2026-06-02",
+            model="bedrock/global.anthropic.claude-opus-4-8",
+            api_key="sk-test",
+            timezone_offset_minutes=-330,
+        )
+
+        assert params == [
+            "2026-05-29",
+            "2026-06-02",
+            "user-1",
+            "bedrock/global.anthropic.claude-opus-4-8",
+            "sk-test",
+        ]
+        assert "model = $4" in sql
+        assert "api_key = $5" in sql
 @pytest.mark.asyncio
 async def test_get_daily_activity_aggregated_empty_result_set():
     """Regression test for the empty-range 500.

@@ -10,7 +10,12 @@ table: one lambda per mapping operation, applied against the typed span data.
 from typing import Callable
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
-from litellm.integrations.otel.mappers.utils import collect, drop_none
+from litellm.integrations.otel.mappers.utils import (
+    collect,
+    drop_none,
+    output_messages,
+    serialize_messages,
+)
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -47,6 +52,8 @@ class GenAIMapper:
             else None
         ),
         GenAI.REQUEST_SEED: lambda d: d.request_params.seed,
+        GenAI.INPUT_MESSAGES: lambda d: serialize_messages(d.messages_in),
+        GenAI.OUTPUT_MESSAGES: lambda d: serialize_messages(output_messages(d)),
         GenAI.RESPONSE_MODEL: lambda d: d.response_model,
         GenAI.RESPONSE_ID: lambda d: d.response_id,
         GenAI.RESPONSE_FINISH_REASONS: lambda d: (

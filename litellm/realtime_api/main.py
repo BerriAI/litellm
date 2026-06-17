@@ -284,7 +284,7 @@ async def arealtime_calls(
 
 
 @wrapper_client
-async def _arealtime(  # noqa: PLR0915
+async def _arealtime(
     model: str,
     websocket: Any,  # fastapi websocket
     api_base: Optional[str] = None,
