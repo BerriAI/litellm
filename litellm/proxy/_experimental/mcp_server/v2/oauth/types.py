@@ -9,7 +9,7 @@ Design invariants encoded here:
   `AuthSpecKind`, one arm per mode. No field-presence inference, no precedence cascade.
 - **Exhaustive dispatch, no wildcard.** `auth_spec_kind` is a closed enum, so the `match` in
   `resolve()` has no `_` arm — basedpyright (`reportMatchNotExhaustive`) guarantees every mode
-  is handled. Adding a sixth mode without an arm fails the type gate, not at runtime.
+  is handled. Adding a new mode without an arm fails the type gate, not at runtime.
 - **Fail-closed at the boundary.** An unknown mode string can only enter through
   `parse_auth_spec_kind()`, which returns a typed `CredError`. Inside the core the mode is
   always valid, so illegal states are unrepresentable.
@@ -45,7 +45,7 @@ class AuthSpecKind(str, Enum):
     scheme is a parameter the arm carries, not its own mode.
     """
 
-    authorization_code = "authorization_code"  # per-user 3LO; gateway is the OAuth client
+    authorization_code = "authorization_code"  # per-user 3LO; gateway is OAuth client
     client_credentials = "client_credentials"  # gateway service account (M2M)
     token_exchange = "token_exchange"  # RFC 8693 on-behalf-of
     api_key = "api_key"  # static header, any scheme (BYOK = per-user-seeded source)
