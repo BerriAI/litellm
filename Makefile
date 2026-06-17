@@ -32,7 +32,7 @@ help:
 	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its ceiling"
 	@echo "  make lint-ruff-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
 	@echo "  make lint-budget-update - Re-capture all three ratchet budgets (ruff + mypy + basedpyright)"
-	@echo "  make lint-any           - Fail if a changed file exceeds its Any-typed value budget (baseline + ~25%)"
+	@echo "  make lint-any           - Fail if a changed file exceeds its Any-typed value budget (baseline + ~50%)"
 	@echo "  make lint-any-budget-update - Re-capture the per-file Any baseline (ratchet)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"

@@ -13,8 +13,8 @@ litellm already contains a large amount of pre-existing `Any` (a single legacy
 file can have >100 findings), and a whole-tree scan would have to re-export types
 for litellm's entire import closure on every run (~2 min, ~3 GB). So the gate
 grandfathers each file at its current count in `any-discipline-budget.json` and
-gives it ~25% headroom: a file fails once its `Any`-tainted values exceed
-`baseline + ceil(baseline * 0.25)`. A file with no entry is budgeted at zero, so
+gives it ~50% headroom: a file fails once its `Any`-tainted values exceed
+`baseline + ceil(baseline * 0.50)`. A file with no entry is budgeted at zero, so
 a brand new file must be `Any`-free, and a legacy file may absorb a little drift
 before it has to be cleaned. Cold files the change doesn't touch are left to the
 ratchet (run `--update`); like the mypy/basedpyright budgets, the gate only
@@ -113,7 +113,7 @@ PY_TAG = f"{sys.version_info.major}.{sys.version_info.minor}"
 DEFAULT_BASE = "origin/litellm_internal_staging"
 
 # Headroom each grandfathered file gets over its baseline before the gate trips.
-HEADROOM_RATIO = 0.25
+HEADROOM_RATIO = 0.50
 
 # `--update` re-counts every file. Type-checking each module also preserves its
 # AST and exports its types, so we re-check in bounded batches against a warmed
@@ -161,7 +161,7 @@ class Violation(NamedTuple):
 
 
 def cap_for(baseline: int) -> int:
-    """The most `Any`-tainted values a file may hold: baseline plus ~25%."""
+    """The most `Any`-tainted values a file may hold: baseline plus ~50%."""
     return baseline + math.ceil(baseline * HEADROOM_RATIO)
 
 

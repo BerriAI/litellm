@@ -16,7 +16,7 @@ def _v(path="litellm/x.py", line=10, code="LIT009"):
 
 
 # --------------------------------------------------------------------------- #
-# cap_for: ~25% headroom over the grandfathered baseline
+# cap_for: ~50% headroom over the grandfathered baseline
 # --------------------------------------------------------------------------- #
 
 
@@ -25,16 +25,16 @@ def test_zero_baseline_gets_no_headroom():
     assert mod.cap_for(0) == 0
 
 
-def test_headroom_is_a_quarter_of_the_baseline():
-    assert mod.cap_for(100) == 125
-    assert mod.cap_for(40) == 50
+def test_headroom_is_half_of_the_baseline():
+    assert mod.cap_for(100) == 150
+    assert mod.cap_for(40) == 60
 
 
 def test_headroom_rounds_up_so_small_baselines_get_at_least_one_slot():
-    # ceil(1 * 0.25) == 1, ceil(4 * 0.25) == 1, ceil(8 * 0.25) == 2.
+    # ceil(1 * 0.5) == 1, ceil(3 * 0.5) == 2, ceil(5 * 0.5) == 3.
     assert mod.cap_for(1) == 2
-    assert mod.cap_for(4) == 5
-    assert mod.cap_for(8) == 10
+    assert mod.cap_for(3) == 5
+    assert mod.cap_for(5) == 8
 
 
 # --------------------------------------------------------------------------- #
@@ -56,17 +56,17 @@ def test_counts_only_lit009_per_file():
 
 
 # --------------------------------------------------------------------------- #
-# budget_breaches: a file fails only above baseline + ~25%
+# budget_breaches: a file fails only above baseline + ~50%
 # --------------------------------------------------------------------------- #
 
 
 def test_file_at_its_ceiling_does_not_breach():
-    assert mod.budget_breaches({"litellm/a.py": 125}, {"litellm/a.py": 100}) == []
+    assert mod.budget_breaches({"litellm/a.py": 150}, {"litellm/a.py": 100}) == []
 
 
 def test_file_one_over_its_ceiling_breaches():
-    assert mod.budget_breaches({"litellm/a.py": 126}, {"litellm/a.py": 100}) == [
-        ("litellm/a.py", 126, 125)
+    assert mod.budget_breaches({"litellm/a.py": 151}, {"litellm/a.py": 100}) == [
+        ("litellm/a.py", 151, 150)
     ]
 
 

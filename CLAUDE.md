@@ -40,7 +40,7 @@ When you fix violations gated by `ruff-strict-budget.json`, `mypy-code-budget.js
 
 If you're trying to create a new function that relies on untyped stuff, instead of adding more Any's and bringing it closer to the max, just validate it in the caller with Pydantic (a model or `TypeAdapter` that returns the typed thing or raises will do) and then pass the now typed variable in
 
-The Any-discipline gate (`make lint-any`, also a CI job) grandfathers each file under `litellm/` at its current count of values typed `Any` (including the `X | Any`) in `any-discipline-budget.json` and gives it ~25% headroom; a changed file fails once it exceeds that ceiling, so a brand new file must be `Any`-free while a legacy file can absorb a little drift before it has to be cleaned. Ideally `# any-ok: <reason>` is never used; treat it as a last resort for a genuine typed/untyped boundary that Pydantic truly can't model
+The Any-discipline gate (`make lint-any`, also a CI job) grandfathers each file under `litellm/` at its current count of values typed `Any` (including the `X | Any`) in `any-discipline-budget.json` and gives it ~50% headroom; a changed file fails once it exceeds that ceiling, so a brand new file must be `Any`-free while a legacy file can absorb a little drift before it has to be cleaned. Ideally `# any-ok: <reason>` is never used; treat it as a last resort for a genuine typed/untyped boundary that Pydantic truly can't model
 
 Ask to commit and push your work when you're done (or if you're confident that your code is good and works, just do it)
 
