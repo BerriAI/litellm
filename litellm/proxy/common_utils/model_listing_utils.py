@@ -76,6 +76,23 @@ class TeamModelNameTranslator:
         )
 
     @staticmethod
+    def _response_to_lookup_map(
+        model_names: list[str],
+        internal_to_public: dict[str, str],
+    ) -> dict[str, str]:
+        """Map each public response id to the first internal lookup id seen in
+        `model_names`, preserving first-occurrence order. First-wins keeps list
+        and retrieve in agreement on which accessible deployment a shared public
+        id resolves to: a global iterated before a colliding team alias stays
+        the listed entry, and sibling team rows collapse to their first
+        occurrence.
+        """
+        result: dict[str, str] = {}
+        for name in model_names:
+            result.setdefault(internal_to_public.get(name, name), name)
+        return result
+
+    @staticmethod
     def listing_entries(
         model_names: list[str],
         llm_router: "Router | None",
@@ -97,10 +114,11 @@ class TeamModelNameTranslator:
         )
         if not internal_to_public:
             return [(name, name) for name in model_names]
-        deduped_entries = {
-            internal_to_public.get(name, name): name for name in model_names
-        }
-        return list(deduped_entries.items())
+        return list(
+            TeamModelNameTranslator._response_to_lookup_map(
+                model_names, internal_to_public
+            ).items()
+        )
 
     @staticmethod
     def translate_listing(
@@ -131,19 +149,17 @@ class TeamModelNameTranslator:
 
         Resolution is restricted to `available_models` (the caller's accessible
         set) so colliding public names across teams never resolve across an access
-        boundary. Returns `model_id` unchanged when it is not an accessible public
-        team name (already-internal names and globals pass through).
+        boundary. Uses the same first-occurrence dedup as `listing_entries` so a
+        public id advertised by `/v1/models` resolves to the same internal
+        deployment that the listing's metadata was built from. Returns `model_id`
+        unchanged when it is not an accessible public team name (already-internal
+        names and globals pass through).
         """
         internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(
             llm_router, general_settings
         )
         if not internal_to_public:
             return model_id
-        return next(
-            (
-                internal
-                for internal in available_models
-                if internal_to_public.get(internal) == model_id
-            ),
-            model_id,
-        )
+        return TeamModelNameTranslator._response_to_lookup_map(
+            available_models, internal_to_public
+        ).get(model_id, model_id)

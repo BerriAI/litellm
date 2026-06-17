@@ -916,6 +916,68 @@ def test_listing_entries_lookup_id_never_crosses_team_boundary():
     assert entries == [("shared-name", "model_name_teamX_uuidA")]
 
 
+def test_listing_entries_global_wins_when_team_alias_collides_with_global():
+    """Regression: when an accessible global model shares its name with a team
+    deployment's `team_public_model_name`, the listing must keep the global
+    entry rather than overwriting its lookup id with the colliding team's
+    internal routing key (which would surface the team's metadata under the
+    global id)."""
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {
+            "model_name": "model_name_teamX_uuidA",
+            "model_info": {
+                "team_id": "teamX",
+                "team_public_model_name": "gpt-4o",
+            },
+        },
+        {"model_name": "gpt-4o", "model_info": {"db_model": False}},
+    ]
+
+    entries = TeamModelNameTranslator.listing_entries(
+        ["gpt-4o", "model_name_teamX_uuidA"], router, {}
+    )
+
+    assert entries == [("gpt-4o", "gpt-4o")]
+
+
+def test_listing_and_resolve_agree_on_sibling_internal_key():
+    """Regression: when two team deployments share a public name, listing and
+    retrieve must pick the same internal routing key, otherwise `/v1/models/{id}`
+    describes a different deployment than what the listing's metadata was built
+    from."""
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {
+            "model_name": "model_name_teamX_uuidA",
+            "model_info": {
+                "team_id": "teamX",
+                "team_public_model_name": "tushar-gpt-4.1",
+            },
+        },
+        {
+            "model_name": "model_name_teamX_uuidB",
+            "model_info": {
+                "team_id": "teamX",
+                "team_public_model_name": "tushar-gpt-4.1",
+            },
+        },
+    ]
+    available = ["model_name_teamX_uuidA", "model_name_teamX_uuidB"]
+
+    [(_, listing_lookup)] = TeamModelNameTranslator.listing_entries(
+        available, router, {}
+    )
+    resolve_lookup = TeamModelNameTranslator.resolve_public_name(
+        model_id="tushar-gpt-4.1",
+        available_models=available,
+        llm_router=router,
+        general_settings={},
+    )
+
+    assert listing_lookup == resolve_lookup
+
+
 def test_listing_entries_passthrough_when_disabled():
     """Legacy flag / no router -> response id equals lookup id (no translation)."""
     assert TeamModelNameTranslator.listing_entries(["a", "b"], None, {}) == [
