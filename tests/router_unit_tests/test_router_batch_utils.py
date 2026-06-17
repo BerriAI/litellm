@@ -1,17 +1,10 @@
 import sys
 import os
-import traceback
-from dotenv import load_dotenv
-from fastapi import Request
-from datetime import datetime
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from litellm import Router
 import pytest
-import litellm
-from unittest.mock import patch, MagicMock, AsyncMock
 
 import json
 from io import BytesIO
@@ -152,9 +145,9 @@ def test_should_replace_model_in_jsonl():
     """Test that should_replace_model_in_jsonl returns the correct value"""
     from litellm.router_utils.batch_utils import should_replace_model_in_jsonl
 
-    assert should_replace_model_in_jsonl(purpose="batch") == True
-    assert should_replace_model_in_jsonl(purpose="test") == False
-    assert should_replace_model_in_jsonl(purpose="user_data") == False
+    assert should_replace_model_in_jsonl(purpose="batch") is True
+    assert should_replace_model_in_jsonl(purpose="test") is False
+    assert should_replace_model_in_jsonl(purpose="user_data") is False
 
 
 def test_parse_jsonl_with_embedded_newlines_simple():

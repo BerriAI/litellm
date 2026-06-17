@@ -1,4 +1,5 @@
 import base64
+import itertools
 import json
 import os
 import re
@@ -759,39 +760,38 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         }
         """
         try:
-            # Decode content
-            content_str = content.decode("utf-8")
-
-            # Check if it's JSONL (multiple lines)
-            lines = content_str.strip().split("\n")
-            if not lines:
+            # Read the result file one row at a time. Batch output files can be
+            # as large as the (multi-GB) input, so splitting into a list of rows
+            # and building a second list of transformed rows peaks at several full
+            # copies and OOMs on retrieval.
+            lines = _iter_openai_jsonl_lines(content)
+            try:
+                first_line = next(lines)
+            except StopIteration:
                 return content
 
-            # Try to parse the first line to see if it's Vertex AI batch output
-            first_line = json.loads(lines[0])
-
-            # Check if it has Vertex AI batch output structure with discriminating fields
-            # Must have request, response, and processed_time
-            # Plus either candidates (success) or status (error)
-            has_base_structure = (
-                "response" in first_line
-                and "request" in first_line
-                and "processed_time" in first_line
+            # Identify a Vertex AI batch output from the first row's
+            # discriminating fields. Anything else (e.g. a binary file whose
+            # first line is not valid UTF-8/JSON) raises and falls through to the
+            # passthrough below, leaving the content untouched.
+            first_row = json.loads(first_line)
+            is_vertex_batch_output = (
+                "request" in first_row
+                and "response" in first_row
+                and "processed_time" in first_row
+                and (
+                    "candidates" in first_row.get("response", {})
+                    or "promptFeedback" in first_row.get("response", {})
+                    or bool(first_row.get("status"))
+                )
             )
-            has_success_or_error = (
-                "candidates" in first_line.get("response", {})
-                or "promptFeedback" in first_line.get("response", {})
-                or bool(first_line.get("status"))
-            )
-
-            if not (has_base_structure and has_success_or_error):
-                # Not a Vertex AI batch output, return as-is
+            if not is_vertex_batch_output:
                 return content
 
             vertex_gemini_config = VertexGeminiConfig()
-            # Always use a fresh local Logging object for the per-line transformation
-            # so we never mutate the caller's logging_obj (which already went through
-            # pre_call and has its own model/start_time/optional_params set).
+            # Use a fresh Logging object for the per-row transform so we never
+            # mutate the caller's (which already ran pre_call with its own
+            # model/start_time/optional_params).
             batch_transform_logging_obj = Logging(
                 model="",
                 messages=[],
@@ -808,29 +808,27 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 request=httpx.Request(method="POST", url="https://example.com"),
             )
 
-            # Transform all lines
-            transformed_lines = []
-            for line in lines:
-                if not line.strip():
-                    continue
-
+            # Transform each row straight into the output buffer, so peak memory
+            # stays at ~one row plus the output. If any row fails, return the
+            # original content unchanged.
+            output = bytearray()
+            for line in itertools.chain([first_line], lines):
                 try:
-                    vertex_output = json.loads(line)
                     openai_output = (
                         self._transform_single_vertex_batch_output_to_openai(
-                            vertex_output=vertex_output,
+                            vertex_output=json.loads(line),
                             vertex_gemini_config=vertex_gemini_config,
                             logging_obj=batch_transform_logging_obj,
                             mock_httpx_response=mock_httpx_response,
                         )
                     )
-                    transformed_lines.append(json.dumps(openai_output))
                 except Exception:
-                    # If any line fails, return original content
                     return content
+                if output:
+                    output += b"\n"
+                output += json.dumps(openai_output).encode("utf-8")
 
-            # Return transformed content
-            return "\n".join(transformed_lines).encode("utf-8")
+            return bytes(output)
 
         except Exception:
             # If anything fails, return original content

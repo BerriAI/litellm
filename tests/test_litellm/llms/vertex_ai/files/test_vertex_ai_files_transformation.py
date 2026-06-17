@@ -854,6 +854,106 @@ class TestVertexBatchOutputTransformation:
         )
         assert transformed_content == invalid_content
 
+    def test_binary_content_passthrough(self, config):
+        """A binary file (PDF/video) whose first bytes are not valid UTF-8 must be
+        returned unchanged. The row-by-row transform only engages for a JSONL
+        batch output and must never line-parse or corrupt binary content."""
+        binary = b"%PDF-1.4\n%\xc4\xe5\xf2\xe5\xeb\xa7\n" + b"\x00\x01\x02\xff\xfe" * 64
+        assert config._try_transform_vertex_batch_output_to_openai(binary) == binary
+
+    def test_streaming_transform_peaks_below_list_pipeline(self, config):
+        """The output transform must stream row-by-row, not build a list of every
+        parsed row and a second list of transformed rows. This guards against a
+        regression to the list pipeline, which peaks at several full copies and
+        OOMs on large result files. The relative comparison cancels shared noise
+        (per-row transform cost, GC timing) and only the list overhead differs.
+        """
+        import gc
+        import tracemalloc
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            VertexGeminiConfig,
+        )
+
+        def vertex_row(index: int) -> dict:
+            return {
+                "status": "",
+                "processed_time": "2024-11-01T18:13:16.826+00:00",
+                "request": {
+                    "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                    "labels": {"litellm_custom_id": f"r-{index}"},
+                },
+                "response": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [{"text": "hello " * 20}],
+                                "role": "model",
+                            },
+                            "finishReason": "STOP",
+                        }
+                    ],
+                    "modelVersion": "gemini-2.0-flash-001",
+                    "usageMetadata": {
+                        "promptTokenCount": 10,
+                        "candidatesTokenCount": 20,
+                        "totalTokenCount": 30,
+                    },
+                },
+            }
+
+        content = ("\n".join(json.dumps(vertex_row(i)) for i in range(4000))).encode(
+            "utf-8"
+        )
+
+        def list_pipeline() -> bytes:
+            gemini_config = VertexGeminiConfig()
+            logging_obj = Logging(
+                model="",
+                messages=[],
+                stream=False,
+                call_type="batch_transform",
+                start_time=0.1,
+                litellm_call_id="",
+                function_id="",
+            )
+            logging_obj.optional_params = {}
+            mock_response = httpx.Response(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                request=httpx.Request("POST", "https://example.com"),
+            )
+            rows = content.decode("utf-8").strip().split("\n")
+            transformed = [
+                json.dumps(
+                    config._transform_single_vertex_batch_output_to_openai(
+                        json.loads(row), gemini_config, logging_obj, mock_response
+                    )
+                )
+                for row in rows
+            ]
+            return "\n".join(transformed).encode("utf-8")
+
+        def peak_of(fn) -> int:
+            gc.collect()
+            tracemalloc.start()
+            try:
+                fn()
+                return tracemalloc.get_traced_memory()[1]
+            finally:
+                tracemalloc.stop()
+
+        streaming_peak = peak_of(
+            lambda: config._try_transform_vertex_batch_output_to_openai(content)
+        )
+        list_peak = peak_of(list_pipeline)
+
+        assert streaming_peak < list_peak * 0.75, (
+            f"streaming peak {streaming_peak} is not a clear win over the list "
+            f"pipeline {list_peak} (ratio {streaming_peak / list_peak:.2f})"
+        )
+
 
 class TestTryTransformDoesNotMutateCallerLoggingObj:
     """Regression tests: _try_transform_vertex_batch_output_to_openai must not mutate
