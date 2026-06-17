@@ -11,10 +11,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Literal, Protocol, Sequence, cast
+from typing import TYPE_CHECKING, Annotated, Callable, Literal, Protocol, Sequence, cast
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -34,44 +34,50 @@ class MCPTrustScoringConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = False
-    min_trust_score: float = Field(
-        default=DEFAULT_MCP_TRUST_SCORING_MIN_SCORE,
-        ge=0.0,
-        le=1.0,
-        description="Minimum normalized trust score (0-1) required to expose or route to a server",
-    )
-    cache_ttl_seconds: int = Field(
-        default=DEFAULT_MCP_TRUST_SCORING_CACHE_TTL,
-        ge=1,
-        description="Seconds to cache Dominion Observatory responses per server URL",
-    )
-    api_url: str = Field(
-        default=DEFAULT_MCP_TRUST_SCORING_API_URL,
-        description="Dominion Observatory trust endpoint base URL",
-    )
-    fail_open: bool = Field(
-        default=True,
-        description="When True, keep servers reachable if DO is down, rate-limited, or has no score yet",
-    )
-    api_key: str | None = Field(
-        default=None,
-        description="Optional API key for paid Dominion Observatory tiers",
-    )
+    min_trust_score: Annotated[
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description="Minimum normalized trust score (0-1) required to expose or route to a server",
+        ),
+    ] = DEFAULT_MCP_TRUST_SCORING_MIN_SCORE
+    cache_ttl_seconds: Annotated[
+        int,
+        Field(
+            ge=1,
+            description="Seconds to cache Dominion Observatory responses per server URL",
+        ),
+    ] = DEFAULT_MCP_TRUST_SCORING_CACHE_TTL
+    api_url: Annotated[
+        str,
+        Field(description="Dominion Observatory trust endpoint base URL"),
+    ] = DEFAULT_MCP_TRUST_SCORING_API_URL
+    fail_open: Annotated[
+        bool,
+        Field(
+            description="When True, keep servers reachable if DO is down, rate-limited, or has no score yet"
+        ),
+    ] = True
+    api_key: Annotated[
+        str | None,
+        Field(description="Optional API key for paid Dominion Observatory tiers"),
+    ] = None
 
 
 class DominionObservatoryTrustResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    server_url: str
-    found: bool
-    trust_score_normalized: float | None = Field(
-        default=None,
-        description="Trust score normalized to 0-1",
-    )
-    trust_score_raw: float | None = Field(
-        default=None,
-        description="Raw trust score from Dominion Observatory (0-100 scale)",
-    )
+    server_url: str  # any-ok: required pydantic field, mypy exports the field symbol as Any but the runtime type is str
+    found: bool  # any-ok: required pydantic field, mypy exports the field symbol as Any but the runtime type is bool
+    trust_score_normalized: Annotated[
+        float | None,
+        Field(description="Trust score normalized to 0-1"),
+    ] = None
+    trust_score_raw: Annotated[
+        float | None,
+        Field(description="Raw trust score from Dominion Observatory (0-100 scale)"),
+    ] = None
     lookup_status: Literal["ok", "skipped", "error"] = "ok"
     message: str | None = None
 
@@ -88,12 +94,6 @@ class DominionObservatoryTrustResult(BaseModel):
         if self.trust_score_normalized is None:
             return (2, 0.0)
         return (0, -self.trust_score_normalized)
-
-
-class _TrustCacheEntry(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    payload_json: str
 
 
 class _DominionObservatoryTrustApiResponse(BaseModel):
@@ -139,8 +139,8 @@ class _HttpClient(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class _ScoredServer:
-    server: MCPServer
-    trust: DominionObservatoryTrustResult
+    server: MCPServer  # any-ok: required dataclass field, mypy exports the field symbol as Any but the runtime type is MCPServer
+    trust: DominionObservatoryTrustResult  # any-ok: required dataclass field, mypy exports the field symbol as Any but the runtime type is typed
 
 
 def _normalize_server_url(server_url: str) -> str:
@@ -170,15 +170,17 @@ def parse_trust_response(
     server_url: str,
     payload: object,
 ) -> DominionObservatoryTrustResult:
-    if not isinstance(payload, dict):
+    try:
+        parsed = TypeAdapter(_DominionObservatoryTrustApiResponse).validate_python(
+            payload
+        )
+    except ValidationError:
         return DominionObservatoryTrustResult(
             server_url=server_url,
             found=False,
             lookup_status="error",
             message="Invalid Dominion Observatory response shape",
         )
-
-    parsed = TypeAdapter(_DominionObservatoryTrustApiResponse).validate_python(payload)
 
     return DominionObservatoryTrustResult(
         server_url=server_url,
@@ -259,7 +261,9 @@ class MCPTrustScoringClient:
 
         try:
             shared_cache = self._cache_getter()
-            shared = await shared_cache.async_get_cache(cache_key)
+            shared = await shared_cache.async_get_cache(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is narrowed below
+                cache_key
+            )
         except Exception:
             shared = None
 
@@ -270,16 +274,6 @@ class MCPTrustScoringClient:
                 ttl=self._config.cache_ttl_seconds,
             )
             return DominionObservatoryTrustResult.model_validate_json(shared)
-        if isinstance(shared, dict):
-            entry = _TrustCacheEntry.model_validate(shared)
-            self._local_cache.set_cache(
-                cache_key,
-                entry.payload_json,
-                ttl=self._config.cache_ttl_seconds,
-            )
-            return DominionObservatoryTrustResult.model_validate_json(
-                entry.payload_json
-            )
         return None
 
     async def _write_cached_result(
@@ -296,9 +290,9 @@ class MCPTrustScoringClient:
         )
         try:
             shared_cache = self._cache_getter()
-            await shared_cache.async_set_cache(
+            await shared_cache.async_set_cache(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the stored value is a typed JSON string
                 cache_key,
-                _TrustCacheEntry(payload_json=payload_json).model_dump(),
+                payload_json,
                 ttl=self._config.cache_ttl_seconds,
             )
         except Exception as exc:
@@ -310,17 +304,25 @@ class MCPTrustScoringClient:
 
     async def get_trust_score(self, server_url: str) -> DominionObservatoryTrustResult:
         normalized_url = _normalize_server_url(server_url)
-        cached = await self._read_cached_result(normalized_url)
+        cached = await self._read_cached_result(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+            normalized_url
+        )
         if cached is not None:
             return cached
 
         async with self._lock_for_url(normalized_url):
-            cached = await self._read_cached_result(normalized_url)
+            cached = await self._read_cached_result(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                normalized_url
+            )
             if cached is not None:
                 return cached
 
-            result = await self._fetch_trust_score(normalized_url)
-            await self._write_cached_result(normalized_url, result)
+            result = await self._fetch_trust_score(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                normalized_url
+            )
+            await self._write_cached_result(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and returns None
+                normalized_url, result
+            )
             return result
 
     async def _fetch_trust_score(
@@ -332,7 +334,7 @@ class MCPTrustScoringClient:
 
         try:
             client = self._http_client_getter()
-            response = await client.get(
+            response = await client.get(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is an httpx.Response
                 self._config.api_url,
                 params={"url": server_url},
                 headers=headers or None,
@@ -374,7 +376,9 @@ class MCPTrustScoringClient:
                 lookup_status="skipped",
                 message="Server has no HTTP URL to score",
             )
-        return await self.get_trust_score(server.url)
+        return await self.get_trust_score(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+            server.url
+        )
 
     async def score_servers(
         self,
@@ -383,8 +387,13 @@ class MCPTrustScoringClient:
         if not servers:
             return ()
 
-        trust_results = await asyncio.gather(
-            *(self.get_trust_score_for_server(server) for server in servers)
+        trust_results = await asyncio.gather(  # any-ok: awaited coroutine, gather's element Any is a typing artifact and each result is a typed DominionObservatoryTrustResult
+            *(  # any-ok: generator of coroutines, the Coroutine Send/Recv Any is a typing artifact
+                self.get_trust_score_for_server(  # any-ok: coroutine expression, Send/Recv Any is a typing artifact and the result is fully typed
+                    server
+                )
+                for server in servers
+            )
         )
         return tuple(
             _ScoredServer(server=server, trust=trust)
@@ -398,7 +407,9 @@ class MCPTrustScoringClient:
         if not self.enabled:
             return tuple(servers)
 
-        scored = await self.score_servers(servers)
+        scored = await self.score_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+            servers
+        )
         return tuple(
             entry.server
             for entry in scored
@@ -412,7 +423,9 @@ class MCPTrustScoringClient:
         if not self.enabled:
             return tuple(servers)
 
-        scored = await self.score_servers(servers)
+        scored = await self.score_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+            servers
+        )
         ordered = sorted(scored, key=lambda entry: entry.trust.sort_key())
         return tuple(entry.server for entry in ordered)
 
@@ -450,9 +463,9 @@ def _resolve_trust_scoring_config_values(
     resolved = dict(config)
     api_key = resolved.get("api_key")
     if isinstance(api_key, str) and api_key.startswith("os.environ/"):
-        from litellm.secret_managers.main import get_secret  # noqa: PLC0415
+        from litellm.secret_managers.main import get_secret_str  # noqa: PLC0415
 
-        resolved["api_key"] = get_secret(api_key)
+        resolved["api_key"] = get_secret_str(api_key)
     return resolved
 
 
@@ -487,7 +500,9 @@ async def filter_mcp_servers_by_trust(
     active_client = client or get_mcp_trust_scoring_client()
     if active_client is None:
         return tuple(servers)
-    return await active_client.filter_servers_by_trust(servers)
+    return await active_client.filter_servers_by_trust(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+        servers
+    )
 
 
 async def rank_mcp_servers_by_trust(
@@ -498,7 +513,9 @@ async def rank_mcp_servers_by_trust(
     active_client = client or get_mcp_trust_scoring_client()
     if active_client is None:
         return tuple(servers)
-    return await active_client.rank_servers_by_trust(servers)
+    return await active_client.rank_servers_by_trust(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+        servers
+    )
 
 
 async def apply_trust_filter_to_allowed_mcp_servers(
@@ -506,4 +523,6 @@ async def apply_trust_filter_to_allowed_mcp_servers(
     *,
     client: MCPTrustScoringClient | None = None,
 ) -> tuple[MCPServer, ...]:
-    return await filter_mcp_servers_by_trust(servers, client=client)
+    return await filter_mcp_servers_by_trust(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+        servers, client=client
+    )

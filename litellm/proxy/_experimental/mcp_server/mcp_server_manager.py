@@ -13,19 +13,7 @@ import json
 import os
 import re
 import time
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Set,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import anyio
@@ -1647,12 +1635,10 @@ class MCPServerManager:
                 for server_id in allowed_mcp_servers
                 if (server := self.get_mcp_server_by_id(server_id)) is not None
             )
-            allowed_mcp_servers = [
-                server.server_id
-                for server in await apply_trust_filter_to_allowed_mcp_servers(
-                    allowed_server_objects
-                )
-            ]
+            trusted_servers = await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                allowed_server_objects
+            )
+            allowed_mcp_servers = [server.server_id for server in trusted_servers]
 
         verbose_logger.debug("SERVER MANAGER LISTING TOOLS")
 
@@ -3583,246 +3569,6 @@ class MCPServerManager:
 
         return cast(CallToolResult, result)
 
-    @staticmethod
-    def _should_attempt_trust_fallback(error: BaseException) -> bool:
-        if isinstance(
-            error, (BlockedPiiEntityError, GuardrailRaisedException, ValueError)
-        ):
-            return False
-        if isinstance(error, HTTPException):
-            return error.status_code not in {401, 403, 412}
-        return True
-
-    def _server_exposes_tool(
-        self,
-        server: MCPServer,
-        tool_name: str,
-        server_name: str,
-    ) -> bool:
-        if server_name:
-            server_matches = False
-            for identifier in (server.alias, server.server_name, server.name):
-                if identifier and normalize_server_name(
-                    identifier
-                ) == normalize_server_name(server_name):
-                    server_matches = True
-                    break
-            if not server_matches:
-                return False
-
-        for known_prefix in iter_known_server_prefixes(server):
-            candidate_names = (
-                tool_name,
-                add_server_prefix_to_name(tool_name, known_prefix),
-            )
-            for candidate_name in candidate_names:
-                mapped_server = self.tool_name_to_mcp_server_name_mapping.get(
-                    candidate_name
-                )
-                if mapped_server is None:
-                    continue
-                normalized_mapped = normalize_server_name(mapped_server)
-                for identifier in (
-                    server.alias,
-                    server.server_name,
-                    server.name,
-                    known_prefix,
-                ):
-                    if identifier and normalized_mapped == normalize_server_name(
-                        identifier
-                    ):
-                        return True
-        return False
-
-    async def _ordered_mcp_servers_for_tool_call(
-        self,
-        server_name: str,
-        name: str,
-        allowed_mcp_servers: Sequence[MCPServer] | None,
-    ) -> tuple[MCPServer, ...]:
-        primary = self._resolve_mcp_server_for_tool_call(server_name, name)
-
-        from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
-            get_mcp_trust_scoring_client,
-            rank_mcp_servers_by_trust,
-        )
-
-        client = get_mcp_trust_scoring_client()
-        if client is None or not client.enabled or not allowed_mcp_servers:
-            return (primary,)
-
-        allowed_ids = {server.server_id for server in allowed_mcp_servers}
-        if primary.server_id not in allowed_ids:
-            return (primary,)
-
-        candidates = tuple(
-            server
-            for server in allowed_mcp_servers
-            if self._server_exposes_tool(
-                server=server,
-                tool_name=name,
-                server_name=server_name,
-            )
-        )
-        if len(candidates) <= 1:
-            return candidates if candidates else (primary,)
-
-        ranked = await rank_mcp_servers_by_trust(candidates)
-        return ranked if ranked else (primary,)
-
-    async def _call_tool_on_mcp_server(
-        self,
-        *,
-        mcp_server: MCPServer,
-        server_name: str,
-        name: str,
-        arguments: dict[str, Any],
-        user_api_key_auth: UserAPIKeyAuth | None,
-        mcp_auth_header: str | None,
-        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
-        proxy_logging_obj: ProxyLogging | None,
-        oauth2_headers: dict[str, str] | None,
-        raw_headers: dict[str, str] | None,
-        host_progress_callback: Callable | None,
-        start_time: datetime.datetime,
-    ) -> CallToolResult:
-        hook_result: dict[str, Any] = {}
-        if proxy_logging_obj:
-            hook_result = await self.pre_call_tool_check(
-                name=name,
-                arguments=arguments,
-                server_name=server_name,
-                user_api_key_auth=user_api_key_auth,
-                proxy_logging_obj=proxy_logging_obj,
-                server=mcp_server,
-                raw_headers=raw_headers,
-            )
-            if "arguments" in hook_result:
-                arguments = hook_result["arguments"]
-
-        tasks: list = []
-        if proxy_logging_obj:
-            during_hook_task = self._create_during_hook_task(
-                name=name,
-                arguments=arguments,
-                server_name_from_prefix=server_name,
-                user_api_key_auth=user_api_key_auth,
-                proxy_logging_obj=proxy_logging_obj,
-                start_time=start_time,
-            )
-            tasks.append(during_hook_task)
-
-        resolved_oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(
-            mcp_server, oauth2_headers, user_api_key_auth
-        )
-
-        if mcp_server.spec_path:
-            verbose_logger.debug(
-                "Calling OpenAPI tool %s directly via HTTP handler", name
-            )
-            if hook_result.get("extra_headers"):
-                verbose_logger.warning(
-                    "pre_mcp_call hook returned extra_headers for OpenAPI-backed "
-                    "MCP server '%s' — header injection is not supported for "
-                    "OpenAPI servers; headers will be ignored. Use SSE/HTTP "
-                    "transport to enable hook header injection.",
-                    server_name,
-                )
-            tasks.append(
-                asyncio.create_task(
-                    self._call_openapi_tool_handler(mcp_server, name, arguments)
-                )
-            )
-            return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
-
-        return await self._call_regular_mcp_tool(
-            mcp_server=mcp_server,
-            original_tool_name=name,
-            arguments=arguments,
-            tasks=tasks,
-            mcp_auth_header=mcp_auth_header,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            oauth2_headers=resolved_oauth2_headers,
-            raw_headers=raw_headers,
-            proxy_logging_obj=proxy_logging_obj,
-            host_progress_callback=host_progress_callback,
-            hook_extra_headers=hook_result.get("extra_headers"),
-            user_api_key_auth=user_api_key_auth,
-        )
-
-    async def call_tool(
-        self,
-        server_name: str,
-        name: str,
-        arguments: dict[str, Any],
-        user_api_key_auth: UserAPIKeyAuth | None = None,
-        mcp_auth_header: str | None = None,
-        mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
-        proxy_logging_obj: ProxyLogging | None = None,
-        oauth2_headers: dict[str, str] | None = None,
-        raw_headers: dict[str, str] | None = None,
-        host_progress_callback: Callable | None = None,
-        allowed_mcp_servers: Sequence[MCPServer] | None = None,
-    ) -> CallToolResult:
-        """
-        Call a tool with the given name and arguments
-
-        Args:
-            server_name: Server name
-            name: Tool name
-            arguments: Tool arguments
-            user_api_key_auth: User authentication
-            mcp_auth_header: MCP auth header (deprecated)
-            mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
-            proxy_logging_obj: Optional ProxyLogging object for hook integration
-            allowed_mcp_servers: Optional allowed servers for trust-ranked fallback
-
-
-        Returns:
-            CallToolResult from the MCP server
-        """
-        start_time = datetime.datetime.now()
-        ordered_servers = await self._ordered_mcp_servers_for_tool_call(
-            server_name=server_name,
-            name=name,
-            allowed_mcp_servers=allowed_mcp_servers,
-        )
-
-        last_error: BaseException | None = None
-        for attempt_index, mcp_server in enumerate(ordered_servers):
-            effective_server_name = server_name or mcp_server.name
-            try:
-                return await self._call_tool_on_mcp_server(
-                    mcp_server=mcp_server,
-                    server_name=effective_server_name,
-                    name=name,
-                    arguments=arguments,
-                    user_api_key_auth=user_api_key_auth,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    proxy_logging_obj=proxy_logging_obj,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
-                    host_progress_callback=host_progress_callback,
-                    start_time=start_time,
-                )
-            except Exception as exc:
-                if not self._should_attempt_trust_fallback(exc):
-                    raise
-                if attempt_index + 1 >= len(ordered_servers):
-                    raise
-                last_error = exc
-                verbose_logger.debug(
-                    "MCP trust fallback after failure on server %s for tool %s: %s",
-                    mcp_server.name,
-                    name,
-                    exc,
-                )
-
-        if last_error is not None:
-            raise last_error
-        raise ValueError(f"Tool {name} not found")
-
     def _resolve_mcp_server_for_tool_call(
         self,
         server_name: str,
@@ -3911,8 +3657,8 @@ class MCPServerManager:
 
     async def _gather_openapi_tool_tasks(
         self,
-        tasks: list[Any],
-        proxy_logging_obj: ProxyLogging | None,
+        tasks: List[Any],
+        proxy_logging_obj: Optional[ProxyLogging],
     ) -> CallToolResult:
         """Await OpenAPI tool tasks and return the tool call result."""
         try:
@@ -3928,6 +3674,110 @@ class MCPServerManager:
                 f"Guardrail blocked MCP tool call during result check: {str(e)}"
             )
             raise e
+
+    async def call_tool(
+        self,
+        server_name: str,
+        name: str,
+        arguments: Dict[str, Any],
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        proxy_logging_obj: Optional[ProxyLogging] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+        host_progress_callback: Optional[Callable] = None,
+    ) -> CallToolResult:
+        """
+        Call a tool with the given name and arguments
+
+        Args:
+            server_name: Server name
+            name: Tool name
+            arguments: Tool arguments
+            user_api_key_auth: User authentication
+            mcp_auth_header: MCP auth header (deprecated)
+            mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
+            proxy_logging_obj: Optional ProxyLogging object for hook integration
+
+
+        Returns:
+            CallToolResult from the MCP server
+        """
+        start_time = datetime.datetime.now()
+        mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
+
+        #########################################################
+        # Pre MCP Tool Call Hook
+        # Allow validation and modification of tool calls before execution
+        # Using standard pre_call_hook
+        #########################################################
+        hook_result: Dict[str, Any] = {}
+        if proxy_logging_obj:
+            hook_result = await self.pre_call_tool_check(
+                name=name,
+                arguments=arguments,
+                server_name=server_name,
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                server=mcp_server,
+                raw_headers=raw_headers,
+            )
+            if "arguments" in hook_result:
+                arguments = hook_result["arguments"]
+
+        # Prepare tasks for during hooks
+        tasks = []
+        if proxy_logging_obj:
+            during_hook_task = self._create_during_hook_task(
+                name=name,
+                arguments=arguments,
+                server_name_from_prefix=server_name,
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                start_time=start_time,
+            )
+            tasks.append(during_hook_task)
+
+        oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(
+            mcp_server, oauth2_headers, user_api_key_auth
+        )
+
+        # For OpenAPI servers, call the tool handler directly instead of via MCP client
+        if mcp_server.spec_path:
+            verbose_logger.debug(
+                "Calling OpenAPI tool %s directly via HTTP handler", name
+            )
+            if hook_result.get("extra_headers"):
+                verbose_logger.warning(
+                    "pre_mcp_call hook returned extra_headers for OpenAPI-backed "
+                    "MCP server '%s' — header injection is not supported for "
+                    "OpenAPI servers; headers will be ignored. Use SSE/HTTP "
+                    "transport to enable hook header injection.",
+                    server_name,
+                )
+            tasks.append(
+                asyncio.create_task(
+                    self._call_openapi_tool_handler(mcp_server, name, arguments)
+                )
+            )
+        else:
+            return await self._call_regular_mcp_tool(
+                mcp_server=mcp_server,
+                original_tool_name=name,
+                arguments=arguments,
+                tasks=tasks,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                proxy_logging_obj=proxy_logging_obj,
+                host_progress_callback=host_progress_callback,
+                hook_extra_headers=hook_result.get("extra_headers"),
+                user_api_key_auth=user_api_key_auth,
+            )
+
+        return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
 
     #########################################################
     # End of Methods that call the upstream MCP servers

@@ -383,7 +383,9 @@ if MCP_AVAILABLE:
         )
 
         allowed_mcp_servers = list(
-            await apply_trust_filter_to_allowed_mcp_servers(allowed_mcp_servers)
+            await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                allowed_mcp_servers
+            )
         )
 
         return allowed_mcp_servers, canonical_server_id
@@ -477,7 +479,9 @@ if MCP_AVAILABLE:
         )
 
         return list(
-            await apply_trust_filter_to_allowed_mcp_servers(allowed_mcp_servers)
+            await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                allowed_mcp_servers
+            )
         )
 
     async def _list_tools_for_single_server(
@@ -666,12 +670,10 @@ if MCP_AVAILABLE:
                     )
                     is not None
                 ]
-                allowed_server_ids = [
-                    server.server_id
-                    for server in await apply_trust_filter_to_allowed_mcp_servers(
-                        allowed_mcp_server_objects
-                    )
-                ]
+                trusted_servers = await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                    allowed_mcp_server_objects
+                )
+                allowed_server_ids = [server.server_id for server in trusted_servers]
 
             list_tools_result = []
             error_message = None

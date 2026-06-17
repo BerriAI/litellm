@@ -939,7 +939,7 @@ async def proxy_startup_event(app: FastAPI):
         )
         verbose_proxy_logger.debug("After semantic tool filter initialization")
         ProxyStartupEvent._initialize_mcp_trust_scoring(
-            litellm_settings=_litellm_settings,
+            litellm_settings=_litellm_settings,  # any-ok: proxy config state is untyped (Any), validated downstream by MCPTrustScoringConfig
         )
     except Exception as e:
         verbose_proxy_logger.error(
@@ -7608,7 +7608,9 @@ class ProxyStartupEvent:
         )
 
         initialize_mcp_trust_scoring_from_config(
-            litellm_settings.get("mcp_trust_scoring")
+            litellm_settings.get(  # any-ok: proxy config state is untyped (Any), validated downstream by MCPTrustScoringConfig
+                "mcp_trust_scoring"
+            )
         )
 
     @classmethod

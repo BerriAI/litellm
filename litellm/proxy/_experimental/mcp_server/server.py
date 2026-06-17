@@ -1717,7 +1717,9 @@ if MCP_AVAILABLE:
             )
 
             allowed_mcp_servers = list(
-                await apply_trust_filter_to_allowed_mcp_servers(allowed_mcp_servers)
+                await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                    allowed_mcp_servers
+                )
             )
 
             # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
@@ -2747,7 +2749,6 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
                 host_progress_callback=host_progress_callback,
-                allowed_mcp_servers=allowed_mcp_servers,
             )
 
         # Fall back to local tool registry with original name (legacy support)
@@ -2816,7 +2817,9 @@ if MCP_AVAILABLE:
             )
 
             allowed_mcp_servers = list(
-                await apply_trust_filter_to_allowed_mcp_servers(allowed_mcp_servers)
+                await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                    allowed_mcp_servers
+                )
             )
             if not allowed_mcp_servers:
                 raise HTTPException(
@@ -3004,7 +3007,6 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
         host_progress_callback: Optional[Callable] = None,
-        allowed_mcp_servers: list[MCPServer] | None = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
@@ -3021,7 +3023,6 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
-            allowed_mcp_servers=allowed_mcp_servers,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
