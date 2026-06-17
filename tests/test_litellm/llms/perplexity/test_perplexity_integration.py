@@ -9,7 +9,6 @@ import json
 import math
 import os
 import sys
-from unittest.mock import Mock, patch
 
 import pytest
 
