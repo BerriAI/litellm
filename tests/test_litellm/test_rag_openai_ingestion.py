@@ -1,5 +1,4 @@
 import asyncio
-from typing import List, Optional, Tuple
 from unittest.mock import AsyncMock, patch
 
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
@@ -75,13 +74,13 @@ async def _run_openai_existing_file_id_requires_vector_store_id_test():
 class UnsupportedExistingFileIngestion(BaseRAGIngestion):
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
-        existing_file_id: Optional[str] = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
+        existing_file_id: str | None = None,
+    ) -> tuple[str | None, str | None]:
         raise AssertionError("store should not be called for unsupported file_id")
 
 

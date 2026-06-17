@@ -282,7 +282,7 @@ class BaseRAGIngestion(ABC):
         content_type: Optional[str],
         chunks: List[str],
         embeddings: Optional[List[List[float]]],
-        existing_file_id: Optional[str] = None,
+        existing_file_id: str | None = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Store content in vector store.
