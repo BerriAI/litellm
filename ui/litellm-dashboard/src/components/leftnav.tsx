@@ -1,6 +1,7 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { usePluginMode, type PluginMode } from "@/contexts/PluginModeContext";
 import {
   ApiOutlined,
   ApartmentOutlined,
@@ -11,26 +12,33 @@ import {
   BgColorsOutlined,
   BlockOutlined,
   BookOutlined,
+  ClockCircleOutlined,
   CreditCardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
   ExportOutlined,
   FileTextOutlined,
   FolderOutlined,
+  InboxOutlined,
   KeyOutlined,
   LineChartOutlined,
+  LockOutlined,
+  MessageOutlined,
   PlayCircleOutlined,
+  PlusSquareOutlined,
   RobotOutlined,
   SafetyOutlined,
   SearchOutlined,
   SettingOutlined,
+  SwapOutlined,
   TagsOutlined,
   TeamOutlined,
+  ThunderboltOutlined,
   ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
-import { ConfigProvider, Layout, Menu } from "antd";
+import { ConfigProvider, Layout, Menu, Select } from "antd";
 import { useMemo } from "react";
 import {
   all_admin_roles,
@@ -406,6 +414,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
+  const { mode, setMode, setAgentPlatformPath } = usePluginMode();
 
   // Check if user is an org_admin
   const isOrgAdmin = useMemo(() => {
@@ -596,6 +605,41 @@ const Sidebar: React.FC<SidebarProps> = ({
     return items;
   };
 
+  // Build ACP menu items (no role filtering needed — simpler)
+  const buildAcpMenuItems = (): MenuProps["items"] => {
+    const items: MenuProps["items"] = [];
+    agentControlPlaneMenuGroups.forEach((group) => {
+      items.push({
+        type: "group",
+        label: collapsed ? null : (
+          <span
+            style={{
+              fontSize: "10px",
+              fontWeight: 600,
+              color: "#6b7280",
+              letterSpacing: "0.05em",
+              padding: "12px 0 4px 12px",
+              display: "block",
+              marginBottom: "2px",
+            }}
+          >
+            {group.groupLabel}
+          </span>
+        ),
+        children: group.items.map((item) => ({
+          key: item.key,
+          icon: item.icon,
+          label: item.label,
+          onClick: () => {
+            const path = acpPagePaths[item.page] ?? "/sessions";
+            setAgentPlatformPath(path);
+          },
+        })),
+      });
+    });
+    return items;
+  };
+
   // Find selected menu key
   const findMenuItemKey = (page: string): string => {
     for (const group of menuGroups) {
@@ -612,6 +656,11 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const selectedMenuKey = findMenuItemKey(defaultSelectedKey);
 
+  const modeOptions = [
+    { value: "ai-gateway" as PluginMode, label: "AI Gateway" },
+    { value: "litellm-platform-plugin" as PluginMode, label: "Agent Control Plane" },
+  ];
+
   return (
     <Layout>
       <Sider
@@ -626,6 +675,44 @@ const Sidebar: React.FC<SidebarProps> = ({
           position: "relative",
         }}
       >
+        {/* Product/Mode Switcher */}
+        <div
+          style={{
+            padding: collapsed ? "8px 4px" : "10px 12px 6px 12px",
+            borderBottom: "1px solid #f0f0f0",
+            marginBottom: "4px",
+          }}
+        >
+          {collapsed ? (
+            <div
+              title={mode === "ai-gateway" ? "AI Gateway" : "Agent Control Plane"}
+              style={{
+                display: "flex",
+                justifyContent: "center",
+                cursor: "pointer",
+                padding: "4px",
+                borderRadius: "6px",
+                background: "#f5f5f5",
+              }}
+              onClick={() => setMode(mode === "ai-gateway" ? "litellm-platform-plugin" : "ai-gateway")}
+            >
+              <SwapOutlined style={{ fontSize: 16, color: "#6b7280" }} />
+            </div>
+          ) : (
+            <Select
+              value={mode}
+              onChange={(val) => setMode(val as PluginMode)}
+              options={modeOptions}
+              size="small"
+              style={{ width: "100%" }}
+              suffixIcon={<SwapOutlined />}
+              styles={{
+                popup: { root: { minWidth: 180 } },
+              }}
+            />
+          )}
+        </div>
+
         <ConfigProvider
           theme={{
             components: {
@@ -643,22 +730,41 @@ const Sidebar: React.FC<SidebarProps> = ({
             },
           }}
         >
-          <Menu
-            mode="inline"
-            selectedKeys={[selectedMenuKey]}
-            defaultOpenKeys={[]}
-            inlineCollapsed={collapsed}
-            className="custom-sidebar-menu"
-            style={{
-              borderRight: 0,
-              backgroundColor: "transparent",
-              fontSize: "13px",
-              paddingTop: "4px",
-            }}
-            items={buildMenuItems()}
-          />
+          {mode === "ai-gateway" ? (
+            <Menu
+              mode="inline"
+              selectedKeys={[selectedMenuKey]}
+              defaultOpenKeys={[]}
+              inlineCollapsed={collapsed}
+              className="custom-sidebar-menu"
+              style={{
+                borderRight: 0,
+                backgroundColor: "transparent",
+                fontSize: "13px",
+                paddingTop: "4px",
+              }}
+              items={buildMenuItems()}
+            />
+          ) : (
+            <Menu
+              mode="inline"
+              selectedKeys={[]}
+              defaultOpenKeys={["AGENT CONTROL PLANE", "INFRASTRUCTURE"]}
+              inlineCollapsed={collapsed}
+              className="custom-sidebar-menu"
+              style={{
+                borderRight: 0,
+                backgroundColor: "transparent",
+                fontSize: "13px",
+                paddingTop: "4px",
+              }}
+              items={buildAcpMenuItems()}
+            />
+          )}
         </ConfigProvider>
-        {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
+        {isAdminRole(userRole) && !collapsed && mode === "ai-gateway" && (
+          <UsageIndicator accessToken={accessToken} width={220} />
+        )}
       </Sider>
     </Layout>
   );
@@ -668,3 +774,98 @@ export default Sidebar;
 
 // Also export menuGroups for advanced use cases
 export { menuGroups };
+
+// Agent Control Plane nav groups
+export const agentControlPlaneMenuGroups: MenuGroup[] = [
+  {
+    groupLabel: "AGENT CONTROL PLANE",
+    items: [
+      {
+        key: "acp-sessions",
+        page: "acp-sessions",
+        label: "Sessions",
+        icon: <MessageOutlined />,
+      },
+      {
+        key: "acp-agents",
+        page: "acp-agents",
+        label: "Agents",
+        icon: <RobotOutlined />,
+      },
+      {
+        key: "acp-routines",
+        page: "acp-routines",
+        label: "Routines",
+        icon: <ClockCircleOutlined />,
+      },
+      {
+        key: "acp-inbox",
+        page: "acp-inbox",
+        label: "Inbox",
+        icon: <InboxOutlined />,
+      },
+      {
+        key: "acp-skills",
+        page: "acp-skills",
+        label: "Skills",
+        icon: <ThunderboltOutlined />,
+      },
+      {
+        key: "acp-rules",
+        page: "acp-rules",
+        label: "Rules",
+        icon: <SafetyOutlined />,
+      },
+      {
+        key: "acp-vault",
+        page: "acp-vault",
+        label: "Vault",
+        icon: <LockOutlined />,
+      },
+      {
+        key: "acp-integrations",
+        page: "acp-integrations",
+        label: "Integrations",
+        icon: <PlusSquareOutlined />,
+      },
+    ],
+  },
+  {
+    groupLabel: "INFRASTRUCTURE",
+    items: [
+      {
+        key: "acp-runtimes",
+        page: "acp-runtimes",
+        label: "Agent Runtimes",
+        icon: <ToolOutlined />,
+      },
+      {
+        key: "acp-mcp-servers",
+        page: "acp-mcp-servers",
+        label: "MCP Servers",
+        icon: <ApiOutlined />,
+      },
+      {
+        key: "acp-providers",
+        page: "acp-providers",
+        label: "LLM Providers",
+        icon: <DatabaseOutlined />,
+      },
+    ],
+  },
+];
+
+// Page to agent platform path mapping
+const acpPagePaths: Record<string, string> = {
+  "acp-sessions": "/sessions",
+  "acp-agents": "/agents",
+  "acp-routines": "/routines",
+  "acp-inbox": "/inbox",
+  "acp-skills": "/skills",
+  "acp-rules": "/rules",
+  "acp-vault": "/vault",
+  "acp-integrations": "/integrations",
+  "acp-runtimes": "/runtimes",
+  "acp-mcp-servers": "/mcp-servers",
+  "acp-providers": "/providers",
+};

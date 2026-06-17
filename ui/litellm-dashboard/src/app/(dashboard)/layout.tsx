@@ -9,6 +9,43 @@ import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
+import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
+
+function AgentControlPlaneView() {
+  const { agentPlatformUrl, agentPlatformPath } = usePluginMode();
+  const { accessToken } = useAuth();
+
+  if (!agentPlatformUrl) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-gray-500">
+        <div className="text-center">
+          <p className="text-lg font-medium mb-2">Agent Control Plane</p>
+          <p className="text-sm">Configure agent platform URL in settings</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Pass the user's litellm virtual key — LAP validates it against litellm's /key/info.
+  // This propagates litellm's user hierarchy (role, team, budget) into the agent control plane.
+  const params = accessToken ? `?token=${encodeURIComponent(accessToken)}` : "";
+  const iframeSrc = `${agentPlatformUrl}${agentPlatformPath}${params}`;
+
+  return (
+    <iframe
+      src={iframeSrc}
+      style={{
+        width: "100%",
+        height: "100%",
+        border: "none",
+        flex: 1,
+        minHeight: "calc(100vh - 56px)",
+      }}
+      title="Agent Control Plane"
+      allow="clipboard-read; clipboard-write"
+    />
+  );
+}
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -16,6 +53,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { accessToken } = useAuth();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const { mode } = usePluginMode();
 
   const page = legacyKeyForPathname(pathname) || searchParams.get("page") || "api-keys";
 
@@ -37,7 +75,13 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <div className="mt-2">
           <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
         </div>
-        <main className="flex-1">{children}</main>
+        {mode === "litellm-platform-plugin" ? (
+          <div className="flex-1 flex">
+            <AgentControlPlaneView />
+          </div>
+        ) : (
+          <main className="flex-1">{children}</main>
+        )}
       </div>
     </div>
   );
@@ -62,7 +106,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <LayoutContent>{children}</LayoutContent>
+      <PluginModeProvider>
+        <LayoutContent>{children}</LayoutContent>
+      </PluginModeProvider>
     </Suspense>
   );
 }
