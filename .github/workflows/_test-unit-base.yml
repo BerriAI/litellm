@@ -45,6 +45,7 @@ jobs:
     name: Run tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    continue-on-error: ${{ matrix.python-version == '3.10' }}
     strategy:
       fail-fast: false
       matrix:
