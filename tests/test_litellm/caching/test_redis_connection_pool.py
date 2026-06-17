@@ -1,9 +1,3 @@
-"""
-Regression tests for Redis connection pool leak fixes (RC1-RC5).
-
-Tests are pure unit tests — no Redis server required.
-"""
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
