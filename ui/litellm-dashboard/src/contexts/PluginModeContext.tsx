@@ -71,24 +71,21 @@ export function PluginModeProvider({ children, accessToken }: PluginModeProvider
       .catch(() => {});
   }, [accessToken]);
 
-  // If the persisted mode is no longer registered, fall back to ai-gateway
-  useEffect(() => {
-    if (mode !== "ai-gateway" && plugins.length > 0) {
-      const stillRegistered = plugins.some((p) => p.name === mode);
-      if (!stillRegistered) setModeState("ai-gateway");
-    }
-  }, [plugins, mode]);
+  // If the persisted mode is no longer registered, fall back to ai-gateway.
+  // Use a derived value rather than setState-in-effect to avoid cascading renders.
+  const effectiveMode =
+    mode !== "ai-gateway" && plugins.length > 0 && !plugins.some((p) => p.name === mode) ? "ai-gateway" : mode;
 
   const setMode = (m: PluginMode) => {
     setModeState(m);
     localStorage.setItem(STORAGE_KEY, m);
   };
 
-  const activePlugin = plugins.find((p) => p.name === mode) ?? null;
+  const activePlugin = plugins.find((p) => p.name === effectiveMode) ?? null;
 
   return (
     <PluginModeContext.Provider
-      value={{ mode, setMode, plugins, activePlugin, agentPlatformPath, setAgentPlatformPath }}
+      value={{ mode: effectiveMode, setMode, plugins, activePlugin, agentPlatformPath, setAgentPlatformPath }}
     >
       {children}
     </PluginModeContext.Provider>

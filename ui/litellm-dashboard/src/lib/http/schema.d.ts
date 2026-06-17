@@ -526,7 +526,8 @@ export interface paths {
          * List Plugins
          * @description Return registered plugins for authenticated UI callers.
          *
-         *     plugin_key is only returned to callers with a valid litellm token.
+         *     plugin_key is only returned to proxy admins — not to regular users —
+         *     so plugin credentials cannot be extracted by non-admin callers.
          */
         get: operations["list_plugins_api_plugins_get"];
         put?: never;
@@ -8997,36 +8998,57 @@ export interface paths {
         /**
          * Plugin Proxy
          * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
          */
         get: operations["plugin_proxy_plugin_proxy__plugin_name___path__get"];
         /**
          * Plugin Proxy
          * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
          */
         put: operations["plugin_proxy_plugin_proxy__plugin_name___path__put"];
         /**
          * Plugin Proxy
          * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
          */
         post: operations["plugin_proxy_plugin_proxy__plugin_name___path__post"];
         /**
          * Plugin Proxy
          * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
          */
         delete: operations["plugin_proxy_plugin_proxy__plugin_name___path__delete"];
         /**
          * Plugin Proxy
          * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
          */
         options: operations["plugin_proxy_plugin_proxy__plugin_name___path__options"];
         /**
          * Plugin Proxy
          * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
          */
         head: operations["plugin_proxy_plugin_proxy__plugin_name___path__head"];
         /**
          * Plugin Proxy
          * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
          */
         patch: operations["plugin_proxy_plugin_proxy__plugin_name___path__patch"];
         trace?: never;
