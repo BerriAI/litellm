@@ -122,7 +122,9 @@ class TinyfishSearchConfig(BaseSearchConfig):
 
         result_data: dict[str, object] = dict(request_data)
 
-        raw_supported: object = self.get_supported_perplexity_optional_params()  # any-ok: base class returns bare set
+        raw_supported: object = (
+            self.get_supported_perplexity_optional_params()
+        )  # any-ok: base class returns bare set
         supported_perplexity = _StrFrozenSet.validate_python(raw_supported)
         for param, value in optional_params.items():
             if param not in supported_perplexity and param not in result_data:
