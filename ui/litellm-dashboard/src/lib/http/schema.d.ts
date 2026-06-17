@@ -538,6 +538,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plugins/auth-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plugin Auth Token
+         * @description Return an encrypted copy of the caller's token for plugin iframe auth.
+         *
+         *     The token is encrypted with a key derived from LITELLM_SALT_KEY.
+         *     The plugin decrypts it with the same shared key — the raw litellm
+         *     credential never appears in plaintext outside the proxy process.
+         *
+         *     Requires LITELLM_SALT_KEY to be set; returns 503 otherwise.
+         */
+        get: operations["plugin_auth_token_api_plugins_auth_token_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/apply_guardrail": {
         parameters: {
             query?: never;
