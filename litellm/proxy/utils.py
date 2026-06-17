@@ -3431,6 +3431,7 @@ class PrismaClient:
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all" and team_id is not None:
                     response = await VerificationTokenRepository(self).table.find_many(
+                        take=limit,
                         where={"team_id": team_id},
                         include={"litellm_budget_table": True},
                     )
