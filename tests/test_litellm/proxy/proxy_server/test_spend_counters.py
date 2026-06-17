@@ -26,6 +26,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm.proxy.proxy_server as ps
+from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCache
 
 from .conftest import normalize
 
@@ -816,3 +818,53 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
     )
 
     assert result is None
+
+
+def test_attach_shared_spend_counter_redis_adopts_router_redis():
+    """Multi-replica budget enforcement (LIT-3772): when Redis is configured
+    only on the router (router_settings), the in-memory-only spend counter must
+    adopt the router's Redis so spend is shared across processes."""
+    spend_counter_cache = DualCache()
+    assert spend_counter_cache.redis_cache is None
+
+    router_redis = MagicMock(spec=RedisCache)
+    router = MagicMock()
+    router.cache = DualCache()
+    router.cache.redis_cache = router_redis
+
+    ps.attach_shared_spend_counter_redis(
+        spend_counter_cache=spend_counter_cache, router=router
+    )
+
+    assert spend_counter_cache.redis_cache is router_redis
+
+
+def test_attach_shared_spend_counter_redis_preserves_existing_backend():
+    """A Redis backend already wired from litellm_settings.cache must not be
+    clobbered by the router adoption."""
+    existing = MagicMock(spec=RedisCache)
+    spend_counter_cache = DualCache()
+    spend_counter_cache.redis_cache = existing
+
+    router = MagicMock()
+    router.cache = DualCache()
+    router.cache.redis_cache = MagicMock(spec=RedisCache)
+
+    ps.attach_shared_spend_counter_redis(
+        spend_counter_cache=spend_counter_cache, router=router
+    )
+
+    assert spend_counter_cache.redis_cache is existing
+
+
+def test_attach_shared_spend_counter_redis_noop_without_any_redis():
+    spend_counter_cache = DualCache()
+    router = MagicMock()
+    router.cache = DualCache()
+    router.cache.redis_cache = None
+
+    ps.attach_shared_spend_counter_redis(
+        spend_counter_cache=spend_counter_cache, router=router
+    )
+
+    assert spend_counter_cache.redis_cache is None

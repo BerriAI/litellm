@@ -2064,6 +2064,34 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     return fallback_spend
 
 
+def attach_shared_spend_counter_redis(
+    spend_counter_cache: DualCache,
+    router: Optional[Router],
+) -> None:
+    """
+    Back the cross-process spend counter with Redis when one is available.
+
+    Budget enforcement reads and writes spend_counter_cache. If it stays
+    in-memory each worker/replica enforces budgets against its own counter
+    while the database aggregates spend from all of them, so keys exceed their
+    limit cluster-wide. litellm_settings.cache already wires Redis here, but a
+    deployment that configures Redis only via router_settings would otherwise
+    leave the counter in-memory; adopt the router's Redis in that case.
+    attach_redis_cache is a no-op when a backend was already wired.
+    """
+    if router is not None and router.cache.redis_cache is not None:
+        spend_counter_cache.attach_redis_cache(router.cache.redis_cache)
+    if spend_counter_cache.redis_cache is None:
+        verbose_proxy_logger.warning(
+            "spend_counter_cache has no Redis backend: virtual-key, team, and "
+            "user budget enforcement is per-process (in-memory). In multi-worker "
+            "or multi-replica deployments this lets budgets be exceeded because "
+            "each process tracks spend independently. Configure Redis via "
+            "litellm_settings.cache or router_settings to enable cross-process "
+            "budget enforcement."
+        )
+
+
 async def increment_spend_counters(
     token: Optional[str],
     team_id: Optional[str],
@@ -4599,6 +4627,10 @@ class ProxyConfig:
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
             router._update_redis_cache(cache=redis_usage_cache)
+
+        attach_shared_spend_counter_redis(
+            spend_counter_cache=spend_counter_cache, router=router
+        )
 
         # Guardrail settings
         guardrails_v2: Optional[List[Dict]] = None
