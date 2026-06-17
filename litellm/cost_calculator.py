@@ -94,6 +94,7 @@ from litellm.types.utils import (
     LlmProviders,
     LlmProvidersSet,
     ModelInfo,
+    ServiceTier,
     StandardBuiltInToolsParams,
     TranscriptionUsageDurationObject,
     TranscriptionUsageTokensObject,
@@ -614,7 +615,9 @@ def cost_per_token(
                 service_tier=service_tier,
             )
     elif custom_llm_provider == "anthropic":
-        return anthropic_cost_per_token(model=model, usage=usage_block)
+        return anthropic_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "bedrock":
         return bedrock_cost_per_token(
             model=model, usage=usage_block, service_tier=service_tier
@@ -1223,6 +1226,12 @@ def completion_cost(
         # Extract service_tier from optional_params if not provided directly
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
+
+        # "auto" is a routing preference, not a billable tier: the provider picks
+        # the tier and reports the one actually served on the response/usage, so
+        # defer to that instead of pricing the request-level "auto" as standard
+        if service_tier is not None and service_tier.lower() == ServiceTier.AUTO.value:
+            service_tier = None
 
         # Extract service_tier from completion_response if not provided
         if service_tier is None and completion_response is not None:

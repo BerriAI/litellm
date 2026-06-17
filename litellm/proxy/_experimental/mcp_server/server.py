@@ -1036,7 +1036,14 @@ if MCP_AVAILABLE:
         allowed_mcp_servers: List[MCPServer],
     ) -> List[MCPServer]:
         """
-        Get the filtered MCP servers from the MCP server names
+        Get the filtered MCP servers from the MCP server names.
+
+        Fails closed when ``mcp_servers`` is explicitly provided (path- or
+        header-derived) but none of the names resolve to a server alias or
+        access group the caller can access. The previous behavior returned
+        the full ``allowed_mcp_servers`` set, which silently widened scope
+        when a client targeted ``/mcp/<unknown>/`` and made URL/header
+        namespacing appear to work when it did not.
         """
 
         filtered_server: dict[str, MCPServer] = {}
@@ -1075,6 +1082,17 @@ if MCP_AVAILABLE:
 
         if filtered_server:
             return list(filtered_server.values())
+
+        if mcp_servers is not None:
+            # Caller asked for a specific scope but nothing resolved. Fail
+            # closed so URL/header namespacing cannot silently fall back to
+            # the caller's full allowed-server set.
+            verbose_logger.debug(
+                "MCP scope filter resolved to no servers for requested names %s; "
+                "returning empty list (fail-closed).",
+                mcp_servers,
+            )
+            return []
 
         return allowed_mcp_servers
 

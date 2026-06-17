@@ -523,7 +523,6 @@ from unittest.mock import MagicMock, patch
 
 from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
 
-
 # Clear the cache at module load to ensure clean state
 _select_tokenizer_helper.cache_clear()
 
@@ -1010,3 +1009,64 @@ def test_token_counter_with_thinking_content():
     assert (
         tokens_no_thinking < 15
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
+
+
+def test_token_counter_with_tool_reference_block():
+    """
+    Regression test: a message containing an Anthropic tool-search
+    `tool_reference` content block must NOT raise.
+
+    Before the fix, token_counter raised
+    `Invalid content item type: tool_reference`. On the streaming
+    anthropic_messages proxy path this nulled response_cost and caused the
+    SpendLogs row to be dropped, silently undercounting cost. token_counter
+    must instead count the referenced tool name and return a positive count.
+    """
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me look up the right tool."},
+                {"type": "tool_reference", "tool_name": "search_knowledge_base"},
+            ],
+        }
+    ]
+
+    # Must not raise, and must produce a positive token count.
+    tokens = token_counter_new(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
+    )
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+
+    # A tool_reference with no/empty tool_name must also be handled gracefully.
+    messages_empty = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_reference", "tool_name": ""}],
+        }
+    ]
+    tokens_empty = token_counter_new(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages_empty
+    )
+    assert tokens_empty >= 0
+
+
+def test_count_content_list_rejects_unknown_type():
+    """
+    An unrecognized content block type must raise, and the error message must
+    enumerate the supported types (including `tool_reference`). This pins the
+    catch-all contract so a future block type isn't silently dropped.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    with pytest.raises(ValueError) as exc_info:
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "totally_unknown_block"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+
+    message = str(exc_info.value)
+    assert "Invalid content item type: totally_unknown_block" in message
+    assert "tool_reference" in message

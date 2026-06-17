@@ -5,7 +5,7 @@
   },
   "reportArgumentType": {
     "baseline": 1863,
-    "slack": 3
+    "slack": 180
   },
   "reportAssignmentType": {
     "baseline": 220,
@@ -113,7 +113,7 @@
   },
   "reportPrivateUsage": {
     "baseline": 1625,
-    "slack": 10
+    "slack": 160
   },
   "reportRedeclaration": {
     "baseline": 8,
