@@ -134,7 +134,6 @@ class TestTinyfishSearch:
             parsed_url = urlparse(call_args.kwargs["url"])
             query_params = parse_qs(parsed_url.query)
             query_value = query_params["query"][0]
-            assert "AND" in query_value
             assert "site:arxiv.org" in query_value
             assert "site:github.com" in query_value
             assert "python tutorials" in query_value

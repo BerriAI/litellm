@@ -134,19 +134,16 @@ class TestTransformSearchRequest:
         )
         assert result["_tinyfish_params"]["max_results"] == 5
 
-    def test_domain_filter_uses_explicit_and(self):
+    def test_domain_filter_appends_site_operators(self):
         config = TinyfishSearchConfig()
         result = config.transform_search_request(
             query="python tutorials",
             optional_params={"search_domain_filter": ["arxiv.org", "github.com"]},
         )
         query_value = result["_tinyfish_params"]["query"]
-        assert "AND" in query_value
         assert "site:arxiv.org" in query_value
         assert "site:github.com" in query_value
-        assert (
-            "(python tutorials) AND (site:arxiv.org OR site:github.com)" == query_value
-        )
+        assert "(python tutorials) (site:arxiv.org OR site:github.com)" == query_value
 
     def test_domain_filter_empty_list_ignored(self):
         config = TinyfishSearchConfig()
@@ -335,8 +332,8 @@ class TestTransformSearchResponse:
 class TestAppendDomainFilters:
     def test_single_domain(self):
         result = _append_domain_filters("test", ["example.com"])
-        assert result == "(test) AND (site:example.com)"
+        assert result == "(test) (site:example.com)"
 
     def test_multiple_domains(self):
         result = _append_domain_filters("query", ["a.com", "b.com", "c.com"])
-        assert result == "(query) AND (site:a.com OR site:b.com OR site:c.com)"
+        assert result == "(query) (site:a.com OR site:b.com OR site:c.com)"

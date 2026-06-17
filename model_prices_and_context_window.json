@@ -13877,11 +13877,11 @@
         }
     },
     "tinyfish/search": {
-        "input_cost_per_query": 0.005,
+        "input_cost_per_query": 0.0,
         "litellm_provider": "tinyfish",
         "mode": "search",
         "metadata": {
-            "notes": "TinyFish web search. Pricing: $5/1k searches."
+            "notes": "TinyFish Search API"
         }
     },
     "elevenlabs/scribe_v1": {
