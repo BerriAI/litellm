@@ -2152,6 +2152,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     master_key: Optional[str] = Field(
         None, description="require a key for all calls to proxy"
     )
+    allow_cli_sso_verification_uri_complete: bool | None = Field(
+        None,
+        description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
+    )
     database_url: Optional[str] = Field(
         None,
         description="connect to a postgres db - needed for generating temporary keys + tracking spend / key",
