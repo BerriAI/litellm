@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useState, useRef, useEffect } from "react";
 import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -10,10 +10,47 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
+import { createApiClient } from "@/lib/http/client";
+import { getProxyBaseUrl } from "@/components/networking";
+
+const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
+
+// Wrapper so PluginModeProvider receives the live accessToken from auth context,
+// which means plugin data refreshes on login/logout without stale cookie reads.
+function PluginModeProviderWithAuth({ children }: { children: React.ReactNode }) {
+  const { accessToken } = useAuth();
+  return <PluginModeProvider accessToken={accessToken}>{children}</PluginModeProvider>;
+}
 
 function AgentControlPlaneView() {
-  const { agentPlatformUrl, agentPlatformPath } = usePluginMode();
+  const { activePlugin, agentPlatformPath } = usePluginMode();
+  const agentPlatformUrl = activePlugin?.url ?? "";
   const { accessToken } = useAuth();
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [encryptedToken, setEncryptedToken] = useState<string | null>(null);
+
+  // Fetch an encrypted copy of the token from the proxy.
+  // The proxy encrypts it with LITELLM_SALT_KEY; the plugin decrypts with the
+  // same key.  The raw litellm credential never leaves the proxy in plaintext.
+  useEffect(() => {
+    if (!accessToken) return;
+    pluginApiClient
+      .get("/api/plugins/auth-token", { accessToken })
+      .then((data: { encrypted_token?: string }) => setEncryptedToken(data?.encrypted_token ?? null))
+      .catch(() => {});
+  }, [accessToken]);
+
+  // Deliver the encrypted token to the iframe via postMessage.
+  // targetOrigin is the configured plugin URL — no other origin receives it.
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || !encryptedToken || !agentPlatformUrl) return;
+    const send = () => {
+      iframe.contentWindow?.postMessage({ type: "litellm-auth", encrypted_token: encryptedToken }, agentPlatformUrl);
+    };
+    iframe.addEventListener("load", send);
+    return () => iframe.removeEventListener("load", send);
+  }, [encryptedToken, agentPlatformUrl]);
 
   if (!agentPlatformUrl) {
     return (
@@ -26,14 +63,10 @@ function AgentControlPlaneView() {
     );
   }
 
-  // Pass the user's litellm virtual key — LAP validates it against litellm's /key/info.
-  // This propagates litellm's user hierarchy (role, team, budget) into the agent control plane.
-  const params = accessToken ? `?token=${encodeURIComponent(accessToken)}` : "";
-  const iframeSrc = `${agentPlatformUrl}${agentPlatformPath}${params}`;
-
   return (
     <iframe
-      src={iframeSrc}
+      ref={iframeRef}
+      src={`${agentPlatformUrl}${agentPlatformPath}`}
       style={{
         width: "100%",
         height: "100%",
@@ -75,7 +108,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <div className="mt-2">
           <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
         </div>
-        {mode === "litellm-platform-plugin" ? (
+        {mode !== "ai-gateway" ? (
           <div className="flex-1 flex">
             <AgentControlPlaneView />
           </div>
@@ -106,9 +139,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <PluginModeProvider>
+      <PluginModeProviderWithAuth>
         <LayoutContent>{children}</LayoutContent>
-      </PluginModeProvider>
+      </PluginModeProviderWithAuth>
     </Suspense>
   );
 }
