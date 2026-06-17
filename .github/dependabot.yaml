@@ -17,6 +17,12 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    ignore:
+      # langchain fix for GHSA-gr75-jv2w-4656 requires >=1.3.9, which needs
+      # langgraph>=1.2.4,<1.3.0 — conflicts with pinned langgraph==1.0.10.
+      # Remove when langgraph family can be bumped as a coordinated upgrade.
+      - dependency-name: "langchain"
+        versions: [">=1.3.9"]
 
   - package-ecosystem: "npm"
     directory: "/"
