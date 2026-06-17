@@ -5,14 +5,20 @@ date: 2026-06-16T07:30:00
 authors:
   - krrish
   - ishaan-alt
-description: "Join the LiteLLM June townhall on Thursday, 18 June at 7:30 AM PST to learn about LiteLLM's product updates and roadmap."
+description: "Join the LiteLLM June townhall on Thursday, 25 June at 7:30 AM PST to learn about LiteLLM's product updates and roadmap."
 tags: [announcement, townhall]
 hide_table_of_contents: true
 ---
 
 import Image from '@theme/IdealImage';
 
-We are hosting our June townhall on **Thursday, 18 June at 7:30 AM PST**.
+:::note Rescheduled
+
+The June townhall has been moved from Thursday, 18 June to **Thursday, 25 June at 7:30 AM PST**. Thanks for your patience!
+
+:::
+
+We are hosting our June townhall on **Thursday, 25 June at 7:30 AM PST**.
 
 <Image
   img={require('../../img/june_townhall_banner.png')}
