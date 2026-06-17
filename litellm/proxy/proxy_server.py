@@ -925,8 +925,7 @@ async def proxy_startup_event(app: FastAPI):
         redis_usage_cache=transaction_buffer_redis_cache,
     )
 
-    ## SEMANTIC TOOL FILTER ##
-    # Read litellm_settings from config for semantic filter initialization
+    ## SEMANTIC TOOL FILTER / MCP TRUST SCORING ##
     try:
         verbose_proxy_logger.debug("About to initialize semantic tool filter")
         _config = proxy_config.get_config_state()
@@ -939,8 +938,13 @@ async def proxy_startup_event(app: FastAPI):
             litellm_settings=_litellm_settings,
         )
         verbose_proxy_logger.debug("After semantic tool filter initialization")
+        ProxyStartupEvent._initialize_mcp_trust_scoring(
+            litellm_settings=_litellm_settings,
+        )
     except Exception as e:
-        verbose_proxy_logger.error(f"Semantic filter init failed: {e}", exc_info=True)
+        verbose_proxy_logger.error(
+            f"MCP semantic filter / trust scoring init failed: {e}", exc_info=True
+        )
 
     ## JWT AUTH ##
     ProxyStartupEvent._initialize_jwt_auth(
@@ -7593,6 +7597,19 @@ class ProxyStartupEvent:
             return None
 
         return RedisCache(**redis_env_kwargs)
+
+    @classmethod
+    def _initialize_mcp_trust_scoring(
+        cls,
+        litellm_settings: Dict[str, Any],
+    ) -> None:
+        from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+            initialize_mcp_trust_scoring_from_config,
+        )
+
+        initialize_mcp_trust_scoring_from_config(
+            litellm_settings.get("mcp_trust_scoring")
+        )
 
     @classmethod
     async def _initialize_semantic_tool_filter(

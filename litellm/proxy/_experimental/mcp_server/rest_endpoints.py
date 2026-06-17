@@ -378,6 +378,14 @@ if MCP_AVAILABLE:
             if server is not None:
                 allowed_mcp_servers.append(server)
 
+        from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+            apply_trust_filter_to_allowed_mcp_servers,
+        )
+
+        allowed_mcp_servers = list(
+            await apply_trust_filter_to_allowed_mcp_servers(allowed_mcp_servers)
+        )
+
         return allowed_mcp_servers, canonical_server_id
 
     async def _get_tools_for_single_server(
@@ -463,7 +471,12 @@ if MCP_AVAILABLE:
             server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
             if server is not None:
                 allowed_mcp_servers.append(server)
-        return allowed_mcp_servers
+
+        from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+            apply_trust_filter_to_allowed_mcp_servers,
+        )
+
+        return list(await apply_trust_filter_to_allowed_mcp_servers(allowed_mcp_servers))
 
     async def _list_tools_for_single_server(
         server_id: str,
@@ -633,6 +646,23 @@ if MCP_AVAILABLE:
             ) = global_mcp_server_manager.filter_server_ids_by_ip_with_info(
                 list(allowed_server_ids_set), _rest_client_ip
             )
+
+            allowed_mcp_server_objects: List[MCPServer] = []
+            for allowed_server_id in allowed_server_ids:
+                server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
+                if server is not None:
+                    allowed_mcp_server_objects.append(server)
+
+            from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+                apply_trust_filter_to_allowed_mcp_servers,
+            )
+
+            allowed_server_ids = [
+                server.server_id
+                for server in await apply_trust_filter_to_allowed_mcp_servers(
+                    allowed_mcp_server_objects
+                )
+            ]
 
             list_tools_result = []
             error_message = None

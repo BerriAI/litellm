@@ -1712,6 +1712,14 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
             )
 
+            from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+                apply_trust_filter_to_allowed_mcp_servers,
+            )
+
+            allowed_mcp_servers = list(
+                await apply_trust_filter_to_allowed_mcp_servers(allowed_mcp_servers)
+            )
+
             # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
             # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
             _has_oauth2_server = any(
@@ -2739,6 +2747,7 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
                 host_progress_callback=host_progress_callback,
+                allowed_mcp_servers=allowed_mcp_servers,
             )
 
         # Fall back to local tool registry with original name (legacy support)
@@ -2800,6 +2809,19 @@ if MCP_AVAILABLE:
                 raise HTTPException(
                     status_code=403,
                     detail="User not allowed to call this tool.",
+                )
+
+            from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+                apply_trust_filter_to_allowed_mcp_servers,
+            )
+
+            allowed_mcp_servers = list(
+                await apply_trust_filter_to_allowed_mcp_servers(allowed_mcp_servers)
+            )
+            if not allowed_mcp_servers:
+                raise HTTPException(
+                    status_code=403,
+                    detail="No MCP servers meet the configured trust score threshold.",
                 )
 
             # Delegate to execute_mcp_tool for execution
@@ -2982,6 +3004,7 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
         host_progress_callback: Optional[Callable] = None,
+        allowed_mcp_servers: Optional[List[MCPServer]] = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
@@ -2998,6 +3021,7 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
+            allowed_mcp_servers=allowed_mcp_servers,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
