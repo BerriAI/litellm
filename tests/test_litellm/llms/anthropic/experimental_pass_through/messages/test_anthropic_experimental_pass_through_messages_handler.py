@@ -673,3 +673,145 @@ async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
     assert spy.call_count == 1
     assert captured["presanitized"] is True
     assert [b["type"] for b in captured["messages"][0]["content"]] == ["tool_use"]
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled backup cost map so Opus 4.8's
+    ``supports_mid_conversation_system`` flag is read from local data rather
+    than the network-fetched ``main`` copy, which lacks the flag until this
+    branch merges."""
+    import litellm
+
+    original = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original
+        litellm.get_model_info.cache_clear()
+
+
+def _capture_base_llm_call(model, messages, system=None):
+    """Invoke the handler with base_llm mocked; return (optional_params, messages) it received."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.handler."
+        "base_llm_http_handler"
+    ) as mock_handler:
+        mock_handler.anthropic_messages_handler.return_value = MagicMock()
+        kwargs = dict(
+            max_tokens=16,
+            messages=messages,
+            model=model,
+            custom_llm_provider="bedrock",
+        )
+        if system is not None:
+            kwargs["system"] = system
+        anthropic_messages_handler(**kwargs)
+        assert mock_handler.anthropic_messages_handler.called
+        call = mock_handler.anthropic_messages_handler.call_args.kwargs
+        return (
+            call.get("anthropic_messages_optional_request_params", {}),
+            call.get("messages"),
+        )
+
+
+def test_handler_hoists_leading_system_into_top_level_for_invoke():
+    opt, msgs = _capture_base_llm_call(
+        "bedrock/invoke/us.anthropic.claude-opus-4-8",
+        [
+            {"role": "system", "content": "Be a pirate."},
+            {"role": "user", "content": "Hi"},
+        ],
+    )
+    assert opt.get("system") == [{"type": "text", "text": "Be a pirate."}]
+    assert all(m.get("role") != "system" for m in msgs)
+
+
+def test_handler_demotes_mid_system_on_unsupported_model_for_invoke():
+    opt, msgs = _capture_base_llm_call(
+        "bedrock/invoke/us.anthropic.claude-opus-4-7",
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "system", "content": "Be a pirate."},
+        ],
+    )
+    assert opt.get("system") == [{"type": "text", "text": "Be a pirate."}]
+    assert all(m.get("role") != "system" for m in msgs)
+
+
+def test_handler_passes_through_mid_system_on_supported_model_for_invoke(
+    local_model_cost_map,
+):
+    opt, msgs = _capture_base_llm_call(
+        "bedrock/invoke/us.anthropic.claude-opus-4-8",
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "system", "content": "Be a pirate."},
+        ],
+    )
+    assert any(m.get("role") == "system" for m in msgs)
+    assert not opt.get("system")
+
+
+def test_handler_passes_through_mid_system_on_supported_model_for_mantle(
+    local_model_cost_map,
+):
+    opt, msgs = _capture_base_llm_call(
+        "bedrock/mantle/anthropic.claude-opus-4-8",
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "system", "content": "Be a pirate."},
+        ],
+    )
+    assert any(m.get("role") == "system" for m in msgs)
+    assert not opt.get("system")
+
+
+def test_handler_merges_leading_system_after_existing_string_system():
+    opt, msgs = _capture_base_llm_call(
+        "bedrock/invoke/us.anthropic.claude-opus-4-8",
+        [
+            {"role": "system", "content": "In-array sys."},
+            {"role": "user", "content": "Hi"},
+        ],
+        system="Top-level sys.",
+    )
+    assert opt.get("system") == [
+        {"type": "text", "text": "Top-level sys."},
+        {"type": "text", "text": "In-array sys."},
+    ]
+    assert all(m.get("role") != "system" for m in msgs)
+
+
+def test_handler_merges_leading_system_after_empty_string_system():
+    opt, msgs = _capture_base_llm_call(
+        "bedrock/invoke/us.anthropic.claude-opus-4-8",
+        [
+            {"role": "system", "content": "In-array sys."},
+            {"role": "user", "content": "Hi"},
+        ],
+        system="   ",
+    )
+    assert opt.get("system") == [{"type": "text", "text": "In-array sys."}]
+
+
+def test_handler_merges_leading_system_after_existing_list_system():
+    opt, msgs = _capture_base_llm_call(
+        "bedrock/invoke/us.anthropic.claude-opus-4-8",
+        [
+            {"role": "system", "content": "In-array sys."},
+            {"role": "user", "content": "Hi"},
+        ],
+        system=[{"type": "text", "text": "Top-level sys."}],
+    )
+    assert opt.get("system") == [
+        {"type": "text", "text": "Top-level sys."},
+        {"type": "text", "text": "In-array sys."},
+    ]
