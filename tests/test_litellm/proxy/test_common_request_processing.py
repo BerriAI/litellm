@@ -2244,6 +2244,41 @@ class TestHandleLLMApiExceptionDictDetail:
         assert proxy_exc.message == "Content blocked by guardrail"
         assert proxy_exc.provider_specific_fields is None
 
+    async def test_already_normalized_proxy_exception_is_honored(self):
+        """A ProxyException raised mid-request (e.g. a guardrail block) is already
+        the OpenAI wire format. The funnel must re-raise it untouched instead of
+        re-deriving the status from a (nonexistent) status_code attribute and
+        defaulting to 500. Regression for LIT-3751."""
+        from litellm.proxy._types import ProxyException
+
+        exc = ProxyException(
+            message='"Leroy Jenkins" detected as name',
+            type="invalid_request_error",
+            param=None,
+            code=400,
+            openai_code="content_policy_violation",
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc is exc
+        assert proxy_exc.code == "400"
+        assert proxy_exc.type == "invalid_request_error"
+        assert proxy_exc.param is None
+        assert proxy_exc.openai_code == "content_policy_violation"
+        assert proxy_exc.message == '"Leroy Jenkins" detected as name'
+
+        # The body the OpenAI-SDK client actually receives. The HTTP status line
+        # comes from int(exc.code) == 400; the wire ``code`` stays the status
+        # string. ``openai_code`` ("content_policy_violation") is intentionally
+        # NOT serialized here - to_dict() emits only ``code`` - so this asserts
+        # the real contract rather than the write-only attribute.
+        assert int(proxy_exc.code) == 400
+        assert proxy_exc.to_dict() == {
+            "message": '"Leroy Jenkins" detected as name',
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "400",
+        }
+
 
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""
