@@ -89,7 +89,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
             )
             create_response = await vector_store_acreate(
                 name=self.ingest_name or "litellm-rag-ingest",
-                custom_llm_provider="openai",
+                custom_llm_provider=self.custom_llm_provider,
                 expires_after=expires_after,
                 api_key=api_key,
                 api_base=api_base,
@@ -107,7 +107,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
                     content_type or "application/octet-stream",
                 ),
                 purpose="assistants",
-                custom_llm_provider="openai",
+                custom_llm_provider=self.custom_llm_provider,
                 api_key=api_key,
                 api_base=api_base,
             )
@@ -117,7 +117,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
             await vector_store_file_acreate(
                 vector_store_id=vector_store_id,
                 file_id=result_file_id,
-                custom_llm_provider="openai",
+                custom_llm_provider=self.custom_llm_provider,
                 chunking_strategy=cast(
                     Optional[Dict[str, Any]], self.chunking_strategy
                 ),
