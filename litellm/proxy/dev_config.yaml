@@ -1,0 +1,191 @@
+model_list:
+  # ---------- Anthropic native ----------
+  - model_name: anthropic-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: anthropic-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: anthropic-opus-4-5
+    litellm_params:
+      model: anthropic/claude-opus-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: anthropic-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: anthropic-opus-4-6
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: anthropic-opus-4-7
+    litellm_params:
+      model: anthropic/claude-opus-4-7
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: anthropic-opus-4-8
+    litellm_params:
+      model: anthropic/claude-opus-4-8
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ---------- Bedrock Invoke ----------
+  - model_name: bedrock-invoke-haiku-4-5
+    litellm_params:
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_region_name: us-east-1
+  - model_name: bedrock-invoke-sonnet-4-5
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_region_name: us-east-1
+  - model_name: bedrock-invoke-opus-4-5
+    litellm_params:
+      model: bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0
+      aws_region_name: us-east-1
+  - model_name: bedrock-invoke-sonnet-4-6
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-6
+      aws_region_name: us-east-1
+  - model_name: bedrock-invoke-opus-4-6
+    litellm_params:
+      model: bedrock/us.anthropic.claude-opus-4-6-v1
+      aws_region_name: us-east-1
+  - model_name: bedrock-invoke-opus-4-7
+    litellm_params:
+      model: bedrock/global.anthropic.claude-opus-4-7
+      aws_region_name: us-east-1
+  - model_name: bedrock-invoke-opus-4-8
+    litellm_params:
+      model: bedrock/global.anthropic.claude-opus-4-8
+      aws_region_name: us-east-1
+
+  # ---------- Bedrock Converse ----------
+  - model_name: bedrock-converse-haiku-4-5
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_region_name: us-east-1
+  - model_name: bedrock-converse-sonnet-4-5
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_region_name: us-east-1
+  - model_name: bedrock-converse-opus-4-5
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0
+      aws_region_name: us-east-1
+  - model_name: bedrock-converse-sonnet-4-6
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-6
+      aws_region_name: us-east-1
+  - model_name: bedrock-converse-opus-4-6
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-opus-4-6-v1
+      aws_region_name: us-east-1
+  - model_name: bedrock-converse-opus-4-7
+    litellm_params:
+      model: bedrock/converse/global.anthropic.claude-opus-4-7
+      aws_region_name: us-east-1
+  - model_name: bedrock-converse-opus-4-8
+    litellm_params:
+      model: bedrock/converse/global.anthropic.claude-opus-4-8
+      aws_region_name: us-east-1
+
+  # ---------- Vertex AI (Anthropic on Vertex) ----------
+  - model_name: vertex-haiku-4-5
+    litellm_params:
+      model: vertex_ai/claude-haiku-4-5@20251001
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+  - model_name: vertex-sonnet-4-5
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-5@20250929
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+  - model_name: vertex-opus-4-5
+    litellm_params:
+      model: vertex_ai/claude-opus-4-5@20251101
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+  - model_name: vertex-sonnet-4-6
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-6
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+  - model_name: vertex-opus-4-6
+    litellm_params:
+      model: vertex_ai/claude-opus-4-6
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+  - model_name: vertex-opus-4-7
+    litellm_params:
+      model: vertex_ai/claude-opus-4-7
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+  - model_name: vertex-opus-4-8
+    litellm_params:
+      model: vertex_ai/claude-opus-4-8
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+
+  # ---------- Gemini Enterprise Agent Platform ----------
+  - model_name: gemini-claude-code
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+      vertex_credentials: os.environ/GEMINI_CLAUDE_CODE_VERTEX_CREDENTIALS
+      extra_body:
+        labels:
+          workload: claude-code
+          source: litellm
+          environment: internal
+          reconciliation_group: claude-code-gemini
+
+  # ---------- Azure AI Foundry (Anthropic on Azure) ----------
+  - model_name: azure-haiku-4-5
+    litellm_params:
+      model: azure_ai/claude-haiku-4-5
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+  - model_name: azure-sonnet-4-5
+    litellm_params:
+      model: azure_ai/claude-sonnet-4-5
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+  - model_name: azure-opus-4-5
+    litellm_params:
+      model: azure_ai/claude-opus-4-5
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+  - model_name: azure-sonnet-4-6
+    litellm_params:
+      model: azure_ai/claude-sonnet-4-6
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+  - model_name: azure-opus-4-6
+    litellm_params:
+      model: azure_ai/claude-opus-4-6
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+  - model_name: azure-opus-4-7
+    litellm_params:
+      model: azure_ai/claude-opus-4-7
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+  - model_name: azure-opus-4-8
+    litellm_params:
+      model: azure_ai/claude-opus-4-8
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+
+  # ---------- OpenAI ----------
+  - model_name: gpt-5.5
+    litellm_params:
+      model: openai/gpt-5.5
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: sk-1234
+
+litellm_settings:
+  drop_params: True
+  telemetry: False

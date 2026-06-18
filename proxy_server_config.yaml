@@ -78,39 +78,39 @@ model_list:
     litellm_params:
       model: openai/gpt-5-mini
       api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
   - model_name: fake-openai-endpoint-2
     litellm_params:
       model: openai/my-fake-model
       api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       stream_timeout: 0.001
       rpm: 1
   - model_name: fake-openai-endpoint-3
     litellm_params:
       model: openai/my-fake-model
       api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       stream_timeout: 0.001
       rpm: 1000
   - model_name: fake-openai-endpoint-4
     litellm_params:
       model: openai/my-fake-model
       api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       num_retries: 50
   - model_name: fake-openai-endpoint-3
     litellm_params:
       model: openai/my-fake-model-2
       api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       stream_timeout: 0.001
       rpm: 1000
   - model_name: bad-model
     litellm_params:
       model: openai/bad-model
       api_key: os.environ/OPENAI_API_KEY
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       mock_timeout: True
       timeout: 60
       rpm: 1000
@@ -120,7 +120,7 @@ model_list:
     litellm_params:
       model: openai/bad-model
       api_key: os.environ/OPENAI_API_KEY
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       rpm: 1000
     model_info:
       health_check_timeout: 1
@@ -162,7 +162,7 @@ model_list:
     litellm_params:
       model: openai/my-fake-model
       api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: os.environ/FAKE_OPENAI_API_BASE
       timeout: 1
   - model_name: badly-configured-openai-endpoint
     litellm_params:

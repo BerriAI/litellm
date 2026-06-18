@@ -5416,19 +5416,20 @@ class StandardLoggingPayloadSetup:
                     tb_lines[:MAXIMUM_TRACEBACK_LINES_TO_LOG]
                 )  # Limit to first 100 lines
 
+        # Prefer the `.message` attribute (set by ProxyException and every
+        # litellm.exceptions.* class) over str(exc); ProxyException does not
+        # call super().__init__() nor define __str__, so str() on it returns
+        # an empty string, which used to silently strip the human-readable
+        # message from spend_logs.metadata.error_information.
+        # Use isinstance, not truthiness: an explicit empty string on
+        # `.message` is a deliberate value and must not be replaced by
+        # `str(exc)`.
         explicit_message = getattr(original_exception, "message", None)
-        error_message = (
-            explicit_message
-            if isinstance(explicit_message, str) and explicit_message
-            else str(original_exception)
-        )
+        if isinstance(explicit_message, str):
+            error_message = explicit_message
+        else:
+            error_message = str(original_exception) if original_exception else ""
 
-        # Duck-typed read so bare-Exception subclasses like
-        # `litellm.BudgetExceededError` can participate without joining the
-        # RateLimitError hierarchy (which would break `except BudgetExceededError`).
-        # Validated against the enum value sets so a third-party exception that
-        # happens to declare a `.category` or `.rate_limit_type` string attribute
-        # can't leak garbage into the payload or Prometheus label cardinality.
         rate_limit_category = validate_rate_limit_category(
             getattr(original_exception, "category", None)
         )
@@ -5441,7 +5442,7 @@ class StandardLoggingPayloadSetup:
             error_class=error_class,
             llm_provider=_llm_provider_in_exception,
             traceback=traceback_info,
-            error_message=error_message if original_exception else "",
+            error_message=error_message,
             error_rate_limit_category=rate_limit_category,
             error_rate_limit_type=rate_limit_type,
         )
@@ -5455,21 +5456,19 @@ class StandardLoggingPayloadSetup:
         error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,
         )
-        if not metadata.get("client_disconnected"):  # any-ok: untyped metadata
+        if not metadata.get("client_disconnected"):
             return error_information, error_str
 
-        client_disconnect_error = metadata.get(  # any-ok: untyped metadata
-            "error_information"
-        )
-        if isinstance(client_disconnect_error, dict):  # any-ok: untyped metadata
+        client_disconnect_error = metadata.get("error_information")
+        if isinstance(client_disconnect_error, dict):
             error_information = cast(
                 StandardLoggingPayloadErrorInformation,
-                client_disconnect_error,  # any-ok: untyped metadata
+                client_disconnect_error,
             )
         else:
             error_information = cast(
                 StandardLoggingPayloadErrorInformation,
-                {  # any-ok: untyped metadata
+                {
                     "error_code": "499",
                     "error_message": "Client disconnected the request",
                     "error_class": "ClientDisconnected",
@@ -5808,7 +5807,7 @@ def get_standard_logging_object_payload(
 
         error_information, error_str = (
             StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
-                metadata=metadata,  # any-ok: untyped metadata
+                metadata=metadata,
                 original_exception=original_exception,
                 error_str=error_str,
             )

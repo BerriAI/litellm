@@ -194,11 +194,7 @@ def _is_valid_cli_sso_user_code(user_code: str | None) -> bool:
 def _cli_sso_verification_uri_complete_enabled() -> bool:
     from litellm.proxy.proxy_server import general_settings
 
-    return bool(
-        general_settings.get(  # any-ok: operator opt-in read from the untyped general_settings dict
-            "allow_cli_sso_verification_uri_complete", False
-        )
-    )
+    return bool(general_settings.get("allow_cli_sso_verification_uri_complete", False))
 
 
 def _cli_sso_start_response_body(

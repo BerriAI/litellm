@@ -9313,3 +9313,34 @@ async def test_clear_team_member_budget_fields_no_budget_row_skips_update():
     mock_update_budget.assert_not_awaited()
     assert "team_member_budget" not in result
     assert "team_member_rpm_limit" not in result
+
+
+@pytest.mark.asyncio
+async def test_team_info_forwards_key_limit_to_get_data():
+    """/team/info must thread its ``key_limit`` query param into the key
+    lookup so the database caps how many keys are returned for the team.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="team-1")
+    )
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.object(
+            team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])
+        ),
+    ):
+        await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            key_limit=7,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert mock_prisma.get_data.await_args.kwargs["limit"] == 7
