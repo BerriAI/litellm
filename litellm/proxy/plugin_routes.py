@@ -29,7 +29,7 @@ import time
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import PluginConfig, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -64,7 +64,7 @@ _RESPONSE_STRIP = {
 }
 
 # In-memory plugin registry — populated from general_settings at startup
-_plugin_registry: dict = {}
+_plugin_registry: dict[str, PluginConfig] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -130,17 +130,19 @@ def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> dict:
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-def register_plugins_from_config(general_settings: dict) -> None:
+def register_plugins_from_config(general_settings: dict[str, object]) -> None:
     """Replace the plugin registry from general_settings.
 
     Replaces (not merges) so plugins removed from config are immediately
     unreachable without requiring a process restart.
     """
+    raw = general_settings.get("plugins")
+    entries: list[object] = raw if isinstance(raw, list) else []
+    new_registry = {
+        p.name: p for p in (PluginConfig.model_validate(entry) for entry in entries)
+    }
     _plugin_registry.clear()
-    for plugin in general_settings.get("plugins", []):
-        name = plugin.get("name")
-        if name:
-            _plugin_registry[name] = plugin
+    _plugin_registry.update(new_registry)
 
 
 # ---------------------------------------------------------------------------
@@ -149,24 +151,26 @@ def register_plugins_from_config(general_settings: dict) -> None:
 @router.get("/api/plugins", tags=["plugins"])
 async def list_plugins(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> list:
+) -> list[dict[str, str]]:
     """Return registered plugins for authenticated UI callers.
 
     plugin_key is only returned to proxy admins — not to regular users —
     so plugin credentials cannot be extracted by non-admin callers.
     """
     is_admin = getattr(user_api_key_dict, "user_role", None) == "proxy_admin"
-    result = []
-    for name, plugin in _plugin_registry.items():
-        entry: dict = {
-            "name": name,
-            "display_name": plugin.get("display_name", name),
-            "url": plugin.get("url", ""),
+    return [
+        {
+            "name": plugin.name,
+            "display_name": plugin.display_name or plugin.name,
+            "url": plugin.url,
+            **(
+                {"plugin_key": plugin.plugin_key}
+                if is_admin and plugin.plugin_key
+                else {}
+            ),
         }
-        if is_admin and plugin.get("plugin_key"):
-            entry["plugin_key"] = plugin["plugin_key"]
-        result.append(entry)
-    return result
+        for plugin in _plugin_registry.values()
+    ]
 
 
 @router.get("/api/plugins/auth-token", tags=["plugins"])
@@ -236,7 +240,7 @@ async def plugin_proxy(
             status_code=404,
         )
 
-    target_url = f"{plugin['url'].rstrip('/')}/{path}"
+    target_url = f"{plugin.url.rstrip('/')}/{path}"
     query = request.url.query
     if query:
         target_url = f"{target_url}?{query}"
@@ -249,7 +253,7 @@ async def plugin_proxy(
     }
 
     # Inject plugin's own credential as upstream auth (if configured)
-    plugin_key = plugin.get("plugin_key")
+    plugin_key = plugin.plugin_key
     if plugin_key:
         forward_headers["authorization"] = f"Bearer {plugin_key}"
 
@@ -278,7 +282,7 @@ async def plugin_proxy(
         resp = await handler.client.send(req, follow_redirects=False)
     except Exception:
         return Response(
-            content=f"Cannot connect to plugin '{plugin_name}' at {plugin['url']}",
+            content=f"Cannot connect to plugin '{plugin_name}' at {plugin.url}",
             status_code=502,
         )
 

@@ -14800,6 +14800,9 @@ async def update_config_general_settings(
     )
     await invalidate_config_param("general_settings")
 
+    if data.field_name == "plugins":
+        register_plugins_from_config(general_settings)
+
     return response
 
 

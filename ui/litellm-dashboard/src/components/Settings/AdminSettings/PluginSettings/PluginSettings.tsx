@@ -158,9 +158,9 @@ export default function PluginSettings() {
           <Form.Item
             name="plugin_key"
             label="Plugin Key"
-            extra="The plugin's own credential. Injected as Authorization: Bearer <key> on proxied requests. Used for encrypted iframe auth via LITELLM_SALT_KEY."
+            extra="Optional. The plugin's own credential, injected as Authorization: Bearer <key> only when litellm reverse-proxies API calls to the plugin's backend (/plugin-proxy/<name>/*). Leave blank for plugins that use the forwarded litellm user token (e.g. iframe plugins) — that path uses the user's token, not this key."
           >
-            <Input.Password placeholder="sk-..." />
+            <Input.Password placeholder="sk-... (optional)" />
           </Form.Item>
         </Form>
       </Modal>
