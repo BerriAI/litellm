@@ -49,6 +49,8 @@ build/
 *.egg-info/
 .DS_Store
 **/node_modules
+ui/litellm-dashboard/.next
+ui/litellm-dashboard/out
 *.log
 .env
 .env.local

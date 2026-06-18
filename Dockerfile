@@ -1,11 +1,31 @@
+# syntax=docker/dockerfile:1.7
+
 # Base image for building
 ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:31da6565f35af6401031c1d7aa91dc84ac76c5c48edd17fb90f0ed9e3173c7a9
 
 # Runtime image
 ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:31da6565f35af6401031c1d7aa91dc84ac76c5c48edd17fb90f0ed9e3173c7a9
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
+ARG UI_BUILD_IMAGE=node:20.18-alpine3.20
 
 FROM $UV_IMAGE AS uvbin
+
+# UI builder — mirrors ui/Dockerfile so the monolith ships a UI built from this
+# source tree. The npm cache mount plus the buildx layer cache make rebuilds
+# fast; replaces the slow out-of-band build_ui.sh refresh of the committed bundle.
+FROM $UI_BUILD_IMAGE AS ui-builder
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    npm_config_fund=false \
+    npm_config_audit=false
+
+WORKDIR /ui
+
+COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
+
+COPY ui/litellm-dashboard/ ./
+RUN npm run build
 
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
@@ -46,6 +66,13 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
 
 # Copy full source tree
 COPY . .
+
+# Replace the committed _experimental/out bundle with a UI built from this exact
+# source. Clearing first drops the committed bundle's content-hashed chunks,
+# which COPY would otherwise leave behind. build_admin_ui.sh still runs after,
+# applying the enterprise custom-color override when present.
+RUN rm -rf litellm/proxy/_experimental/out
+COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
 
 # Build Admin UI before final sync
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
