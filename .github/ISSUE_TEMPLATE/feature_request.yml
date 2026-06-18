@@ -1,4 +1,4 @@
-name: 🚀 Feature Request
+name: 🚀 Feature Request 
 description: Submit a proposal/request for a new LiteLLM feature.
 title: "[Feature]: "
 labels: ["enhancement"]
@@ -6,10 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for making LiteLLM better!
-
-        > ⚠️ **Auto-triage notice for external contributors:**
-        > Feature requests need (1) a clear description of the proposed feature, (2) the motivation / use case with a concrete example, and (3) what success looks like. Vague requests are auto-closed by our LLM triage bot with an explanation. Fill in the missing details and reopen at any time — the bot will re-evaluate. Internal BerriAI contributors are exempt.
+        Thanks for making LiteLLM better! 
   - type: checkboxes
     id: duplicate-check
     attributes:
@@ -21,25 +18,16 @@ body:
   - type: textarea
     id: the-feature
     attributes:
-      label: The feature
-      description: A clear and concise description of the feature proposal. What should LiteLLM do that it doesn't today?
-      placeholder: e.g. "Support per-team max_input_tokens overrides on the proxy."
+      label: The Feature
+      description: A clear and concise description of the feature proposal
+      placeholder: Tell us what you want!
     validations:
       required: true
   - type: textarea
     id: motivation
     attributes:
-      label: Motivation, pitch, and concrete example
-      description: |
-        **Required.** Why is this needed? Include a concrete use case — what
-        you're trying to accomplish, what's blocked today, and what success
-        would look like (ideally with an example config / API call / UI flow).
-        If this is related to another GitHub issue, link it here too.
-      placeholder: |
-        I'm running a multi-tenant proxy where team A processes long docs and
-        team B only does short chats. Today I have to spin up two proxies.
-        With this feature I could set max_input_tokens per team and route in one
-        proxy. Example config: ...
+      label: Motivation, pitch
+      description: Please outline the motivation for the proposal. Is your feature request related to a specific problem? e.g., "I'm working on X and would like Y to be possible". If this is related to another GitHub issue, please link here too.
     validations:
       required: true
   - type: dropdown
@@ -68,7 +56,7 @@ body:
   - type: input
     id: contact
     attributes:
-      label: Twitter / LinkedIn details
+      label: Twitter / LinkedIn details 
       description: We announce new features on Twitter + LinkedIn. When this is announced, and you'd like a mention, we'll gladly shout you out!
       placeholder: ex. @krrish_dh / https://www.linkedin.com/in/krish-d/
     validations:

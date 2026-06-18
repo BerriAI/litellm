@@ -6,11 +6,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to file a bug report!
-
-        > ⚠️ **Auto-triage notice for external contributors:**
-        > Bug reports without **clear reproduction steps, expected vs. actual behavior, and a screenshot or terminal/log output** are auto-closed by our LLM triage bot with an explanation of what was missing. You can fill in the missing details and reopen at any time — the bot will re-evaluate. Internal BerriAI contributors are exempt.
-
+        Thanks for taking the time to fill out this bug report!
+        
         **💡 Tip:** See our [Troubleshooting Guide](https://docs.litellm.ai/docs/troubleshoot) for what information to include.
   - type: checkboxes
     id: duplicate-check
@@ -23,33 +20,21 @@ body:
   - type: textarea
     id: what-happened
     attributes:
-      label: What happened? (Actual behavior)
-      description: A clear description of what is happening today, with the bug.
-      placeholder: e.g. "Calling completion() with model=gpt-4o-mini returns an empty string."
-    validations:
-      required: true
-  - type: textarea
-    id: expected-behavior
-    attributes:
-      label: What did you expect to happen? (Expected behavior)
-      description: A clear description of what you expected to happen. **Required.**
-      placeholder: e.g. "I expected completion() to return the model's response text."
+      label: What happened?
+      description: Also tell us, what did you expect to happen?
+      placeholder: Tell us what you see!
+      value: "A bug happened!"
     validations:
       required: true
   - type: textarea
     id: steps-to-reproduce
     attributes:
-      label: Steps to reproduce
-      description: |
-        Provide a minimal reproduction. Include a runnable Python snippet or a
-        `curl` command, your config.yaml if relevant, and the exact LiteLLM
-        version + Python version. Reports without a runnable reproduction are
-        auto-closed.
+      label: Steps to Reproduce
+      description: Please provide detailed steps to reproduce this bug(A curl/python code to reproduce the bug)
       placeholder: |
-        1. Create `config.yaml` with: ...
-        2. Start the proxy with: `litellm --config config.yaml --port 4000`
-        3. Run this Python / curl: ...
-        4. Observe: ...
+        1. config.yaml file/ .env file/ etc.
+        2. Run the following code...
+        3. Observe the error...
       value: |
         1. 
         2. 
@@ -59,15 +44,9 @@ body:
   - type: textarea
     id: logs
     attributes:
-      label: Relevant log output / screenshot
-      description: |
-        **Required.** Paste the full traceback, stderr, proxy logs, or attach a
-        screenshot showing the bug. For UI bugs a screenshot or screen
-        recording is mandatory. Without proof of the bug, the issue is
-        auto-closed.
+      label: Relevant log output
+      description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
       render: shell
-    validations:
-      required: true
   - type: dropdown
     id: component
     attributes:
@@ -84,14 +63,14 @@ body:
   - type: input
     id: version
     attributes:
-      label: What LiteLLM version are you on ?
+      label: What LiteLLM version are you on ? 
       placeholder: v1.53.1
     validations:
       required: true
   - type: input
     id: contact
     attributes:
-      label: Twitter / LinkedIn details
+      label: Twitter / LinkedIn details 
       description: We announce new features on Twitter + LinkedIn. If this issue leads to an announcement, and you'd like a mention, we'll gladly shout you out!
       placeholder: ex. @krrish_dh / https://www.linkedin.com/in/krish-d/
     validations:
