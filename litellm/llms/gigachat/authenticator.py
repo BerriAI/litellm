@@ -7,7 +7,6 @@ Based on official GigaChat SDK authentication flow.
 
 import time
 import uuid
-from typing import Optional, Tuple
 
 import httpx
 
@@ -41,7 +40,7 @@ class GigaChatAuthError(BaseLLMException):
     pass
 
 
-def _get_credentials() -> Optional[str]:
+def _get_credentials() -> str | None:
     """Get GigaChat credentials from environment."""
     return get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
 
@@ -62,10 +61,10 @@ def _get_http_client() -> HTTPHandler:
 
 
 def get_access_token(
-    credentials: Optional[str] = None,
-    scope: Optional[str] = None,
-    auth_url: Optional[str] = None,
-    litellm_params: Optional[dict] = None,
+    credentials: str | None = None,
+    scope: str | None = None,
+    auth_url: str | None = None,
+    litellm_params: dict | None = None,
 ) -> str:
     """
     Get valid access token, using cache if available.
@@ -124,10 +123,10 @@ def get_access_token(
 
 
 async def get_access_token_async(
-    credentials: Optional[str] = None,
-    scope: Optional[str] = None,
-    auth_url: Optional[str] = None,
-    litellm_params: Optional[dict] = None,
+    credentials: str | None = None,
+    scope: str | None = None,
+    auth_url: str | None = None,
+    litellm_params: dict | None = None,
 ) -> str:
     """Async version of get_access_token."""
     if not litellm_params:
@@ -176,12 +175,12 @@ def _request_token_sync(
     credentials: str,
     scope: str,
     auth_url: str,
-) -> Tuple[str, int]:
+) -> tuple[str, int]:
     """
     Request new access token from GigaChat OAuth endpoint (sync).
 
     Returns:
-        Tuple of (access_token, expires_at_ms)
+        tuple of (access_token, expires_at_ms)
     """
     headers = {
         "Authorization": f"Basic {credentials}",
@@ -213,7 +212,7 @@ async def _request_token_async(
     credentials: str,
     scope: str,
     auth_url: str,
-) -> Tuple[str, int]:
+) -> tuple[str, int]:
     """Async version of _request_token_sync."""
     headers = {
         "Authorization": f"Basic {credentials}",
@@ -244,7 +243,7 @@ async def _request_token_async(
         )
 
 
-def _parse_token_response(response: httpx.Response) -> Tuple[str, int]:
+def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
     """Parse OAuth token response."""
     data = response.json()
 

@@ -50,7 +50,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
         self._iterator: AsyncGenerator[bytes, Any]
         self._litellm_logging_obj = litellm_logging_obj
         self._provider_config = provider_config
-        self._raw_bytes: List[bytes] = []
+        self._raw_bytes: list[bytes] = []
         self._flush_scheduled = False
         self._background_tasks: set[asyncio.Task] = set()
 
@@ -92,10 +92,10 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
                     self._iterator = cast(
                         AsyncGenerator[bytes, Any], self._response.aiter_bytes()
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001
                     try:
                         await self._response.aclose()
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         pass
                     raise
             return self
@@ -120,7 +120,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
 
             # Remove the task from the set when it finishes to avoid memory leaks
             task.add_done_callback(self._background_tasks.discard)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             verbose_logger.exception(
                 "Failed to schedule passthrough spend-tracking flush; "
                 "%d buffered chunks dropped: %s",
@@ -138,11 +138,11 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
             chunk = await self._iterator.__anext__()
             self._raw_bytes.append(chunk)
             return chunk
-        except Exception:
+        except Exception:  # noqa: BLE001
             self._start_flush()
             try:
                 await self._response.aclose()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
             raise
 
@@ -161,7 +161,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
         try:
             if self._initialized:
                 await self._response.aclose()
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
 
 
@@ -196,7 +196,7 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
                 raw_bytes=self._raw_bytes,
                 provider_config=self._provider_config,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             verbose_logger.exception(
                 "Failed to schedule passthrough spend-tracking flush; "
                 "%d buffered chunks dropped: %s",
@@ -212,11 +212,11 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
             chunk = next(self._iterator)
             self._raw_bytes.append(chunk)
             return chunk
-        except Exception:
+        except Exception:  # noqa: BLE001
             self._start_flush()
             try:
                 self._response.close()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
             raise
 
@@ -230,7 +230,7 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
         self._start_flush()
         try:
             self._response.close()
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
 
 
@@ -240,17 +240,17 @@ async def allm_passthrough_route(
     method: str,
     endpoint: str,
     model: str,
-    custom_llm_provider: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    request_query_params: Optional[dict] = None,
-    request_headers: Optional[dict] = None,
-    content: Optional[Any] = None,
-    data: Optional[dict] = None,
-    files: Optional[RequestFiles] = None,
-    json: Optional[Any] = None,
-    params: Optional[QueryParamTypes] = None,
-    cookies: Optional[CookieTypes] = None,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    request_query_params: dict | None = None,
+    request_headers: dict | None = None,
+    content: Any | None = None,
+    data: dict | None = None,
+    files: RequestFiles | None = None,
+    json: Any | None = None,
+    params: QueryParamTypes | None = None,
+    cookies: CookieTypes | None = None,
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     **kwargs,
 ) -> Union[httpx.Response, AsyncGenerator[Any, Any]]:
@@ -365,19 +365,19 @@ def llm_passthrough_route(
     method: str,
     endpoint: str,
     model: str,
-    custom_llm_provider: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    request_query_params: Optional[dict] = None,
-    request_headers: Optional[dict] = None,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    request_query_params: dict | None = None,
+    request_headers: dict | None = None,
     allm_passthrough_route: bool = False,
-    content: Optional[Any] = None,
-    data: Optional[dict] = None,
-    files: Optional[RequestFiles] = None,
-    json: Optional[Any] = None,
-    params: Optional[QueryParamTypes] = None,
-    cookies: Optional[CookieTypes] = None,
-    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    content: Any | None = None,
+    data: dict | None = None,
+    files: RequestFiles | None = None,
+    json: Any | None = None,
+    params: QueryParamTypes | None = None,
+    cookies: CookieTypes | None = None,
+    client: Union[HTTPHandler, AsyncHTTPHandler] | None = None,
     **kwargs,
 ) -> Union[
     httpx.Response,
