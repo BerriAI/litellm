@@ -345,6 +345,66 @@ class TestBedrockMantleChatAuth:
         assert "Bearer" in msg
         assert "SigV4" in msg or "IAM" in msg
 
+    def test_completion_no_bearer_signs_with_sigv4_end_to_end(self, monkeypatch):
+        # The full completion chain (not just sign_request in isolation) must reach
+        # the SigV4 path when no Bearer token exists: with api_key=None the parent
+        # validate_environment must not short-circuit before sign_request runs.
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_API_BASE",
+            "BEDROCK_MANTLE_REGION",
+            "AWS_REGION_NAME",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        monkeypatch.setenv(
+            "AWS_SECRET_ACCESS_KEY", "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0"
+        )
+        monkeypatch.setenv("AWS_REGION", "us-east-2")
+
+        requests = []
+
+        def mock_post(self, url, data=None, headers=None, **kwargs):
+            requests.append({"url": url, "headers": headers or {}})
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1733529600,
+                    "model": "openai.gpt-oss-120b",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", mock_post
+        ):
+            response = litellm.completion(
+                model="bedrock_mantle/openai.gpt-oss-120b",
+                messages=[{"role": "user", "content": "hello"}],
+            )
+
+        assert response.choices[0].message.content == "ok"
+        assert len(requests) == 1
+        authorization = requests[0]["headers"]["Authorization"]
+        assert authorization.startswith("AWS4-HMAC-SHA256")
+        assert "/us-east-2/bedrock/aws4_request" in authorization
+        assert requests[0]["url"].startswith("https://bedrock-mantle.us-east-2.api.aws")
+
 
 class TestBedrockMantleProjectHeader:
     def test_validate_environment_sets_openai_project_header(self):
