@@ -1399,3 +1399,45 @@ model LiteLLM_WorkflowMessage {
   @@unique([run_id, sequence_number])
   @@index([run_id])
 }
+
+// ---------------------------------------------------------------------------
+// Managed Agents (Cursor SDK / sandboxed agent runtime)
+//
+// LiteLLM_ManagedAgent stores agent definitions (config: model, system_prompt,
+// tools, litellm_api_key, litellm_base_url). LiteLLM_ManagedAgentSession tracks
+// individual sandbox runtime instances spun up from an agent definition.
+// ---------------------------------------------------------------------------
+
+model LiteLLM_ManagedAgent {
+  id         String   @id @default(uuid())
+  name       String
+  config     Json     // { model, system_prompt, tools, litellm_api_key, litellm_base_url }
+  created_by String?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([name, created_by])
+}
+
+model LiteLLM_ManagedAgentSession {
+  id                          String    @id @default(uuid())
+  agent_id                    String
+  sandbox_type                String    // "opencode" for v2
+  sandbox_size                String    // "small" | "medium" | "large"
+  sandbox_timeout_minutes     Int
+  sandbox_idle_timeout_minutes Int
+  sandbox_image               String?
+  sandbox_url                 String?
+  sandbox_metadata            Json?     // { opencode_session_id }
+  status                      String    @default("provisioning") // provisioning | ready | terminated | error
+  repos                       Json?
+  env_vars                    Json?
+  created_by                  String?
+  created_at                  DateTime  @default(now())
+  updated_at                  DateTime  @updatedAt
+  terminated_at               DateTime?
+
+  @@index([agent_id])
+  @@index([created_by])
+  @@index([status])
+}
