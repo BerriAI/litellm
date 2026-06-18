@@ -20,10 +20,10 @@ else:
 
 MID_STREAM_CONTINUATION_SYSTEM_PROMPT = "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: "
 
-FallbackEntry = Union[str, Dict[str, List[str]]]
+FallbackEntry = str | dict[str, list[str]]
 
 
-def _prefill_explicitly_unsupported(model: str | None) -> bool:
+def _prefill_explicitly_unsupported(model: str) -> bool:
     """True only when the model registry explicitly marks the model as NOT
     supporting assistant prefill (``supports_assistant_prefill: false``).
 
@@ -31,8 +31,6 @@ def _prefill_explicitly_unsupported(model: str | None) -> bool:
     the legacy prefill behavior — only models that would reject the prefill with
     a 400 anyway are routed to the user-message continuation.
     """
-    if model is None:
-        return False
     try:
         from litellm.utils import get_model_info
 

@@ -241,3 +241,35 @@ def test_resolver_returning_prefill_supporting_model_keeps_legacy():
         resolve_underlying_model=aliases.get,
     )
     _assert_legacy_prefill(result)
+
+
+def test_malformed_fallback_entry_does_not_crash():
+    """A malformed fallback entry (e.g. an empty dict) makes the underlying
+    fallback-group resolution raise; the capability check must swallow it and
+    fall back to the legacy prefill rather than break the mid-stream retry."""
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="gpt-4",
+        fallbacks=[{}],
+    )
+    _assert_legacy_prefill(result)
+
+
+def test_resolver_raising_is_swallowed():
+    """The injected resolver wraps router lookups that can raise; an exception
+    must not propagate out of the capability check, and the raw group name is
+    still evaluated."""
+
+    def boom(_model_group):
+        raise RuntimeError("deployment lookup failed")
+
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="claude-sonnet-4-6",
+        resolve_underlying_model=boom,
+    )
+    # raw name still classified as prefill-rejecting -> user continuation
+    assert len(result) == 2
+    assert result[1]["role"] == "user"
