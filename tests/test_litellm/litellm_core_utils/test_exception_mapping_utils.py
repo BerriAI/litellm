@@ -119,6 +119,144 @@ class TestExceptionCheckers:
         result = ExceptionCheckers.is_error_str_rate_limit(error_str)
         assert result is True
 
+    def test_is_error_str_rate_limit_ignores_field_name_substring(self):
+        """
+        Regression: an unrelated upstream 400 whose body happens to contain
+        ``rate_limit`` as a substring of an identifier (e.g. a field name
+        like ``_litellm_rate_limit_descriptors`` echoed back by OpenAI in an
+        "Unknown parameter" / "Unrecognized request arguments supplied"
+        error) must NOT be classified as a rate-limit signal.
+
+        Without a word boundary the regex ``rate[\\s_\\-]*limit`` matched
+        the embedded ``rate_limit`` and turned a 400 BadRequest into a 429
+        RateLimitError, hiding real proxy bugs (PR #27001 metadata leak)
+        behind a misleading ``throttling_error`` code.
+        """
+        for error_str in [
+            "Unknown parameter: '_litellm_rate_limit_descriptors'.",
+            "Unrecognized request arguments supplied: _litellm_rate_limit_descriptors, _litellm_tpm_reserved_tokens",
+            "my_rate_limit_field is not allowed",
+        ]:
+            assert (
+                ExceptionCheckers.is_error_str_rate_limit(error_str) is False
+            ), f"Field-name substring should not trigger rate-limit signal: {error_str!r}"
+
+    def test_is_error_str_rate_limit_still_matches_standalone_token(self):
+        """Both standalone forms still match — the tightening only affects
+        embedded substrings."""
+        for error_str in [
+            "Rate limit exceeded for tokens",
+            "rate_limit_exceeded: try again later",
+            "rate-limit-exceeded",
+            "You hit a rate limit",
+        ]:
+            assert (
+                ExceptionCheckers.is_error_str_rate_limit(error_str) is True
+            ), f"Standalone rate-limit phrase should match: {error_str!r}"
+
+
+class TestExceptionTypeStatusCodeGate:
+    """
+    Integration tests for the status-code gate on the OpenAI rate-limit
+    heuristic. Even if a 400 message happens to contain a substring that
+    trips the string heuristic, an explicit upstream 400 must map to
+    ``BadRequestError`` — never ``RateLimitError`` — because confusing the
+    two changes whether the client retries.
+    """
+
+    def _make_openai_400(self, message: str) -> Exception:
+        """Build something shaped like an upstream OpenAI 400."""
+        import httpx
+        import openai
+
+        request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+        response = httpx.Response(status_code=400, request=request)
+        err = openai.BadRequestError(
+            message=message,
+            response=response,
+            body={"message": message},
+        )
+        # openai.BadRequestError sets status_code via response, but assert
+        # the surface the mapper actually reads.
+        assert getattr(err, "status_code", None) == 400
+        return err
+
+    def test_openai_400_with_unknown_parameter_maps_to_bad_request(self):
+        """
+        PR #27001 regression: the v3 limiter leaked ``_litellm_*`` keys
+        into the upstream body and OpenAI rejected the request with::
+
+            400 Unknown parameter: '_litellm_rate_limit_descriptors'.
+
+        The exception mapper turned that 400 into a 429
+        ``RateLimitError`` / ``throttling_error`` because the message
+        substring matched ``rate[\\s_\\-]*limit``. That hid the real bug
+        and signalled "throttle and retry" to clients, which would loop
+        forever on a malformed request. Lock in the fix.
+        """
+        from litellm.exceptions import BadRequestError, RateLimitError
+
+        upstream = self._make_openai_400(
+            "Unknown parameter: '_litellm_rate_limit_descriptors'."
+        )
+
+        with pytest.raises(BadRequestError) as exc_info:
+            exception_type(
+                model="gpt-4o-mini",
+                original_exception=upstream,
+                custom_llm_provider="openai",
+                completion_kwargs={},
+                extra_kwargs={},
+            )
+        assert exc_info.value.status_code == 400
+        assert not isinstance(exc_info.value, RateLimitError)
+
+    def test_openai_400_with_unrecognized_arguments_maps_to_bad_request(self):
+        """Same regression, second OpenAI error wording observed in the wild."""
+        from litellm.exceptions import BadRequestError, RateLimitError
+
+        upstream = self._make_openai_400(
+            "Unrecognized request arguments supplied: "
+            "_litellm_rate_limit_descriptors, _litellm_tpm_reserved_model, "
+            "_litellm_tpm_reserved_scopes, _litellm_tpm_reserved_tokens."
+        )
+
+        with pytest.raises(BadRequestError) as exc_info:
+            exception_type(
+                model="gpt-4o-mini",
+                original_exception=upstream,
+                custom_llm_provider="openai",
+                completion_kwargs={},
+                extra_kwargs={},
+            )
+        assert exc_info.value.status_code == 400
+        assert not isinstance(exc_info.value, RateLimitError)
+
+    def test_openai_429_still_maps_to_rate_limit(self):
+        """The status-code gate must not regress the genuine 429 path."""
+        import httpx
+        import openai
+
+        from litellm.exceptions import RateLimitError
+
+        request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+        response = httpx.Response(status_code=429, request=request)
+        upstream = openai.RateLimitError(
+            message="Rate limit reached for requests",
+            response=response,
+            body={"message": "Rate limit reached for requests"},
+        )
+
+        with pytest.raises(RateLimitError) as exc_info:
+            exception_type(
+                model="gpt-4o-mini",
+                original_exception=upstream,
+                custom_llm_provider="openai",
+                completion_kwargs={},
+                extra_kwargs={},
+            )
+        assert exc_info.value.status_code == 429
+
     def test_is_azure_content_policy_violation_error_with_policy_violation_text(self):
         """Test detection of Azure content policy violation with explicit policy violation text"""
 

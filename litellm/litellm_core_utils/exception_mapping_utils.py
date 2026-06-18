@@ -53,8 +53,13 @@ class ExceptionCheckers:
 
         _error_str_lower = error_str.lower()
 
-        # Match "rate limit" (including variations like rate-limit / rate_limit)
-        if re.search(r"rate[\s_\-]*limit", _error_str_lower):
+        # Match "rate limit" (including variations like rate-limit / rate_limit).
+        # Anchored with a leading word boundary so substrings like
+        # ``_litellm_rate_limit_descriptors`` inside an unrelated upstream 400
+        # (e.g. "Unknown parameter: _litellm_rate_limit_descriptors") don't
+        # get misclassified as throttling. Without the boundary, the field
+        # name's embedded ``rate_limit`` matched and turned a 400 into a 429.
+        if re.search(r"\brate[\s_\-]*limit", _error_str_lower):
             return True
 
         #######################################
@@ -397,7 +402,20 @@ def exception_type(  # type: ignore
                         + "Exception"
                     )
 
-                if ExceptionCheckers.is_error_str_rate_limit(error_str):
+                # A known 400 is unambiguous: the upstream rejected the
+                # request body, not the rate. Skipping the string heuristic
+                # in that case prevents an honest 400 ("Unknown parameter",
+                # "invalid_request_error", validation message) from being
+                # misclassified as a 429 just because its body happens to
+                # contain the substring ``rate_limit`` (e.g. a leaked field
+                # name) or a standalone ``429`` (e.g. a model id fragment).
+                _exception_status_code = getattr(
+                    original_exception, "status_code", None
+                )
+                if (
+                    _exception_status_code != 400
+                    and ExceptionCheckers.is_error_str_rate_limit(error_str)
+                ):
                     exception_mapping_worked = True
                     raise RateLimitError(
                         message=f"RateLimitError: {exception_provider} - {message}",
