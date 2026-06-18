@@ -6219,6 +6219,7 @@ def _get_model_info_helper(
                 bedrock_output_config_effort_ceiling=_model_info.get(
                     "bedrock_output_config_effort_ceiling", None
                 ),
+                supported_endpoints=_model_info.get("supported_endpoints", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
                     "search_context_cost_per_query", None

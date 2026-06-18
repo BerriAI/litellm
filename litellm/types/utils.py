@@ -151,6 +151,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     bedrock_output_config_effort_ceiling: Optional[
         Literal["low", "medium", "high", "max", "xhigh"]
     ]
+    supported_endpoints: Optional[List[str]]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
