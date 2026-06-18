@@ -409,7 +409,13 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     agent_id: Optional[str] = kwargs.get("agent_id") or metadata.get("agent_id")
     custom_llm_provider = kwargs.get("custom_llm_provider")
     raw_model = cast(str, kwargs.get("model") or "")
-    model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
+    # prefer the standard logging payload's model; it carries response-level
+    # overrides (e.g. the model Azure Model Router actually selected)
+    model_name = (
+        standard_logging_payload.get("model")
+        if standard_logging_payload is not None
+        else None
+    ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
