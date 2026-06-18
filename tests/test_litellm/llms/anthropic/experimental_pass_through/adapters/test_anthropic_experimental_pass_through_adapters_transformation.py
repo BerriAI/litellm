@@ -2747,3 +2747,28 @@ def test_translate_openai_response_to_anthropic_with_polyfill_both_compaction_an
     cm = result.get("context_management")
     assert cm is not None
     assert cm["applied_edits"][0]["type"] == "compact_20260112"
+
+
+def test_translate_anthropic_tools_to_openai_does_not_leak_type_into_input_schema():
+    """
+    A custom Anthropic tool carries a tool-level "type" discriminator (e.g.
+    "custom") next to an input_schema whose own type must stay "object". The
+    adapter must not copy the tool-level "type" into the schema, and must not
+    mutate the caller's tool dict (it aliased input_schema before the fix, so a
+    Bedrock -> Anthropic fallback died with input_schema.type "object" -> "custom").
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    input_schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+    tool = {
+        "type": "custom",
+        "name": "my_tool",
+        "description": "desc",
+        "input_schema": input_schema,
+    }
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai([tool])
+
+    params = new_tools[0]["function"]["parameters"]
+    assert params["type"] == "object"
+    assert input_schema["type"] == "object"
+    assert tool["input_schema"]["type"] == "object"
