@@ -21,6 +21,7 @@ from litellm.proxy.auth.auth_checks import (
     _block_unknown_cost_models_check,
     _classify_deployment_cost,
     _classify_model_group_cost,
+    _cost_class_cache_key,
     _is_model_cost_zero,
     _request_has_unknown_cost_model,
     common_checks,
@@ -213,7 +214,9 @@ class TestUnmappedModelBudgetEnforcement:
         # Warm the cache as zero-cost.
         assert _is_model_cost_zero(model="ramping-model", llm_router=router) is True
         assert (
-            router._model_cost_class_cache.get("ramping-model")
+            router._model_cost_class_cache.get(
+                _cost_class_cache_key("ramping-model", None)
+            )
             == ModelCostClass.EXPLICIT_ZERO.value
         )
 
@@ -624,7 +627,7 @@ class TestCostClassificationCaching:
         assert lookups["count"] == lookups_after_first
 
         assert (
-            router._model_cost_class_cache[_UNMAPPED_MODEL]
+            router._model_cost_class_cache[_cost_class_cache_key(_UNMAPPED_MODEL, None)]
             == ModelCostClass.UNKNOWN.value
         )
 
@@ -818,3 +821,77 @@ class TestAsCost:
         # bool subclasses int, but a misconfigured `cost: true` is not a $1 price.
         assert _as_cost(True) is None
         assert _as_cost(False) is None
+
+
+class TestTeamScopedCostClassification:
+    """A team can shadow a priced public model name with its own unpriced
+    deployment; the guard must classify the deployment set the router resolves
+    for that team, not the global one, or the team route bypasses budgets."""
+
+    def setup_method(self):
+        self._saved_model_cost = copy.deepcopy(litellm.model_cost)
+
+    def teardown_method(self):
+        litellm.model_cost = self._saved_model_cost
+
+    def _router_with_team_shadow(self) -> Router:
+        # Global "shared-model" is priced; team "teamX" exposes the same public
+        # name backed by its own unmapped (unpriced) deployment.
+        return Router(
+            model_list=[
+                {
+                    "model_name": "shared-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-fake",
+                    },
+                    "model_info": {"id": "global-priced"},
+                },
+                {
+                    "model_name": "shared-model-team-teamX",
+                    "litellm_params": {
+                        "model": "openai/team-unmapped-zzz",
+                        "api_key": "sk-fake",
+                    },
+                    "model_info": {
+                        "id": "team-unpriced",
+                        "team_id": "teamX",
+                        "team_public_model_name": "shared-model",
+                    },
+                },
+            ]
+        )
+
+    def test_team_unpriced_shadow_is_blocked(self):
+        router = self._router_with_team_shadow()
+        # The global view only sees the priced deployment, which is why a
+        # team-unaware guard would wrongly let the team request through.
+        assert (
+            _classify_model_group_cost("shared-model", router, None)
+            == ModelCostClass.KNOWN_POSITIVE
+        )
+        assert (
+            _classify_model_group_cost("shared-model", router, "teamX")
+            == ModelCostClass.UNKNOWN
+        )
+        with pytest.raises(ProxyException) as exc_info:
+            _block_unknown_cost_models_check(
+                enabled=True,
+                model="shared-model",
+                llm_router=router,
+                route="/v1/chat/completions",
+                team_id="teamX",
+            )
+        assert "shared-model" in exc_info.value.message
+
+    def test_non_team_request_not_overblocked(self):
+        router = self._router_with_team_shadow()
+        # A non-team caller routes to the priced global deployment, so the guard
+        # must not block it just because some team shadows the name.
+        _block_unknown_cost_models_check(
+            enabled=True,
+            model="shared-model",
+            llm_router=router,
+            route="/v1/chat/completions",
+            team_id=None,
+        )

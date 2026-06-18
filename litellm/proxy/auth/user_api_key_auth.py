@@ -1358,7 +1358,7 @@ async def _user_api_key_auth_builder(
                         from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
                         skip_budget_checks = _is_model_cost_zero(
-                            model=model, llm_router=llm_router
+                            model=model, llm_router=llm_router, team_id=team_id
                         )
                         if skip_budget_checks:
                             verbose_proxy_logger.info(
@@ -1776,7 +1776,7 @@ async def _user_api_key_auth_builder(
                 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
                 skip_budget_checks = _is_model_cost_zero(
-                    model=model, llm_router=llm_router
+                    model=model, llm_router=llm_router, team_id=valid_token.team_id
                 )
                 if skip_budget_checks:
                     verbose_proxy_logger.info(
@@ -2384,6 +2384,7 @@ async def _run_centralized_common_checks(
         route=route,
         request=request,
         llm_router=llm_router,
+        team_id=user_api_key_auth_obj.team_id,
     )
 
     # Merge x-litellm-tags into request_data BEFORE common_checks runs.
@@ -2488,6 +2489,7 @@ def _should_skip_budget_checks(
     route: str,
     request: Optional[Request],
     llm_router: Optional[Any],
+    team_id: str | None = None,
 ) -> bool:
     model = _get_model_from_request_context(
         request_data=request_data,
@@ -2496,7 +2498,7 @@ def _should_skip_budget_checks(
         llm_router=llm_router,
     )
     if model is not None and llm_router is not None:
-        return _is_model_cost_zero(model=model, llm_router=llm_router)
+        return _is_model_cost_zero(model=model, llm_router=llm_router, team_id=team_id)
     return False
 
 

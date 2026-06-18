@@ -171,32 +171,41 @@ class ModelCostClass(str, Enum):
     UNKNOWN = "unknown"
 
 
-def _classify_model_group_cost(model_name: str, llm_router: Router) -> ModelCostClass:
+def _cost_class_cache_key(model_name: str, team_id: str | None) -> str:
+    """Cache key scoped by team, since a team can map a public model name to its
+    own deployments and the router resolves a different deployment set per team."""
+    return f"{team_id or ''}\x00{model_name}"
+
+
+def _classify_model_group_cost(
+    model_name: str, llm_router: Router, team_id: str | None = None
+) -> ModelCostClass:
     """Classify one model group's per-token pricing, memoized per router.
 
-    Classifies every deployment the request could route to (see
+    Classifies every deployment the request could route to for this team (see
     ``_compute_model_group_cost_class``); a zero cost is only trusted when
     explicitly configured, and a zero defaulted from sparse auto-registration is
     treated as UNKNOWN. The classification is cached on the router so the
     free-model bypass (``_is_model_cost_zero``) and the unknown-cost block check
     (``_request_has_unknown_cost_model``) share a single resolution per model
-    per request.
+    per team per request.
     See: https://github.com/BerriAI/litellm/issues/24770
     """
     cache = _get_router_cost_class_cache(llm_router)
+    cache_key = _cost_class_cache_key(model_name, team_id)
     if cache is not None:
-        cached = cache.get(model_name)
+        cached = cache.get(cache_key)
         if cached is not None:
             return ModelCostClass(cached)
 
-    classification = _compute_model_group_cost_class(model_name, llm_router)
+    classification = _compute_model_group_cost_class(model_name, llm_router, team_id)
     if cache is not None:
-        cache[model_name] = classification.value
+        cache[cache_key] = classification.value
     return classification
 
 
 def _compute_model_group_cost_class(
-    model_name: str, llm_router: Router
+    model_name: str, llm_router: Router, team_id: str | None = None
 ) -> ModelCostClass:
     """Classify a model group from every deployment a request could route to.
 
@@ -205,10 +214,13 @@ def _compute_model_group_cost_class(
     Aggregating with ``get_model_group_info`` keeps the maximum cost across
     deployments, which would hide an unpriced deployment behind a priced one and
     let calls that land on it record $0; classifying each deployment avoids that.
+    ``team_id`` is threaded into ``get_model_list`` so the guard evaluates the
+    same deployment set the router will route to (a team can shadow a priced
+    public model name with its own unpriced deployment).
     """
     safe_name = str(model_name).replace("\n", "").replace("\r", "")
     try:
-        deployments = llm_router.get_model_list(model_name=model_name)
+        deployments = llm_router.get_model_list(model_name=model_name, team_id=team_id)
     except Exception as e:
         verbose_proxy_logger.debug(
             "Error classifying cost for model %s: %s; treating as unknown cost",
@@ -234,14 +246,17 @@ def _compute_model_group_cost_class(
 
 
 def _is_model_cost_zero(
-    model: Optional[Union[str, List[str]]], llm_router: Optional[Router]
+    model: Optional[Union[str, List[str]]],
+    llm_router: Optional[Router],
+    team_id: str | None = None,
 ) -> bool:
     """
     Check if a model has zero cost (explicitly configured $0 pricing).
 
     Returns True only when every requested model group is an explicitly
     configured free deployment. Unmapped / unknown-cost models return False so
-    spend-based budget checks are still enforced.
+    spend-based budget checks are still enforced. ``team_id`` scopes the lookup
+    to the deployment set the router resolves for that team.
     See: https://github.com/BerriAI/litellm/issues/24770
     """
     if model is None or llm_router is None:
@@ -249,7 +264,7 @@ def _is_model_cost_zero(
 
     model_list = [model] if isinstance(model, str) else model
     return all(
-        _classify_model_group_cost(model_name, llm_router)
+        _classify_model_group_cost(model_name, llm_router, team_id)
         == ModelCostClass.EXPLICIT_ZERO
         for model_name in model_list
     )
@@ -350,17 +365,21 @@ def _classify_model_from_cost_map(model_name: str) -> ModelCostClass:
     return ModelCostClass.EXPLICIT_ZERO
 
 
-def _classify_model_cost(model_name: str, llm_router: Router | None) -> ModelCostClass:
+def _classify_model_cost(
+    model_name: str, llm_router: Router | None, team_id: str | None = None
+) -> ModelCostClass:
     """Classify a model's per-token pricing via the router when one is present
-    (resolving wildcard/pattern deployments the way cost tracking does) or the
-    global litellm cost map otherwise."""
+    (resolving wildcard/pattern deployments the way cost tracking does, scoped to
+    the team) or the global litellm cost map otherwise."""
     if llm_router is not None:
-        return _classify_model_group_cost(model_name, llm_router)
+        return _classify_model_group_cost(model_name, llm_router, team_id)
     return _classify_model_from_cost_map(model_name)
 
 
 def _request_has_unknown_cost_model(
-    model: str | list[str] | None, llm_router: Router | None
+    model: str | list[str] | None,
+    llm_router: Router | None,
+    team_id: str | None = None,
 ) -> bool:
     """Return True if any requested model has a cost LiteLLM cannot determine,
     meaning its spend cannot be measured for budget enforcement."""
@@ -368,7 +387,7 @@ def _request_has_unknown_cost_model(
         return False
     model_list = [model] if isinstance(model, str) else model
     return any(
-        _classify_model_cost(model_name, llm_router) == ModelCostClass.UNKNOWN
+        _classify_model_cost(model_name, llm_router, team_id) == ModelCostClass.UNKNOWN
         for model_name in model_list
     )
 
@@ -378,6 +397,7 @@ def _block_unknown_cost_models_check(
     model: str | list[str] | None,
     llm_router: Router | None,
     route: str,
+    team_id: str | None = None,
 ) -> None:
     """Fail closed against Denial of Wallet (OWASP LLM10 Unbounded Consumption).
 
@@ -387,15 +407,18 @@ def _block_unknown_cost_models_check(
     budget protecting the caller would silently never trip; a cap that can't
     measure spend is no cap at all. Cost is resolved via the router when present
     and the global litellm cost map otherwise, so the guard holds even on a
-    proxy that routes directly through litellm. Explicitly free deployments
-    (cost configured as 0) are unaffected because their budget checks are
-    already skipped upstream.
+    proxy that routes directly through litellm. ``team_id`` scopes the lookup to
+    the deployments the router will route to for the caller's team. Explicitly
+    free deployments (cost configured as 0) are unaffected because their budget
+    checks are already skipped upstream.
     """
     if not enabled:
         return
     if not RouteChecks.is_llm_api_route(route=route):
         return
-    if not _request_has_unknown_cost_model(model=model, llm_router=llm_router):
+    if not _request_has_unknown_cost_model(
+        model=model, llm_router=llm_router, team_id=team_id
+    ):
         return
 
     model_str = model if isinstance(model, str) else ", ".join(model or [])
@@ -809,6 +832,7 @@ async def common_checks(
             model=general_settings.get("completion_model") or _model,
             llm_router=llm_router,
             route=route,
+            team_id=valid_token.team_id if valid_token else None,
         )
 
         # 3. If team is in budget
