@@ -2243,6 +2243,7 @@ class Router:
                                 generated_content=e.generated_content,
                                 model_group=model_group,
                                 fallbacks=fallbacks,
+                                resolve_underlying_model=self._underlying_model_for_group,
                             )
                         )
                     self._update_kwargs_before_fallbacks(
@@ -2803,6 +2804,7 @@ class Router:
                                 generated_content=e.generated_content,
                                 model_group=model_group,
                                 fallbacks=fallbacks,
+                                resolve_underlying_model=router_self._underlying_model_for_group,
                             )
                         )
                     router_self._update_kwargs_before_fallbacks(
@@ -9049,6 +9051,15 @@ class Router:
                 else:
                     raise Exception("Model Name invalid - {}".format(type(model)))
         return None
+
+    def _underlying_model_for_group(self, model_group_name: str) -> str | None:
+        """Registry model name the group resolves to (e.g. the alias
+        ``production-claude`` -> ``anthropic/claude-sonnet-4-6``), or None when
+        the group has no deployment."""
+        deployment = self.get_deployment_by_model_group_name(model_group_name)
+        if deployment is None:
+            return None
+        return deployment.litellm_params.model
 
     def get_deployment_credentials_with_provider(
         self, model_id: str

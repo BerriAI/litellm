@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -19,8 +20,10 @@ else:
 
 MID_STREAM_CONTINUATION_SYSTEM_PROMPT = "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: "
 
+FallbackEntry = Union[str, Dict[str, List[str]]]
 
-def _prefill_explicitly_unsupported(model_group: str | None) -> bool:
+
+def _prefill_explicitly_unsupported(model: str | None) -> bool:
     """True only when the model registry explicitly marks the model as NOT
     supporting assistant prefill (``supports_assistant_prefill: false``).
 
@@ -28,15 +31,52 @@ def _prefill_explicitly_unsupported(model_group: str | None) -> bool:
     the legacy prefill behavior — only models that would reject the prefill with
     a 400 anyway are routed to the user-message continuation.
     """
-    if model_group is None:
+    if model is None:
         return False
     try:
         from litellm.utils import get_model_info
 
-        model_info = get_model_info(model=model_group)
+        model_info = get_model_info(model=model)
         return model_info.get("supports_assistant_prefill") is False
     except Exception:
         return False
+
+
+def _candidate_model_groups(
+    model_group: str | None, fallbacks: list[FallbackEntry] | None
+) -> tuple[str, ...]:
+    """Every model group the reused continuation messages can reach for this hop:
+    the primary group plus its fallback targets. Bare-string fallback entries are
+    generic fallbacks tried for every group; dict-format entries are resolved for
+    this group. Both formats (and mixed lists) are collected directly so a
+    prefill-rejecting target anywhere in the list is never missed.
+    """
+    if model_group is None:
+        return ()
+    if not fallbacks:
+        return (model_group,)
+    bare_strings = tuple(f for f in fallbacks if isinstance(f, str))
+    try:
+        # Copy: get_fallback_model_group pops string entries while iterating,
+        # which would mutate the caller's live fallbacks list.
+        dict_targets, _ = get_fallback_model_group(
+            fallbacks=list(fallbacks), model_group=model_group
+        )
+    except Exception:
+        dict_targets = None
+    return (model_group, *bare_strings, *(dict_targets or ()))
+
+
+def _resolved_registry_model(
+    model_group: str,
+    resolve_underlying_model: Callable[[str], str | None] | None,
+) -> str | None:
+    if resolve_underlying_model is None:
+        return None
+    try:
+        return resolve_underlying_model(model_group)
+    except Exception:
+        return None
 
 
 def build_mid_stream_continuation_messages(
@@ -44,6 +84,7 @@ def build_mid_stream_continuation_messages(
     generated_content: str,
     model_group: str | None,
     fallbacks: list[Any] | None = None,
+    resolve_underlying_model: Callable[[str], str | None] | None = None,
 ) -> list[Any]:
     """Build the message list a mid-stream fallback uses to resume an interrupted stream.
 
@@ -60,35 +101,19 @@ def build_mid_stream_continuation_messages(
 
     The same continuation messages are sent to every deployment the fallback
     chain tries, so the safe pattern engages when the primary model OR any
-    configured fallback target for this model group is explicitly marked as
-    not supporting prefill.
+    configured fallback target is explicitly marked as not supporting prefill.
+    Router model-group names are often custom aliases absent from the registry,
+    so ``resolve_underlying_model`` maps each candidate group to the deployment
+    model the registry actually keys on.
     """
-    candidate_models: list[str | None] = [model_group]
-    if fallbacks is not None and model_group is not None:
-        if fallbacks and all(isinstance(f, str) for f in fallbacks):
-            # Flat string-format lists (["model-a", "model-b", ...]) are tried in
-            # order for every model_group. get_fallback_model_group surfaces only
-            # ONE entry from them — it pops a single string mid-iteration and
-            # leaves the rest hidden — so a prefill-rejecting model at a non-first
-            # position would slip through, and the once-built continuation that is
-            # reused across every hop would 400 when the chain reaches it. Check
-            # every entry directly instead.
-            candidate_models.extend(fallbacks)
-        else:
-            try:
-                # list() copy: get_fallback_model_group POPS string entries from a
-                # mixed fallbacks list while iterating — mutating the live list
-                # here would silently drop a fallback target before the actual
-                # fallback execution runs.
-                fallback_model_group, _ = get_fallback_model_group(
-                    fallbacks=list(fallbacks), model_group=model_group
-                )
-                if fallback_model_group:
-                    candidate_models.extend(fallback_model_group)
-            except Exception:
-                pass
-
-    if any(_prefill_explicitly_unsupported(m) for m in candidate_models):
+    groups = _candidate_model_groups(model_group, fallbacks)
+    models_to_check = frozenset(
+        model
+        for group in groups
+        for model in (group, _resolved_registry_model(group, resolve_underlying_model))
+        if model is not None
+    )
+    if any(_prefill_explicitly_unsupported(model) for model in models_to_check):
         return messages + [
             {
                 "role": "user",

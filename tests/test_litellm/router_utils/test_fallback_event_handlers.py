@@ -174,3 +174,70 @@ def test_flat_string_fallback_all_prefill_supporting_keeps_legacy():
         fallbacks=["gpt-4o", "gpt-3.5-turbo"],
     )
     _assert_legacy_prefill(result)
+
+
+def test_mixed_format_fallback_prefill_rejecter_string_entry():
+    """A mixed dict+string fallback list must still catch a prefill-rejecting
+    bare-string entry — get_fallback_model_group only surfaces the dict target
+    for the group, so the trailing string had been slipping through."""
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="gpt-4",
+        fallbacks=[{"gpt-4": ["gpt-4o"]}, "claude-sonnet-4-6"],
+    )
+    assert len(result) == 2
+    assert result[1]["role"] == "user"
+    assert PARTIAL in result[1]["content"]
+    assert all(m.get("prefix") is not True for m in result)
+
+
+def test_custom_group_alias_resolved_to_prefill_rejecter():
+    """A router group name is often a custom alias absent from the registry
+    (get_model_info(alias) raises). The injected resolver maps it to the
+    deployment's registry model so the prefill-rejecting capability is honored."""
+    aliases = {"production-claude": "anthropic/claude-sonnet-4-6"}
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="production-claude",
+        resolve_underlying_model=aliases.get,
+    )
+    assert len(result) == 2
+    assert result[1]["role"] == "user"
+    assert PARTIAL in result[1]["content"]
+
+
+def test_custom_group_alias_without_resolver_falls_back_to_legacy():
+    """Without a resolver an unregistered alias cannot be classified, so the
+    legacy prefill path is preserved (no regression vs. pre-fix behavior)."""
+    _assert_legacy_prefill(_build("production-claude"))
+
+
+def test_resolver_applied_to_fallback_target_alias():
+    """The resolver also resolves fallback-target aliases, not just the primary
+    group, so a prefill-rejecting fallback hidden behind an alias is caught."""
+    aliases = {"prod-anthropic": "claude-sonnet-4-6"}
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="gpt-4",
+        fallbacks=[{"gpt-4": ["prod-anthropic"]}],
+        resolve_underlying_model=aliases.get,
+    )
+    assert len(result) == 2
+    assert result[1]["role"] == "user"
+    assert PARTIAL in result[1]["content"]
+
+
+def test_resolver_returning_prefill_supporting_model_keeps_legacy():
+    """A resolver that maps to a prefill-supporting registry model must not flip
+    the behavior — only an explicit supports_assistant_prefill=false does."""
+    aliases = {"prod-gpt": "gpt-4o"}
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="prod-gpt",
+        resolve_underlying_model=aliases.get,
+    )
+    _assert_legacy_prefill(result)
