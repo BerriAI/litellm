@@ -152,10 +152,7 @@ class TestOCIChatConfig:
             headers={},
         )
         assert "tools" in transformed_request["chatRequest"]
-        assert (
-            transformed_request["chatRequest"]["tools"][0]["name"]
-            == "get_current_weather"
-        )
+        assert transformed_request["chatRequest"]["tools"][0]["name"] == "get_current_weather"
         assert transformed_request["chatRequest"]["tools"][0]["type"] == "FUNCTION"
         assert (
             transformed_request["chatRequest"]["tools"][0]["description"]
@@ -294,18 +291,11 @@ class TestOCIChatConfig:
 
         # Verify Cohere-specific request structure
         assert "message" in transformed_request["chatRequest"]  # Cohere uses "message"
-        assert (
-            "chatHistory" in transformed_request["chatRequest"]
-        )  # Cohere uses "chatHistory"
-        assert (
-            "messages" not in transformed_request["chatRequest"]
-        )  # Generic uses "messages"
+        assert "chatHistory" in transformed_request["chatRequest"]  # Cohere uses "chatHistory"
+        assert "messages" not in transformed_request["chatRequest"]  # Generic uses "messages"
 
         # Verify the message content
-        assert (
-            transformed_request["chatRequest"]["message"]
-            == "What is quantum computing?"
-        )
+        assert transformed_request["chatRequest"]["message"] == "What is quantum computing?"
 
     def test_transform_request_response_format_json_object(self):
         """
@@ -501,11 +491,7 @@ class TestOCIChatConfig:
         are handled correctly (fields are optional).
         """
         config = OCIChatConfig()
-        created_time = (
-            datetime.datetime.now(datetime.timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
+        created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         mock_oci_response = {
             "modelId": TEST_MODEL_NAME,
             "modelVersion": "1.0",
@@ -557,11 +543,7 @@ class TestOCIChatConfig:
         Tests if a simple text response is transformed correctly.
         """
         config = OCIChatConfig()
-        created_time = (
-            datetime.datetime.now(datetime.timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
+        created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         mock_oci_response = {
             "modelId": TEST_MODEL_NAME,
             "modelVersion": "1.0",
@@ -572,9 +554,7 @@ class TestOCIChatConfig:
                         "index": 0,
                         "message": {
                             "role": "ASSISTANT",
-                            "content": [
-                                {"type": "TEXT", "text": "I am doing well, thank you!"}
-                            ],
+                            "content": [{"type": "TEXT", "text": "I am doing well, thank you!"}],
                         },
                         "finishReason": "COMPLETE",
                     }
@@ -634,11 +614,7 @@ class TestOCIChatConfig:
         Tests if a response with tool calls is transformed correctly.
         """
         config = OCIChatConfig()
-        created_time = (
-            datetime.datetime.now(datetime.timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
+        created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         mock_oci_response = {
             "modelId": TEST_MODEL_NAME,
             "modelVersion": "1.0",
@@ -678,9 +654,7 @@ class TestOCIChatConfig:
             },
         }
         response = httpx.Response(status_code=200, json=mock_oci_response)
-        model_response = ModelResponse(
-            choices=[litellm.Choices(index=0, message=litellm.Message())]
-        )
+        model_response = ModelResponse(choices=[litellm.Choices(index=0, message=litellm.Message())])
 
         result = config.transform_response(
             model=TEST_MODEL_NAME,
@@ -1072,9 +1046,7 @@ class TestOCICohereParamMapping:
             "topP",
             "frequencyPenalty",
         ):
-            assert (
-                injected not in result
-            ), f"'{injected}' should not be injected when user did not provide it"
+            assert injected not in result, f"'{injected}' should not be injected when user did not provide it"
 
     def test_cohere_explicit_params_still_passed(self):
         """User-provided Cohere params must still be forwarded correctly."""
@@ -1087,6 +1059,58 @@ class TestOCICohereParamMapping:
         )
         assert result.get("maxTokens") == 200
         assert result.get("temperature") == 0.5
+
+
+class TestOCICohereToolParameterTypes:
+    """OCI's Cohere backend returns HTTP 500 on a bare ``List`` parameter type
+    (e.g. MLflow judge tools whose params are JSON-schema arrays). Collection
+    types must map to the lowercase builtins. Verified live against us-chicago-1.
+    """
+
+    def _parameter_definitions(self) -> dict:
+        config = OCIChatConfig()
+        body = config.transform_request(
+            model="cohere.command-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={
+                **BASE_OCI_PARAMS,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_span",
+                            "description": "Fetch a span.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "attributes": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "attribute names",
+                                    },
+                                    "filters": {
+                                        "type": "object",
+                                        "description": "filter mapping",
+                                    },
+                                },
+                                "required": [],
+                            },
+                        },
+                    }
+                ],
+            },
+            litellm_params={},
+            headers={},
+        )
+        return body["chatRequest"]["tools"][0]["parameterDefinitions"]
+
+    def test_array_param_maps_to_lowercase_list(self):
+        params = self._parameter_definitions()
+        assert params["attributes"]["type"] == "list"
+
+    def test_object_param_maps_to_lowercase_dict(self):
+        params = self._parameter_definitions()
+        assert params["filters"]["type"] == "dict"
 
 
 class TestOCIDefaultMaxTokens:
@@ -1107,16 +1131,12 @@ class TestOCIDefaultMaxTokens:
         )
         return body["chatRequest"]
 
-    @pytest.mark.parametrize(
-        "model", ["cohere.command-latest", "meta.llama-3.3-70b-instruct"]
-    )
+    @pytest.mark.parametrize("model", ["cohere.command-latest", "meta.llama-3.3-70b-instruct"])
     def test_default_injected_when_max_tokens_omitted(self, model):
         chat_request = self._chat_request(model, {})
         assert chat_request["maxTokens"] == DEFAULT_OCI_CHAT_MAX_TOKENS
 
-    @pytest.mark.parametrize(
-        "model", ["cohere.command-latest", "meta.llama-3.3-70b-instruct"]
-    )
+    @pytest.mark.parametrize("model", ["cohere.command-latest", "meta.llama-3.3-70b-instruct"])
     def test_explicit_max_tokens_not_overridden(self, model):
         chat_request = self._chat_request(model, {"max_tokens": 256})
         assert chat_request["maxTokens"] == 256
@@ -1210,11 +1230,7 @@ class TestOCIReasoningEffort:
         Usage.completion_tokens_details.reasoning_tokens."""
         from litellm.llms.oci.chat.generic import handle_generic_response
 
-        created_time = (
-            datetime.datetime.now(datetime.timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
+        created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         oci_response = {
             "modelId": "xai.grok-4-fast-reasoning",
             "modelVersion": "1.0",
@@ -1254,11 +1270,7 @@ class TestOCIReasoningEffort:
         """When OCI omits completionTokensDetails, Usage has no reasoning_tokens."""
         from litellm.llms.oci.chat.generic import handle_generic_response
 
-        created_time = (
-            datetime.datetime.now(datetime.timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
+        created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         oci_response = {
             "modelId": "xai.grok-4",
             "modelVersion": "1.0",
@@ -1337,9 +1349,7 @@ class TestOCIStreamingSignedBody:
             signed_json_body=signed_bytes,
         )
 
-        assert (
-            posted_data["data"] == signed_bytes
-        ), "Streaming must use signed_json_body, not re-serialize data"
+        assert posted_data["data"] == signed_bytes, "Streaming must use signed_json_body, not re-serialize data"
 
     def test_get_custom_stream_wrapper_fallback_without_signed_body(self, monkeypatch):
         """When signed_json_body is None, fall back to json.dumps(data)."""
@@ -1376,9 +1386,9 @@ class TestOCIStreamingSignedBody:
             signed_json_body=None,
         )
 
-        assert posted_data["data"] == json.dumps(
-            payload
-        ), "Without signed_json_body, must fall back to json.dumps(data)"
+        assert posted_data["data"] == json.dumps(payload), (
+            "Without signed_json_body, must fall back to json.dumps(data)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1478,6 +1488,7 @@ class TestOCIChatConfigErrorPaths:
             drop_params=False,
         )
         assert "max_retries" not in result
+
     def test_map_openai_params_cohere_n_default_dropped(self):
         """Cohere has no numGenerations field, but n=1 (and None) is the OpenAI
         default single-generation request. It must be dropped silently rather
