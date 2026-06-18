@@ -1060,7 +1060,7 @@ def test_initialize_pass_through_endpoints_with_cost_per_request():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  # noqa: PLR0915
+async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
     """
     Test that pass_through_request (parent method) correctly includes proxy_server_request
     in kwargs passed to the success handler.

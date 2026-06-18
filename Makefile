@@ -5,8 +5,8 @@
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
-	lint-mypy lint-mypy-budget-update lint-basedpyright lint-basedpyright-budget-update \
-	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-any \
+	lint-basedpyright lint-basedpyright-budget-update \
+	lint-ruff-budget lint-ruff-budget-update lint-budget-update \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
@@ -22,17 +22,14 @@ help:
 	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
 	@echo "  make format             - Apply Black code formatting"
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
-	@echo "  make lint               - Run all linting (Ruff, MyPy, Black check, circular imports, import safety)"
+	@echo "  make lint               - Run all linting (Ruff, basedpyright, Black check, circular imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
-	@echo "  make lint-mypy          - Run MyPy (disallow_untyped_defs), gated by per-rule error counts"
-	@echo "  make lint-mypy-budget-update - Re-capture the MyPy per-rule budget (ratchet)"
 	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-rule error counts"
 	@echo "  make lint-basedpyright-budget-update - Re-capture the basedpyright per-rule budget (ratchet)"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
 	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its ceiling"
 	@echo "  make lint-ruff-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
-	@echo "  make lint-budget-update - Re-capture all three ratchet budgets (ruff + mypy + basedpyright)"
-	@echo "  make lint-any           - Fail if changed lines under litellm/ hold an Any-typed value"
+	@echo "  make lint-budget-update - Re-capture all ratchet budgets (ruff + basedpyright)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -126,17 +123,11 @@ lint-ruff-FULL-dev: install-dev
 	if [ -n "$$files" ]; then echo "$$files" | xargs $(UV_RUN) ruff check; \
 	else echo "No changed .py files to check."; fi
 
-lint-mypy: install-dev
-	cd litellm && ($(UV_RUN) mypy . || true) | $(UV_RUN) python ../scripts/type_check_gate.py --tool mypy
-
-lint-mypy-budget-update: install-dev
-	cd litellm && ($(UV_RUN) mypy . || true) | $(UV_RUN) python ../scripts/type_check_gate.py --tool mypy --update
-
 lint-basedpyright: install-dev
-	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --tool basedpyright
+	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py
 
 lint-basedpyright-budget-update: install-dev
-	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --tool basedpyright --update
+	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --update
 
 lint-black: format-check
 
@@ -146,11 +137,8 @@ lint-ruff-budget: install-dev
 lint-ruff-budget-update: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py --update
 
-# Ratchet all three budgets in one shot (ruff strict + mypy + basedpyright)
-lint-budget-update: lint-ruff-budget-update lint-mypy-budget-update lint-basedpyright-budget-update
-
-lint-any: install-dev
-	$(UV_RUN) python scripts/check_any_discipline.py --changed
+# Ratchet all budgets in one shot (ruff strict + basedpyright)
+lint-budget-update: lint-ruff-budget-update lint-basedpyright-budget-update
 
 check-circular-imports: install-dev
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
@@ -159,10 +147,10 @@ check-import-safety: install-dev
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
 # Combined linting (matches test-linting.yml workflow)
-lint: format-check lint-ruff lint-mypy lint-basedpyright check-circular-imports check-import-safety lint-ruff-budget lint-any
+lint: format-check lint-ruff lint-basedpyright check-circular-imports check-import-safety lint-ruff-budget
 
 # Faster linting for local development (only checks changed code)
-lint-dev: lint-format-changed lint-mypy lint-any check-circular-imports check-import-safety
+lint-dev: lint-format-changed check-circular-imports check-import-safety
 
 # Testing targets
 test: install-test-deps

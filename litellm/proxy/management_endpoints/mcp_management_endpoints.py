@@ -49,6 +49,8 @@ from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
     build_env_var_setup_url,
     collect_env_var_references,
+    LITELLM_MCP_SERVER_DESCRIPTION,
+    LITELLM_MCP_SERVER_NAME,
     get_server_prefix,
     parse_admin_env_vars,
 )
@@ -89,8 +91,6 @@ def does_mcp_server_exist(
 
 
 DEFAULT_MCP_REGISTRY_VERSION = "1.0.0"
-LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
-LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
 
 try:
     importlib.import_module("mcp")

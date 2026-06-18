@@ -1639,7 +1639,10 @@ async def test_router_text_completion_client():
                 "litellm_params": {
                     "model": "text-completion-openai/gpt-3.5-turbo-instruct",
                     "api_key": os.getenv("OPENAI_API_KEY", None),
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": os.getenv(
+                        "FAKE_OPENAI_API_BASE",
+                        "https://exampleopenaiendpoint-production.up.railway.app/",
+                    ),
                 },
             }
         ]

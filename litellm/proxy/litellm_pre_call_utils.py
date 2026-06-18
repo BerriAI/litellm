@@ -162,6 +162,8 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS = (
     "secret_fields",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
+    "client_disconnected",
+    "error_information",
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 
@@ -1317,7 +1319,7 @@ class LiteLLMProxyRequestSetup:
         )
 
 
-async def add_litellm_data_to_request(  # noqa: PLR0915
+async def add_litellm_data_to_request(
     data: dict,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,

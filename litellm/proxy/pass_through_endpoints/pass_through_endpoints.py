@@ -143,7 +143,7 @@ async def set_env_variables_in_header(custom_headers: Optional[dict]) -> Optiona
     return headers
 
 
-async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
+async def chat_completion_pass_through_endpoint(
     fastapi_response: Response,
     request: Request,
     adapter_id: str,
@@ -701,7 +701,7 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
-async def pass_through_request(  # noqa: PLR0915
+async def pass_through_request(
     request: Request,
     target: str,
     custom_headers: dict,
@@ -1540,7 +1540,7 @@ async def _parse_request_data_by_content_type(
     return query_params_data, custom_body_data, file_data, stream
 
 
-def create_pass_through_route(  # noqa: PLR0915
+def create_pass_through_route(
     endpoint,
     target: str,
     custom_headers: Optional[Mapping[str, Any]] = None,
@@ -1776,7 +1776,7 @@ def create_websocket_passthrough_route(
     return websocket_endpoint_func
 
 
-async def websocket_passthrough_request(  # noqa: PLR0915
+async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
     custom_headers: dict,

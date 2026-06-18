@@ -72,3 +72,12 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
 
     aws_sts_endpoint: Optional[str] = None
     """Custom STS endpoint URL (useful for VPC endpoints or testing)"""
+
+    replica_regions: Optional[List[str]] = None
+    """
+    Optional list of additional AWS regions to replicate secrets to after CreateSecret.
+    Uses the AWS Secrets Manager ReplicateSecretToRegions API. Replication is
+    best-effort — failure to replicate does not fail key creation.
+    Example: ["us-west-2", "eu-west-1"]
+    Only applies when key_management_system is "aws_secret_manager".
+    """

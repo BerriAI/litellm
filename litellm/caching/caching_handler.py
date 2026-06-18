@@ -394,7 +394,7 @@ class LLMCachingHandler:
                 return cr["model"]
         return None
 
-    def _process_async_embedding_cached_response(  # noqa: PLR0915
+    def _process_async_embedding_cached_response(
         self,
         final_embedding_cached_response: Optional[EmbeddingResponse],
         cached_result: List[Optional[CachedEmbedding]],

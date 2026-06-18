@@ -585,6 +585,50 @@ async def test_logging_hook_multiple_content_items(presidio_guardrail):
 
 
 @pytest.mark.asyncio
+async def test_logging_only_does_not_mask_pre_call_request(
+    mock_user_api_key, mock_cache
+):
+    """
+    A guardrail configured with `logging_only` must only mask PII for logs/traces,
+    never for the request sent to the model. `async_pre_call_hook` should leave the
+    request untouched so the model receives (and replies based on) the real input.
+
+    Regression test for the case where the pre-call hook masked the live request,
+    causing the model's response to contain anonymization tokens (e.g. <PERSON>)
+    instead of the real output.
+    """
+    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        logging_only=True,
+        pii_entities_config={PiiEntityType.PHONE_NUMBER: PiiAction.MASK},
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("555-123-4567", "[PHONE]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    original_text = "My phone is 555-123-4567"
+    test_data = {
+        "messages": [{"role": "user", "content": original_text}],
+        "model": "gpt-4",
+    }
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    # The live request must be unchanged: PII reaches the model intact.
+    assert result["messages"][0]["content"] == original_text
+    assert "[PHONE]" not in result["messages"][0]["content"]
+
+    print("✓ logging_only leaves the pre-call request unmasked")
+
+
+@pytest.mark.asyncio
 async def test_presidio_sets_guardrail_information_in_request_data():
     """
     Test that Presidio populates guardrail information into request_data metadata.

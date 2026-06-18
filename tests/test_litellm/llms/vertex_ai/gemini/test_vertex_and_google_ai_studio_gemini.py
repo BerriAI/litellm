@@ -4996,3 +4996,146 @@ def test_mid_stream_429_error_raises_during_iteration():
     # Verify: 429 error is properly raised
     assert exc_info.value.status_code == 429
     assert "RESOURCE_EXHAUSTED" in str(exc_info.value.message)
+
+
+class TestModelResponseIteratorCleanup:
+    def _make_logging_obj(self):
+        from unittest.mock import Mock
+
+        obj = Mock()
+        obj.optional_params = {}
+        return obj
+
+    def test_aclose_closes_iterator_and_response(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            ModelResponseIterator,
+        )
+
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+
+        mock_iterator = MagicMock()
+        mock_iterator.aclose = AsyncMock()
+
+        iterator = ModelResponseIterator(
+            streaming_response=MagicMock(),
+            sync_stream=False,
+            logging_obj=self._make_logging_obj(),
+            response=mock_response,
+        )
+        iterator.async_response_iterator = mock_iterator
+
+        asyncio.run(iterator.aclose())
+
+        mock_iterator.aclose.assert_awaited_once()
+        mock_response.aclose.assert_awaited_once()
+
+    def test_close_closes_iterator_and_response(self):
+        from unittest.mock import MagicMock
+
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            ModelResponseIterator,
+        )
+
+        mock_response = MagicMock()
+        mock_iterator = MagicMock()
+
+        iterator = ModelResponseIterator(
+            streaming_response=MagicMock(),
+            sync_stream=True,
+            logging_obj=self._make_logging_obj(),
+            response=mock_response,
+        )
+        iterator.response_iterator = mock_iterator
+
+        iterator.close()
+
+        mock_iterator.close.assert_called_once()
+        mock_response.close.assert_called_once()
+
+    def test_aclose_without_response_does_not_raise(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            ModelResponseIterator,
+        )
+
+        mock_iterator = MagicMock()
+        mock_iterator.aclose = AsyncMock()
+
+        iterator = ModelResponseIterator(
+            streaming_response=MagicMock(),
+            sync_stream=False,
+            logging_obj=self._make_logging_obj(),
+        )
+        iterator.async_response_iterator = mock_iterator
+
+        asyncio.run(iterator.aclose())
+
+        mock_iterator.aclose.assert_awaited_once()
+
+    def test_aclose_tolerates_iterator_error(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            ModelResponseIterator,
+        )
+
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+
+        mock_iterator = MagicMock()
+        mock_iterator.aclose = AsyncMock(side_effect=RuntimeError("transport error"))
+
+        iterator = ModelResponseIterator(
+            streaming_response=MagicMock(),
+            sync_stream=False,
+            logging_obj=self._make_logging_obj(),
+            response=mock_response,
+        )
+        iterator.async_response_iterator = mock_iterator
+
+        asyncio.run(iterator.aclose())
+
+        mock_response.aclose.assert_awaited_once()
+
+    def test_custom_stream_wrapper_aclose_triggers_model_response_iterator_aclose(self):
+        """CustomStreamWrapper.aclose() must propagate to ModelResponseIterator.aclose()."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            ModelResponseIterator,
+        )
+
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+
+        mock_iterator = MagicMock()
+        mock_iterator.aclose = AsyncMock()
+
+        model_response_iter = ModelResponseIterator(
+            streaming_response=MagicMock(),
+            sync_stream=False,
+            logging_obj=self._make_logging_obj(),
+            response=mock_response,
+        )
+        model_response_iter.async_response_iterator = mock_iterator
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=model_response_iter,
+            model="gemini-2.0-flash",
+            custom_llm_provider="vertex_ai",
+            logging_obj=MagicMock(),
+        )
+
+        asyncio.run(wrapper.aclose())
+
+        mock_iterator.aclose.assert_awaited_once()
+        mock_response.aclose.assert_awaited_once()

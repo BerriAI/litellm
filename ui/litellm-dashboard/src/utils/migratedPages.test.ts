@@ -48,6 +48,14 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES["llm-playground"]).toBe("playground");
   });
 
+  it("maps the models sidebar id to the models-and-endpoints route and builds its redirect href", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, migratedHref } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.models).toBe("models-and-endpoints");
+    expect(migratedHref(MIGRATED_PAGES.models)).toBe("/ui/models-and-endpoints");
+  });
+
   it("maps the projects and access-groups sidebar ids to their routes", async () => {
     vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
     const { MIGRATED_PAGES } = await import("./migratedPages");

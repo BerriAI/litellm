@@ -514,3 +514,26 @@ async def test_get_data_combined_view_returns_view_for_deprecated_key(
 
     assert isinstance(response, LiteLLM_VerificationTokenView)
     assert response.token == active_hash
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [5, None])
+async def test_get_data_team_keys_forward_limit_as_take(
+    prisma_client: PrismaClient, limit: Any
+) -> None:
+    """The /team/info ``key_limit`` must reach Prisma as ``take`` so the
+    database caps how many of a team's keys come back.
+    ``limit=None`` leaves ``take`` unset so every key is returned.
+    """
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    await prisma_client.get_data(
+        team_id="team-1",
+        table_name="key",
+        query_type="find_all",
+        limit=limit,
+    )
+    assert prisma_client.db.litellm_verificationtoken.find_many.await_args.kwargs == {
+        "take": limit,
+        "where": {"team_id": "team-1"},
+        "include": {"litellm_budget_table": True},
+    }

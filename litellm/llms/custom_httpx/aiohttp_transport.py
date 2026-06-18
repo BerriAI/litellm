@@ -116,6 +116,16 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             # For other exceptions, use the normal mapping
             with map_aiohttp_exceptions():
                 raise
+        finally:
+            # Release the aiohttp connection when iteration ends for any
+            # reason (read timeout, cancellation from a client disconnect,
+            # GeneratorExit). Without this, abnormally terminated streams
+            # permanently hold a slot in the TCPConnector pool; once the
+            # pool is exhausted every request to that host times out (408)
+            # until the proxy is restarted, even after the backend recovers.
+            # On a fully-read response the connection was already released
+            # at EOF and close() is a no-op.
+            self._aiohttp_response.close()
 
     async def aclose(self) -> None:
         with map_aiohttp_exceptions():

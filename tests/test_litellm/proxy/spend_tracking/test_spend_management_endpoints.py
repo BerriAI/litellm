@@ -359,6 +359,7 @@ ignored_keys = [
     "metadata.additional_usage_values.cache_read_input_tokens",
     "metadata.additional_usage_values.inference_geo",
     "metadata.additional_usage_values.speed",
+    "metadata.additional_usage_values.service_tier",
     "metadata.additional_usage_values.iterations",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",

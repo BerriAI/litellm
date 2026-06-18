@@ -605,7 +605,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _tool_choice
 
-    def _map_tool_helper(  # noqa: PLR0915
+    def _map_tool_helper(
         self,
         tool: ChatCompletionToolParam,
     ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
@@ -1399,7 +1399,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return None
 
-    def map_openai_params(  # noqa: PLR0915
+    def map_openai_params(
         self,
         non_default_params: dict,
         optional_params: dict,
@@ -2213,6 +2213,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         inference_geo: Optional[str] = None
         if "inference_geo" in _usage and _usage["inference_geo"] is not None:
             inference_geo = _usage["inference_geo"]
+        service_tier = cast(
+            str | None,
+            _usage.get("service_tier"),
+        )
 
         iterations: Optional[List[Any]] = _usage.get("iterations")
         if iterations:
@@ -2324,6 +2328,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ),
             inference_geo=inference_geo,
             speed=speed,
+            service_tier=service_tier,
         )
         return usage
 

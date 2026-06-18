@@ -184,6 +184,20 @@ class OpenTelemetryV2Config(BaseSettings):
         ),
     )
 
+    @field_validator("capture_message_content", mode="before")
+    @classmethod
+    def _normalize_capture_message_content(cls, value: object) -> object:
+        """Fold the capture mode to its canonical lower_snake_case form.
+
+        V1 read this env var case-insensitively, so operators set the
+        UPPER_SNAKE_CASE form (e.g. ``SPAN_AND_EVENT``). The canonical values
+        here are lower_snake_case; normalizing at the boundary keeps both
+        spellings working and lets every downstream comparison stay exact.
+        """
+        if isinstance(value, str):
+            return value.lower()
+        return value
+
     @field_validator(
         "baggage_promoted_keys",
         "baggage_metadata_keys",

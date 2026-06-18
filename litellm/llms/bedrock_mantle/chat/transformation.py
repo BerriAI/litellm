@@ -4,8 +4,10 @@ Amazon Bedrock Mantle - OpenAI-compatible inference engine in Amazon Bedrock.
 API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 
 Base URL: https://bedrock-mantle.{region}.api.aws/v1
-Auth: AWS Bedrock API key as Bearer token (set via BEDROCK_MANTLE_API_KEY env var)
-      or region-aware key via BEDROCK_MANTLE_{REGION}_API_KEY.
+Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
+      standard AWS_BEARER_TOKEN_BEDROCK) when present; otherwise AWS SigV4
+      (service "bedrock") over the standard credential chain. See
+      BedrockMantleAuthMixin in common_utils.
 """
 
 from typing import Iterator, AsyncIterator, Any, List, Optional, Tuple, Union
@@ -13,19 +15,25 @@ from typing import Iterator, AsyncIterator, Any, List, Optional, Tuple, Union
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock_mantle.common_utils import (
+    BEDROCK_MANTLE_DEFAULT_REGION,
+    BedrockMantleAuthMixin,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
-BEDROCK_MANTLE_DEFAULT_REGION = "us-east-1"
 
-
-class BedrockMantleChatConfig(OpenAILikeChatConfig):
+class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
     """
     Transformation config for Amazon Bedrock Mantle OpenAI-compatible API.
     """
+
+    def __init__(self, aws_signer: BaseAWSLLM | None = None):
+        super().__init__()
+        self._aws_signer = aws_signer or BaseAWSLLM()
 
     @property
     def custom_llm_provider(self) -> Optional[str]:
@@ -54,7 +62,7 @@ class BedrockMantleChatConfig(OpenAILikeChatConfig):
             or get_secret_str("BEDROCK_MANTLE_API_BASE")
             or f"https://bedrock-mantle.{region}.api.aws/v1"
         )
-        dynamic_api_key = api_key or get_secret_str("BEDROCK_MANTLE_API_KEY")
+        dynamic_api_key = self._resolve_bearer_token(api_key)
         return api_base, dynamic_api_key
 
     def validate_environment(

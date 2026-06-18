@@ -519,7 +519,7 @@ MODEL_DISCOVERY_ROUTES = frozenset(
 )
 
 
-async def common_checks(  # noqa: PLR0915
+async def common_checks(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],

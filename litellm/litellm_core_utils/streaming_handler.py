@@ -967,7 +967,7 @@ class CustomStreamWrapper:
                     delta, model_response.choices[0].delta, attribute
                 )
 
-    def return_processed_chunk_logic(  # noqa: PLR0915, C901
+    def return_processed_chunk_logic(  # noqa: C901
         self,
         completion_obj: Dict[str, Any],
         model_response: ModelResponseStream,
@@ -1145,7 +1145,7 @@ class CustomStreamWrapper:
                 del model_response.choices[0].delta.reasoning_content
         return
 
-    def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
+    def chunk_creator(self, chunk: Any):  # type: ignore
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
         model_response = self.model_response_creator()
@@ -1887,7 +1887,7 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
-    def __next__(self) -> "ModelResponseStream":  # noqa: PLR0915
+    def __next__(self) -> "ModelResponseStream":
         cache_hit = False
         if (
             self.custom_llm_provider is not None
@@ -2077,7 +2077,7 @@ class CustomStreamWrapper:
 
         return self.completion_stream
 
-    async def __anext__(self) -> "ModelResponseStream":  # noqa: PLR0915
+    async def __anext__(self) -> "ModelResponseStream":
         cache_hit = False
         if (
             self.custom_llm_provider is not None

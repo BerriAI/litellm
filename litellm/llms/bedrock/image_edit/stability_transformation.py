@@ -149,7 +149,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
 
         return mapped_params
 
-    def transform_image_edit_request(  # noqa: PLR0915
+    def transform_image_edit_request(
         self,
         model: str,
         prompt: Optional[str],
