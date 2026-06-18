@@ -917,6 +917,8 @@ def run_server(
     use_v2_migration_resolver: bool,
     reload: bool,
 ):
+    if use_v2_migration_resolver:
+        os.environ["LITELLM_USE_V2_MCP_RESOLVER"] = "true"
     if cli_args:
         if cli_args == ("xai-oauth", "login"):
             from litellm.llms.xai.oauth import XAIOAuthAuthenticator

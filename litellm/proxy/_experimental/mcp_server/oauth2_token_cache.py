@@ -27,6 +27,9 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy._experimental.mcp_server.auth import token_exchange
+from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+    resolve_v2_auth_value,
+)
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
@@ -287,6 +290,9 @@ async def resolve_mcp_auth(
     """
     if mcp_auth_header:
         return mcp_auth_header
+    v2_auth_value = await resolve_v2_auth_value(server)
+    if v2_auth_value is not None:
+        return v2_auth_value
     if server.has_token_exchange_config:
         if subject_token:
             return await token_exchange.mcp_token_exchange_handler.exchange_token(
