@@ -485,8 +485,11 @@ def test_adapt_cohere_assistant_with_tool_calls_in_history():
     assert history[0].toolCalls[0].name == "calc"
 
 
-def test_adapt_cohere_tool_result_in_history():
+def test_adapt_cohere_tool_result_goes_to_tool_results_not_history():
+    from litellm.llms.oci.chat.cohere import extract_cohere_tool_results
+
     messages = [
+        {"role": "user", "content": "compute"},
         {
             "role": "assistant",
             "content": None,
@@ -498,17 +501,17 @@ def test_adapt_cohere_tool_result_in_history():
                 }
             ],
         },
-        {
-            "role": "tool",
-            "tool_call_id": "call_1",
-            "content": "result: 42",
-        },
-        {"role": "user", "content": "ok"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "result: 42"},
     ]
+    # Tool results never appear in chatHistory; they ride the top-level field.
     history = adapt_messages_to_cohere_standard(messages)
-    tool_msg = next(m for m in history if m.role == "TOOL")
-    assert tool_msg.toolResults[0].call.name == "calc"
-    assert tool_msg.toolResults[0].outputs[0]["output"] == "result: 42"
+    assert all(m.role != "TOOL" for m in history)
+
+    results = extract_cohere_tool_results(messages)
+    assert results is not None
+    assert results[0].call.name == "calc"
+    assert results[0].call.parameters == {"x": 1}
+    assert results[0].outputs[0]["output"] == "result: 42"
 
 
 # ===========================================================================
@@ -543,6 +546,32 @@ def test_handle_cohere_response_complete():
     assert result.choices[0].finish_reason == "stop"
     assert result.choices[0].message["content"] == "Hello from Cohere!"
     assert result.usage.prompt_tokens == 10
+
+
+def test_handle_cohere_response_tool_grounded_citations():
+    """Tool-grounded answers carry citations with ``documentIds`` (camelCase) and
+    no ``document_ids``. Response parsing must not choke on them (they are never
+    surfaced). Regression for the MLflow {{trace}} agentic loop."""
+    resp = {
+        **_COHERE_RESPONSE_JSON,
+        "chatResponse": {
+            **_COHERE_RESPONSE_JSON["chatResponse"],
+            "text": "There are 47 spans.",
+            "citations": [
+                {
+                    "start": 10,
+                    "end": 18,
+                    "text": "47 spans",
+                    "documentIds": ["get_root_span:0:2:0"],
+                }
+            ],
+        },
+    }
+    model_response = ModelResponse()
+    result = handle_cohere_response(
+        resp, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE
+    )
+    assert result.choices[0].message["content"] == "There are 47 spans."
 
 
 def test_handle_cohere_response_max_tokens():
