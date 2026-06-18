@@ -296,14 +296,10 @@ class TestOCICohereToolCalls:
 
         assert transformed_request["chatRequest"]["responseFormat"] == {"type": "TEXT"}
 
-    def test_cohere_tool_continuation_uses_top_level_tool_results(self):
-        """A tool-result continuation must send an empty top-level `message`, keep
-        the user turn in chatHistory, carry the tool result in the top-level
-        `toolResults` field, and never emit a TOOL chatHistory entry. OCI 500s
-        ("message must be ... or tool results must be specified") and 400s
-        ("cannot specify message if the last entry in chat history contains tool
-        results") otherwise. Verified live against us-chicago-1."""
+    def test_cohere_tool_call_only_message_no_text(self):
+        """Test chat history with an assistant message that has tool calls but no text content."""
         config = OCIChatConfig()
+
         messages = [
             {"role": "user", "content": "What's the weather?"},
             {
@@ -320,43 +316,81 @@ class TestOCICohereToolCalls:
                     }
                 ],
             },
-            {"role": "tool", "content": "Sunny, 25C", "tool_call_id": "call_1"},
+            {
+                "role": "tool",
+                "content": "Sunny, 25C",
+                "tool_call_id": "call_1",
+            },
         ]
 
-        chat_request = config.transform_request(
-            model="cohere.command-latest",
-            messages=messages,  # type: ignore[arg-type]
-            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
-            litellm_params={},
-            headers={},
-        )["chatRequest"]
+        chat_history = adapt_messages_to_cohere_standard(messages)
 
-        assert chat_request["message"] == ""
-        assert all(m["role"] != "TOOL" for m in chat_request["chatHistory"])
-        assert [m["role"] for m in chat_request["chatHistory"]] == ["USER", "CHATBOT"]
+        # The last user message is consumed by the request's top-level `message`
+        # field, so chatHistory carries the assistant tool call and tool result.
+        assert len(chat_history) == 2
 
-        tool_results = chat_request["toolResults"]
-        assert len(tool_results) == 1
-        assert tool_results[0]["call"]["name"] == "get_weather"
-        assert tool_results[0]["call"]["parameters"] == {"location": "Paris"}
-        assert tool_results[0]["outputs"][0]["output"] == "Sunny, 25C"
+        assistant_msg = chat_history[0]
+        assert assistant_msg.role == "CHATBOT"
+        assert assistant_msg.message is None or assistant_msg.message == ""
+        assert assistant_msg.toolCalls is not None
+        assert len(assistant_msg.toolCalls) == 1
+        assert assistant_msg.toolCalls[0].name == "get_weather"
 
-    def test_cohere_first_turn_uses_message_not_tool_results(self):
-        """Without a tool-result continuation the last user message is the top-level
-        `message` and no `toolResults` field is emitted."""
+        tool_msg = chat_history[1]
+        assert tool_msg.role == "TOOL"
+        assert tool_msg.toolResults[0].call.name == "get_weather"
+        assert tool_msg.toolResults[0].outputs[0]["output"] == "Sunny, 25C"
+
+    def test_cohere_chat_history_with_tool_calls(self):
+        """Tool results trailing the last user turn must be preserved in chatHistory."""
         config = OCIChatConfig()
-        messages = [{"role": "user", "content": "What's the weather like in Tokyo?"}]
 
-        chat_request = config.transform_request(
-            model="cohere.command-latest",
-            messages=messages,  # type: ignore[arg-type]
-            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
-            litellm_params={},
-            headers={},
-        )["chatRequest"]
+        messages = [
+            {"role": "user", "content": "What's the weather like in Tokyo?"},
+            {
+                "role": "assistant",
+                "content": "I will look up the weather in Tokyo.",
+                "tool_calls": [
+                    {
+                        "id": "call_0",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "Tokyo"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "content": "The weather in Tokyo is 22°C with partly cloudy skies.",
+                "tool_call_id": "call_0",
+            },
+        ]
 
-        assert chat_request["message"] == "What's the weather like in Tokyo?"
-        assert "toolResults" not in chat_request
+        chat_history = adapt_messages_to_cohere_standard(messages)
+
+        # The last user message becomes the request's top-level `message`.
+        # Everything else — including the trailing tool result — must remain in
+        # chatHistory so the model can see the tool output.
+        assert len(chat_history) == 2
+
+        assistant_msg = chat_history[0]
+        assert assistant_msg.role == "CHATBOT"
+        assert assistant_msg.message == "I will look up the weather in Tokyo."
+        assert assistant_msg.toolCalls is not None
+        assert len(assistant_msg.toolCalls) == 1
+        assert assistant_msg.toolCalls[0].name == "get_weather"
+        assert assistant_msg.toolCalls[0].parameters == {"location": "Tokyo"}
+
+        tool_msg = chat_history[1]
+        assert tool_msg.role == "TOOL"
+        assert tool_msg.toolResults[0].call.name == "get_weather"
+        assert tool_msg.toolResults[0].call.parameters == {"location": "Tokyo"}
+        assert (
+            tool_msg.toolResults[0].outputs[0]["output"]
+            == "The weather in Tokyo is 22°C with partly cloudy skies."
+        )
 
     def test_cohere_streaming_chunk_handling(self):
         """Test Cohere streaming chunk handling"""
