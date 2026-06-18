@@ -1058,6 +1058,17 @@ def test_responses_api_bridge_check_github_copilot_gpt_5_4_tools_reasoning_no_br
         "by responses_api_bridge_check"
     )
 
+    # Verify litellm.completion raises BadRequestError before any HTTP call
+    from litellm import BadRequestError, completion
+
+    with pytest.raises(BadRequestError, match="Function tools with reasoning_effort"):
+        completion(
+            model="github_copilot/gpt-5.4",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[{"type": "function", "function": {"name": "test"}}],
+            reasoning_effort="low",
+        )
+
 
 @pytest.mark.asyncio
 async def test_async_mock_delay():
