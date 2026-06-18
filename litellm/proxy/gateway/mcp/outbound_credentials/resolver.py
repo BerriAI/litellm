@@ -13,8 +13,9 @@ Implemented: `none`, `passthrough`, `api_key` (shared from config, or per-user /
 from the injected `CredentialStore`), `authorization_code` (per-user token read from the
 injected `TokenStore`, refreshed proactively via the `TokenRefresher`), and `client_credentials`
 (shared service-account token cached in the `ServiceTokenStore`, minted by the
-`ClientCredentialsFetcher`). The `token_exchange` and `aws_sigv4` modes are typed stubs that
-fail closed until their collaborators are injected.
+`ClientCredentialsFetcher`), and `token_exchange` (RFC 8693 OBO: the caller's inbound token is
+swapped for an upstream-audience token via the `TokenExchanger`, cached per-user). The
+`aws_sigv4` mode is a typed stub that fails closed until its signer is injected.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from .clock import Clock
 from .credential_store import CredentialKey, CredentialStore
 from .httpx_auth import NoOpAuth, StaticHeaderAuth
 from .service_token_store import ServiceTokenKey, ServiceTokenStore
+from .token_exchanger import TokenExchanger
 from .token_refresher import TokenRefresher
 from .token_store import StoredToken, TokenKey, TokenStore
 from .types import (
@@ -64,6 +66,7 @@ class UpstreamCredentialProvider:
         clock: Clock,
         service_token_store: ServiceTokenStore,
         client_credentials_fetcher: ClientCredentialsFetcher,
+        token_exchanger: TokenExchanger,
     ) -> None:
         self._credential_store = credential_store
         self._token_store = token_store
@@ -71,6 +74,7 @@ class UpstreamCredentialProvider:
         self._clock = clock
         self._service_token_store = service_token_store
         self._client_credentials_fetcher = client_credentials_fetcher
+        self._token_exchanger = token_exchanger
 
     async def resolve(
         self, subject: Subject, server: ServerSpec
@@ -223,12 +227,44 @@ class UpstreamCredentialProvider:
         )  # best-effort; token is valid anyway
         return Ok(_bearer(minted))
 
-    # --- arms awaiting their collaborators (typed stubs, fail closed) ----------------------
     async def _token_exchange(
         self, subject: Subject, server: ServerSpec, config: TokenExchangeConfig
     ) -> Result[httpx.Auth, CredError]:
-        return _todo(AuthSpecKind.token_exchange)
+        # OBO: swap the caller's live inbound token for a token bound to server.resource at the
+        # IdP's exchange endpoint. The inbound token is sent ONLY to the exchanger, never to the
+        # upstream; the upstream gets the exchanged token. Per-user cache, best-effort like M2M
+        # (read failure re-exchanges, write failure is ignored) since it is re-exchangeable.
+        if subject.inbound_token is None:
+            return Error(
+                CredError.of_unauthorized(
+                    "token_exchange: no inbound token to exchange; authenticate to the gateway"
+                )
+            )
+        key = TokenKey(
+            tenant_id=subject.tenant_id,
+            subject_id=subject.subject_id,
+            server_id=server.server_id,
+            resource=server.resource,
+        )
+        cached = await self._token_store.get(key)
+        if isinstance(cached, Ok):
+            token = cached.ok
+            if token is not None and not self._is_near_expiry(token):
+                return Ok(_bearer(token))
+        exchanged = await self._token_exchanger.exchange(
+            config, subject.inbound_token, server.resource
+        )
+        if isinstance(exchanged, Error):
+            return Error(
+                exchanged.error
+            )  # subject_token bad -> 401, config -> 500, down -> 503
+        minted = exchanged.ok
+        await self._token_store.put(
+            key, minted
+        )  # best-effort; token is re-exchangeable
+        return Ok(_bearer(minted))
 
+    # --- arms awaiting their collaborators (typed stubs, fail closed) ----------------------
     async def _aws_sigv4(
         self, subject: Subject, server: ServerSpec, config: AwsSigV4Config
     ) -> Result[httpx.Auth, CredError]:

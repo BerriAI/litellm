@@ -32,6 +32,9 @@ from litellm.proxy.gateway.mcp.outbound_credentials.service_token_store import (
     ServiceTokenKey,
     ServiceTokenStore,
 )
+from litellm.proxy.gateway.mcp.outbound_credentials.token_exchanger import (
+    TokenExchanger,
+)
 from litellm.proxy.gateway.mcp.outbound_credentials.token_refresher import (
     TokenRefresher,
 )
@@ -54,6 +57,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     ServerSpec,
     SharedKey,
     Subject,
+    TokenExchangeConfig,
 )
 from litellm.proxy.gateway.mcp.result import Error, Ok, Result
 
@@ -124,6 +128,22 @@ class FlakyServiceTokenStore:
         return Ok(None)
 
 
+class FakeExchanger:
+    def __init__(self, result: Result[StoredToken, CredError]) -> None:
+        self._result = result
+        self.calls = 0
+        self.received_subject_token: str | None = None
+        self.received_resource: str | None = None
+
+    async def exchange(
+        self, config: TokenExchangeConfig, subject_token: SecretStr, resource: str
+    ) -> Result[StoredToken, CredError]:
+        self.calls += 1
+        self.received_subject_token = subject_token.get_secret_value()
+        self.received_resource = resource
+        return self._result
+
+
 def _provider(
     *,
     credential_store: CredentialStore | None = None,
@@ -132,6 +152,7 @@ def _provider(
     clock: Clock | None = None,
     service_token_store: ServiceTokenStore | None = None,
     fetcher: ClientCredentialsFetcher | None = None,
+    token_exchanger: TokenExchanger | None = None,
 ) -> UpstreamCredentialProvider:
     return UpstreamCredentialProvider(
         credential_store=credential_store or InMemoryCredentialStore(),
@@ -142,6 +163,8 @@ def _provider(
         service_token_store=service_token_store or InMemoryServiceTokenStore(),
         client_credentials_fetcher=fetcher
         or FakeFetcher(Error(CredError.of_upstream_unavailable("unused"))),
+        token_exchanger=token_exchanger
+        or FakeExchanger(Error(CredError.of_upstream_unavailable("unused"))),
     )
 
 
@@ -173,6 +196,10 @@ def _cc_cfg() -> ClientCredentialsConfig:
 
 def _svc_key() -> ServiceTokenKey:
     return ServiceTokenKey(server_id="s1", resource=RESOURCE)
+
+
+def _tx_cfg() -> TokenExchangeConfig:
+    return TokenExchangeConfig()
 
 
 def _applied_headers(auth: httpx.Auth) -> httpx.Headers:
@@ -312,11 +339,6 @@ async def test_self_contained_arms_never_read_the_inbound_token():
 @pytest.mark.parametrize(
     "config",
     [
-        {
-            "kind": "token_exchange",
-            "token_exchange_endpoint": "https://idp/token",
-            "audience": "https://up.example",
-        },
         {"kind": "aws_sigv4", "region": "us-east-1"},
     ],
 )
@@ -558,6 +580,125 @@ async def test_client_credentials_cache_write_failure_is_best_effort():
     result = await provider.resolve(SUBJECT, _spec(_cc_cfg()))
     assert isinstance(result, Ok)
     assert _applied_headers(result.ok)["Authorization"] == "Bearer fresh"
+
+
+async def test_token_exchange_swaps_inbound_for_an_upstream_token():
+    # Core invariant: the inbound token goes to the exchanger; the upstream gets the EXCHANGED
+    # token bound to server.resource, never the inbound one.
+    subject = Subject(tenant_id="t1", subject_id="u1", inbound_token="user-idp-jwt")
+    exchanger = FakeExchanger(
+        Ok(StoredToken(access_token="exchanged", expires_at=NOW + timedelta(hours=1)))
+    )
+    result = await _provider(token_exchanger=exchanger).resolve(
+        subject, _spec(_tx_cfg())
+    )
+    assert isinstance(result, Ok)
+    header = _applied_headers(result.ok)["Authorization"]
+    assert header == "Bearer exchanged"
+    assert "user-idp-jwt" not in header  # inbound is never forwarded to the upstream
+    assert (
+        exchanger.received_subject_token == "user-idp-jwt"
+    )  # it went to the exchanger
+    assert exchanger.received_resource == RESOURCE  # bound to server.resource
+
+
+async def test_token_exchange_without_inbound_token_fails_closed():
+    result = await _provider().resolve(SUBJECT, _spec(_tx_cfg()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+async def test_token_exchange_uses_cached_fresh_token():
+    store = InMemoryTokenStore(
+        {
+            _token_key(): StoredToken(
+                access_token="cached", expires_at=NOW + timedelta(hours=1)
+            )
+        }
+    )
+    exchanger = FakeExchanger(
+        Error(CredError.of_upstream_unavailable("must not be called"))
+    )
+    subject = Subject(tenant_id="t1", subject_id="u1", inbound_token="jwt")
+    result = await _provider(token_store=store, token_exchanger=exchanger).resolve(
+        subject, _spec(_tx_cfg())
+    )
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"] == "Bearer cached"
+    assert exchanger.calls == 0
+
+
+async def test_token_exchange_remints_near_expiry():
+    store = InMemoryTokenStore(
+        {
+            _token_key(): StoredToken(
+                access_token="old", expires_at=NOW + timedelta(seconds=30)
+            )
+        }
+    )
+    exchanger = FakeExchanger(
+        Ok(StoredToken(access_token="new", expires_at=NOW + timedelta(hours=1)))
+    )
+    subject = Subject(tenant_id="t1", subject_id="u1", inbound_token="jwt")
+    result = await _provider(token_store=store, token_exchanger=exchanger).resolve(
+        subject, _spec(_tx_cfg())
+    )
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"] == "Bearer new"
+    assert exchanger.calls == 1
+
+
+async def test_token_exchange_subject_token_invalid_is_unauthorized():
+    exchanger = FakeExchanger(Error(CredError.of_unauthorized("invalid subject_token")))
+    subject = Subject(tenant_id="t1", subject_id="u1", inbound_token="stale")
+    result = await _provider(token_exchanger=exchanger).resolve(
+        subject, _spec(_tx_cfg())
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+async def test_token_exchange_config_error_is_misconfigured():
+    exchanger = FakeExchanger(
+        Error(CredError.of_misconfigured("IdP lacks token exchange"))
+    )
+    subject = Subject(tenant_id="t1", subject_id="u1", inbound_token="jwt")
+    result = await _provider(token_exchanger=exchanger).resolve(
+        subject, _spec(_tx_cfg())
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+
+
+async def test_token_exchange_endpoint_down_is_upstream_unavailable():
+    exchanger = FakeExchanger(
+        Error(CredError.of_upstream_unavailable("exchange endpoint timeout"))
+    )
+    subject = Subject(tenant_id="t1", subject_id="u1", inbound_token="jwt")
+    result = await _provider(token_exchanger=exchanger).resolve(
+        subject, _spec(_tx_cfg())
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+async def test_token_exchange_cache_failure_degrades_to_exchange():
+    # Same TokenStore as authorization_code, but token_exchange treats it as an optimization:
+    # a read/write outage degrades to a fresh exchange rather than failing (token re-exchangeable).
+    exchanger = FakeExchanger(
+        Ok(StoredToken(access_token="fresh", expires_at=NOW + timedelta(hours=1)))
+    )
+    subject = Subject(tenant_id="t1", subject_id="u1", inbound_token="jwt")
+    result = await _provider(
+        token_store=FailingTokenStore(), token_exchanger=exchanger
+    ).resolve(subject, _spec(_tx_cfg()))
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"] == "Bearer fresh"
+
+
+def test_token_exchange_config_allows_discovery_defaults():
+    spec = _spec({"kind": "token_exchange"})
+    assert isinstance(spec.config, TokenExchangeConfig)
 
 
 async def test_api_key_per_user_store_error_is_upstream_unavailable():

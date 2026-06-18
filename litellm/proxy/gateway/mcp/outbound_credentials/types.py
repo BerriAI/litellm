@@ -168,13 +168,15 @@ class ClientCredentialsConfig(BaseModel):
 
 
 class TokenExchangeConfig(BaseModel):
-    """RFC 8693 OBO; swap the caller's live subject_token for an upstream-audience token."""
+    """RFC 8693 OBO; swap the caller's live subject_token for a token bound to the upstream's
+    audience (`server.resource`). The exchange runs at the IdP's token endpoint, discovered
+    (RFC 8414); only the inbound token type and an optional manual endpoint override are config.
+    """
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.token_exchange] = AuthSpecKind.token_exchange
-    token_exchange_endpoint: str
-    audience: str
     subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+    token_exchange_endpoint: str | None = None
 
 
 class SharedKey(BaseModel):
