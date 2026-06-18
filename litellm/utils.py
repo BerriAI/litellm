@@ -9070,34 +9070,26 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
-            # Mantle serves Responses on two upstream paths. A model takes the
-            # /openai/v1/responses path when its price-map entry declares
-            # use_openai_responses_path (data-driven, so a non-gpt-named frontier
-            # model can be onboarded by JSON alone), or, as a fallback needing no
-            # price-map entry, when its name matches the openai.gpt- frontier
-            # convention (minus gpt-oss) -- this keeps a future gpt-6 routing
-            # correctly before its entry loads. Any other model declared
-            # mode=responses takes the standard /v1/responses path. Everything
-            # else returns None and keeps the chat-completions emulation (see
-            # responses/main.py "config is None").
-            if not model:
-                return None
-            model_lower = model.lower()
-            entry = litellm.model_cost.get(f"bedrock_mantle/{model}", {})
-            on_openai_path = entry.get("use_openai_responses_path") is True
-            name_is_frontier = (
-                "openai.gpt-" in model_lower and "gpt-oss" not in model_lower
+            # Both decisions are data-driven from the model's price-map entry, with
+            # no model-name logic. Capability (can it serve Responses?) comes from
+            # mantle_supports_responses (supported_endpoints / mode);
+            # chat-only models (gpt-oss safeguard, nvidia, ...) return None and keep
+            # the chat-completions emulation (responses/main.py "config is None").
+            # The wire path comes from mantle_base_segment, which reads the
+            # use_openai_responses_path flag: gpt-5.x and gemma-4-* on
+            # /openai/v1/responses, everything else (incl. gpt-oss) on
+            # /v1/responses.
+            from litellm.llms.bedrock_mantle.common_utils import (
+                mantle_base_segment,
+                mantle_supports_responses,
             )
-            if on_openai_path or name_is_frontier:
-                return litellm.BedrockMantleResponsesAPIConfig(use_openai_path=True)
-            try:
-                if get_model_info(model, "bedrock_mantle").get("mode") == "responses":
-                    return litellm.BedrockMantleResponsesAPIConfig(
-                        use_openai_path=False
-                    )
-            except Exception:
-                pass
-            return None
+
+            if not model or not mantle_supports_responses(model, litellm.model_cost):
+                return None
+            return litellm.BedrockMantleResponsesAPIConfig(
+                use_openai_path=mantle_base_segment(model, litellm.model_cost)
+                == "openai/v1"
+            )
         return None
 
     @staticmethod
