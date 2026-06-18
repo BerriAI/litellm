@@ -57,9 +57,7 @@ def _get_redis_kwargs():
     return {name for name in sig.parameters if name not in exclude_args} | include_args
 
 
-def _get_redis_url_kwargs(client=None):
-    if client is None:
-        client = redis.Redis.from_url
+def _get_redis_url_kwargs():
     sig = inspect.signature(redis.Redis)
     exclude_args = {"self", "connection_pool", "retry"}
     include_args = ["url"]
@@ -642,7 +640,7 @@ def get_redis_async_client(
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         if connection_pool is not None:
             return async_redis.Redis(connection_pool=connection_pool)
-        args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
+        args = _get_redis_url_kwargs()
         url_kwargs = {}
         for arg in redis_kwargs:
             if arg in args:
