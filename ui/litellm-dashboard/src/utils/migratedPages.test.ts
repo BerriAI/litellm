@@ -115,9 +115,16 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES["admin-panel"]).toBe("admin-panel");
     expect(MIGRATED_PAGES["logging-and-alerts"]).toBe("logging-and-alerts");
     expect(MIGRATED_PAGES["model-hub-table"]).toBe("model-hub-table");
-    // new_usage routes to /usage; the legacy ?page=usage report keeps its switch arm.
+    // new_usage routes to /usage; the legacy ?page=usage report routes to /old-usage (asserted below).
     expect(MIGRATED_PAGES.new_usage).toBe("usage");
-    expect(MIGRATED_PAGES.usage).toBeUndefined();
+  });
+
+  it("maps the legacy usage report id to the old-usage route and builds its redirect href", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, migratedHref } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.usage).toBe("old-usage");
+    expect(migratedHref(MIGRATED_PAGES.usage)).toBe("/ui/old-usage");
   });
 
   it("maps the agents and router-settings ids to their routes", async () => {

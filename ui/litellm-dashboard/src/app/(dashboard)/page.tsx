@@ -8,7 +8,6 @@ import { Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components
 import { CreateKeyPrefillData } from "@/components/organisms/create_key_button";
 import { fetchOrganizations } from "@/components/organizations";
 import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
-import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -287,34 +286,23 @@ function CreateKeyPageContent() {
         />
       ) : (
         <>
-          {page == "api-keys" ? (
-            <UserDashboard
-              userID={userID}
-              userRole={userRole}
-              premiumUser={premiumUser}
-              teams={teams}
-              keys={keys}
-              setUserRole={setUserRole}
-              userEmail={userEmail}
-              setUserEmail={setUserEmail}
-              setTeams={setTeams}
-              setKeys={setKeys}
-              organizations={organizations}
-              addKey={addKey}
-              createClicked={createClicked}
-              autoOpenCreate={autoOpenCreate}
-              prefillData={prefillData}
-            />
-          ) : (
-            <Usage
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              accessToken={accessToken}
-              keys={keys}
-              premiumUser={premiumUser}
-            />
-          )}
+          <UserDashboard
+            userID={userID}
+            userRole={userRole}
+            premiumUser={premiumUser}
+            teams={teams}
+            keys={keys}
+            setUserRole={setUserRole}
+            userEmail={userEmail}
+            setUserEmail={setUserEmail}
+            setTeams={setTeams}
+            setKeys={setKeys}
+            organizations={organizations}
+            addKey={addKey}
+            createClicked={createClicked}
+            autoOpenCreate={autoOpenCreate}
+            prefillData={prefillData}
+          />
 
           {/* Survey Components */}
           <SurveyPrompt
