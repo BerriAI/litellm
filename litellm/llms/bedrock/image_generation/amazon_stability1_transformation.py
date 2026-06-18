@@ -5,6 +5,9 @@ from typing import List, Optional
 
 from openai.types.image import Image
 
+from litellm.litellm_core_utils.core_helpers import (
+    strip_internal_params_from_request_body,
+)
 from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.utils import ImageResponse
 
@@ -99,7 +102,9 @@ class AmazonStabilityConfig:
         text: str,
         optional_params: dict,
     ) -> dict:
-        inference_params = copy.deepcopy(optional_params)
+        inference_params = strip_internal_params_from_request_body(
+            copy.deepcopy(optional_params)
+        )
         inference_params.pop(
             "user", None
         )  # make sure user is not passed in for bedrock call

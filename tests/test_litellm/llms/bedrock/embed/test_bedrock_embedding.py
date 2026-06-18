@@ -1004,3 +1004,43 @@ def test_bedrock_cohere_embedding_types_wrapped_as_list(
         assert "embedding_types" in request_body
         assert request_body["embedding_types"] == expected_embedding_types
         assert isinstance(request_body["embedding_types"], list)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/amazon.titan-embed-image-v1",
+        "bedrock/amazon.titan-embed-text-v1",
+        "bedrock/amazon.titan-embed-text-v2:0",
+    ],
+)
+def test_bedrock_embedding_does_not_leak_internal_params(model):
+    """Regression for #30314: cache_control_injection_points (a LiteLLM-internal
+    knob) leaked into the Titan embeddings body and Bedrock rejected it with
+    'extraneous key [cache_control_injection_points] is not permitted'."""
+    from litellm.types.internal_params import LiteLLMInternalParam
+
+    client = HTTPHandler()
+    seeded = {param.value: "internal" for param in LiteLLMInternalParam}
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(titan_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        litellm.embedding(
+            model=model,
+            input=test_input,
+            client=client,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key="test-bearer-token-12345",
+            **seeded,
+        )
+
+        request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+        for param in LiteLLMInternalParam:
+            assert param.value not in request_body, f"{param.value} leaked into body"
+        assert request_body.get("inputText") == test_input

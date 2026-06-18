@@ -8,7 +8,10 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    map_finish_reason,
+    strip_internal_params_from_request_body,
+)
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
@@ -162,7 +165,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             provider=provider,
             custom_prompt_dict=custom_prompt_dict,
         )
-        inference_params = copy.deepcopy(optional_params)
+        inference_params = strip_internal_params_from_request_body(
+            copy.deepcopy(optional_params)
+        )
         inference_params = {
             k: v
             for k, v in inference_params.items()

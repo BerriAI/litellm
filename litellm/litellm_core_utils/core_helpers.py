@@ -6,6 +6,10 @@ from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.types.internal_params import (
+    LITELLM_INTERNAL_REQUEST_BODY_PARAMS,
+    MCP_INTERNAL_PARAMS,
+)
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
@@ -436,10 +440,11 @@ def filter_internal_params(
     data: dict, additional_internal_params: Optional[set] = None
 ) -> dict:
     """
-    Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
+    Filter out LiteLLM internal MCP-handler parameters that shouldn't be re-dispatched.
 
-    This removes internal/MCP-related parameters that are used by LiteLLM internally
-    but should not be included in API requests to providers.
+    Used on completion kwargs (e.g. fallbacks) where the goal is to drop runtime
+    handler state before re-invoking, not to sanitize a serialized request body.
+    For the request-body boundary use `strip_internal_params_from_request_body`.
 
     Args:
         data: Dictionary of parameters to filter
@@ -451,19 +456,29 @@ def filter_internal_params(
     if not isinstance(data, dict):
         return data
 
-    # Known internal parameters that should never be sent to provider APIs
-    internal_params = {
-        "skip_mcp_handler",
-        "mcp_handler_context",
-        "_skip_mcp_handler",
-    }
+    internal_params = (
+        MCP_INTERNAL_PARAMS | additional_internal_params
+        if additional_internal_params
+        else MCP_INTERNAL_PARAMS
+    )
 
-    # Add any additional internal params if provided
-    if additional_internal_params:
-        internal_params.update(additional_internal_params)
-
-    # Filter out internal parameters
     return {k: v for k, v in data.items() if k not in internal_params}
+
+
+def strip_internal_params_from_request_body(data: dict) -> dict:
+    """
+    Remove every LiteLLM-internal optional_params key from a provider request body.
+
+    Applied at the serialization boundary (where optional_params becomes a request
+    body) so internal control knobs can never reach a provider that rejects unknown
+    fields. See `litellm.types.internal_params.LiteLLMInternalParam` for the registry.
+    """
+    if not isinstance(data, dict):
+        return data
+
+    return {
+        k: v for k, v in data.items() if k not in LITELLM_INTERNAL_REQUEST_BODY_PARAMS
+    }
 
 
 def redact_nested_match_and_regex_keys(

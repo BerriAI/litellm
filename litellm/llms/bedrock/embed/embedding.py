@@ -11,6 +11,9 @@ import httpx
 
 import litellm
 from litellm.constants import BEDROCK_EMBEDDING_PROVIDERS_LITERAL
+from litellm.litellm_core_utils.core_helpers import (
+    strip_internal_params_from_request_body,
+)
 from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -427,7 +430,9 @@ class BedrockEmbedding(BaseAWSLLM):
                 f"Unable to determine bedrock embedding provider for model: {model}. "
                 f"Supported providers: {list(get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL))}"
             )
-        inference_params = copy.deepcopy(optional_params)
+        inference_params = strip_internal_params_from_request_body(
+            copy.deepcopy(optional_params)
+        )
         inference_params = {
             k: v
             for k, v in inference_params.items()
