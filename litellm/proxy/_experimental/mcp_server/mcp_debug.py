@@ -122,7 +122,6 @@ class MCPDebug:
         },
         visible_prefix=6,
         visible_suffix=4,
-        mask_short_values=False,
     )
 
     @staticmethod
