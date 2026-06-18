@@ -1,0 +1,59 @@
+# Local e2e proxy, built from the litellm_internal_staging branch.
+#
+# The image `litellm-staging:local` is built from a clean checkout of
+# litellm_internal_staging (the working tree's uv.lock has merge markers, so
+# build from a worktree, not the dirty tree):
+#
+#   git worktree add /tmp/litellm-staging litellm_internal_staging
+#   docker build -t litellm-staging:local /tmp/litellm-staging
+#
+# Then provide provider keys (copy .env.example -> .env, fill in keys) and run:
+#
+#   docker compose -f tests/e2e_tests/docker-compose.yml up -d
+#
+# The proxy comes up on http://localhost:4000 with master key sk-1234, which is
+# what the e2e suites default to. Point the suites at it:
+#
+#   LITELLM_MASTER_KEY=sk-1234 LITELLM_PROXY_URL=http://localhost:4000 \
+#     .venv/bin/python -m pytest tests/e2e_tests/ -v
+
+services:
+  litellm:
+    image: litellm-staging:local
+    ports:
+      - "4000:4000"
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./docker-config.yaml:/app/config.yaml
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+      LITELLM_MASTER_KEY: "sk-1234"
+      STORE_MODEL_IN_DB: "True"
+    env_file:
+      # Provider keys for the LLM-calling suites. Boots without it (those tests
+      # skip); copy .env.example -> .env and `docker compose up -d` to enable.
+      - path: .env
+        required: false
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
+    driver: local
