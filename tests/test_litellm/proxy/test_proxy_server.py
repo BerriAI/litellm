@@ -6273,6 +6273,7 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
 
     fake_redis = AsyncMock()
     fake_redis.async_increment = AsyncMock(side_effect=record_increment)
+    fake_redis.async_increment_idempotent = AsyncMock(side_effect=record_increment)
     fake_redis.async_get_cache = AsyncMock(return_value=None)  # counter missing
     fake_redis.async_set_cache = AsyncMock(return_value=True)  # SET NX wins
     counter_cache.redis_cache = fake_redis
@@ -6569,6 +6570,7 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(return_value=None)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+    fake_redis.async_increment_idempotent = AsyncMock(side_effect=redis_increment)
     fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
     counter_cache.redis_cache = fake_redis
 
@@ -6634,6 +6636,7 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
     fake_redis.async_get_cache = AsyncMock(return_value=None)
     fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+    fake_redis.async_increment_idempotent = AsyncMock(side_effect=redis_increment)
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
@@ -6698,6 +6701,7 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
     fake_redis.async_get_cache = AsyncMock(side_effect=redis_get_cache)
     fake_redis.async_set_cache = AsyncMock(return_value=False)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+    fake_redis.async_increment_idempotent = AsyncMock(side_effect=redis_increment)
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
@@ -6957,6 +6961,9 @@ async def test_increment_spend_counter_invalidates_stale_cache_on_redis_failure(
     counter_cache.in_memory_cache.set_cache(key="spend:team:redis-fail", value=4.0)
     fake_redis = AsyncMock()
     fake_redis.async_increment = AsyncMock(side_effect=RuntimeError("redis down"))
+    fake_redis.async_increment_idempotent = AsyncMock(
+        side_effect=RuntimeError("redis down")
+    )
     fake_redis.async_delete_cache = AsyncMock()
     counter_cache.redis_cache = fake_redis
 
