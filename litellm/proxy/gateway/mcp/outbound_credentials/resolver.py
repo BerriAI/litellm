@@ -10,10 +10,11 @@ wildcard-free with an `assert_never` tail, so adding a mode without an arm fails
 gate, and a bypassed gate fails loudly at runtime instead of returning `None`.
 
 Implemented: `none`, `passthrough`, `api_key` (shared from config, or per-user / BYOK pulled
-from the injected `CredentialStore`), and `authorization_code` (per-user token read from the
-injected `TokenStore`, refreshed proactively via the `TokenRefresher`). The `client_credentials`,
-`token_exchange`, and `aws_sigv4` modes are typed stubs that fail closed until their
-collaborators are injected.
+from the injected `CredentialStore`), `authorization_code` (per-user token read from the
+injected `TokenStore`, refreshed proactively via the `TokenRefresher`), and `client_credentials`
+(shared service-account token cached in the `ServiceTokenStore`, minted by the
+`ClientCredentialsFetcher`). The `token_exchange` and `aws_sigv4` modes are typed stubs that
+fail closed until their collaborators are injected.
 """
 
 from __future__ import annotations
@@ -24,9 +25,11 @@ import httpx
 from typing_extensions import assert_never
 
 from ..result import Error, Ok, Result
+from .client_credentials_fetcher import ClientCredentialsFetcher
 from .clock import Clock
 from .credential_store import CredentialKey, CredentialStore
 from .httpx_auth import NoOpAuth, StaticHeaderAuth
+from .service_token_store import ServiceTokenKey, ServiceTokenStore
 from .token_refresher import TokenRefresher
 from .token_store import StoredToken, TokenKey, TokenStore
 from .types import (
@@ -59,11 +62,15 @@ class UpstreamCredentialProvider:
         token_store: TokenStore,
         token_refresher: TokenRefresher,
         clock: Clock,
+        service_token_store: ServiceTokenStore,
+        client_credentials_fetcher: ClientCredentialsFetcher,
     ) -> None:
         self._credential_store = credential_store
         self._token_store = token_store
         self._token_refresher = token_refresher
         self._clock = clock
+        self._service_token_store = service_token_store
+        self._client_credentials_fetcher = client_credentials_fetcher
 
     async def resolve(
         self, subject: Subject, server: ServerSpec
@@ -195,12 +202,28 @@ class UpstreamCredentialProvider:
     def _is_near_expiry(self, token: StoredToken) -> bool:
         return self._clock.now() >= token.expires_at - _REFRESH_BUFFER
 
-    # --- arms awaiting their collaborators (typed stubs, fail closed) ----------------------
     async def _client_credentials(
         self, subject: Subject, server: ServerSpec, config: ClientCredentialsConfig
     ) -> Result[httpx.Auth, CredError]:
-        return _todo(AuthSpecKind.client_credentials)
+        # M2M: one shared service-account token per (server, resource), cached without a
+        # subject; the caller bearer is never read. The cache is best-effort - re-mint on a
+        # read failure, ignore a write failure - because the token is always re-mintable.
+        key = ServiceTokenKey(server_id=server.server_id, resource=server.resource)
+        cached = await self._service_token_store.get(key)
+        if isinstance(cached, Ok):
+            token = cached.ok
+            if token is not None and not self._is_near_expiry(token):
+                return Ok(_bearer(token))
+        fetched = await self._client_credentials_fetcher.fetch(config)
+        if isinstance(fetched, Error):
+            return Error(fetched.error)  # rejected creds -> 500, endpoint down -> 503
+        minted = fetched.ok
+        await self._service_token_store.put(
+            key, minted
+        )  # best-effort; token is valid anyway
+        return Ok(_bearer(minted))
 
+    # --- arms awaiting their collaborators (typed stubs, fail closed) ----------------------
     async def _token_exchange(
         self, subject: Subject, server: ServerSpec, config: TokenExchangeConfig
     ) -> Result[httpx.Auth, CredError]:

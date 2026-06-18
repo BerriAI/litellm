@@ -11,6 +11,9 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from litellm.proxy.gateway.mcp._spike_exhaustiveness import http_status
+from litellm.proxy.gateway.mcp.outbound_credentials.client_credentials_fetcher import (
+    ClientCredentialsFetcher,
+)
 from litellm.proxy.gateway.mcp.outbound_credentials.clock import Clock
 from litellm.proxy.gateway.mcp.outbound_credentials.credential_store import (
     CredentialKey,
@@ -23,6 +26,11 @@ from litellm.proxy.gateway.mcp.outbound_credentials.httpx_auth import (
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.resolver import (
     UpstreamCredentialProvider,
+)
+from litellm.proxy.gateway.mcp.outbound_credentials.service_token_store import (
+    InMemoryServiceTokenStore,
+    ServiceTokenKey,
+    ServiceTokenStore,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.token_refresher import (
     TokenRefresher,
@@ -38,6 +46,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     AuthorizationCodeConfig,
     AuthSpecKind,
     Byok,
+    ClientCredentialsConfig,
     CredError,
     NoneConfig,
     PassthroughConfig,
@@ -81,12 +90,48 @@ class FailingTokenStore:
         return Error(CredError.of_upstream_unavailable("token store down"))
 
 
+class FakeFetcher:
+    def __init__(self, result: Result[StoredToken, CredError]) -> None:
+        self._result = result
+        self.calls = 0
+
+    async def fetch(
+        self, config: ClientCredentialsConfig
+    ) -> Result[StoredToken, CredError]:
+        self.calls += 1
+        return self._result
+
+
+class FlakyServiceTokenStore:
+    """A ServiceTokenStore that can be told to fail reads and/or writes."""
+
+    def __init__(self, *, fail_get: bool = False, fail_put: bool = False) -> None:
+        self._fail_get = fail_get
+        self._fail_put = fail_put
+        self._tokens: dict[ServiceTokenKey, StoredToken] = {}  # mutable-ok: test double
+
+    async def get(self, key: ServiceTokenKey) -> Result[StoredToken | None, CredError]:
+        if self._fail_get:
+            return Error(CredError.of_upstream_unavailable("cache read down"))
+        return Ok(self._tokens.get(key))
+
+    async def put(
+        self, key: ServiceTokenKey, token: StoredToken
+    ) -> Result[None, CredError]:
+        if self._fail_put:
+            return Error(CredError.of_upstream_unavailable("cache write down"))
+        self._tokens[key] = token  # mutable-ok: test double
+        return Ok(None)
+
+
 def _provider(
     *,
     credential_store: CredentialStore | None = None,
     token_store: TokenStore | None = None,
     refresher: TokenRefresher | None = None,
     clock: Clock | None = None,
+    service_token_store: ServiceTokenStore | None = None,
+    fetcher: ClientCredentialsFetcher | None = None,
 ) -> UpstreamCredentialProvider:
     return UpstreamCredentialProvider(
         credential_store=credential_store or InMemoryCredentialStore(),
@@ -94,6 +139,9 @@ def _provider(
         token_refresher=refresher
         or FakeRefresher(Error(CredError.of_upstream_unavailable("unused"))),
         clock=clock or FixedClock(),
+        service_token_store=service_token_store or InMemoryServiceTokenStore(),
+        client_credentials_fetcher=fetcher
+        or FakeFetcher(Error(CredError.of_upstream_unavailable("unused"))),
     )
 
 
@@ -115,6 +163,16 @@ def _authz_cfg() -> AuthorizationCodeConfig:
         authorization_url="https://idp/auth",
         token_url="https://idp/token",
     )
+
+
+def _cc_cfg() -> ClientCredentialsConfig:
+    return ClientCredentialsConfig(
+        client_id="c", client_secret="s", token_url="https://idp/token"
+    )
+
+
+def _svc_key() -> ServiceTokenKey:
+    return ServiceTokenKey(server_id="s1", resource=RESOURCE)
 
 
 def _applied_headers(auth: httpx.Auth) -> httpx.Headers:
@@ -248,12 +306,6 @@ async def test_self_contained_arms_never_read_the_inbound_token():
     "config",
     [
         {
-            "kind": "client_credentials",
-            "client_id": "c",
-            "client_secret": "s",
-            "token_url": "https://idp/token",
-        },
-        {
             "kind": "token_exchange",
             "token_exchange_endpoint": "https://idp/token",
             "audience": "https://up.example",
@@ -372,6 +424,133 @@ def test_stored_token_secrets_are_masked():
     assert "ACCESS-SECRET" not in dumped
     assert "REFRESH-SECRET" not in dumped
     assert "**********" in dumped
+
+
+async def test_client_credentials_uses_cached_fresh_token():
+    store = InMemoryServiceTokenStore(
+        {
+            _svc_key(): StoredToken(
+                access_token="svc", expires_at=NOW + timedelta(hours=1)
+            )
+        }
+    )
+    fetcher = FakeFetcher(
+        Error(CredError.of_upstream_unavailable("must not be called"))
+    )
+    result = await _provider(service_token_store=store, fetcher=fetcher).resolve(
+        SUBJECT, _spec(_cc_cfg())
+    )
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"] == "Bearer svc"
+    assert fetcher.calls == 0
+
+
+async def test_client_credentials_mints_and_caches_on_miss():
+    store = InMemoryServiceTokenStore()
+    minted = StoredToken(access_token="fresh", expires_at=NOW + timedelta(hours=1))
+    result = await _provider(
+        service_token_store=store, fetcher=FakeFetcher(Ok(minted))
+    ).resolve(SUBJECT, _spec(_cc_cfg()))
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"] == "Bearer fresh"
+    cached = await store.get(_svc_key())
+    assert isinstance(cached, Ok) and cached.ok is not None
+    assert cached.ok.access_token.get_secret_value() == "fresh"
+
+
+async def test_client_credentials_remints_near_expiry():
+    store = InMemoryServiceTokenStore(
+        {
+            _svc_key(): StoredToken(
+                access_token="old", expires_at=NOW + timedelta(seconds=30)
+            )
+        }
+    )
+    fetcher = FakeFetcher(
+        Ok(StoredToken(access_token="new", expires_at=NOW + timedelta(hours=1)))
+    )
+    result = await _provider(service_token_store=store, fetcher=fetcher).resolve(
+        SUBJECT, _spec(_cc_cfg())
+    )
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"] == "Bearer new"
+    assert fetcher.calls == 1
+
+
+async def test_client_credentials_rejected_grant_is_misconfigured():
+    fetcher = FakeFetcher(Error(CredError.of_misconfigured("invalid_client")))
+    result = await _provider(fetcher=fetcher).resolve(SUBJECT, _spec(_cc_cfg()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+
+
+async def test_client_credentials_endpoint_down_is_upstream_unavailable():
+    fetcher = FakeFetcher(
+        Error(CredError.of_upstream_unavailable("token endpoint timeout"))
+    )
+    result = await _provider(fetcher=fetcher).resolve(SUBJECT, _spec(_cc_cfg()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+async def test_client_credentials_never_reads_inbound_token():
+    # M2M must never forward the caller bearer: the result is identical with or without one.
+    minted = StoredToken(access_token="svc", expires_at=NOW + timedelta(hours=1))
+    provider = _provider(fetcher=FakeFetcher(Ok(minted)))
+    without = await provider.resolve(SUBJECT, _spec(_cc_cfg()))
+    with_token = Subject(tenant_id="t1", subject_id="u1", inbound_token="leak-me")
+    present = await provider.resolve(with_token, _spec(_cc_cfg()))
+    assert isinstance(without, Ok) and isinstance(present, Ok)
+    assert (
+        _applied_headers(without.ok)["Authorization"]
+        == _applied_headers(present.ok)["Authorization"]
+        == "Bearer svc"
+    )
+
+
+async def test_client_credentials_shared_across_subjects():
+    # Keyed by (server, resource) with no subject: every subject gets the same token.
+    store = InMemoryServiceTokenStore(
+        {
+            _svc_key(): StoredToken(
+                access_token="shared", expires_at=NOW + timedelta(hours=1)
+            )
+        }
+    )
+    provider = _provider(service_token_store=store)
+    u1 = await provider.resolve(SUBJECT, _spec(_cc_cfg()))
+    u2 = await provider.resolve(
+        Subject(tenant_id="t1", subject_id="u2"), _spec(_cc_cfg())
+    )
+    assert isinstance(u1, Ok) and isinstance(u2, Ok)
+    assert (
+        _applied_headers(u1.ok)["Authorization"]
+        == _applied_headers(u2.ok)["Authorization"]
+    )
+
+
+async def test_client_credentials_cache_read_failure_degrades_to_mint():
+    # A cache read outage must not fail the request; we just mint fresh.
+    minted = StoredToken(access_token="fresh", expires_at=NOW + timedelta(hours=1))
+    provider = _provider(
+        service_token_store=FlakyServiceTokenStore(fail_get=True),
+        fetcher=FakeFetcher(Ok(minted)),
+    )
+    result = await provider.resolve(SUBJECT, _spec(_cc_cfg()))
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"] == "Bearer fresh"
+
+
+async def test_client_credentials_cache_write_failure_is_best_effort():
+    # A cache write outage must not fail a valid mint; we return it and skip caching.
+    minted = StoredToken(access_token="fresh", expires_at=NOW + timedelta(hours=1))
+    provider = _provider(
+        service_token_store=FlakyServiceTokenStore(fail_put=True),
+        fetcher=FakeFetcher(Ok(minted)),
+    )
+    result = await provider.resolve(SUBJECT, _spec(_cc_cfg()))
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"] == "Bearer fresh"
 
 
 async def test_api_key_per_user_store_error_is_upstream_unavailable():
