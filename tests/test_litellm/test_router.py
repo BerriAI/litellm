@@ -4756,3 +4756,27 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
         )
         is True
     )
+
+
+def test_underlying_model_for_group_resolves_alias():
+    """The mid-stream prefill check resolves a custom router group name to the
+    deployment's registry model, so an alias like "production-claude" surfaces
+    "anthropic/claude-sonnet-4-6" (which the registry keys on) instead of the
+    unregistered alias. Unknown groups return None."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "production-claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-6",
+                    "api_key": "sk-fake",
+                },
+            }
+        ],
+    )
+
+    assert (
+        router._underlying_model_for_group("production-claude")
+        == "anthropic/claude-sonnet-4-6"
+    )
+    assert router._underlying_model_for_group("nonexistent-group") is None
