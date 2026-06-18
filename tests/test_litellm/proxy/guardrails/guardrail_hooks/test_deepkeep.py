@@ -585,6 +585,57 @@ class TestDeepKeepGuardrail:
         assert result["tool_calls"] != original_tool_calls
 
     @pytest.mark.asyncio
+    async def test_apply_guardrail_honours_empty_list_replacements(self):
+        """Empty-list replacements from the API must clear the field, not fall back to originals."""
+        guardrail = DeepKeepGuardrail(
+            api_key="test-key",
+            api_base="https://test.deepkeep.ai",
+            firewall_id="fw-123",
+            guardrail_name="test",
+            event_hook="pre_call",
+        )
+
+        mock_response = Response(
+            status_code=200,
+            json={
+                "action": "GUARDRAIL_INTERVENED",
+                "blocked_reason": None,
+                # DeepKeep clears all content entirely
+                "texts": [],
+                "images": [],
+                "tools": [],
+                "tool_calls": [],
+            },
+            request=Request(
+                "POST",
+                "https://test.deepkeep.ai/v3/openai/beta/litellm_basic_guardrail_api",
+            ),
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["sensitive content that should be cleared"],
+                    "tools": [{"type": "function", "function": {"name": "leak_data"}}],
+                    "tool_calls": [{"id": "call_1", "type": "function"}],
+                    "images": ["data:image/png;base64,abc"],
+                },
+                request_data={"metadata": {}},
+                input_type="request",
+            )
+
+        # Empty-list replacements must be used — not the original non-empty values
+        assert result["texts"] == []
+        assert result.get("images") == []
+        assert result.get("tools") == []
+        assert result.get("tool_calls") == []
+
+    @pytest.mark.asyncio
     async def test_firewall_id_in_payload(self):
         """should include firewall_id in additional_provider_specific_params."""
         guardrail = DeepKeepGuardrail(

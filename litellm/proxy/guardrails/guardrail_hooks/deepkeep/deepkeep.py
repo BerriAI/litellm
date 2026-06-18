@@ -248,23 +248,29 @@ class DeepKeepGuardrail(CustomGuardrail):
         tool_calls: Any | None,
         structured_messages: Any | None,
     ) -> GenericGuardrailAPIInputs:
-        """Merge original inputs with any guardrail-modified values from the API response."""
+        """Merge original inputs with any guardrail-modified values from the API response.
+
+        Presence is checked with ``is not None`` (not truthiness) so that an
+        intentional empty-list replacement such as ``texts: []`` or
+        ``tool_calls: []`` is honoured and forwarded downstream rather than
+        silently discarded in favour of the original content.
+        """
         return_inputs = GenericGuardrailAPIInputs(texts=texts)
-        if response_json.get("texts"):
+        if response_json.get("texts") is not None:
             return_inputs["texts"] = response_json["texts"]
-        if response_json.get("images"):
+        if response_json.get("images") is not None:
             return_inputs["images"] = response_json["images"]
-        elif images:
+        elif images is not None:
             return_inputs["images"] = images
         if response_json.get("tools") is not None:
             return_inputs["tools"] = response_json["tools"]
-        elif tools:
+        elif tools is not None:
             return_inputs["tools"] = tools
-        if response_json.get("tool_calls"):
+        if response_json.get("tool_calls") is not None:
             return_inputs["tool_calls"] = response_json["tool_calls"]
-        elif tool_calls:
+        elif tool_calls is not None:
             return_inputs["tool_calls"] = tool_calls
-        if structured_messages:
+        if structured_messages is not None:
             return_inputs["structured_messages"] = structured_messages
         return return_inputs
 
