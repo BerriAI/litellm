@@ -46,23 +46,6 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
     )
 
 
-def _resolve_tier_cost_per_token(
-    tier: dict, cost_key: str, fallback_cost_key: Optional[str]
-) -> float:
-    """Resolve a tier's per-token cost.
-
-    An explicit 0.0 is a real price (e.g. a free-cache-read tier) and must not
-    be treated as "missing". Only fall back to ``fallback_cost_key`` when the
-    primary key is absent. This mirrors the flat-pricing path in
-    ``_calculate_prompt_cost`` / ``_calculate_completion_cost``, which already
-    guards with ``is None``.
-    """
-    cost = tier.get(cost_key)
-    if cost is None and fallback_cost_key is not None:
-        cost = tier.get(fallback_cost_key)
-    return float(cost) if cost is not None else 0.0
-
-
 def _calculate_tiered_cost(
     tokens: int,
     tiered_pricing: List[dict],
@@ -122,9 +105,7 @@ def _calculate_tiered_cost(
 
         if tier_end > tier_start:
             tokens_in_tier = tier_end - tier_start
-            cost_per_token = _resolve_tier_cost_per_token(
-                tier, cost_key, fallback_cost_key
-            )
+            cost_per_token = tier.get(cost_key) or tier.get(fallback_cost_key, 0)
             total_cost += tokens_in_tier * cost_per_token
             tokens_processed = tier_end
 
@@ -133,9 +114,7 @@ def _calculate_tiered_cost(
     if tokens_processed < tokens and sorted_tiers:
         last_tier = sorted_tiers[-1]
         remaining_tokens = tokens - tokens_processed
-        cost_per_token = _resolve_tier_cost_per_token(
-            last_tier, cost_key, fallback_cost_key
-        )
+        cost_per_token = last_tier.get(cost_key) or last_tier.get(fallback_cost_key, 0)
         total_cost += remaining_tokens * cost_per_token
 
     return total_cost
