@@ -426,6 +426,9 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
+from litellm.proxy.middleware.security_headers_middleware import (
+    SecurityHeadersMiddleware,
+)
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -1757,6 +1760,7 @@ app.add_middleware(
 
 app.add_middleware(PrometheusAuthMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 def mount_swagger_ui():
