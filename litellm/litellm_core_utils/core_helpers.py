@@ -413,7 +413,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
 # filtering the full `all_litellm_params` (api_key/num_retries/...) would break
 # the call, and knobs like stream_chunk_size are read downstream (converse
 # streaming) so they are not internal. See #30301.
-LITELLM_INTERNAL_PARAMS: set = {
+MCP_INTERNAL_REQUEST_KEYS: set = {
     "skip_mcp_handler",
     "mcp_handler_context",
     "_skip_mcp_handler",
@@ -426,7 +426,7 @@ def filter_internal_params(
     """
     Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
 
-    The base set is `LITELLM_INTERNAL_PARAMS` (pure plumbing, also registered in
+    The base set is `MCP_INTERNAL_REQUEST_KEYS` (pure plumbing, also registered in
     `all_litellm_params`); callers may pass extra names via
     `additional_internal_params` for provider-specific knobs.
 
@@ -440,7 +440,7 @@ def filter_internal_params(
     if not isinstance(data, dict):
         return data
 
-    internal_params = set(LITELLM_INTERNAL_PARAMS)
+    internal_params = set(MCP_INTERNAL_REQUEST_KEYS)
     if additional_internal_params:
         internal_params.update(additional_internal_params)
 

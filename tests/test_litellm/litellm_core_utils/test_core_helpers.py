@@ -4,7 +4,7 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
-    LITELLM_INTERNAL_PARAMS,
+    MCP_INTERNAL_REQUEST_KEYS,
     filter_internal_params,
     map_finish_reason,
     reconstruct_model_name,
@@ -241,9 +241,9 @@ class TestFilterInternalParams:
         assert out == {"keep": 1}
 
     def test_registry_not_mutated_by_additional_params(self):
-        baseline = set(LITELLM_INTERNAL_PARAMS)
+        baseline = set(MCP_INTERNAL_REQUEST_KEYS)
         filter_internal_params({"x": 1}, additional_internal_params={"adhoc_key"})
-        assert LITELLM_INTERNAL_PARAMS == baseline
+        assert MCP_INTERNAL_REQUEST_KEYS == baseline
 
     def test_non_dict_passes_through(self):
         assert filter_internal_params("not-a-dict") == "not-a-dict"
