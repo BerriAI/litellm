@@ -85,7 +85,10 @@ class BaseRAGIngestion(ABC):
             )
             if not credential_values:
                 return
+            protected_fields = self.credential_protected_fields()
             for key, value in credential_values.items():
+                if key in protected_fields:
+                    continue
                 self.vector_store_config[key] = value
             for key in (
                 "api_base",
@@ -114,6 +117,18 @@ class BaseRAGIngestion(ABC):
         that will actually be written to. Default: no-op.
         """
         return None
+
+    @classmethod
+    def credential_protected_fields(cls) -> frozenset[str]:
+        """
+        Vector-store config keys that credential hydration must never override.
+
+        The proxy authorizes ingestion against `vector_store_id`, so letting a
+        stored credential redefine the write target after authorization would
+        bypass the access check. Providers whose real write target is a different
+        field (e.g. Milvus `collection_name`) must extend this set.
+        """
+        return frozenset({"vector_store_id"})
 
     @classmethod
     def can_auto_create_vector_store(cls, vector_store_opts: dict[str, object]) -> bool:

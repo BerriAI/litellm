@@ -134,6 +134,15 @@ class MilvusRAGIngestion(BaseRAGIngestion):
             vector_store_opts["vector_store_id"] = collection_name
 
     @classmethod
+    def credential_protected_fields(cls) -> frozenset[str]:
+        """
+        Milvus selects its write target from `collection_name` (mirrored onto
+        `vector_store_id` for authorization), so both must be shielded from
+        credential hydration to keep the authorized target intact.
+        """
+        return super().credential_protected_fields() | {"collection_name"}
+
+    @classmethod
     def can_auto_create_vector_store(cls, vector_store_opts: dict[str, object]) -> bool:
         """
         Milvus is capable of creating the target collection on ingest, so the

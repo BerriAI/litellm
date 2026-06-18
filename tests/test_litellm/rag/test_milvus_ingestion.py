@@ -401,3 +401,36 @@ def test_can_auto_create_vector_store_ignores_request_supplied_disabled_flag():
         )
         is True
     )
+
+
+def test_credential_hydration_cannot_override_authorized_target(monkeypatch):
+    import litellm
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="milvus_cred",
+                credential_info={},
+                credential_values={
+                    "collection_name": "victim_collection",
+                    "vector_store_id": "victim_collection",
+                    "api_base": "http://localhost:19530",
+                    "api_key": "hydrated:key",
+                },
+            )
+        ],
+    )
+
+    ingestion = _make_ingestion(
+        collection_name="authorized_collection",
+        api_key="request:key",
+        litellm_credential_name="milvus_cred",
+    )
+
+    assert ingestion.collection_name == "authorized_collection"
+    assert ingestion.vector_store_config["collection_name"] == "authorized_collection"
+    assert "victim_collection" not in ingestion.vector_store_config.values()
+    assert ingestion.api_key == "hydrated:key"
