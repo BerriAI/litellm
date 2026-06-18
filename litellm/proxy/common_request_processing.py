@@ -1366,8 +1366,6 @@ class ProxyBaseLLMRequestProcessing:
                 llm_router=llm_router,
             )
 
-        self.data["start_time"] = datetime.now()
-
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.
         # Cache the result to avoid scanning litellm.callbacks twice.
@@ -1442,7 +1440,7 @@ class ProxyBaseLLMRequestProcessing:
                 logging_obj=self.data.get("litellm_logging_obj"),
                 model=self.data.get("model"),
                 kwargs=self.data,
-                start_time=self.data.get("start_time", end_time),
+                start_time=end_time,
                 end_time=end_time,
             )
 
