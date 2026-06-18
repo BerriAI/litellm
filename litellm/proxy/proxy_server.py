@@ -12943,7 +12943,6 @@ async def model_info_v1(
     alias_models = copy.deepcopy(llm_router.get_model_list_from_model_alias())
     all_models.extend(alias_models)
 
-
     allowed_model_names = _get_v1_model_info_allowed_model_names(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
