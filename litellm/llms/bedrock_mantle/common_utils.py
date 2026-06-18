@@ -73,14 +73,19 @@ class BedrockMantleAuthMixin:
         bearer = self._resolve_bearer_token(api_key)
         if not bearer:
             # SigV4 path. Pin the credential-scope region to the region of the actual
-            # signing URL (api_base is already region-resolved) so the SigV4 scope and
-            # the URL host can never disagree. Also drop any caller Authorization so
-            # _sign_request's restore-original-Authorization step cannot override the
-            # SigV4 header.
+            # signing URL so the SigV4 scope and the URL host can never disagree, even
+            # when a stale api_base and aws_region_name point at different regions.
+            # Fall back to _resolve_region only for custom proxy hosts that do not
+            # match the standard Mantle URL pattern. Also drop any caller Authorization
+            # so _sign_request's restore-original-Authorization step cannot override
+            # the SigV4 header.
+            host_match = MANTLE_HOST_RE.match(api_base.rstrip("/"))
             optional_params = {
                 **optional_params,
-                "aws_region_name": self._resolve_region(
-                    {**optional_params, "api_base": api_base}
+                "aws_region_name": (
+                    host_match.group(1)
+                    if host_match
+                    else self._resolve_region({**optional_params, "api_base": api_base})
                 ),
             }
             headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}

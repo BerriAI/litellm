@@ -318,6 +318,42 @@ class TestBedrockMantleChatAuth:
 
         assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
 
+    def test_sigv4_scope_matches_api_base_when_aws_region_name_disagrees(
+        self, monkeypatch
+    ):
+        # If a caller (e.g. proxy) passes a stale api_base in one region and an
+        # aws_region_name in a different region, the SigV4 credential scope must
+        # match the URL host or Bedrock rejects the request with 401. Without the
+        # fix, sign_request would prefer aws_region_name and sign for us-west-2
+        # while POSTing to eu-west-1.
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_REGION",
+            "BEDROCK_MANTLE_API_BASE",
+            "AWS_REGION",
+            "AWS_REGION_NAME",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+        cfg = BedrockMantleChatConfig(aws_signer=BaseAWSLLM())
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                "aws_region_name": "us-west-2",
+            },
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.eu-west-1.api.aws/v1/chat/completions",
+            api_key=None,
+        )
+
+        assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
+        assert "/us-west-2/bedrock/aws4_request" not in headers["Authorization"]
+
     def test_no_bearer_and_no_credentials_raises_value_error(self, monkeypatch):
         from unittest.mock import MagicMock
 
