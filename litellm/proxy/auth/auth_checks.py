@@ -286,14 +286,15 @@ def _classify_deployment_cost(
 ) -> ModelCostClass:
     """Classify a single router deployment's per-token pricing.
 
-    The cost is resolved the way cost tracking resolves it
-    (``get_deployment_model_info`` reads the built-in cost map for known models
-    and defaults unmapped models to $0). A positive cost is KNOWN_POSITIVE; a
-    zero is only trusted as EXPLICIT_ZERO when both input and output pricing are
-    explicitly set on the deployment, otherwise it is a sparse auto-registration
-    default and treated as UNKNOWN. ``get_model_list`` rewrites wildcard
-    deployments to the concrete requested model, so the resolved cost reflects
-    the model that will actually run.
+    Explicit per-deployment pricing wins. For a registered deployment the cost
+    is resolved the way cost tracking resolves it (``get_deployment_model_info``
+    reads the built-in cost map for known models and defaults unmapped models to
+    $0), so a positive cost is KNOWN_POSITIVE and a defaulted zero stays UNKNOWN.
+    For a wildcard/pattern deployment there is no per-deployment cost entry;
+    ``get_model_list`` has rewritten the underlying model to the concrete
+    requested one, so it is priced against the global cost map, which keeps
+    wildcard routes to mapped models (e.g. ``anthropic/*`` -> a known model)
+    usable while still failing closed on genuinely unmapped ones.
     """
     litellm_params = deployment["litellm_params"]
     model_info = deployment.get("model_info")
@@ -301,28 +302,7 @@ def _classify_deployment_cost(
         cast("dict[str, object]", model_info) if isinstance(model_info, dict) else {}
     )
 
-    underlying_model = litellm_params.get("model")
-    model_id = model_info_dict.get("id")
-    resolved_info = None
-    if isinstance(underlying_model, str) and isinstance(model_id, str):
-        try:
-            resolved_info = llm_router.get_deployment_model_info(
-                model_id=model_id, model_name=underlying_model
-            )
-        except Exception:
-            resolved_info = None
-
-    resolved_input = (
-        _as_cost(resolved_info.get("input_cost_per_token")) if resolved_info else None
-    )
-    resolved_output = (
-        _as_cost(resolved_info.get("output_cost_per_token")) if resolved_info else None
-    )
-    if (resolved_input is not None and resolved_input > 0) or (
-        resolved_output is not None and resolved_output > 0
-    ):
-        return ModelCostClass.KNOWN_POSITIVE
-
+    # Explicit per-deployment pricing is authoritative.
     explicit_input = _as_cost(litellm_params.get("input_cost_per_token"))
     if explicit_input is None:
         explicit_input = _as_cost(model_info_dict.get("input_cost_per_token"))
@@ -333,7 +313,45 @@ def _classify_deployment_cost(
         if explicit_input > 0 or explicit_output > 0:
             return ModelCostClass.KNOWN_POSITIVE
         return ModelCostClass.EXPLICIT_ZERO
-    return ModelCostClass.UNKNOWN
+
+    underlying_model = litellm_params.get("model")
+    # get_model_list rewrites the concrete requested model into model_name for
+    # wildcard deployments; prefer it when litellm_params still holds the
+    # pattern, so cost is resolved for the model that will actually run.
+    model_name_value = deployment.get("model_name")
+    if (
+        isinstance(underlying_model, str)
+        and "*" in underlying_model
+        and isinstance(model_name_value, str)
+        and model_name_value
+    ):
+        underlying_model = model_name_value
+    if not isinstance(underlying_model, str) or not underlying_model:
+        return ModelCostClass.UNKNOWN
+    model_id = model_info_dict.get("id")
+
+    # Registered deployment: trust the cost that cost tracking would use. A
+    # positive cost is known; a zero here is a sparse auto-registration default,
+    # so it stays unknown (a zero that was deliberate is handled above).
+    if isinstance(model_id, str):
+        try:
+            resolved_info = llm_router.get_deployment_model_info(
+                model_id=model_id, model_name=underlying_model
+            )
+        except Exception:
+            resolved_info = None
+        if resolved_info is not None:
+            resolved_input = _as_cost(resolved_info.get("input_cost_per_token"))
+            resolved_output = _as_cost(resolved_info.get("output_cost_per_token"))
+            if (resolved_input is not None and resolved_input > 0) or (
+                resolved_output is not None and resolved_output > 0
+            ):
+                return ModelCostClass.KNOWN_POSITIVE
+            return ModelCostClass.UNKNOWN
+
+    # Wildcard / unregistered deployment: get_model_list rewrites the underlying
+    # model to the concrete requested one, so price it via the global cost map.
+    return _classify_model_from_cost_map(underlying_model)
 
 
 def _classify_model_from_cost_map(model_name: str) -> ModelCostClass:

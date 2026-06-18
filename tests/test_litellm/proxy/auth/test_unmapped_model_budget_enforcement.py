@@ -300,6 +300,39 @@ class TestClassifyModelGroupCost:
             == ModelCostClass.EXPLICIT_ZERO
         )
 
+    def test_wildcard_route_to_mapped_model_is_known_positive(self):
+        """A wildcard deployment reaching a model that IS in the cost map must
+        classify KNOWN_POSITIVE (and stay usable), while a genuinely unmapped
+        concrete model on the same wildcard stays UNKNOWN. Guards against the
+        wildcard route being classified UNKNOWN wholesale."""
+        # Inject a mapped concrete model so the test doesn't depend on the live
+        # cost map; setup/teardown snapshot and restore litellm.model_cost.
+        litellm.model_cost["anthropic/mapped-via-wildcard-test"] = {
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000004,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        }
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "anthropic/*",
+                    "litellm_params": {
+                        "model": "anthropic/*",
+                        "api_key": "sk-fake",
+                    },
+                },
+            ]
+        )
+        assert (
+            _classify_model_group_cost("anthropic/mapped-via-wildcard-test", router)
+            == ModelCostClass.KNOWN_POSITIVE
+        )
+        assert (
+            _classify_model_group_cost("anthropic/brand-new-unmapped-zzz", router)
+            == ModelCostClass.UNKNOWN
+        )
+
 
 class TestRequestHasUnknownCostModel:
     """Detector backing the fail-closed check."""
@@ -747,9 +780,9 @@ class TestClassifyDeploymentCost:
         }
         assert _classify_deployment_cost(deployment, router) == ModelCostClass.UNKNOWN
 
-    def test_get_deployment_model_info_error_falls_back_to_explicit(self):
-        # If resolving the deployment's cost raises, the classifier must still
-        # honor an explicit deployment price rather than propagate the error.
+    def test_explicit_price_short_circuits_resolution(self):
+        # An explicit deployment price is authoritative, so the classifier honors
+        # it without consulting (or being broken by) the cost resolver.
         router = MagicMock(spec=Router)
         router.get_deployment_model_info.side_effect = RuntimeError("boom")
         deployment = {
@@ -765,6 +798,19 @@ class TestClassifyDeploymentCost:
             _classify_deployment_cost(deployment, router)
             == ModelCostClass.KNOWN_POSITIVE
         )
+        router.get_deployment_model_info.assert_not_called()
+
+    def test_resolution_error_is_treated_as_unknown(self):
+        # With no explicit price, a cost-resolution error must fail closed to
+        # UNKNOWN (the underlying model is unmapped), never propagate or assume free.
+        router = MagicMock(spec=Router)
+        router.get_deployment_model_info.side_effect = RuntimeError("boom")
+        deployment = {
+            "model_name": "err-unpriced",
+            "litellm_params": {"model": "openai/totally-unmapped-err-zzz"},
+            "model_info": {"id": "err-unpriced-id"},
+        }
+        assert _classify_deployment_cost(deployment, router) == ModelCostClass.UNKNOWN
         router.get_deployment_model_info.assert_called_once()
 
     def test_explicit_cost_from_model_info_when_absent_in_litellm_params(self):
@@ -796,6 +842,54 @@ class TestClassifyDeploymentCost:
             "model_name": "resolved-paid",
             "litellm_params": {"model": "openai/resolved-paid"},
             "model_info": {"id": "resolved-paid-id"},
+        }
+        assert (
+            _classify_deployment_cost(deployment, router)
+            == ModelCostClass.KNOWN_POSITIVE
+        )
+
+    def test_unresolved_deployment_falls_back_to_cost_map(self):
+        # When per-deployment resolution yields nothing (wildcard/unregistered),
+        # the concrete model is priced from the global cost map: mapped models
+        # stay usable, unmapped ones fail closed.
+        litellm.model_cost["anthropic/fallback-mapped-test"] = {
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000004,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        }
+        router = MagicMock(spec=Router)
+        router.get_deployment_model_info.return_value = None
+        mapped = {
+            "model_name": "anthropic/fallback-mapped-test",
+            "litellm_params": {"model": "anthropic/fallback-mapped-test"},
+            "model_info": {"id": "wc-id"},
+        }
+        assert (
+            _classify_deployment_cost(mapped, router) == ModelCostClass.KNOWN_POSITIVE
+        )
+        unmapped = {
+            "model_name": "anthropic/fallback-unmapped-zzz",
+            "litellm_params": {"model": "anthropic/fallback-unmapped-zzz"},
+            "model_info": {"id": "wc-id2"},
+        }
+        assert _classify_deployment_cost(unmapped, router) == ModelCostClass.UNKNOWN
+
+    def test_retained_wildcard_pattern_uses_concrete_model_name(self):
+        # If litellm_params still holds the wildcard pattern, the concrete
+        # model_name the router resolved is used for pricing.
+        litellm.model_cost["anthropic/retained-pattern-mapped"] = {
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000004,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        }
+        router = MagicMock(spec=Router)
+        router.get_deployment_model_info.return_value = None
+        deployment = {
+            "model_name": "anthropic/retained-pattern-mapped",
+            "litellm_params": {"model": "anthropic/*"},
+            "model_info": {"id": "wc-id3"},
         }
         assert (
             _classify_deployment_cost(deployment, router)
