@@ -2521,9 +2521,10 @@ def test_get_base_model_from_metadata():
 def test_gpt_image_2_model_info():
     """Verify gpt-image-2 is registered with correct mode and cost data.
 
-    Issue #26232 – the model was missing from litellm's cost map.
+    Issue #26232 — the model was missing from litellm's cost map.
     """
     import litellm
+    from litellm import model_cost
 
     info = litellm.get_model_info("gpt-image-2")
     assert info is not None, "gpt-image-2 should be in the model cost map"
@@ -2533,28 +2534,27 @@ def test_gpt_image_2_model_info():
     assert info.get("litellm_provider") == "openai", (
         f"Expected litellm_provider='openai', got {info.get('litellm_provider')}"
     )
-    # Must have input and output cost fields (non-null)
-    input_cost = info.get("input_cost_per_token")
-    output_cost = info.get("output_cost_per_token")
-    assert input_cost is not None and input_cost > 0, (
-        f"Expected positive input_cost_per_token, got {input_cost}"
+
+    # Verify in the live model_cost dict (not just get_model_info)
+    live = model_cost.get("gpt-image-2")
+    assert live is not None, "gpt-image-2 should be in litellm.model_cost"
+
+    # Image-specific pricing — primary cost driver for image generation
+    img_input_cost = live.get("input_cost_per_image_token")
+    img_output_cost = live.get("output_cost_per_image_token")
+    assert img_input_cost is not None and img_input_cost > 0, (
+        f"Expected positive input_cost_per_image_token, got {img_input_cost}"
     )
-    assert output_cost is not None and output_cost > 0, (
-        f"Expected positive output_cost_per_token, got {output_cost}"
+    assert img_output_cost is not None and img_output_cost > 0, (
+        f"Expected positive output_cost_per_image_token, got {img_output_cost}"
     )
+
+    # Must have token costs for compatibility
+    assert live.get("input_cost_per_token", 0) > 0
+    assert live.get("output_cost_per_token", 0) > 0
+
     # Must support image generation endpoints
-    endpoints = info.get("supported_endpoints")
-    # supported_endpoints may be None when filtered by get_model_info;
-    # fall back to checking the raw JSON
-    if endpoints is None:
-        import json, os
-        cost_file = os.path.join(
-            os.path.dirname(litellm.__file__),
-            "model_prices_and_context_window_backup.json"
-        )
-        with open(cost_file) as f:
-            raw = json.load(f)
-        endpoints = raw.get("gpt-image-2", {}).get("supported_endpoints", [])
+    endpoints = live.get("supported_endpoints", [])
     assert "/v1/images/generations" in (endpoints or []), (
         f"Expected /v1/images/generations in supported_endpoints, got {endpoints}"
     )
