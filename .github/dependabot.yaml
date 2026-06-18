@@ -12,7 +12,13 @@ updates:
         patterns:
           - "*"
 
-  - package-ecosystem: "pip"
+  # The repo root is a uv project (uv.lock + pyproject.toml). Dependabot treats
+  # "uv" as its own ecosystem, distinct from "pip" — so the root security-update
+  # job runs under the "uv" manager and only honors ignores declared here. The
+  # langchain advisory ignore MUST live in this block (it was previously under a
+  # "pip" block at "/", which matched no manifest, so Dependabot kept retrying
+  # the un-applicable langchain==1.3.9 bump on every run).
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
