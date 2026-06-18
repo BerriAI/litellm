@@ -154,51 +154,42 @@ class TestVertexAIVideoConfig:
             assert info["output_cost_per_second"] == 0.05
             assert info["output_cost_per_second_1080p"] == 0.08
 
-    def test_veo_31_lite_provider_routing_from_local_model_map(self):
-        original_model_cost = litellm.model_cost
-        original_vertex_video_models = set(litellm.vertex_ai_video_models)
+    def test_veo_31_lite_provider_routing_from_local_model_map(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        vertex_video_models = {
+            model_name.removeprefix("vertex_ai/")
+            for model_name, info in model_cost.items()
+            if info.get("litellm_provider") == "vertex_ai-video-models"
+        }
+        monkeypatch.setattr(litellm, "vertex_ai_video_models", vertex_video_models)
 
-        try:
-            model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
-            litellm.model_cost = dict(model_cost)
-            litellm.vertex_ai_video_models.clear()
-            litellm.add_known_models(model_cost_map=litellm.model_cost)
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model="veo-3.1-lite-generate-001"
+        )
 
-            model, custom_llm_provider, _, _ = get_llm_provider(
-                model="veo-3.1-lite-generate-001"
-            )
-
-            assert model == "veo-3.1-lite-generate-001"
-            assert custom_llm_provider == "vertex_ai"
-        finally:
-            litellm.model_cost = original_model_cost
-            litellm.vertex_ai_video_models.clear()
-            litellm.vertex_ai_video_models.update(original_vertex_video_models)
+        assert model == "veo-3.1-lite-generate-001"
+        assert custom_llm_provider == "vertex_ai"
 
     def test_veo_31_lite_cost_uses_resolution_tiers(self):
         model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
         model_info = model_cost[VEO_31_LITE_VERTEX_MODEL]
 
-        assert (
-            video_generation_cost(
-                model=VEO_31_LITE_VERTEX_MODEL,
-                duration_seconds=10.0,
-                custom_llm_provider="vertex_ai",
-                model_info=dict(model_info),
-                video_resolution="720p",
-            )
-            == 0.5
-        )
-        assert (
-            video_generation_cost(
-                model=VEO_31_LITE_VERTEX_MODEL,
-                duration_seconds=10.0,
-                custom_llm_provider="vertex_ai",
-                model_info=dict(model_info),
-                video_resolution="1080p",
-            )
-            == 0.8
-        )
+        assert video_generation_cost(
+            model=VEO_31_LITE_VERTEX_MODEL,
+            duration_seconds=10.0,
+            custom_llm_provider="vertex_ai",
+            model_info=dict(model_info),
+            video_resolution="720p",
+        ) == pytest.approx(0.5)
+        assert video_generation_cost(
+            model=VEO_31_LITE_VERTEX_MODEL,
+            duration_seconds=10.0,
+            custom_llm_provider="vertex_ai",
+            model_info=dict(model_info),
+            video_resolution="1080p",
+        ) == pytest.approx(0.8)
 
     def test_transform_video_create_request(self):
         """Test transformation of video creation request."""
