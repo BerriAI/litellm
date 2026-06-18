@@ -32,17 +32,31 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
 router = APIRouter()
 
-# Headers that must never be forwarded to plugin backends
-_HOP_BY_HOP = {
+# Headers that must never be forwarded TO plugin backends
+_REQUEST_STRIP = {
     "host",
     "connection",
     "transfer-encoding",
     "te",
     "trailers",
     "upgrade",
-    # Strip the caller's litellm credential — plugin auth uses plugin_key only
+    # Strip litellm credentials — plugin auth uses plugin_key only
     "authorization",
     "x-api-key",
+    # Strip session cookies — plugins must not capture litellm JWT cookies
+    "cookie",
+}
+
+# Headers to strip from plugin RESPONSES before returning to the browser.
+# httpx already decompresses and de-chunks the body, so forwarding the wire
+# encoding headers causes clients to attempt double-decompression (garbage) or
+# incorrect length checks.  set-cookie is removed so plugins cannot overwrite
+# litellm session cookies.
+_RESPONSE_STRIP = {
+    "content-encoding",
+    "transfer-encoding",
+    "content-length",
+    "set-cookie",
 }
 
 # In-memory plugin registry — populated from general_settings at startup
@@ -175,7 +189,7 @@ async def plugin_proxy(
 
     # Strip caller credentials and hop-by-hop headers from forwarded request
     forward_headers = {
-        k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP
+        k: v for k, v in request.headers.items() if k.lower() not in _REQUEST_STRIP
     }
 
     # Inject plugin's own credential as upstream auth (if configured)
@@ -198,8 +212,12 @@ async def plugin_proxy(
             status_code=502,
         )
 
+    safe_headers = {
+        k: v for k, v in resp.headers.items() if k.lower() not in _RESPONSE_STRIP
+    }
+
     return Response(
         content=resp.content,
         status_code=resp.status_code,
-        headers=dict(resp.headers),
+        headers=safe_headers,
     )
