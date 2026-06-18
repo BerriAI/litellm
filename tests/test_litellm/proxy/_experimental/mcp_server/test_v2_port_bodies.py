@@ -10,8 +10,14 @@ from pydantic import SecretStr
 from litellm.proxy._experimental.mcp_server import v2_port_bodies
 from litellm.proxy._experimental.mcp_server.v2_port_bodies import (
     HttpxClientCredentialsFetcher,
+    HttpxSigV4Signer,
+    _classify_sigv4_error,
 )
-from litellm.proxy.gateway.mcp.outbound_credentials.types import ClientCredentialsConfig
+from litellm.proxy.gateway.mcp.outbound_credentials.types import (
+    AwsSigV4Config,
+    ClientCredentialsConfig,
+    StaticKeys,
+)
 from litellm.proxy.gateway.mcp.result import Error, Ok
 
 pytestmark = pytest.mark.asyncio
@@ -101,3 +107,58 @@ async def test_fetch_missing_access_token_is_misconfigured(monkeypatch):
     result = await HttpxClientCredentialsFetcher().fetch(_cfg())
     assert isinstance(result, Error)
     assert result.error.tag == "misconfigured"
+
+
+def _sigv4_cfg(session_token=None, region="us-east-1", service="bedrock-agentcore"):
+    return AwsSigV4Config(
+        region=region,
+        service=service,
+        credentials=StaticKeys(
+            access_key_id="AKIATEST",
+            secret_access_key=SecretStr("secret"),
+            session_token=SecretStr(session_token) if session_token else None,
+        ),
+    )
+
+
+async def test_sigv4_static_keys_signs_request():
+    result = await HttpxSigV4Signer().build(_sigv4_cfg())
+    assert isinstance(result, Ok)
+    req = httpx.Request(
+        "POST", "https://svc.us-east-1.amazonaws.com/mcp", content=b"{}"
+    )
+    signed = next(result.ok.auth_flow(req))
+    assert signed.headers["Authorization"].startswith(
+        "AWS4-HMAC-SHA256 Credential=AKIATEST/"
+    )
+    assert "X-Amz-Date" in signed.headers
+    assert "X-Amz-Security-Token" not in signed.headers
+
+
+async def test_sigv4_session_token_adds_security_token():
+    result = await HttpxSigV4Signer().build(_sigv4_cfg(session_token="tok"))
+    assert isinstance(result, Ok)
+    req = httpx.Request("GET", "https://svc.us-east-1.amazonaws.com/mcp")
+    signed = next(result.ok.auth_flow(req))
+    assert "X-Amz-Security-Token" in signed.headers
+
+
+async def test_sigv4_region_and_service_in_credential_scope():
+    result = await HttpxSigV4Signer().build(_sigv4_cfg(region="eu-west-1"))
+    assert isinstance(result, Ok)
+    req = httpx.Request("GET", "https://svc.eu-west-1.amazonaws.com/mcp")
+    signed = next(result.ok.auth_flow(req))
+    assert (
+        "/eu-west-1/bedrock-agentcore/aws4_request" in signed.headers["Authorization"]
+    )
+
+
+async def test_classify_sigv4_connection_error_is_upstream_unavailable():
+    from botocore.exceptions import EndpointConnectionError
+
+    err = EndpointConnectionError(endpoint_url="https://sts.amazonaws.com")
+    assert _classify_sigv4_error(err).tag == "upstream_unavailable"
+
+
+async def test_classify_sigv4_other_error_is_misconfigured():
+    assert _classify_sigv4_error(ValueError("no creds")).tag == "misconfigured"

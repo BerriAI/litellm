@@ -7,9 +7,11 @@ invariant; the graft composition root injects them and v2 unit tests fake them.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from typing import Optional
 
+import httpx
 from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 
 from litellm.constants import MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
@@ -17,8 +19,11 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy.gateway.mcp.outbound_credentials.clock import Clock, SystemClock
 from litellm.proxy.gateway.mcp.outbound_credentials.token_store import StoredToken
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
+    AssumeRole,
+    AwsSigV4Config,
     ClientCredentialsConfig,
     CredError,
+    StaticKeys,
 )
 from litellm.proxy.gateway.mcp.result import Error, Ok, Result
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -107,3 +112,61 @@ class HttpxClientCredentialsFetcher:
                 expires_at=self._clock.now() + ttl,
             )
         )
+
+
+class HttpxSigV4Signer:
+    """AWS SigV4 signer for the `aws_sigv4` arm, backed by botocore.
+
+    Phase-1 graft body: maps the typed credential source onto v1's proven `MCPSigV4Auth`, so the
+    signed headers stay byte-identical to v1 (the signer relocates into the v2 package when v1 is
+    retired). Credentials resolve eagerly at build time -- an unassumable role or a missing
+    ambient chain fails closed here, not mid-request -- and botocore refreshes temporary STS
+    credentials at sign time.
+    """
+
+    async def build(self, config: AwsSigV4Config) -> Result[httpx.Auth, CredError]:
+        try:
+            auth = await asyncio.to_thread(_build_sigv4_auth, config)
+        except Exception as e:  # classified into a CredError below
+            return Error(_classify_sigv4_error(e))
+        return Ok(auth)
+
+
+def _build_sigv4_auth(config: AwsSigV4Config) -> httpx.Auth:
+    from litellm.experimental_mcp_client.client import MCPSigV4Auth
+
+    creds = config.credentials
+    if isinstance(creds, StaticKeys):
+        return MCPSigV4Auth(
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key.get_secret_value(),
+            aws_session_token=(
+                creds.session_token.get_secret_value() if creds.session_token else None
+            ),
+            aws_region_name=config.region,
+            aws_service_name=config.service,
+        )
+    if isinstance(creds, AssumeRole):
+        return MCPSigV4Auth(
+            aws_role_name=creds.role_arn,
+            aws_session_name=creds.session_name,
+            aws_region_name=config.region,
+            aws_service_name=config.service,
+        )
+    return MCPSigV4Auth(aws_region_name=config.region, aws_service_name=config.service)
+
+
+def _classify_sigv4_error(error: Exception) -> CredError:
+    # botocore is an optional dependency without type stubs; match its connection-error classes
+    # by name rather than importing it just to isinstance-check.
+    if type(error).__name__ in (
+        "EndpointConnectionError",
+        "ConnectTimeoutError",
+        "ConnectionError",
+    ):
+        return CredError.of_upstream_unavailable(
+            f"STS unreachable while resolving aws_sigv4 credentials: {error}"
+        )
+    return CredError.of_misconfigured(
+        f"aws_sigv4 credentials could not be resolved: {error}"
+    )
