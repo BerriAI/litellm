@@ -802,6 +802,39 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 elif isinstance(content, list) and content_idx_optional is not None:
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
 
+            # Also mask PII in tool_call / function_call arguments. The content loop
+            # above only inspects message content, so PII embedded in tool-call
+            # arguments would otherwise reach the provider unmasked -- this mirrors the
+            # response-side handling in _process_response_for_pii.
+            for m in messages:
+                if not isinstance(m, dict):
+                    continue
+                for tool_call in m.get("tool_calls") or []:
+                    function = (
+                        tool_call.get("function")
+                        if isinstance(tool_call, dict)
+                        else None
+                    )
+                    if isinstance(function, dict) and isinstance(
+                        function.get("arguments"), str
+                    ):
+                        function["arguments"] = await self.check_pii(
+                            text=function["arguments"],
+                            output_parse_pii=self.output_parse_pii,
+                            presidio_config=presidio_config,
+                            request_data=data,
+                        )
+                function_call = m.get("function_call")
+                if isinstance(function_call, dict) and isinstance(
+                    function_call.get("arguments"), str
+                ):
+                    function_call["arguments"] = await self.check_pii(
+                        text=function_call["arguments"],
+                        output_parse_pii=self.output_parse_pii,
+                        presidio_config=presidio_config,
+                        request_data=data,
+                    )
+
             verbose_proxy_logger.debug(
                 f"Presidio PII Masking: Redacted pii message: {data['messages']}"
             )
@@ -1016,20 +1049,40 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return response
 
         for block in content:
-            if not isinstance(block, dict) or block.get("type") != "text":
+            if not isinstance(block, dict):
                 continue
-            text_value = block.get("text")
-            if text_value is None:
-                continue
-            if mode == "unmask":
-                block["text"] = self._unmask_pii_text(text_value, pii_tokens)
-            elif mode == "mask":
-                block["text"] = await self.check_pii(
-                    text=text_value,
-                    output_parse_pii=False,
-                    presidio_config=presidio_config,
-                    request_data=request_data,
-                )
+            block_type = block.get("type")
+            if block_type == "text":
+                text_value = block.get("text")
+                if text_value is None:
+                    continue
+                if mode == "unmask":
+                    block["text"] = self._unmask_pii_text(text_value, pii_tokens)
+                elif mode == "mask":
+                    block["text"] = await self.check_pii(
+                        text=text_value,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=request_data,
+                    )
+            elif block_type == "tool_use":
+                # Mirror the OpenAI-format path (_process_response_for_pii), which masks
+                # tool_call arguments: a tool_use block's `input` dict can carry PII the
+                # model produced, and must be masked too -- not just sibling text blocks.
+                tool_input = block.get("input")
+                if isinstance(tool_input, dict):
+                    for key, value in list(tool_input.items()):
+                        if not isinstance(value, str):
+                            continue
+                        if mode == "unmask":
+                            tool_input[key] = self._unmask_pii_text(value, pii_tokens)
+                        elif mode == "mask":
+                            tool_input[key] = await self.check_pii(
+                                text=value,
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=request_data,
+                            )
 
         return response
 
