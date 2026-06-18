@@ -3634,26 +3634,24 @@ class Logging(LiteLLMLoggingBaseClass):
     def _handle_non_streaming_google_genai_generate_content_response_logging(
         self, result: Any
     ) -> ModelResponse:
-        """
-        Handles logging for Google GenAI generate content responses.
-        """
         import httpx
 
+        if isinstance(result, ModelResponse):
+            return result
         httpx_response = self.model_call_details.get("httpx_response", None)
-        if httpx_response is None:
-            raise ValueError("Google GenAI Generate Content: httpx_response is None")
-        dict_result = httpx_response.json()
-        result = litellm.VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
+        if httpx_response is not None and isinstance(httpx_response, httpx.Response):
+            dict_result = httpx_response.json()
+        elif isinstance(result, dict):
+            dict_result = result
+        else:
+            raise ValueError("Google GenAI Generate Content: no usable response to log")
+        return litellm.VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
             completion_response=dict_result,
             model_response=litellm.ModelResponse(),
             model=self.model,
             logging_obj=self,
-            raw_response=httpx.Response(
-                status_code=200,
-                headers={},
-            ),
+            raw_response=httpx.Response(status_code=200, headers={}),
         )
-        return result
 
     def _handle_a2a_response_logging(self, result: Any) -> Any:
         """
