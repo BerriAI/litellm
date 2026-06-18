@@ -8537,8 +8537,8 @@ async def model_list(
 async def model_info(
     model_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    team_id: Optional[str] = None,
-    healthy_only: Optional[bool] = False,
+    team_id: str | None = None,
+    healthy_only: bool | None = False,
 ):
     """
     Retrieve information about a specific model accessible to your API key.

@@ -340,7 +340,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
     @staticmethod
     def _build_tracing_detail(
         guardrail_response: Union[dict, str, Exception],
-    ) -> Optional[GuardrailTracingDetail]:
+    ) -> GuardrailTracingDetail | None:
         """
         Pull the flagged category names out of the moderation response so trace
         backends can index a short, queryable ``guardrail_violation_categories``

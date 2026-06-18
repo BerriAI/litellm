@@ -304,10 +304,10 @@ def get_credentials_for_model(
 
 def get_team_provider_credentials(
     llm_router: Optional["Router"],
-    team_models: List[str],
+    team_models: list[str],
     custom_llm_provider: str,
-    team_id: Optional[str] = None,
-) -> Optional[dict]:
+    team_id: str | None = None,
+) -> dict | None:
     """
     Resolve upstream credentials for a provider-scoped file operation
     (e.g. GET /v1/files), which doesn't pin a model.
@@ -327,7 +327,7 @@ def get_team_provider_credentials(
     if llm_router is None:
         return None
 
-    def _provider_credentials(model_id: str) -> Optional[dict]:
+    def _provider_credentials(model_id: str) -> dict | None:
         credentials = llm_router.get_deployment_credentials_with_provider(
             model_id=model_id
         )
