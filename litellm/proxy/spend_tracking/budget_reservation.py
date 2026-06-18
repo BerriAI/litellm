@@ -628,12 +628,14 @@ async def _set_reserved_entries_actual_cost(
     entries: List[dict],
     actual_cost: float,
     default_reserved_cost: float,
+    reseed_on_inconsistent: bool = True,
 ) -> None:
     for entry in entries:
         await _set_reserved_entry_actual_cost(
             entry=entry,
             actual_cost=actual_cost,
             default_reserved_cost=default_reserved_cost,
+            reseed_on_inconsistent=reseed_on_inconsistent,
         )
 
 
@@ -641,8 +643,12 @@ async def _set_reserved_entry_actual_cost(
     entry: dict,
     actual_cost: float,
     default_reserved_cost: float,
+    reseed_on_inconsistent: bool = True,
 ) -> None:
-    from litellm.proxy.proxy_server import _increment_spend_counter_cache
+    from litellm.proxy.proxy_server import (
+        _increment_spend_counter_cache,
+        reseed_spend_counter_from_db,
+    )
 
     counter_key = entry.get("counter_key")
     if counter_key is None:
@@ -656,46 +662,49 @@ async def _set_reserved_entry_actual_cost(
     adjustment = target_adjustment - applied_adjustment
     if adjustment == 0:
         return
-    await _ensure_counter_can_apply_adjustment(
+    if await _counter_can_apply_adjustment(
         counter_key=counter_key,
         adjustment=adjustment,
-    )
-    await _increment_spend_counter_cache(
-        counter_key=counter_key,
-        increment=adjustment,
-    )
+    ):
+        await _increment_spend_counter_cache(
+            counter_key=counter_key,
+            increment=adjustment,
+        )
+    elif reseed_on_inconsistent:
+        # Post-call reconcile / release: the counter was flushed or reseeded
+        # between reservation and reconcile (Redis restart / cross-pod reset),
+        # so the optimistic delta no longer applies. Recover by reseeding from
+        # the DB's lagging authoritative floor rather than deleting the counter
+        # and failing open — deleting it is what left budgets unenforced after a
+        # Redis reload.
+        await reseed_spend_counter_from_db(counter_key=counter_key)
+    else:
+        # Pre-call admission resize: the in-flight reservation cost is not yet
+        # persisted, so the DB floor would discard it. Keep the original
+        # fail-closed behavior (raise -> reserve_budget_for_request releases and
+        # denies) rather than admitting against an inconsistent counter.
+        raise RuntimeError(
+            f"Cannot resize budget reservation against inconsistent counter {counter_key}"
+        )
     entry["applied_adjustment"] = target_adjustment
 
 
-async def _ensure_counter_can_apply_adjustment(
+async def _counter_can_apply_adjustment(
     counter_key: str,
     adjustment: float,
-) -> None:
-    from litellm.proxy.proxy_server import (
-        _invalidate_spend_counter,
-        spend_counter_cache,
-    )
+) -> bool:
+    from litellm.proxy.proxy_server import spend_counter_cache
 
     current_value = await spend_counter_cache.async_get_cache(key=counter_key)
     if current_value is None:
-        await _invalidate_spend_counter(counter_key=counter_key)
-        raise RuntimeError(
-            f"Cannot apply budget reservation adjustment to missing counter {counter_key}"
-        )
+        return False
 
     try:
         current_float = float(current_value)
     except (TypeError, ValueError):
-        await _invalidate_spend_counter(counter_key=counter_key)
-        raise RuntimeError(
-            f"Cannot apply budget reservation adjustment to non-numeric counter {counter_key}"
-        )
+        return False
 
-    if adjustment < 0 and current_float + adjustment < -1e-12:
-        await _invalidate_spend_counter(counter_key=counter_key)
-        raise RuntimeError(
-            f"Budget reservation adjustment would make counter negative {counter_key}"
-        )
+    return not (adjustment < 0 and current_float + adjustment < -1e-12)
 
 
 async def _release_applied_entries_best_effort(
@@ -735,6 +744,7 @@ async def _resize_applied_reservation(
         entries=entries,
         actual_cost=new_reserved_cost,
         default_reserved_cost=current_reserved_cost,
+        reseed_on_inconsistent=False,
     )
     for entry in entries:
         entry["reserved_cost"] = new_reserved_cost
