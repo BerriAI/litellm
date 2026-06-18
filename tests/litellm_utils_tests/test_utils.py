@@ -2516,3 +2516,45 @@ def test_get_base_model_from_metadata():
     # Test 6: None input
     result = _get_base_model_from_metadata(None)
     assert result is None, f"Expected None for None input, got {result}"
+
+
+def test_gpt_image_2_model_info():
+    """Verify gpt-image-2 is registered with correct mode and cost data.
+
+    Issue #26232 – the model was missing from litellm's cost map.
+    """
+    import litellm
+
+    info = litellm.get_model_info("gpt-image-2")
+    assert info is not None, "gpt-image-2 should be in the model cost map"
+    assert info.get("mode") == "image_generation", (
+        f"Expected mode='image_generation', got {info.get('mode')}"
+    )
+    assert info.get("litellm_provider") == "openai", (
+        f"Expected litellm_provider='openai', got {info.get('litellm_provider')}"
+    )
+    # Must have input and output cost fields (non-null)
+    input_cost = info.get("input_cost_per_token")
+    output_cost = info.get("output_cost_per_token")
+    assert input_cost is not None and input_cost > 0, (
+        f"Expected positive input_cost_per_token, got {input_cost}"
+    )
+    assert output_cost is not None and output_cost > 0, (
+        f"Expected positive output_cost_per_token, got {output_cost}"
+    )
+    # Must support image generation endpoints
+    endpoints = info.get("supported_endpoints")
+    # supported_endpoints may be None when filtered by get_model_info;
+    # fall back to checking the raw JSON
+    if endpoints is None:
+        import json, os
+        cost_file = os.path.join(
+            os.path.dirname(litellm.__file__),
+            "model_prices_and_context_window_backup.json"
+        )
+        with open(cost_file) as f:
+            raw = json.load(f)
+        endpoints = raw.get("gpt-image-2", {}).get("supported_endpoints", [])
+    assert "/v1/images/generations" in (endpoints or []), (
+        f"Expected /v1/images/generations in supported_endpoints, got {endpoints}"
+    )
