@@ -97,6 +97,27 @@ def print_verbose(print_statement):
         pass
 
 
+def _original_chunk_has_reasoning_content(response_obj: Dict[str, Any]) -> bool:
+    """Return True when the parsed upstream chunk carries reasoning_content.
+
+    `is_chunk_non_empty` only inspects the fresh `model_response` created at
+    the top of `chunk_creator`, so providers that surface reasoning_content via
+    `response_obj["original_chunk"]` (e.g. Gemini thinking parts under the
+    openai-compatible code path) need this fallback to avoid silent drops.
+    See https://github.com/BerriAI/litellm/issues/28000.
+    """
+    original_chunk = response_obj.get("original_chunk")
+    if original_chunk is None:
+        return False
+    choices = getattr(original_chunk, "choices", None) or []
+    if len(choices) == 0:
+        return False
+    delta = getattr(choices[0], "delta", None)
+    if delta is None:
+        return False
+    return getattr(delta, "reasoning_content", None) is not None
+
+
 class CustomStreamWrapper:
     def __init__(
         self,
@@ -845,6 +866,7 @@ class CustomStreamWrapper:
                 "reasoning_content" in model_response.choices[0].delta
                 and model_response.choices[0].delta.reasoning_content is not None
             )
+            or _original_chunk_has_reasoning_content(response_obj)
             or (model_response.choices[0].delta.provider_specific_fields is not None)
             or (
                 "provider_specific_fields" in model_response

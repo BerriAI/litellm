@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -155,6 +156,108 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
         completion_obj=MagicMock(),
         model_response=ModelResponseStream(**chunk),
         response_obj=MagicMock(),
+    )
+
+
+def test_is_chunk_non_empty_with_original_chunk_reasoning_content(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/28000.
+
+    When Gemini emits a streaming chunk that carries only thinking content
+    (delta.content is None, delta.reasoning_content is set), the upstream
+    handler builds an `original_chunk` ModelResponseStream that holds the
+    reasoning_content, but `model_response` passed into is_chunk_non_empty
+    is a fresh empty object. The thought chunk must still be considered
+    non-empty so it propagates to the caller.
+    """
+    original_chunk = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    reasoning_content="I need to add 2 and 2...",
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+    empty_model_response = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(), finish_reason=None)],
+    )
+
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={"content": ""},
+            model_response=empty_model_response,
+            response_obj={"original_chunk": original_chunk},
+        )
+        is True
+    )
+
+
+def test_is_chunk_non_empty_ignores_original_chunk_without_reasoning(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Companion to test_is_chunk_non_empty_with_original_chunk_reasoning_content.
+
+    An empty completion_obj plus an original_chunk that carries no
+    reasoning_content (and no other non-empty delta fields) must still be
+    treated as empty so existing pass-through behaviour is preserved.
+    """
+    original_chunk = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=None),
+                finish_reason=None,
+            )
+        ],
+    )
+    empty_model_response = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(), finish_reason=None)],
+    )
+
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={"content": ""},
+            model_response=empty_model_response,
+            response_obj={"original_chunk": original_chunk},
+        )
+        is False
+    )
+
+
+def test_original_chunk_has_reasoning_content_defensive_branches():
+    """
+    Cover the defensive guards inside _original_chunk_has_reasoning_content so
+    every early-return path is exercised. Each branch must return False without
+    raising on the surrounding malformed input.
+    """
+    from litellm.litellm_core_utils.streaming_handler import (
+        _original_chunk_has_reasoning_content,
+    )
+
+    # 1. Missing original_chunk entirely.
+    assert _original_chunk_has_reasoning_content({}) is False
+
+    # 2. original_chunk present but no choices.
+    chunk_no_choices = ModelResponseStream(choices=[])
+    assert (
+        _original_chunk_has_reasoning_content({"original_chunk": chunk_no_choices})
+        is False
+    )
+
+    # 3. original_chunk with a choice whose delta is None. ModelResponseStream
+    # always materialises a Delta, so emulate the missing-delta case with a
+    # SimpleNamespace standing in for the choice.
+    chunk_no_delta = SimpleNamespace(choices=[SimpleNamespace(delta=None)])
+    assert (
+        _original_chunk_has_reasoning_content({"original_chunk": chunk_no_delta})
+        is False
     )
 
 
