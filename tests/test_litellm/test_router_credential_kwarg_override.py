@@ -18,10 +18,10 @@ from litellm.router import (
 def test_strip_helper_removes_credential_kwargs_in_place():
     kwargs = {
         "temperature": 0.2,
-        "vertex_project": "attacker-project",
-        "aws_access_key_id": "AKIA-ATTACKER",
-        "api_version": "attacker-version",
-        "base_model": "azure/forged",
+        "vertex_project": "caller-project",
+        "aws_access_key_id": "AKIA-CALLER",
+        "api_version": "caller-version",
+        "base_model": "azure/caller-supplied",
     }
     _strip_deployment_owned_credential_kwargs(kwargs)
     assert kwargs == {"temperature": 0.2}
@@ -59,15 +59,15 @@ def test_sync_completion_ignores_caller_credential_kwargs():
         router.completion(
             model="primary",
             messages=[{"role": "user", "content": "hi"}],
-            vertex_project="attacker-project",
-            vertex_credentials='{"private_key":"attacker"}',
+            vertex_project="caller-project",
+            vertex_credentials='{"private_key":"caller"}',
         )
 
     assert mock_completion.call_count == 1
     _, kwargs = mock_completion.call_args
     assert kwargs["vertex_project"] == "admin-project"
     assert kwargs["vertex_credentials"] == '{"private_key":"admin"}'
-    assert "attacker" not in str(kwargs["vertex_credentials"])
+    assert "caller" not in str(kwargs["vertex_credentials"])
 
 
 @pytest.mark.asyncio
@@ -80,8 +80,8 @@ async def test_async_completion_ignores_caller_credential_kwargs():
         await router.acompletion(
             model="primary",
             messages=[{"role": "user", "content": "hi"}],
-            vertex_project="attacker-project",
-            aws_access_key_id="AKIA-ATTACKER",
+            vertex_project="caller-project",
+            aws_access_key_id="AKIA-CALLER",
         )
 
     assert mock_acompletion.call_count == 1

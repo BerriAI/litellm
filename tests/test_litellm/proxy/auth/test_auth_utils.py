@@ -1417,12 +1417,12 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         out = get_dynamic_litellm_params(
             litellm_params=dict(admin_params),
             request_kwargs={
-                "api_key": "sk-attacker",
-                "api_base": "https://attacker.example",
+                "api_key": "sk-other",
+                "api_base": "https://other.example",
             },
         )
-        assert out["api_base"] == "https://attacker.example"
-        assert out["api_key"] == "sk-attacker"
+        assert out["api_base"] == "https://other.example"
+        assert out["api_key"] == "sk-other"
         assert "organization" not in out
         assert "extra_body" not in out
         assert "api_version" not in out
@@ -1442,7 +1442,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         }
         out = get_dynamic_litellm_params(
             litellm_params=dict(admin_params),
-            request_kwargs={"base_url": "https://attacker.example"},
+            request_kwargs={"base_url": "https://other.example"},
         )
         assert "aws_access_key_id" not in out
         assert "aws_secret_access_key" not in out
@@ -1469,13 +1469,13 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
                 "extra_body": {"admin": "value"},
             },
             request_kwargs={
-                "api_base": "https://attacker.example",
-                "organization": "org-attacker",
-                "extra_body": {"attacker": "value"},
+                "api_base": "https://other.example",
+                "organization": "org-other",
+                "extra_body": {"other": "value"},
             },
         )
-        assert out["organization"] == "org-attacker"
-        assert out["extra_body"] == {"attacker": "value"}
+        assert out["organization"] == "org-other"
+        assert out["extra_body"] == {"other": "value"}
 
     def test_field_echo_does_not_preserve_admin_value(self):
         # Regression: a caller that echoes an admin-config field name with
@@ -1492,7 +1492,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
                 "extra_body": {"x-admin-only": "secret"},
             },
             request_kwargs={
-                "api_base": "https://attacker.example",
+                "api_base": "https://other.example",
                 "organization": "",
                 "extra_body": "",
             },
@@ -1528,9 +1528,9 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
     ``api_base`` / ``base_url``, the same protection must apply to:
 
     * ``aws_bedrock_runtime_endpoint`` — Bedrock endpoint redirect; an
-      attacker-controlled value coerces the proxy to authenticate against
+      caller-controlled value coerces the proxy to authenticate against
       their host with the admin's AWS creds.
-    * ``langsmith_base_url`` — Langsmith callback host; attacker-controlled
+    * ``langsmith_base_url`` — Langsmith callback host; caller-controlled
       values exfiltrate the entire request payload (incl. message content)
       via the observability hook.
     * ``langfuse_host`` — same exfil vector via the Langfuse hook.
@@ -1562,7 +1562,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
     def test_endpoint_targeting_field_in_request_body_is_rejected(self, field):
         with pytest.raises(ValueError) as exc:
             is_request_body_safe(
-                request_body={"model": "gpt-4", field: "https://attacker.example"},
+                request_body={"model": "gpt-4", field: "https://other.example"},
                 general_settings={},
                 llm_router=None,
                 model="gpt-4",
@@ -1586,7 +1586,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
                 request_body={
                     "model": "gpt-4",
                     "api_key": "sk-anything",
-                    field: "https://attacker.example",
+                    field: "https://other.example",
                 },
                 general_settings={},
                 llm_router=None,
@@ -1716,7 +1716,7 @@ class TestIsRequestBodySafeBlocksBedrockProjectOverride:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
-                    "aws_bedrock_project_id": "proj_attacker000000",
+                    "aws_bedrock_project_id": "proj_other000000",
                 },
                 general_settings={},
                 llm_router=None,
@@ -1752,7 +1752,7 @@ class TestIsRequestBodySafeNestedConfig:
         """Sanity check: pre-existing root-level enforcement still works."""
         with pytest.raises(ValueError, match="api_base"):
             is_request_body_safe(
-                request_body={"api_base": "https://attacker.example.com"},
+                request_body={"api_base": "https://other.example.com"},
                 general_settings={},
                 llm_router=None,
                 model="gpt-4",
@@ -1765,7 +1765,7 @@ class TestIsRequestBodySafeNestedConfig:
             is_request_body_safe(
                 request_body={
                     "litellm_embedding_config": {
-                        "api_base": "https://attacker.example.com",
+                        "api_base": "https://other.example.com",
                         "api_key": "leaked-key",
                     }
                 },
@@ -1780,7 +1780,7 @@ class TestIsRequestBodySafeNestedConfig:
         when nested."""
         with pytest.raises(ValueError, match="langfuse_host"):
             is_request_body_safe(
-                request_body={"litellm_embedding_config": {"langfuse_host": "https://attacker.example.com"}},
+                request_body={"litellm_embedding_config": {"langfuse_host": "https://other.example.com"}},
                 general_settings={},
                 llm_router=None,
                 model="milvus-store",
@@ -1842,7 +1842,7 @@ class TestIsRequestBodySafeNestedConfig:
             cur = cur["litellm_embedding_config"]
         # Banned param at the deepest level shouldn't be reached — single
         # level only.
-        cur["api_base"] = "https://attacker.example.com"
+        cur["api_base"] = "https://other.example.com"
 
         # No exception raised: deeper levels aren't checked.
         assert (
@@ -1908,7 +1908,7 @@ class TestObservabilityCallbackBans:
     def test_observability_field_in_request_body_root_is_rejected(self, field):
         with pytest.raises(ValueError) as exc:
             is_request_body_safe(
-                request_body={"model": "gpt-4", field: "attacker-value"},
+                request_body={"model": "gpt-4", field: "other-value"},
                 general_settings={},
                 llm_router=None,
                 model="gpt-4",
@@ -1939,7 +1939,7 @@ class TestObservabilityCallbackBans:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
-                    metadata_key: {field: "attacker-value"},
+                    metadata_key: {field: "other-value"},
                 },
                 general_settings={},
                 llm_router=None,
@@ -1962,7 +1962,7 @@ class TestObservabilityCallbackBans:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
-                    metadata_key: json.dumps({"langfuse_host": "https://attacker.example"}),
+                    metadata_key: json.dumps({"langfuse_host": "https://other.example"}),
                 },
                 general_settings={},
                 llm_router=None,
@@ -2034,7 +2034,7 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
             request_body={
                 "model": "gpt-4",
                 "api_base": "https://allowed-by-deployment.example",
-                "langfuse_host": "https://attacker.example",
+                "langfuse_host": "https://other.example",
             },
             general_settings={},
             llm_router=None,
@@ -2187,8 +2187,8 @@ class TestIsRequestBodySafeBlocksModelList:
                             "model_name": "gpt-4",
                             "litellm_params": {
                                 "model": "gpt-4",
-                                "api_base": "https://attacker.example",
-                                "api_key": "sk-leak",
+                                "api_base": "https://other.example",
+                                "api_key": "sk-other",
                             },
                         }
                     ],
@@ -2210,7 +2210,7 @@ class TestIsRequestBodySafeBlocksModelList:
                             "model_name": "gpt-4",
                             "litellm_params": {
                                 "model": "gpt-4",
-                                "api_base": "https://attacker.example",
+                                "api_base": "https://other.example",
                             },
                         }
                     ],
@@ -2240,14 +2240,14 @@ class TestIsRequestBodySafeBlocksVertexAndCredentialAliases:
         "field,value",
         [
             ("vertex_ai_credentials", '{"private_key":"-----BEGIN..."}'),
-            ("vertex_project", "attacker-gcp-project"),
+            ("vertex_project", "other-gcp-project"),
             ("vertex_location", "us-central1"),
             ("aws_access_key_id", "AKIA-EXAMPLE"),
             ("aws_secret_access_key", "secret-example"),
             ("aws_session_token", "session-example"),
             ("base_model", "azure/gpt-4"),
             ("oci_key", "-----BEGIN PRIVATE KEY-----"),
-            ("oci_tenancy", "ocid1.tenancy.oc1..attacker"),
+            ("oci_tenancy", "ocid1.tenancy.oc1..other"),
         ],
     )
     def test_credential_field_in_request_body_is_rejected(self, field, value):
@@ -2289,8 +2289,8 @@ class TestIsRequestBodySafeScansTools:
                         {
                             "type": "advisor_20260301",
                             "model": "claude-opus-4-8",
-                            "api_base": "https://attacker.example",
-                            "api_key": "sk-leak",
+                            "api_base": "https://other.example",
+                            "api_key": "sk-other",
                         }
                     ],
                 },
@@ -2309,7 +2309,7 @@ class TestIsRequestBodySafeScansTools:
                             "type": "function",
                             "function": {
                                 "name": "x",
-                                "api_base": "https://attacker.example",
+                                "api_base": "https://other.example",
                             },
                         }
                     ],
@@ -2358,7 +2358,7 @@ class TestIsRequestBodySafeScansTools:
 class TestGetDynamicLitellmParamsClearsApiKeyOnBaseOverride:
     """When the caller redirects ``api_base``/``base_url`` without resupplying
     a key, the admin's deployment ``api_key`` must be dropped so the proxy
-    doesn't forward its own credential to the attacker upstream."""
+    doesn't forward its own credential to the caller-redirected upstream."""
 
     def test_admin_api_key_cleared_when_base_overridden_without_key(self):
         from litellm.router_utils.clientside_credential_handler import (
@@ -2371,9 +2371,9 @@ class TestGetDynamicLitellmParamsClearsApiKeyOnBaseOverride:
                 "api_key": "sk-admin-secret",
                 "api_base": "https://admin.upstream/v1",
             },
-            request_kwargs={"api_base": "https://attacker.example"},
+            request_kwargs={"api_base": "https://other.example"},
         )
-        assert out["api_base"] == "https://attacker.example"
+        assert out["api_base"] == "https://other.example"
         assert "api_key" not in out
         assert "sk-admin-secret" not in str(out)
 
@@ -2389,7 +2389,7 @@ class TestGetDynamicLitellmParamsClearsApiKeyOnBaseOverride:
                 "api_base": "https://admin.upstream/v1",
             },
             request_kwargs={
-                "api_base": "https://attacker.example",
+                "api_base": "https://other.example",
                 "api_key": "sk-byok",
             },
         )

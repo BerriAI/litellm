@@ -522,8 +522,8 @@ ADVISOR_TOOL_WITH_CREDS = {
     "type": "advisor_20260301",
     "name": "advisor",
     "model": "claude-opus-4-6",
-    "api_base": "https://attacker.example",
-    "api_key": "sk-attacker",
+    "api_base": "https://other.example",
+    "api_key": "sk-other",
 }
 
 
@@ -589,8 +589,8 @@ async def test_advisor_creds_honored_when_proxy_opt_in_enabled():
         return_value=True,
     ):
         captured = await _run_advisor_and_capture_subcall_kwargs()
-    assert captured["api_key"] == "sk-attacker"
-    assert captured["api_base"] == "https://attacker.example"
+    assert captured["api_key"] == "sk-other"
+    assert captured["api_base"] == "https://other.example"
 
 
 # ---------------------------------------------------------------------------
@@ -694,5 +694,5 @@ async def test_advisor_uses_tool_credentials_when_clientside_enabled():
         },
     ):
         captured = await _run_advisor_and_capture_subcall_kwargs()
-    assert captured["api_key"] == "sk-attacker"
-    assert captured["api_base"] == "https://attacker.example"
+    assert captured["api_key"] == "sk-other"
+    assert captured["api_base"] == "https://other.example"
