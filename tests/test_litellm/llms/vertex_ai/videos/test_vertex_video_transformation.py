@@ -153,6 +153,7 @@ class TestVertexAIVideoConfig:
             assert info["max_input_tokens"] == 1024
             assert info["output_cost_per_second"] == 0.05
             assert info["output_cost_per_second_1080p"] == 0.08
+            assert info["supported_modalities"] == ["text", "image"]
 
     def test_veo_31_lite_provider_routing_from_local_model_map(
         self, monkeypatch: pytest.MonkeyPatch
@@ -284,6 +285,44 @@ class TestVertexAIVideoConfig:
 
         assert mapped["durationSeconds"] == 8
         assert mapped["aspectRatio"] == "16:9"
+        assert mapped["resolution"] == "720p"
+
+    def test_map_openai_size_to_1080p_resolution(self):
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={"size": "1920x1080"},
+            model=VEO_31_LITE_VERTEX_MODEL,
+            drop_params=False,
+        )
+
+        assert mapped["aspectRatio"] == "16:9"
+        assert mapped["resolution"] == "1080p"
+
+    def test_map_openai_size_does_not_override_provider_resolution(self):
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={
+                "size": "1920x1080",
+                "parameters": {"resolution": "720p"},
+            },
+            model=VEO_31_LITE_VERTEX_MODEL,
+            drop_params=False,
+        )
+
+        assert mapped["aspectRatio"] == "16:9"
+        assert "resolution" not in mapped
+        assert mapped["parameters"] == {"resolution": "720p"}
+
+    def test_map_openai_size_does_not_override_direct_resolution(self):
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={
+                "size": "1920x1080",
+                "resolution": "720p",
+            },
+            model=VEO_31_LITE_VERTEX_MODEL,
+            drop_params=False,
+        )
+
+        assert mapped["aspectRatio"] == "16:9"
+        assert mapped["resolution"] == "720p"
 
     def test_map_openai_params_default_duration(self):
         """Test that durationSeconds is omitted when not provided."""
