@@ -68,7 +68,6 @@ export type LogEntry = {
   request_duration_ms?: number;
   session_total_count?: number;
   session_total_spend?: number;
-  session_total_duration?: number;
   mcp_tool_call_count?: number;
   mcp_tool_call_spend?: number;
   session_llm_count?: number;
@@ -77,8 +76,6 @@ export type LogEntry = {
   onKeyHashClick?: (keyHash: string) => void;
   onSessionClick?: (sessionId: string) => void;
 };
-
-const isMultiCallSession = (row: LogEntry): boolean => (row.session_total_count || 1) > 1;
 
 const SortableHeader = ({
   label,
@@ -231,16 +228,13 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     accessorKey: "spend",
     cell: (info: any) => {
       const row = info.row.original;
-      const isSession = isMultiCallSession(row);
-      const displaySpend =
-        isSession && row.session_total_spend != null ? row.session_total_spend : info.getValue() || 0;
       const mcpCount = row.mcp_tool_call_count || 0;
       const mcpSpend = row.mcp_tool_call_spend || 0;
 
       return (
         <div className="flex flex-col">
-          <Tooltip title={`$${String(displaySpend)}`}>
-            <span>{getSpendString(displaySpend)}</span>
+          <Tooltip title={`$${String(info.getValue() || 0)}`}>
+            <span>{getSpendString(info.getValue() || 0)}</span>
           </Tooltip>
           {mcpCount > 0 && mcpSpend > 0 && (
             <span className="text-[10px] text-amber-600">
@@ -265,9 +259,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
       : "Duration (s)",
     accessorKey: "request_duration_ms",
     cell: (info: any) => {
-      const row = info.row.original;
-      const isSession = isMultiCallSession(row);
-      const ms = isSession && row.session_total_duration != null ? row.session_total_duration : info.getValue();
+      const ms = info.getValue();
       if (ms == null) return <span>-</span>;
       const seconds = (ms / 1000).toFixed(2);
       return (
