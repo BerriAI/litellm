@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -162,10 +163,14 @@ async def reserve_budget_for_request(
     if not applied_entries:
         return None
 
+    input_cost = estimate_request_input_cost(
+        request_body=request_body, route=route, llm_router=llm_router
+    )
     return {
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
         "finalized": False,
+        "input_cost": min(float(input_cost or 0.0), reservation_cost),
     }
 
 
@@ -193,6 +198,41 @@ async def release_budget_reservation(budget_reservation: Optional[dict]) -> None
         budget_reservation=budget_reservation,
         actual_cost=0.0,
     )
+
+
+async def release_budget_reservation_on_cancel(
+    budget_reservation: dict | None,
+) -> None:
+    """Reconcile a still-open reservation when the request is cancelled mid-flight.
+
+    A client disconnect or timeout cancels the request task, which surfaces as
+    CancelledError / GeneratorExit rather than a normal exception, so neither the
+    success cost callback nor the failure hook runs and the pre-call reservation
+    is never reconciled. Left alone it pins the spend counter above real spend
+    and 429s subsequent requests until the counter's TTL expires.
+
+    Reconcile to the request's input-token cost rather than refunding to zero:
+    by the time a request is cancelled in-flight the provider call was already
+    dispatched, so the input tokens were billed even if no chunk reached the
+    client. Refunding to zero would let a caller abort pre-token to dodge that
+    charge; the worst-case output portion of the reservation is still released.
+
+    asyncio.shield keeps the reconcile running to completion even though the
+    surrounding task is being cancelled. The `finalized` guard makes this a no-op
+    when success/failure handling already reconciled, so calling it on every
+    cancellation path is safe.
+    """
+    if not budget_reservation or budget_reservation.get("finalized") is True:
+        return
+    incurred_cost = float(budget_reservation.get("input_cost") or 0.0)
+    try:
+        await asyncio.shield(
+            reconcile_budget_reservation(
+                budget_reservation=budget_reservation, actual_cost=incurred_cost
+            )
+        )
+    except (asyncio.CancelledError, Exception):
+        pass
 
 
 async def invalidate_budget_reservation_counters(
@@ -815,6 +855,61 @@ def estimate_request_max_cost(
     if not estimates:
         return None
     return max(cast(List[float], estimates))
+
+
+def estimate_request_input_cost(
+    request_body: dict,
+    route: str,
+    llm_router: Router | None,
+) -> float | None:
+    """Cost of the request's input tokens alone.
+
+    Once the provider request is dispatched the input tokens are billed even if
+    the client disconnects before the first chunk, so this is the cost floor a
+    cancelled in-flight request has already incurred. A cancelled reservation is
+    reconciled to this instead of being refunded to zero.
+    """
+    model = get_model_from_request(request_body, route, llm_router=llm_router)
+    if model is None:
+        return None
+
+    models = [model] if isinstance(model, str) else model
+    estimates = [
+        _estimate_request_input_cost_for_model(
+            request_body=request_body,
+            route=route,
+            model=model_name,
+            llm_router=llm_router,
+        )
+        for model_name in models
+    ]
+    estimates = [estimate for estimate in estimates if estimate is not None]
+    if not estimates:
+        return None
+    return max(cast("list[float]", estimates))
+
+
+def _estimate_request_input_cost_for_model(
+    request_body: dict,
+    route: str,
+    model: str,
+    llm_router: Router | None,
+) -> float | None:
+    model_info = _get_model_cost_info(model=model, llm_router=llm_router)
+    if model_info is None:
+        return None
+    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
+    if input_cost_per_token is None:
+        return None
+    input_tokens = _estimate_input_tokens(
+        request_body=request_body,
+        route=route,
+        model=model,
+        model_info=model_info,
+    )
+    if input_tokens is None:
+        return None
+    return input_tokens * input_cost_per_token
 
 
 def _estimate_request_max_cost_for_model(
