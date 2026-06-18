@@ -15,6 +15,7 @@ Covers:
 """
 
 import asyncio
+from collections import deque
 import os
 import threading
 import time
@@ -109,6 +110,7 @@ async def test_poll_missing_process_triggers_reconnect(engine_client) -> None:
     engine_client.attempt_db_reconnect.assert_awaited_once_with(
         reason="engine_process_death",
         force=True,
+        engine_pid=1234,
     )
 
 
@@ -174,6 +176,7 @@ async def test_pidfd_readable_schedules_reconnect(engine_client) -> None:
     engine_client.attempt_db_reconnect.assert_awaited_once_with(
         reason="engine_process_death",
         force=True,
+        engine_pid=1234,
     )
 
 
@@ -459,6 +462,7 @@ async def test_on_engine_death_from_thread_triggers_reconnect(engine_client) -> 
     engine_client.attempt_db_reconnect.assert_awaited_once_with(
         reason="engine_process_death",
         force=True,
+        engine_pid=1234,
     )
 
 
@@ -493,6 +497,7 @@ async def test_escalation_after_consecutive_direct_reconnect_failures(engine_cli
     """After N consecutive direct reconnect failures, _engine_confirmed_dead
     is set to True so _run_reconnect_cycle takes the heavy reconnect path."""
     engine_client._reconnect_escalation_threshold = 3
+    engine_client._db_reconnect_circuit_breaker_enabled = False
     engine_client._consecutive_reconnect_failures = 0
     engine_client._db_reconnect_cooldown_seconds = 0  # disable cooldown for test
     engine_client._start_engine_watcher = AsyncMock(return_value=None)
@@ -560,3 +565,217 @@ def test_escalation_threshold_min_guard(mock_proxy_logging):
             database_url="mock://test", proxy_logging_obj=mock_proxy_logging
         )
     assert client._reconnect_escalation_threshold == 1
+
+
+# ---------------------------------------------------------------------------
+# Reconnect circuit breaker
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reconnect_circuit_breaker_exit_action_does_not_terminate_on_reconnect_failures(
+    engine_client,
+):
+    engine_client._db_reconnect_circuit_breaker_enabled = True
+    engine_client._db_reconnect_circuit_breaker_action = "exit"
+    engine_client._db_reconnect_circuit_breaker_max_attempts = 100
+    engine_client._db_reconnect_circuit_breaker_max_failures = 2
+    engine_client._db_reconnect_circuit_breaker_max_engine_deaths = 100
+    engine_client._db_reconnect_circuit_breaker_window_seconds = 900
+    engine_client._db_reconnect_cooldown_seconds = 0
+    engine_client._start_engine_watcher = AsyncMock(return_value=None)
+    engine_client.db.recreate_prisma_client = AsyncMock(
+        side_effect=RuntimeError("recreate failed")
+    )
+    engine_client._terminate_for_reconnect_breaker = MagicMock()
+
+    with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
+        first_result = await engine_client._attempt_reconnect_inside_lock(
+            force=True,
+            reason="db_health_watchdog_connection_error",
+            timeout_seconds=5.0,
+        )
+        second_result = await engine_client._attempt_reconnect_inside_lock(
+            force=True,
+            reason="db_health_watchdog_connection_error",
+            timeout_seconds=5.0,
+        )
+
+    assert first_result is False
+    assert second_result is False
+    assert engine_client._db_reconnect_circuit_breaker_opened is True
+    engine_client._terminate_for_reconnect_breaker.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_circuit_breaker_opens_immediately_on_engine_death(
+    engine_client,
+):
+    engine_client._db_reconnect_circuit_breaker_enabled = True
+    engine_client._db_reconnect_circuit_breaker_action = "exit"
+    engine_client._db_reconnect_circuit_breaker_max_attempts = 100
+    engine_client._db_reconnect_circuit_breaker_max_failures = 100
+    engine_client._db_reconnect_circuit_breaker_max_engine_deaths = 1
+    engine_client._db_reconnect_cooldown_seconds = 0
+    engine_client._run_reconnect_cycle = AsyncMock(return_value=None)
+    engine_client._terminate_for_reconnect_breaker = MagicMock()
+
+    result = await engine_client._attempt_reconnect_inside_lock(
+        force=True,
+        reason="engine_process_death",
+        timeout_seconds=5.0,
+        engine_pid=5678,
+    )
+
+    assert result is False
+    engine_client._run_reconnect_cycle.assert_not_awaited()
+    assert engine_client._db_reconnect_circuit_breaker_opened is True
+    assert engine_client._db_reconnect_breaker_last_engine_pid == 5678
+    engine_client._terminate_for_reconnect_breaker.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_circuit_breaker_stays_closed_on_transient_success(
+    engine_client,
+):
+    engine_client._db_reconnect_circuit_breaker_enabled = True
+    engine_client._db_reconnect_circuit_breaker_max_attempts = 3
+    engine_client._db_reconnect_circuit_breaker_max_failures = 2
+    engine_client._db_reconnect_circuit_breaker_max_engine_deaths = 1
+    engine_client._db_reconnect_cooldown_seconds = 0
+    engine_client._start_engine_watcher = AsyncMock(return_value=None)
+    engine_client.db.recreate_prisma_client = AsyncMock(return_value=None)
+    engine_client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
+    engine_client._terminate_for_reconnect_breaker = MagicMock()
+
+    with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
+        result = await engine_client._attempt_reconnect_inside_lock(
+            force=True,
+            reason="db_health_watchdog_connection_error",
+            timeout_seconds=5.0,
+        )
+
+    assert result is True
+    assert engine_client._db_reconnect_circuit_breaker_opened is False
+    engine_client._terminate_for_reconnect_breaker.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_circuit_breaker_opens_on_exact_attempt_threshold(
+    engine_client,
+):
+    engine_client._db_reconnect_circuit_breaker_enabled = True
+    engine_client._db_reconnect_circuit_breaker_action = "exit"
+    engine_client._db_reconnect_circuit_breaker_max_attempts = 2
+    engine_client._db_reconnect_circuit_breaker_max_failures = 100
+    engine_client._db_reconnect_circuit_breaker_max_engine_deaths = 100
+    engine_client._db_reconnect_breaker_attempts = deque(maxlen=2)
+    engine_client._db_reconnect_breaker_failures = deque(maxlen=100)
+    engine_client._db_reconnect_breaker_engine_deaths = deque(maxlen=100)
+    engine_client._db_reconnect_cooldown_seconds = 0
+    engine_client._run_reconnect_cycle = AsyncMock(return_value=None)
+    engine_client._terminate_for_reconnect_breaker = MagicMock()
+
+    first_result = await engine_client._attempt_reconnect_inside_lock(
+        force=True,
+        reason="db_health_watchdog_connection_error",
+        timeout_seconds=5.0,
+    )
+    second_result = await engine_client._attempt_reconnect_inside_lock(
+        force=True,
+        reason="db_health_watchdog_connection_error",
+        timeout_seconds=5.0,
+    )
+
+    assert first_result is True
+    assert second_result is True
+    assert len(engine_client._db_reconnect_breaker_attempts) == 2
+    assert engine_client._db_reconnect_circuit_breaker_opened is True
+    engine_client._terminate_for_reconnect_breaker.assert_not_called()
+
+
+def test_reconnect_circuit_breaker_success_clears_failure_state(engine_client):
+    engine_client._db_reconnect_circuit_breaker_enabled = True
+    engine_client._db_reconnect_breaker_failures.append(100.0)
+    engine_client._db_reconnect_breaker_engine_deaths.append(100.0)
+
+    result = engine_client._record_reconnect_breaker_event(
+        event_type="success",
+        reason="db_health_watchdog_connection_error",
+    )
+
+    assert result is False
+    assert len(engine_client._db_reconnect_breaker_failures) == 0
+    assert len(engine_client._db_reconnect_breaker_engine_deaths) == 0
+
+
+@pytest.mark.asyncio
+async def test_reconnect_circuit_breaker_log_action_does_not_skip_reconnect(
+    engine_client,
+):
+    engine_client._db_reconnect_circuit_breaker_enabled = True
+    engine_client._db_reconnect_circuit_breaker_action = "log"
+    engine_client._db_reconnect_circuit_breaker_max_attempts = 100
+    engine_client._db_reconnect_circuit_breaker_max_failures = 100
+    engine_client._db_reconnect_circuit_breaker_max_engine_deaths = 1
+    engine_client._db_reconnect_cooldown_seconds = 0
+    engine_client._run_reconnect_cycle = AsyncMock(return_value=None)
+
+    result = await engine_client._attempt_reconnect_inside_lock(
+        force=True,
+        reason="engine_process_death",
+        timeout_seconds=5.0,
+    )
+
+    assert result is True
+    assert engine_client._db_reconnect_circuit_breaker_opened is True
+    engine_client._run_reconnect_cycle.assert_awaited_once_with(timeout_seconds=5.0)
+
+
+def test_reconnect_circuit_breaker_env_vars_are_respected(mock_proxy_logging):
+    with patch.dict(
+        os.environ,
+        {
+            "PRISMA_RECONNECT_CIRCUIT_BREAKER_ENABLED": "false",
+            "PRISMA_RECONNECT_CIRCUIT_BREAKER_WINDOW_SECONDS": "120",
+            "PRISMA_RECONNECT_CIRCUIT_BREAKER_MAX_ATTEMPTS": "4",
+            "PRISMA_RECONNECT_CIRCUIT_BREAKER_MAX_FAILURES": "2",
+            "PRISMA_RECONNECT_CIRCUIT_BREAKER_MAX_ENGINE_DEATHS": "1",
+            "PRISMA_RECONNECT_CIRCUIT_BREAKER_ACTION": "log",
+        },
+    ):
+        client = PrismaClient(
+            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+        )
+
+    assert client._db_reconnect_circuit_breaker_enabled is False
+    assert client._db_reconnect_circuit_breaker_window_seconds == 120
+    assert client._db_reconnect_circuit_breaker_max_attempts == 4
+    assert client._db_reconnect_circuit_breaker_max_failures == 2
+    assert client._db_reconnect_circuit_breaker_max_engine_deaths == 1
+    assert client._db_reconnect_circuit_breaker_action == "log"
+    assert client._db_reconnect_breaker_attempts.maxlen == 4
+    assert client._db_reconnect_breaker_failures.maxlen == 2
+    assert client._db_reconnect_breaker_engine_deaths.maxlen == 1
+
+
+def test_reconnect_circuit_breaker_action_defaults_to_log(mock_proxy_logging):
+    with patch.dict(os.environ, {}, clear=True):
+        client = PrismaClient(
+            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+        )
+
+    assert client._db_reconnect_circuit_breaker_enabled is True
+    assert client._db_reconnect_circuit_breaker_action == "log"
+
+
+def test_reconnect_circuit_breaker_invalid_action_defaults_to_log(mock_proxy_logging):
+    with patch.dict(
+        os.environ,
+        {"PRISMA_RECONNECT_CIRCUIT_BREAKER_ACTION": "invalid"},
+    ):
+        client = PrismaClient(
+            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+        )
+
+    assert client._db_reconnect_circuit_breaker_action == "log"
