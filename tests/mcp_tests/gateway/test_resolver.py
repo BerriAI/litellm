@@ -192,10 +192,11 @@ async def test_api_key_per_user_isolated_by_subject():
     assert result.error.tag == "unauthorized"
 
 
-def test_missing_status_maps_byok_401_distinct_from_env_var_412():
-    # The two per-user sources surface different HTTP statuses at the edge.
+def test_crederror_maps_to_distinct_http_statuses():
+    # Each failure class surfaces its own HTTP status at the edge.
     assert http_status(CredError.of_unauthorized("byok missing")) == 401
     assert http_status(CredError.of_precondition_required("env var missing")) == 412
+    assert http_status(CredError.of_not_implemented("stub arm")) == 501
 
 
 async def test_passthrough_forwards_the_inbound_token():
@@ -242,9 +243,10 @@ async def test_self_contained_arms_never_read_the_inbound_token():
     ],
 )
 async def test_unimplemented_arms_fail_closed(config: dict):
+    # Stub arms signal not_implemented (-> 501), not misconfigured (-> 500 operator error).
     result = await PROVIDER.resolve(SUBJECT, _spec(config))
     assert isinstance(result, Error)
-    assert result.error.tag == "misconfigured"
+    assert result.error.tag == "not_implemented"
 
 
 async def test_authorization_code_returns_a_valid_stored_token():

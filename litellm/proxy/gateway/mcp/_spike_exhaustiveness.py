@@ -63,6 +63,8 @@ def http_status(err: CredError) -> int:
             return 500
         case "precondition_required":
             return 412
+        case "not_implemented":
+            return 501
     assert_never(err.tag)
 
 

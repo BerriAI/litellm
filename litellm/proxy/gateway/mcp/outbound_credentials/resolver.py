@@ -205,5 +205,5 @@ def _bearer(token: StoredToken) -> StaticHeaderAuth:
 
 def _todo(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
     return Error(
-        CredError.of_misconfigured(f"{kind.value}: resolver arm not implemented yet")
+        CredError.of_not_implemented(f"{kind.value}: resolver arm not implemented yet")
     )

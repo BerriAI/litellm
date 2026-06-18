@@ -68,6 +68,7 @@ class CredError:
         "upstream_unavailable",
         "unsupported_mode",
         "precondition_required",
+        "not_implemented",
     ] = tag()
 
     unauthorized: str = (
@@ -85,6 +86,9 @@ class CredError:
     precondition_required: str = (
         case()
     )  # a required per-user value (e.g. an env var) has not been provided -> 412
+    not_implemented: str = (
+        case()
+    )  # the declared mode's resolver arm is not built yet -> 501 (not operator error)
 
     @staticmethod
     def of_unauthorized(detail: str) -> CredError:
@@ -106,6 +110,10 @@ class CredError:
     def of_precondition_required(detail: str) -> CredError:
         return CredError(precondition_required=detail)
 
+    @staticmethod
+    def of_not_implemented(detail: str) -> CredError:
+        return CredError(not_implemented=detail)
+
     @property
     def summary(self) -> str:
         # Exhaustiveness: every Literal tag has an arm; the trailing assert_never typechecks
@@ -121,6 +129,8 @@ class CredError:
                 return self.unsupported_mode
             case "precondition_required":
                 return f"precondition required: {self.precondition_required}"
+            case "not_implemented":
+                return f"not implemented: {self.not_implemented}"
         assert_never(self.tag)
 
 
