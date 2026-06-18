@@ -70,7 +70,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install LLM client
-        run: pip install --no-cache-dir "openai>=1.40.0"
+        run: pip install --no-cache-dir --require-hashes -r .github/scripts/triage-requirements.txt
 
       - name: Run review gate
         env:

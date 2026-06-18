@@ -103,7 +103,7 @@ jobs:
 
       - name: Install LLM client
         if: steps.auth.outputs.authorized == 'true'
-        run: pip install --no-cache-dir "openai>=1.40.0"
+        run: pip install --no-cache-dir --require-hashes -r .github/scripts/triage-requirements.txt
 
       - name: Run Agent Shin reconsider
         if: steps.auth.outputs.authorized == 'true'
