@@ -28,8 +28,6 @@ interface PluginModeContextValue {
   setMode: (mode: PluginMode) => void;
   plugins: Plugin[];
   activePlugin: Plugin | null;
-  agentPlatformPath: string;
-  setAgentPlatformPath: (path: string) => void;
 }
 
 const PluginModeContext = createContext<PluginModeContextValue>({
@@ -37,8 +35,6 @@ const PluginModeContext = createContext<PluginModeContextValue>({
   setMode: () => {},
   plugins: [],
   activePlugin: null,
-  agentPlatformPath: "/sessions",
-  setAgentPlatformPath: () => {},
 });
 
 const STORAGE_KEY = "litellm_plugin_mode";
@@ -58,7 +54,6 @@ interface PluginModeProviderProps {
 export function PluginModeProvider({ children, accessToken }: PluginModeProviderProps) {
   const [mode, setModeState] = useState<PluginMode>(readStoredMode);
   const [plugins, setPlugins] = useState<Plugin[]>([]);
-  const [agentPlatformPath, setAgentPlatformPath] = useState<string>("/sessions");
 
   useEffect(() => {
     // Re-fetch whenever the auth token changes (handles login/logout cycles)
@@ -84,9 +79,7 @@ export function PluginModeProvider({ children, accessToken }: PluginModeProvider
   const activePlugin = plugins.find((p) => p.name === effectiveMode) ?? null;
 
   return (
-    <PluginModeContext.Provider
-      value={{ mode: effectiveMode, setMode, plugins, activePlugin, agentPlatformPath, setAgentPlatformPath }}
-    >
+    <PluginModeContext.Provider value={{ mode: effectiveMode, setMode, plugins, activePlugin }}>
       {children}
     </PluginModeContext.Provider>
   );

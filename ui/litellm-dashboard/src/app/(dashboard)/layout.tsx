@@ -22,8 +22,8 @@ function PluginModeProviderWithAuth({ children }: { children: React.ReactNode })
   return <PluginModeProvider accessToken={accessToken}>{children}</PluginModeProvider>;
 }
 
-function AgentControlPlaneView() {
-  const { activePlugin, agentPlatformPath } = usePluginMode();
+export function AgentControlPlaneView() {
+  const { activePlugin } = usePluginMode();
   const agentPlatformUrl = activePlugin?.url ?? "";
   const { accessToken } = useAuth();
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -56,17 +56,18 @@ function AgentControlPlaneView() {
     return (
       <div className="flex flex-1 items-center justify-center text-gray-500">
         <div className="text-center">
-          <p className="text-lg font-medium mb-2">Agent Control Plane</p>
-          <p className="text-sm">Configure agent platform URL in settings</p>
+          <p className="text-lg font-medium mb-2">Plugin</p>
+          <p className="text-sm">Configure the plugin URL in settings</p>
         </div>
       </div>
     );
   }
 
+  // Embed the plugin at its root; the plugin renders its own full UI (incl. nav) inside.
   return (
     <iframe
       ref={iframeRef}
-      src={`${agentPlatformUrl}${agentPlatformPath}`}
+      src={`${agentPlatformUrl.replace(/\/$/, "")}/`}
       style={{
         width: "100%",
         height: "100%",
@@ -74,7 +75,7 @@ function AgentControlPlaneView() {
         flex: 1,
         minHeight: "calc(100vh - 56px)",
       }}
-      title="Agent Control Plane"
+      title={activePlugin?.display_name ?? "Plugin"}
       allow="clipboard-read; clipboard-write"
     />
   );
@@ -105,15 +106,17 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
       />
       <DebugWarningBanner accessToken={accessToken} />
       <div className="flex flex-1">
-        <div className="mt-2">
-          <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
-        </div>
         {mode !== "ai-gateway" ? (
           <div className="flex-1 flex">
             <AgentControlPlaneView />
           </div>
         ) : (
-          <main className="flex-1">{children}</main>
+          <>
+            <div className="mt-2">
+              <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
+            </div>
+            <main className="flex-1">{children}</main>
+          </>
         )}
       </div>
     </div>
