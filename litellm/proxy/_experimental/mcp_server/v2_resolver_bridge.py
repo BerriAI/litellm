@@ -152,4 +152,11 @@ async def resolve_v2_auth_value(server: MCPServer) -> Optional[Dict[str, str]]:
             result.error.summary,
         )
         return None
-    return _added_headers(result.ok)
+    headers = _added_headers(result.ok)
+    verbose_logger.info(
+        "v2 MCP resolver handled server %s (auth_type=%s): %s",
+        server.server_id,
+        server.auth_type,
+        f"attached {sorted(headers)}" if headers else "no auth header",
+    )
+    return headers
