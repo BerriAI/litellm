@@ -5456,6 +5456,10 @@ class ProxyConfig:
                 llm_router=llm_router,
             )
 
+        if _general_settings is not None and "plugins" in _general_settings:
+            general_settings["plugins"] = _general_settings["plugins"]
+            register_plugins_from_config(general_settings)
+
     async def _reschedule_spend_log_cleanup_job(self):
         """
         Reschedule the spend log cleanup job based on current general_settings.
