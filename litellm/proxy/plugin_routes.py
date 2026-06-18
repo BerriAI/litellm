@@ -197,6 +197,16 @@ async def plugin_proxy(
     if plugin_key:
         forward_headers["authorization"] = f"Bearer {plugin_key}"
 
+    # Forward caller identity so the plugin can enforce its own access control.
+    # The plugin MUST NOT trust these as credentials — they are informational.
+    # The plugin_key above is the only authentication mechanism.
+    user_id = getattr(user_api_key_dict, "user_id", None)
+    user_role = getattr(user_api_key_dict, "user_role", None)
+    if user_id:
+        forward_headers["x-litellm-user-id"] = str(user_id)
+    if user_role:
+        forward_headers["x-litellm-user-role"] = str(user_role)
+
     handler = get_async_httpx_client(llm_provider=None)
     try:
         req = handler.client.build_request(
