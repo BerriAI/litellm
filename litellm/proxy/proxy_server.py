@@ -8321,7 +8321,16 @@ async def model_list(
     if blocked_names:
         all_models = [m for m in all_models if m not in blocked_names]
 
-    # Build response data
+    # Budget-exceeded models policy: when "free_only", return only zero-cost models
+    policy = settings.get("budget_exceeded_models_policy", "blocked")
+    if policy == "free_only":
+        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+
+        all_models = [m for m in all_models if _is_model_cost_zero(m, llm_router)]
+
+    # Surface the public team name by default; legacy internal keys via flag.
+    # The internal routing key drives the metadata/fallback lookup, while the
+    # public name is what the client sees as the model id.
     model_data = []
     for model in all_models:
         model_info = create_model_info_response(

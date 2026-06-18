@@ -2610,6 +2610,17 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
     )
 
+    budget_exceeded_models_policy: Optional[Literal["blocked", "all", "free_only"]] = Field(
+        "blocked",
+        description=(
+            "Controls model-list behavior when a team/user/key budget is exceeded. "
+            "'blocked' (default) returns 429 as before. "
+            "'all' returns the full model list regardless of budget. "
+            "'free_only' returns only zero-cost models. "
+            "Inference calls always enforce the budget regardless of this setting."
+        ),
+    )
+
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
     """
