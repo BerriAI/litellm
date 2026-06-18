@@ -93,6 +93,13 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     3. Extract video data (base64) from response
     """
 
+    _OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO: Dict[str, str] = {
+        "1280x720": "16:9",
+        "1920x1080": "16:9",
+        "720x1280": "9:16",
+        "1080x1920": "9:16",
+    }
+
     def __init__(self):
         BaseVideoConfig.__init__(self)
         VertexBase.__init__(self)
@@ -135,9 +142,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         - prompt → prompt (in instances)
         - input_reference → image (in instances)
         - size → aspectRatio (e.g., "1280x720" → "16:9")
+        - size → resolution when inferable ("1280x720"/"720x1280" → "720p",
+          "1920x1080"/"1080x1920" → "1080p"); skipped if ``resolution`` is already set
         - seconds → durationSeconds (defaults to 4 seconds if not provided)
         """
         mapped_params: Dict[str, Any] = {}
+        provider_params = cast(Dict[str, Any], video_create_optional_params)
 
         # Map input_reference to image (will be processed in transform_video_create_request)
         if "input_reference" in video_create_optional_params:
@@ -149,6 +159,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if "parameters" in video_create_optional_params:
             mapped_params["parameters"] = video_create_optional_params["parameters"]
 
+        if "resolution" in provider_params:
+            mapped_params["resolution"] = provider_params["resolution"]
+
         # Map size to aspectRatio
         if "size" in video_create_optional_params:
             size = video_create_optional_params["size"]
@@ -156,6 +169,15 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                 aspect_ratio = self._convert_size_to_aspect_ratio(size)
                 if aspect_ratio:
                     mapped_params["aspectRatio"] = aspect_ratio
+                nested_params = provider_params.get("parameters")
+                has_resolution = "resolution" in mapped_params or (
+                    isinstance(nested_params, dict)
+                    and nested_params.get("resolution") is not None
+                )
+                if not has_resolution:
+                    inferred_resolution = self._convert_size_to_resolution(size)
+                    if inferred_resolution is not None:
+                        mapped_params["resolution"] = inferred_resolution
 
         # Map seconds to durationSeconds, default to 4 seconds (matching OpenAI)
         if "seconds" in video_create_optional_params:
@@ -179,14 +201,21 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if not size:
             return None
 
-        aspect_ratio_map = {
-            "1280x720": "16:9",
-            "1920x1080": "16:9",
-            "720x1280": "9:16",
-            "1080x1920": "9:16",
-        }
+        return self._OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO.get(size, "16:9")
 
-        return aspect_ratio_map.get(size, "16:9")
+    def _convert_size_to_resolution(self, size: str) -> Optional[str]:
+        if not size or size not in self._OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO:
+            return None
+        try:
+            width, height = size.split("x", 1)
+            smaller_edge = min(int(width), int(height))
+        except (ValueError, TypeError):
+            return None
+        if smaller_edge == 720:
+            return "720p"
+        if smaller_edge == 1080:
+            return "1080p"
+        return None
 
     def validate_environment(
         self,

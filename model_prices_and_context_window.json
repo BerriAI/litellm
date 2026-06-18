@@ -36225,7 +36225,8 @@
         "output_cost_per_second_1080p": 0.08,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#veo",
         "supported_modalities": [
-            "text"
+            "text",
+            "image"
         ],
         "supported_output_modalities": [
             "video"
