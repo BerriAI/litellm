@@ -170,9 +170,20 @@ async def plugin_proxy(
 ) -> Response:
     """Authenticated reverse-proxy to a registered plugin backend.
 
+    Restricted to proxy_admin callers — the shared plugin_key must not be
+    usable as a confused-deputy credential by regular users.  Plugin UIs
+    talk to the plugin service directly via the iframe; this route is for
+    administrative and server-to-server access only.
+
     The caller's litellm credential is stripped and replaced with the
     plugin's own plugin_key so plugins never receive a live litellm API key.
     """
+    if getattr(user_api_key_dict, "user_role", None) != "proxy_admin":
+        return Response(
+            content="Plugin proxy access requires proxy_admin role.",
+            status_code=403,
+        )
+
     plugin = _plugin_registry.get(plugin_name)
     if not plugin:
         return Response(
