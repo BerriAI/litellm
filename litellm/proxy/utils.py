@@ -2983,11 +2983,11 @@ class PrismaClient:
                 # `PrismaWrapper.__getattr__`, which deadlocks the event loop
                 # and times out after 30s.
                 if iam_flag and reader_iam_endpoint is not None:
-                    from litellm.proxy.auth.rds_iam_token import (
-                        generate_iam_auth_token,
+                    from litellm.proxy.db.db_iam_token import (
+                        generate_db_iam_token,
                     )
 
-                    reader_token = generate_iam_auth_token(
+                    reader_token = generate_db_iam_token(
                         db_host=reader_iam_endpoint.host,
                         db_port=reader_iam_endpoint.port,
                         db_user=reader_iam_endpoint.user,

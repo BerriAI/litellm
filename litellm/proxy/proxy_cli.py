@@ -1030,7 +1030,10 @@ def run_server(
         ### GET DB TOKEN FOR IAM AUTH ###
 
         if iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
-            from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+            from litellm.proxy.db.db_iam_token import (
+                build_postgres_url,
+                generate_db_iam_token,
+            )
 
             db_host = os.getenv("DATABASE_HOST")
             # Default to the Postgres standard port. Without a default,
@@ -1043,14 +1046,18 @@ def run_server(
             db_name = os.getenv("DATABASE_NAME")
             db_schema = os.getenv("DATABASE_SCHEMA")
 
-            token = generate_iam_auth_token(
+            token = generate_db_iam_token(
                 db_host=db_host, db_port=db_port, db_user=db_user
             )
 
-            # print(f"token: {token}")
-            _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
-            if db_schema:
-                _db_url += f"?schema={db_schema}"
+            _db_url = build_postgres_url(
+                user=db_user,
+                token=token,
+                host=db_host,
+                port=db_port,
+                name=db_name,
+                schema=db_schema,
+            )
 
             os.environ["DATABASE_URL"] = _db_url
             os.environ["IAM_TOKEN_DB_AUTH"] = "True"

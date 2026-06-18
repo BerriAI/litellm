@@ -3,6 +3,8 @@ This file contains the PrismaWrapper class, which is used to wrap the Prisma cli
 """
 
 import asyncio
+import base64
+import json
 import os
 import random
 import signal
@@ -20,11 +22,12 @@ from litellm.secret_managers.main import str_to_bool
 
 @dataclass(frozen=True)
 class IAMEndpoint:
-    """Static parts of an RDS IAM-authenticated Postgres connection.
+    """Static parts of an identity-token-authenticated Postgres connection.
 
-    The IAM token rotates every ~15 minutes; everything else (host, port, user,
-    database name, schema) stays fixed. We capture the static fields once so
-    refresh just regenerates the token and reassembles the URL.
+    The auth token rotates (RDS IAM ~15 min, Azure Entra ~60-90 min); everything
+    else (host, port, user, database name, schema) stays fixed. We capture the
+    static fields once — DECODED — so refresh just regenerates the token and
+    reassembles the URL via the shared builder (which re-encodes user/name).
     """
 
     host: str
@@ -34,10 +37,16 @@ class IAMEndpoint:
     schema: Optional[str] = None
 
     def build_url(self, token: str) -> str:
-        url = f"postgresql://{self.user}:{token}@{self.host}:{self.port}/{self.name}"
-        if self.schema:
-            url += f"?schema={self.schema}"
-        return url
+        from litellm.proxy.db.db_iam_token import build_postgres_url
+
+        return build_postgres_url(
+            user=self.user,
+            token=token,
+            host=self.host,
+            port=self.port,
+            name=self.name,
+            schema=self.schema,
+        )
 
 
 def parse_iam_endpoint_from_url(url: str) -> IAMEndpoint:
@@ -59,26 +68,33 @@ def parse_iam_endpoint_from_url(url: str) -> IAMEndpoint:
         schema_vals = qs.get("schema")
         if schema_vals:
             schema = schema_vals[0]
+    # Store user + db name DECODED (urlparse does not percent-decode), so a
+    # reader URL with a raw or %-encoded UPN yields the bare principal here;
+    # build_url re-encodes it, keeping reader and writer URLs identical.
     return IAMEndpoint(
         host=parsed.hostname,
         port=port,
-        user=parsed.username,
-        name=name,
+        user=urllib.parse.unquote(parsed.username),
+        name=urllib.parse.unquote(name),
         schema=schema,
     )
 
 
 class PrismaWrapper:
     """
-    Wrapper around Prisma client that handles RDS IAM token authentication.
+    Wrapper around Prisma client that handles short-lived DB auth tokens.
 
     When iam_token_db_auth is enabled, this wrapper:
-    1. Proactively refreshes IAM tokens before they expire (background task)
+    1. Proactively refreshes the token before it expires (background task)
     2. Falls back to synchronous refresh if a token is found expired
     3. Uses proper locking to prevent race conditions during reconnection
 
-    RDS IAM tokens are valid for 15 minutes. This wrapper refreshes them
-    3 minutes before expiration to ensure uninterrupted database connectivity.
+    The token provider is detected from the database host: AWS RDS/Aurora IAM
+    tokens (valid ~15 min) or Microsoft Entra ID tokens for Azure Database for
+    PostgreSQL (valid ~60-90 min). The refresh is scheduled
+    from each token's parsed expiry (RDS presigned params or JWT ``exp``),
+    falling back to a fixed interval when expiry cannot be parsed. The buffer
+    below refreshes ahead of expiration to keep connectivity uninterrupted.
     """
 
     # Buffer time in seconds before token expiration to trigger refresh
@@ -171,7 +187,8 @@ class PrismaWrapper:
         """
         Extract the token (password) from the DATABASE_URL.
 
-        The token contains the AWS signature with X-Amz-Date and X-Amz-Expires parameters.
+        The token is either an AWS RDS presigned token (with X-Amz-Date /
+        X-Amz-Expires query params) or an Azure Entra ID JWT.
 
         Important: We must parse the URL while it's still encoded to preserve structure,
         then decode the password portion. Otherwise the '?' in the token breaks URL parsing.
@@ -192,11 +209,24 @@ class PrismaWrapper:
         """
         Parse the token to extract its expiration time.
 
-        Returns the datetime when the token expires, or None if parsing fails.
+        Handles both auth-token shapes the proxy can mint:
+          * AWS RDS IAM presigned tokens (``...?X-Amz-Date=...&X-Amz-Expires=...``)
+          * Azure Entra ID access tokens (JWTs carrying an ``exp`` claim)
+
+        Returns the datetime when the token expires, or None if parsing fails
+        (callers then fall back to ``FALLBACK_REFRESH_INTERVAL_SECONDS``).
         """
         if token is None:
             return None
 
+        aws_expiration = self._parse_aws_presigned_token_expiration(token)
+        if aws_expiration is not None:
+            return aws_expiration
+
+        return self._parse_jwt_token_expiration(token)
+
+    def _parse_aws_presigned_token_expiration(self, token: str) -> Optional[datetime]:
+        """Parse expiry from an AWS RDS IAM presigned token's query params."""
         try:
             # Token format: ...?X-Amz-Date=YYYYMMDDTHHMMSSZ&X-Amz-Expires=900&...
             if "?" not in token:
@@ -216,7 +246,35 @@ class PrismaWrapper:
 
             return token_created + timedelta(seconds=expires_in)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to parse token expiration: {e}")
+            verbose_proxy_logger.debug(
+                f"Failed to parse AWS presigned token expiration: {e}"
+            )
+            return None
+
+    def _parse_jwt_token_expiration(self, token: str) -> Optional[datetime]:
+        """Parse expiry from a JWT's ``exp`` claim (e.g. Azure Entra ID tokens).
+
+        Decodes the payload without signature verification — we only read the
+        public ``exp`` timestamp to schedule a proactive refresh, never to make
+        a trust decision.
+        """
+        try:
+            parts = token.split(".")
+            if len(parts) != 3:
+                return None
+            payload_segment = parts[1]
+            # Restore base64url padding before decoding.
+            padding = "=" * (-len(payload_segment) % 4)
+            decoded = base64.urlsafe_b64decode(payload_segment + padding)
+            claims = json.loads(decoded)
+            exp = claims.get("exp")
+            if exp is None:
+                return None
+            # `exp` is a Unix timestamp (UTC); keep naive-UTC to match the rest
+            # of this class (which compares against datetime.utcnow()).
+            return datetime.utcfromtimestamp(int(exp))
+        except Exception as e:
+            verbose_proxy_logger.debug(f"Failed to parse JWT token expiration: {e}")
             return None
 
     def _calculate_seconds_until_refresh(self) -> float:
@@ -273,41 +331,51 @@ class PrismaWrapper:
         return datetime.utcnow() > expiration_time
 
     def get_rds_iam_token(self) -> Optional[str]:
-        """Generate a new RDS IAM token and update the configured DB URL env var.
+        """Generate a new DB auth token and update the configured DB URL env var.
 
-        When the wrapper was constructed with an explicit `iam_endpoint`
-        (typical for a reader wrapper whose host/port/user came from a parsed
-        URL), use that. Otherwise fall back to the legacy DATABASE_HOST/PORT/
-        USER/NAME/SCHEMA env vars (writer behavior).
+        Mints an AWS RDS IAM token or an Azure Entra ID token depending on the
+        database host. When the wrapper was constructed with an explicit
+        `iam_endpoint` (typical for a reader wrapper whose host/port/user came
+        from a parsed URL), use that. Otherwise fall back to the legacy
+        DATABASE_HOST/PORT/USER/NAME/SCHEMA env vars (writer behavior).
         """
         if not self.iam_token_db_auth:
             return None
 
-        from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+        from litellm.proxy.db.db_iam_token import (
+            build_postgres_url,
+            generate_db_iam_token,
+        )
 
         if self._iam_endpoint is not None:
             endpoint = self._iam_endpoint
-            token = generate_iam_auth_token(
+            token = generate_db_iam_token(
                 db_host=endpoint.host, db_port=endpoint.port, db_user=endpoint.user
             )
             _db_url = endpoint.build_url(token)
         else:
             db_host = os.getenv("DATABASE_HOST")
-            # Default to the Postgres standard port; passing None to
-            # `generate_iam_auth_token` makes botocore embed the literal
-            # string "None" in the presigned URL, which then fails to parse.
+            # Default to the Postgres standard port; the AWS RDS token mint
+            # (botocore) embeds the literal string "None" in the presigned URL
+            # when the port is None, which then fails to parse. (The Azure
+            # provider ignores the port.)
             db_port = os.getenv("DATABASE_PORT", "5432")
             db_user = os.getenv("DATABASE_USER")
             db_name = os.getenv("DATABASE_NAME")
             db_schema = os.getenv("DATABASE_SCHEMA")
 
-            token = generate_iam_auth_token(
+            token = generate_db_iam_token(
                 db_host=db_host, db_port=db_port, db_user=db_user
             )
 
-            _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
-            if db_schema:
-                _db_url += f"?schema={db_schema}"
+            _db_url = build_postgres_url(
+                user=db_user,
+                token=token,
+                host=db_host,
+                port=db_port,
+                name=db_name,
+                schema=db_schema,
+            )
 
         os.environ[self._db_url_env_var] = _db_url
         return _db_url
@@ -347,7 +415,7 @@ class PrismaWrapper:
         """
         Start the background token refresh task.
 
-        This task proactively refreshes RDS IAM tokens before they expire,
+        This task proactively refreshes the DB auth token before it expires,
         preventing connection failures. Should be called after the initial
         Prisma client connection is established.
         """
@@ -363,7 +431,7 @@ class PrismaWrapper:
 
         self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
         verbose_proxy_logger.info(
-            "%sStarted RDS IAM token proactive refresh background task",
+            "%sStarted DB auth token proactive refresh background task",
             self._log_prefix,
         )
 
@@ -383,19 +451,19 @@ class PrismaWrapper:
             pass
         self._token_refresh_task = None
         verbose_proxy_logger.info(
-            "%sStopped RDS IAM token refresh background task", self._log_prefix
+            "%sStopped DB auth token refresh background task", self._log_prefix
         )
 
     async def _token_refresh_loop(self) -> None:
         """
-        Background loop that proactively refreshes RDS IAM tokens before expiration.
+        Background loop that proactively refreshes the DB auth token before expiration.
 
         Uses precise timing: calculates the exact sleep duration until the token
         needs to be refreshed (expiration - 3 minute buffer), then refreshes.
         This is more efficient than polling, requiring only 1 wake-up per token cycle.
         """
         verbose_proxy_logger.info(
-            f"{self._log_prefix}RDS IAM token refresh loop started. "
+            f"{self._log_prefix}DB auth token refresh loop started. "
             f"Tokens will be refreshed {self.TOKEN_REFRESH_BUFFER_SECONDS}s before expiration."
         )
 
@@ -406,25 +474,25 @@ class PrismaWrapper:
 
                 if sleep_seconds > 0:
                     verbose_proxy_logger.info(
-                        f"{self._log_prefix}RDS IAM token refresh scheduled in "
+                        f"{self._log_prefix}DB auth token refresh scheduled in "
                         f"{sleep_seconds:.0f} seconds ({sleep_seconds / 60:.1f} minutes)"
                     )
                     await asyncio.sleep(sleep_seconds)
 
                 # Refresh the token
                 verbose_proxy_logger.info(
-                    "%sProactively refreshing RDS IAM token...", self._log_prefix
+                    "%sProactively refreshing DB auth token...", self._log_prefix
                 )
                 await self._safe_refresh_token()
 
             except asyncio.CancelledError:
                 verbose_proxy_logger.info(
-                    "%sRDS IAM token refresh loop cancelled", self._log_prefix
+                    "%sDB auth token refresh loop cancelled", self._log_prefix
                 )
                 break
             except Exception as e:
                 verbose_proxy_logger.error(
-                    f"{self._log_prefix}Error in RDS IAM token refresh loop: {e}. "
+                    f"{self._log_prefix}Error in DB auth token refresh loop: {e}. "
                     f"Retrying in {self.FALLBACK_REFRESH_INTERVAL_SECONDS}s..."
                 )
                 # On error, wait before retrying to avoid tight error loops
@@ -435,23 +503,26 @@ class PrismaWrapper:
 
     async def _safe_refresh_token(self) -> None:
         """
-        Refresh the RDS IAM token with proper locking to prevent race conditions.
+        Refresh the DB auth token with proper locking to prevent race conditions.
 
         Uses an asyncio lock to ensure only one refresh operation happens at a time,
         preventing multiple concurrent reconnection attempts.
         """
         async with self._reconnection_lock:
-            new_db_url = self.get_rds_iam_token()
+            # Mint + reassemble off the event loop: the provider token mint
+            # (boto3 sign / azure-identity get_token) is a blocking network call
+            # that would otherwise stall the loop (and /health/liveliness)
+            # during the periodic refresh.
+            new_db_url = await asyncio.to_thread(self.get_rds_iam_token)
             if new_db_url:
                 await self.recreate_prisma_client(new_db_url)
                 self._last_refresh_time = datetime.utcnow()
                 verbose_proxy_logger.info(
-                    "%sRDS IAM token refreshed successfully. New token valid for ~15 minutes.",
-                    self._log_prefix,
+                    "%sDB auth token refreshed successfully.", self._log_prefix
                 )
             else:
                 verbose_proxy_logger.error(
-                    "%sFailed to generate new RDS IAM token during proactive refresh",
+                    "%sFailed to generate new DB auth token during proactive refresh",
                     self._log_prefix,
                 )
 
@@ -489,7 +560,7 @@ class PrismaWrapper:
 
                 if running_loop is not None:
                     verbose_proxy_logger.warning(
-                        "%sRDS IAM token expired in __getattr__ — proactive refresh "
+                        "%sDB auth token expired in __getattr__ — proactive refresh "
                         "may have failed. Scheduling async refresh; the current "
                         "request may fail and be retried with the fresh token.",
                         self._log_prefix,
@@ -500,7 +571,7 @@ class PrismaWrapper:
                     running_loop.create_task(self._safe_refresh_token())
                 else:
                     verbose_proxy_logger.warning(
-                        "%sRDS IAM token expired in __getattr__ — proactive refresh "
+                        "%sDB auth token expired in __getattr__ — proactive refresh "
                         "may have failed. Triggering synchronous fallback refresh...",
                         self._log_prefix,
                     )
@@ -514,7 +585,7 @@ class PrismaWrapper:
                             self._log_prefix,
                         )
                     else:
-                        raise ValueError("Failed to get RDS IAM token")
+                        raise ValueError("Failed to get DB auth token")
 
         return original_attr
 

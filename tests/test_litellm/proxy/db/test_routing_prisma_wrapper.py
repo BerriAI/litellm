@@ -553,18 +553,18 @@ async def test_iam_refresh_logs_carry_log_prefix(caplog):
 
     with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
         await wrapper.start_token_refresh_task()
-        # Loop emits "RDS IAM token refresh loop started..." on first tick.
+        # Loop emits "DB auth token refresh loop started..." on first tick.
         # Cancel immediately so the loop body runs once and we can assert.
         await wrapper.stop_token_refresh_task()
 
     messages = [r.getMessage() for r in caplog.records]
     # Both start and stop notifications carry the prefix.
     assert any(
-        m.startswith("[reader] Started RDS IAM token proactive refresh")
+        m.startswith("[reader] Started DB auth token proactive refresh")
         for m in messages
     )
     assert any(
-        m.startswith("[reader] Stopped RDS IAM token refresh background task")
+        m.startswith("[reader] Stopped DB auth token refresh background task")
         for m in messages
     )
 
