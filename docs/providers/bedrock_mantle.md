@@ -17,7 +17,7 @@ Use this provider to call Bedrock Mantle models with accurate **AWS Bedrock pric
 
 [Claude Mythos](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-mythos-preview.html) (`anthropic.claude-mythos-preview`) is available on Bedrock Mantle with **1M token input context**, 128K output, and support for reasoning, vision, and tool use.
 
-Use the `bedrock/mantle/` route prefix with standard AWS credentials.
+Use the `bedrock_mantle/` route prefix with standard AWS credentials.
 
 ### /messages
 
@@ -35,7 +35,7 @@ os.environ['AWS_REGION_NAME'] = "us-east-1"
 
 async def main():
     response = await litellm.anthropic_messages(
-        model="bedrock/mantle/anthropic.claude-mythos-preview",
+        model="bedrock_mantle/anthropic.claude-mythos-preview",
         max_tokens=1024,
         messages=[{"role": "user", "content": "Explain quantum entanglement simply."}],
     )
@@ -53,7 +53,7 @@ asyncio.run(main())
 model_list:
   - model_name: claude-mythos
     litellm_params:
-      model: bedrock/mantle/anthropic.claude-mythos-preview
+      model: bedrock_mantle/anthropic.claude-mythos-preview
       aws_region_name: us-east-1
 ```
 
@@ -95,7 +95,7 @@ os.environ['AWS_SECRET_ACCESS_KEY'] = "your-aws-secret-key"
 os.environ['AWS_REGION_NAME'] = "us-east-1"
 
 response = completion(
-    model="bedrock/mantle/anthropic.claude-mythos-preview",
+    model="bedrock_mantle/anthropic.claude-mythos-preview",
     messages=[{"role": "user", "content": "Explain quantum entanglement simply."}],
 )
 print(response)
@@ -110,7 +110,7 @@ print(response)
 model_list:
   - model_name: claude-mythos
     litellm_params:
-      model: bedrock/mantle/anthropic.claude-mythos-preview
+      model: bedrock_mantle/anthropic.claude-mythos-preview
       aws_region_name: us-east-1
 ```
 
