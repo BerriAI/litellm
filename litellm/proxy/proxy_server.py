@@ -260,6 +260,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.auth_utils import (
     check_response_size_is_safe,
     is_request_body_safe,
+    warn_once_if_custom_auth_skips_common_checks,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
@@ -4373,6 +4374,12 @@ class ProxyConfig:
                 user_custom_auth = get_instance_fn(
                     value=custom_auth, config_file_path=config_file_path
                 )
+            warn_once_if_custom_auth_skips_common_checks(
+                custom_auth_configured=custom_auth is not None,
+                run_common_checks=bool(
+                    general_settings.get("custom_auth_run_common_checks", False)
+                ),
+            )
 
             custom_key_generate = general_settings.get("custom_key_generate", None)
             if custom_key_generate is not None:
