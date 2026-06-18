@@ -23889,32 +23889,6 @@ export interface components {
             detail?: components["schemas"]["ValidationError"][];
         };
         /**
-         * PluginConfig
-         * @description A single external service registered as an embeddable UI plugin.
-         */
-        PluginConfig: {
-            /**
-             * Display Name
-             * @description human-readable label shown in the UI view switcher
-             */
-            display_name?: string | null;
-            /**
-             * Name
-             * @description unique plugin identifier (kebab-case)
-             */
-            name: string;
-            /**
-             * Plugin Key
-             * @description plugin's own credential, injected as *** only on /plugin-proxy/<name>/* reverse-proxy calls
-             */
-            plugin_key?: string | null;
-            /**
-             * Url
-             * @description base URL of the plugin service
-             */
-            url: string;
-        };
-        /**
          * HashicorpVaultConfig
          * @description Configuration for Hashicorp Vault secret manager integration.
          */
@@ -28396,6 +28370,32 @@ export interface components {
              * @description Author name
              */
             name: string;
+        };
+        /**
+         * PluginConfig
+         * @description A single external service registered as an embeddable UI plugin.
+         */
+        PluginConfig: {
+            /**
+             * Display Name
+             * @description human-readable label shown in the UI view switcher
+             */
+            display_name?: string | null;
+            /**
+             * Name
+             * @description unique plugin identifier (kebab-case)
+             */
+            name: string;
+            /**
+             * Plugin Key
+             * @description plugin's own credential, injected as *** only on /plugin-proxy/<name>/* reverse-proxy calls
+             */
+            plugin_key?: string | null;
+            /**
+             * Url
+             * @description base URL of the plugin service
+             */
+            url: string;
         };
         /**
          * PluginListItem
