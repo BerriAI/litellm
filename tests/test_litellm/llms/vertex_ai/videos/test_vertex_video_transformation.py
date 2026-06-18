@@ -4,18 +4,37 @@ Tests for Vertex AI (Veo) video generation transformation.
 
 import base64
 import json
-import os
-from unittest.mock import MagicMock, Mock, patch
+from pathlib import Path
+from typing import Mapping, cast
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
 
+import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.llms.vertex_ai.videos.transformation import (
     VertexAIVideoConfig,
     _convert_image_to_vertex_format,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
+
+VEO_31_LITE_VERTEX_MODEL = "vertex_ai/veo-3.1-lite-generate-001"
+ROOT_MODEL_COST_PATH = (
+    Path(__file__).parents[5] / "model_prices_and_context_window.json"
+)
+BACKUP_MODEL_COST_PATH = (
+    Path(__file__).parents[5]
+    / "litellm"
+    / "model_prices_and_context_window_backup.json"
+)
+ModelCostMap = Mapping[str, Mapping[str, object]]
+
+
+def _load_model_cost_map(path: Path) -> ModelCostMap:
+    return cast(ModelCostMap, json.loads(path.read_text()))
 
 
 class TestVertexAIVideoConfig:
@@ -122,6 +141,64 @@ class TestVertexAIVideoConfig:
         assert "us-central1" in url
         # Should NOT include endpoint
         assert not url.endswith(":predictLongRunning")
+
+    def test_veo_31_lite_model_cost_entries_match_pricing(self):
+        for path in (ROOT_MODEL_COST_PATH, BACKUP_MODEL_COST_PATH):
+            model_cost = _load_model_cost_map(path)
+            info = model_cost.get(VEO_31_LITE_VERTEX_MODEL)
+
+            assert info is not None, f"{VEO_31_LITE_VERTEX_MODEL} missing from {path}"
+            assert info["litellm_provider"] == "vertex_ai-video-models"
+            assert info["mode"] == "video_generation"
+            assert info["max_input_tokens"] == 1024
+            assert info["output_cost_per_second"] == 0.05
+            assert info["output_cost_per_second_1080p"] == 0.08
+
+    def test_veo_31_lite_provider_routing_from_local_model_map(self):
+        original_model_cost = litellm.model_cost
+        original_vertex_video_models = set(litellm.vertex_ai_video_models)
+
+        try:
+            model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+            litellm.model_cost = dict(model_cost)
+            litellm.vertex_ai_video_models.clear()
+            litellm.add_known_models(model_cost_map=litellm.model_cost)
+
+            model, custom_llm_provider, _, _ = get_llm_provider(
+                model="veo-3.1-lite-generate-001"
+            )
+
+            assert model == "veo-3.1-lite-generate-001"
+            assert custom_llm_provider == "vertex_ai"
+        finally:
+            litellm.model_cost = original_model_cost
+            litellm.vertex_ai_video_models.clear()
+            litellm.vertex_ai_video_models.update(original_vertex_video_models)
+
+    def test_veo_31_lite_cost_uses_resolution_tiers(self):
+        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        model_info = model_cost[VEO_31_LITE_VERTEX_MODEL]
+
+        assert (
+            video_generation_cost(
+                model=VEO_31_LITE_VERTEX_MODEL,
+                duration_seconds=10.0,
+                custom_llm_provider="vertex_ai",
+                model_info=dict(model_info),
+                video_resolution="720p",
+            )
+            == 0.5
+        )
+        assert (
+            video_generation_cost(
+                model=VEO_31_LITE_VERTEX_MODEL,
+                duration_seconds=10.0,
+                custom_llm_provider="vertex_ai",
+                model_info=dict(model_info),
+                video_resolution="1080p",
+            )
+            == 0.8
+        )
 
     def test_transform_video_create_request(self):
         """Test transformation of video creation request."""
