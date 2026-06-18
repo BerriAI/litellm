@@ -5122,7 +5122,7 @@ async def list_keys(
     size: int = Query(10, description="Page size", ge=1, le=100),
     user_id: Optional[str] = Query(
         None,
-        description="Filter keys by user ID. Supports partial matching (substring, case-insensitive).",
+        description="Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
     ),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     organization_id: Optional[str] = Query(
@@ -5131,7 +5131,7 @@ async def list_keys(
     key_hash: Optional[str] = Query(None, description="Filter keys by key hash"),
     key_alias: Optional[str] = Query(
         None,
-        description="Filter keys by key alias. Supports partial matching (substring, case-insensitive).",
+        description="Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
     ),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(
@@ -5154,6 +5154,10 @@ async def list_keys(
     project_id: Optional[str] = Query(None, description="Filter keys by project ID"),
     access_group_id: Optional[str] = Query(
         None, description="Filter keys by access group ID"
+    ),
+    substring_matching: bool = Query(
+        False,
+        description="If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys.",
     ),
 ) -> KeyListResponseObject:
     """
@@ -5236,12 +5240,21 @@ async def list_keys(
         else:
             admin_team_ids = None
 
-        use_substring_matching = user_api_key_dict.user_role in [
+        is_proxy_admin = user_api_key_dict.user_role in [
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]
 
-        if not user_id and not use_substring_matching:
+        # Substring matching is opt-in (admin-only). /key/list matched user_id and
+        # key_alias exactly before substring search was added; auto-applying a
+        # substring match to every admin call broke that contract and let a caller
+        # passing an exact user_id (e.g. an integration scoping to one user with an
+        # admin key) receive other users' keys (user_id="alice" -> "alice2"). Exact
+        # by default restores the prior behavior; the dashboard opts in explicitly.
+        use_substring_matching = substring_matching and is_proxy_admin
+
+        # Admins may omit user_id to list all keys; non-admins are scoped to self.
+        if not user_id and not is_proxy_admin:
             user_id = user_api_key_dict.user_id
 
         response = await _list_key_helper(

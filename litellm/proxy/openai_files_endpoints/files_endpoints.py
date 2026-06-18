@@ -38,6 +38,9 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.litellm_core_utils.cloud_storage_security import (
+    is_managed_cloud_storage_uri,
+)
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     encode_file_id_with_model,
@@ -726,6 +729,15 @@ async def get_file_content(
                     }
                 )
         else:
+            # A raw cloud-storage URI (s3://, gs://) supplied here would skip the
+            # managed-file owner/team check that only runs for unified ids, letting
+            # a caller read another tenant's object by its key. Such objects are only
+            # reachable through their managed unified id.
+            if is_managed_cloud_storage_uri(file_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Raw cloud storage file ids cannot be retrieved directly. Use the LiteLLM managed file id returned when the file was created.",
+                )
             # Check for model-based credential routing
             (
                 should_route,

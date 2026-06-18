@@ -2596,7 +2596,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "soniox/stt-async-v4"
+    "default_model_placeholder": "soniox/stt-async-v5"
   },
   {
     "provider": "TEXT_COMPLETION_CODESTRAL",

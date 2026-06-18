@@ -2453,6 +2453,9 @@ export const keyListCall = async (
         return_full_object: "true",
         include_team_keys: "true",
         include_created_by_keys: "true",
+        // /key/list is exact by default; opt in so the key-list search box keeps
+        // matching partial user_id/key_alias.
+        substring_matching: "true",
       },
     });
   } catch (error) {

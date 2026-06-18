@@ -228,6 +228,25 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
     assert "Invalid purpose: my-bad-purpose" in response.json()["error"]["message"]
 
 
+def test_get_file_content_rejects_raw_cloud_storage_uri(llm_router: Router):
+    """A raw s3:// file id must be rejected on the proxy content endpoint.
+
+    Such an id is not a managed unified id, so it would otherwise skip the
+    owner/team access check and let a caller read another tenant's batch output
+    object by its key. Callers must use the managed unified file id.
+    """
+    from urllib.parse import quote
+
+    s3_file_id = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+    response = client.get(
+        f"/v1/files/{quote(s3_file_id, safe='')}/content?provider=bedrock",
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 400
+    assert "managed file id" in response.json()["error"]["message"].lower()
+
+
 def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: Router):
     """
     Asserts 'create_file' is called with the correct arguments

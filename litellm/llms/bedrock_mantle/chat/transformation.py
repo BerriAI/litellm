@@ -23,6 +23,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
+from ..common_utils import mantle_base_segment
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 
@@ -48,6 +49,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         api_base: Optional[str],
         api_key: Optional[str],
         litellm_params: Optional[GenericLiteLLMParams] = None,
+        model: str | None = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         region = (
             (litellm_params.aws_region_name if litellm_params else None)
@@ -57,10 +59,13 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             or BEDROCK_MANTLE_DEFAULT_REGION
         )
         BaseAWSLLM._validate_aws_region_name(region)
+        # The base path segment is data-driven per model (use_openai_responses_path
+        # flag): gemma-4-* and gpt-5.x are served on /openai/v1, everything else on
+        # /v1. An explicit api_base still wins over the derived default.
         api_base = (
             api_base
             or get_secret_str("BEDROCK_MANTLE_API_BASE")
-            or f"https://bedrock-mantle.{region}.api.aws/v1"
+            or f"https://bedrock-mantle.{region}.api.aws/{mantle_base_segment(model, litellm.model_cost)}"
         )
         dynamic_api_key = self._resolve_bearer_token(api_key)
         return api_base, dynamic_api_key

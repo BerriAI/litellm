@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,11 +16,13 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.spend_tracking.budget_reservation import (
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
     release_budget_reservation,
+    release_budget_reservation_on_cancel,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -1701,3 +1704,326 @@ async def test_should_not_block_concurrent_team_request_when_first_request_lacks
         await release_budget_reservation(first_reservation)
     if second_reservation is not None:
         await release_budget_reservation(second_reservation)
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_gives_back_counter(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-cancel-give-back", spend=0.0, max_budget=10.0
+    )
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=3.0,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_input_cost",
+            return_value=0.5,
+        ),
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    assert reservation is not None
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-give-back"
+    ) == pytest.approx(3.0)
+
+    await release_budget_reservation_on_cancel(reservation)
+
+    # the provider already received the input, so the reservation is reconciled
+    # to the input cost (0.5), not refunded to zero; the worst-case output
+    # reservation (3.0 -> 0.5) is released
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-give-back"
+    ) == pytest.approx(0.5)
+    assert reservation["finalized"] is True
+
+    # idempotent: a second cancel reconcile must not change the counter again
+    await release_budget_reservation_on_cancel(reservation)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-give-back"
+    ) == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_noop_when_finalized(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-cancel-finalized", spend=0.0, max_budget=10.0
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=3.0,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    assert reservation is not None
+    reservation["finalized"] = True
+
+    await release_budget_reservation_on_cancel(reservation)
+
+    # already reconciled by the success/failure path -> must stay untouched
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-finalized"
+    ) == pytest.approx(3.0)
+
+
+async def _reserve_for_stream(counter_cache, key_cache, proxy_logging_obj, token: str):
+    valid_token = UserAPIKeyAuth(token=token, spend=0.0, max_budget=10.0)
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=2.0,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_input_cost",
+            return_value=0.5,
+        ),
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    assert reservation is not None
+    assert counter_cache.in_memory_cache.get_cache(
+        key=f"spend:key:{token}"
+    ) == pytest.approx(2.0)
+    valid_token.budget_reservation = reservation
+    return valid_token, reservation
+
+
+def _drive_streaming_cancel(valid_token, iterator_hook):
+    streaming_logging_obj = MagicMock()
+    streaming_logging_obj.async_post_call_streaming_iterator_hook = iterator_hook
+    return ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+        response=MagicMock(),
+        user_api_key_dict=valid_token,
+        request_data=_request_body(),
+        proxy_logging_obj=streaming_logging_obj,
+        serialize_chunk=lambda chunk: chunk,
+        serialize_error=lambda exc: str(exc),
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token, reservation = await _reserve_for_stream(
+        counter_cache, key_cache, proxy_logging_obj, "key-cancel-no-chunk"
+    )
+
+    # Client disconnects before the upstream produced any output.
+    async def cancel_before_chunk(user_api_key_dict, response, request_data):
+        if False:
+            yield ""  # make this an async generator
+        raise asyncio.CancelledError()
+
+    generator = _drive_streaming_cancel(valid_token, cancel_before_chunk)
+    received = []
+    with pytest.raises(asyncio.CancelledError):
+        async for chunk in generator:
+            received.append(chunk)
+
+    assert received == []
+    # no chunk delivered, but the provider already received the input, so the
+    # reservation is reconciled to the input cost (0.5), not refunded to zero
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-no-chunk"
+    ) == pytest.approx(0.5)
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancel_after_chunk_keeps_reservation(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token, reservation = await _reserve_for_stream(
+        counter_cache, key_cache, proxy_logging_obj, "key-cancel-after-chunk"
+    )
+
+    # Client consumes a chunk, then disconnects. Cancellation logs no cost, so
+    # refunding here would let the caller read partial output for free.
+    async def cancel_after_chunk(user_api_key_dict, response, request_data):
+        yield "data: chunk\n\n"
+        raise asyncio.CancelledError()
+
+    generator = _drive_streaming_cancel(valid_token, cancel_after_chunk)
+    received = []
+    with pytest.raises(asyncio.CancelledError):
+        async for chunk in generator:
+            received.append(chunk)
+
+    assert received == ["data: chunk\n\n"]
+    # a consumed stream must NOT be refunded
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-after-chunk"
+    ) == pytest.approx(2.0)
+    assert reservation.get("finalized") is not True
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_swallows_release_errors():
+    # If the release itself fails (e.g. Redis unavailable) it must not escape
+    # the helper: doing so would replace the in-flight CancelledError /
+    # GeneratorExit at the call site and disrupt the disconnect teardown.
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [{"counter_key": "spend:key:key-cancel-error"}],
+        "finalized": False,
+        "input_cost": 0.5,
+    }
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ):
+        # must return without raising
+        await release_budget_reservation_on_cancel(reservation)
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token, reservation = await _reserve_for_stream(
+        counter_cache, key_cache, proxy_logging_obj, "key-cancel-slowpath"
+    )
+
+    async def one_chunk(user_api_key_dict, response, request_data):
+        yield "data: chunk\n\n"
+
+    streaming_logging_obj = MagicMock()
+    streaming_logging_obj.async_post_call_streaming_iterator_hook = one_chunk
+    # On the slow path the per-chunk hook is awaited before the chunk is yielded
+    # to the client; cancel there. Nothing has reached the client yet.
+    streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(
+        side_effect=asyncio.CancelledError()
+    )
+
+    generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+        response=MagicMock(),
+        user_api_key_dict=valid_token,
+        request_data=_request_body(),
+        proxy_logging_obj=streaming_logging_obj,
+        serialize_chunk=lambda chunk: chunk,
+        serialize_error=lambda exc: str(exc),
+    )
+
+    received = []
+    # include_cost_in_streaming_usage forces fast_path off, so the hook above runs
+    with patch.object(litellm, "include_cost_in_streaming_usage", True, create=True):
+        with pytest.raises(asyncio.CancelledError):
+            async for chunk in generator:
+                received.append(chunk)
+
+    assert received == []
+    # cancellation happened before any chunk reached the client, but the
+    # provider already received the input -> reconcile to the input cost (0.5)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-slowpath"
+    ) == pytest.approx(0.5)
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_disconnect_after_consuming_chunk_keeps_reservation(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token, reservation = await _reserve_for_stream(
+        counter_cache, key_cache, proxy_logging_obj, "key-disconnect-after-chunk"
+    )
+
+    async def two_chunks(user_api_key_dict, response, request_data):
+        yield "data: a\n\n"
+        yield "data: b\n\n"
+
+    generator = _drive_streaming_cancel(valid_token, two_chunks)
+
+    # Client consumes one chunk, then disconnects. aclose() raises GeneratorExit
+    # at the suspended yield, after the chunk already reached the client.
+    first = await generator.__anext__()
+    assert first == "data: a\n\n"
+    await generator.aclose()
+
+    # output was delivered, so the reservation must NOT be refunded
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-disconnect-after-chunk"
+    ) == pytest.approx(2.0)
+    assert reservation.get("finalized") is not True
+
+
+@pytest.mark.asyncio
+async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token, _ = await _reserve_for_stream(
+        counter_cache, key_cache, proxy_logging_obj, "key-slowpath-ok"
+    )
+
+    async def one_chunk(user_api_key_dict, response, request_data):
+        yield {"content": "hi"}
+
+    streaming_logging_obj = MagicMock()
+    streaming_logging_obj.async_post_call_streaming_iterator_hook = one_chunk
+    streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(
+        side_effect=lambda **kwargs: kwargs["response"]
+    )
+
+    generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+        response=MagicMock(),
+        user_api_key_dict=valid_token,
+        request_data=_request_body(),
+        proxy_logging_obj=streaming_logging_obj,
+        serialize_chunk=lambda chunk: chunk,
+        serialize_error=lambda exc: str(exc),
+    )
+
+    received = []
+    # include_cost_in_streaming_usage forces the slow path so the per-chunk hook,
+    # content accumulation, and cost-injection branch all run to a successful yield
+    with patch.object(litellm, "include_cost_in_streaming_usage", True, create=True):
+        async for chunk in generator:
+            received.append(chunk)
+
+    assert received == [{"content": "hi"}]
+    streaming_logging_obj.async_post_call_streaming_hook.assert_awaited_once()

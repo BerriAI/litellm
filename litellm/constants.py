@@ -802,6 +802,7 @@ openai_compatible_endpoints: List = [
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
+    "https://pinstripes.io/v1",
 ]
 
 
@@ -865,6 +866,7 @@ openai_compatible_providers: List = [
     "clarifai",
     "docker_model_runner",
     "ragflow",
+    "pinstripes",  # Pinstripes - JSON-configured provider
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
