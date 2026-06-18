@@ -1948,6 +1948,221 @@ def test_completion_cost_service_tier_for_bedrock():
     assert priority_cost > default_cost > flex_cost > 0
 
 
+def test_completion_cost_service_tier_for_anthropic():
+    """
+    Anthropic priority-tier requests must be priced at the priority rate.
+
+    Regression for LIT-3771: the Anthropic cost route dropped ``service_tier``,
+    so priority requests (whose tier is reported on the response usage) were
+    always billed at the standard rate. The tier is captured by the
+    transformation and must flow through to ``generic_cost_per_token``.
+    """
+    from litellm import completion_cost
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-service-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    def _cost_for_tier(service_tier):
+        usage = AnthropicConfig().calculate_usage(
+            usage_object={
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "service_tier": service_tier,
+            },
+            reasoning_content=None,
+        )
+        response = ModelResponse(usage=usage, model=model)
+        return completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="anthropic",
+        )
+
+    standard_cost = _cost_for_tier("standard")
+    priority_cost = _cost_for_tier("priority")
+
+    expected_standard = 1000 * 3e-6 + 500 * 15e-6
+    assert standard_cost == pytest.approx(expected_standard)
+    # priority rates are exactly 2x standard for both input and output
+    assert priority_cost == pytest.approx(2 * standard_cost)
+
+
+def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate():
+    """
+    Proxy billing path regression for LIT-3771.
+
+    Priority is opted into with ``service_tier="auto"``; Anthropic then serves
+    "priority" and reports it on the response usage. The proxy forwards the
+    request-level "auto" into ``completion_cost`` (via ``_response_cost_calculator``),
+    and that preference must not shadow the served tier, otherwise priority
+    requests are silently billed at the standard rate.
+    """
+    from litellm import completion_cost
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-auto-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "service_tier": "priority",
+        },
+        reasoning_content=None,
+    )
+    response = ModelResponse(usage=usage, model=model)
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="anthropic",
+        service_tier="auto",
+        optional_params={"service_tier": "auto"},
+    )
+
+    expected_priority = 1000 * 6e-6 + 500 * 30e-6
+    assert cost == pytest.approx(expected_priority)
+
+
+def test_completion_cost_non_string_service_tier_defers_to_served_tier():
+    """
+    Regression: a non-string request-level ``service_tier`` (reachable via
+    ``allowed_openai_params``/``drop_params``) must not crash cost tracking.
+
+    Before the fix, ``completion_cost`` called ``service_tier.lower()`` on the
+    request-level value, so a dict raised ``AttributeError``. ``_response_cost_calculator``
+    swallowed it and reported ``response_cost=None``, silently dropping the cost.
+    The non-string preference must be ignored so pricing defers to the tier the
+    provider actually served on the response usage.
+    """
+    from litellm import completion_cost
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-non-string-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "service_tier": "priority",
+        },
+        reasoning_content=None,
+    )
+    response = ModelResponse(usage=usage, model=model)
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="anthropic",
+        optional_params={"service_tier": {"name": "auto"}},
+    )
+
+    expected_priority = 1000 * 6e-6 + 500 * 30e-6
+    assert cost == pytest.approx(expected_priority)
+
+
+def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier():
+    """
+    Regression for the cache/tier interaction in the Anthropic geo/speed path.
+
+    When a request is served at "priority" and also carries a geo/speed
+    multiplier (here ``speed="fast"``), the cache portion is held out of the
+    multiplier so it is not scaled. That held-out cache cost must use the
+    served tier's cache rate; pricing it at the standard rate while the cache
+    embedded in ``prompt_cost`` is priced at the priority rate leaves a
+    ``(cache_priority - cache_standard)(multiplier - 1)`` billing error.
+    """
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-priority-cache-fast-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "cache_read_input_token_cost": 0.3e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "cache_read_input_token_cost_priority": 0.6e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+                "provider_specific_entry": {"fast": 2.0},
+            }
+        }
+    )
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200),
+    )
+    usage.speed = "fast"
+
+    prompt_cost, completion_cost = anthropic_cost_per_token(
+        model=model, usage=usage, service_tier="priority"
+    )
+
+    # non-cache input priced at the priority rate and scaled by the fast
+    # multiplier; the 200 cache-hit tokens priced at the priority cache rate
+    # and held out of the multiplier
+    expected_prompt = (1000 - 200) * 6e-6 * 2 + 200 * 0.6e-6
+    expected_completion = 500 * 30e-6 * 2
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost == pytest.approx(expected_completion)
+
+
 def test_gemini_cache_tokens_details_no_negative_values():
     """
     Test for Issue #18750: Negative text_tokens with Gemini caching

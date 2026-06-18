@@ -410,6 +410,90 @@ def test_emitter_without_call_id_is_not_deduped():
     assert len(exporter.get_finished_spans()) == 2
 
 
+def _emit_error_span(message, error_type="litellm.APIError"):
+    from litellm.integrations.otel.emitter import SpanEmitter
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "t"), cfg)
+    data = LLMCallSpanData(
+        operation=GenAIOperation.CHAT,
+        provider="openai",
+        request_model="gpt-4o",
+        response_model=None,
+        response_id=None,
+        request_params=LLMRequestParams(),
+        usage=LLMUsage(),
+        finish_reasons=(),
+        error=SpanError(error_type=error_type, message=message),
+        response_cost=None,
+        server=None,
+        identity=RequestIdentity(call_id=None),
+    )
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    return span
+
+
+def _exception_event(span):
+    from litellm.integrations.otel.model.semconv import ExceptionEvent
+
+    events = [e for e in span.events if e.name == ExceptionEvent.NAME]
+    assert len(events) == 1, "expected exactly one exception event"
+    return events[0]
+
+
+def test_error_message_recorded_as_full_exception_event_untruncated():
+    """Regression for the Elasticsearch keyword/ignore_above:1024 truncation.
+
+    A long error message must survive intact on the standard ``exception``
+    event under ``exception.message`` — not get dropped onto a bare string
+    attribute that backends dynamic-map to a 1024-char ``keyword``. The SDK
+    must not truncate it either, so a 5000-char message stays 5000 chars.
+    """
+    from litellm.integrations.otel.model.semconv import Error, ExceptionEvent
+
+    long_message = "boom: " + "x" * 5000
+    span = _emit_error_span(long_message, error_type="litellm.APIError")
+
+    event = _exception_event(span)
+    assert event.attributes[ExceptionEvent.MESSAGE] == long_message
+    assert len(event.attributes[ExceptionEvent.MESSAGE]) == len(long_message) > 1024
+    assert event.attributes[ExceptionEvent.TYPE] == "litellm.APIError"
+
+    # error.type stays a low-cardinality attribute; the message does NOT become a
+    # bare string attribute (which is what got truncated).
+    assert span.attributes[Error.TYPE] == "litellm.APIError"
+    assert ExceptionEvent.MESSAGE not in span.attributes
+    assert span.status.description == long_message
+
+
+def test_success_span_records_no_exception_event():
+    from litellm.integrations.otel.emitter import SpanEmitter
+    from litellm.integrations.otel.model.semconv import ExceptionEvent
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "t"), cfg)
+    data = LLMCallSpanData(
+        operation=GenAIOperation.CHAT,
+        provider="openai",
+        request_model="gpt-4o",
+        response_model="gpt-4o",
+        response_id="resp-1",
+        request_params=LLMRequestParams(),
+        usage=LLMUsage(),
+        finish_reasons=("stop",),
+        error=None,
+        response_cost=None,
+        server=None,
+        identity=RequestIdentity(call_id=None),
+    )
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    assert all(e.name != ExceptionEvent.NAME for e in span.events)
+
+
 # --- service taxonomy: which calls become spans, and of what kind ----------- #
 
 
