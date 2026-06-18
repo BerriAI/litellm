@@ -39,6 +39,7 @@ async def arerank(
     rank_fields: Optional[List[str]] = None,
     return_documents: Optional[bool] = None,
     max_chunks_per_doc: Optional[int] = None,
+    instruction: Optional[str] = None,
     **kwargs,
 ) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
     """
@@ -58,6 +59,7 @@ async def arerank(
             rank_fields,
             return_documents,
             max_chunks_per_doc,
+            instruction=instruction,
             **kwargs,
         )
 
@@ -98,6 +100,7 @@ def rerank(
     return_documents: Optional[bool] = True,
     max_chunks_per_doc: Optional[int] = None,
     max_tokens_per_doc: Optional[int] = None,
+    instruction: Optional[str] = None,
     **kwargs,
 ) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
     """
@@ -155,6 +158,7 @@ def rerank(
             return_documents=return_documents,
             max_chunks_per_doc=max_chunks_per_doc,
             max_tokens_per_doc=max_tokens_per_doc,
+            instruction=instruction,
             non_default_params=kwargs,
         )
         verbose_logger.info(f"optional_rerank_params: {optional_rerank_params}")

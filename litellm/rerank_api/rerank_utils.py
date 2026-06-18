@@ -15,6 +15,7 @@ def get_optional_rerank_params(
     return_documents: Optional[bool] = True,
     max_chunks_per_doc: Optional[int] = None,
     max_tokens_per_doc: Optional[int] = None,
+    instruction: Optional[str] = None,
     non_default_params: Optional[dict] = None,
 ) -> Dict:
     all_non_default_params = non_default_params or {}
@@ -30,6 +31,8 @@ def get_optional_rerank_params(
         all_non_default_params["max_chunks_per_doc"] = max_chunks_per_doc
     if max_tokens_per_doc is not None:
         all_non_default_params["max_tokens_per_doc"] = max_tokens_per_doc
+    if instruction is not None:
+        all_non_default_params["instruction"] = instruction
     return rerank_provider_config.map_cohere_rerank_params(
         model=model,
         drop_params=drop_params,
