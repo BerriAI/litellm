@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
 )
+from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
@@ -63,6 +64,24 @@ def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
     if _master_key is None or api_key is None:
         return False
     return secrets.compare_digest(api_key, _master_key)
+
+
+_HASHED_JWT_RE = re.compile(r"^hashed-jwt-[a-fA-F0-9]{64}$")
+
+
+def _redact_logged_api_key(
+    value: str | None, *, already_hashed: bool = False
+) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    stripped = re.sub(r"(?i)^bearer ", "", value)
+    if not stripped:
+        return None
+    if already_hashed and is_valid_sha256_hash(stripped):
+        return stripped
+    if _HASHED_JWT_RE.match(stripped):
+        return stripped
+    return hash_token(stripped)
 
 
 def _get_spend_logs_metadata(
@@ -120,6 +139,16 @@ def _get_spend_logs_metadata(
         **{  # type: ignore
             key: metadata.get(key) for key in SpendLogsMetadata.__annotations__.keys()
         }
+    )
+    _raw_key = clean_metadata.get("user_api_key")
+    _trusted_hash = metadata.get("user_api_key_hash") if metadata else None
+    _already_hashed = (
+        isinstance(_trusted_hash, str)
+        and is_valid_sha256_hash(_trusted_hash)
+        and _trusted_hash == _raw_key
+    )
+    clean_metadata["user_api_key"] = _redact_logged_api_key(
+        _raw_key, already_hashed=_already_hashed
     )
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
@@ -283,10 +312,13 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             "completion_tokens", 0
         )
         standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
-    if api_key is not None and isinstance(api_key, str):
-        if api_key.startswith("sk-"):
-            # hash the api_key
-            api_key = hash_token(api_key)
+    _trusted_hash = metadata.get("user_api_key_hash") if metadata else None
+    _key_already_hashed = (
+        isinstance(_trusted_hash, str)
+        and is_valid_sha256_hash(_trusted_hash)
+        and _trusted_hash == api_key
+    )
+    api_key = _redact_logged_api_key(api_key, already_hashed=_key_already_hashed) or ""
 
     if (
         standard_logging_payload is not None
@@ -299,8 +331,6 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         end_user_id = end_user_id or standard_logging_payload["metadata"].get(
             "user_api_key_end_user_id"
         )
-    # BUG FIX: Don't overwrite api_key when standard_logging_payload is None
-    # The api_key was already extracted from metadata (line 243) and hashed (lines 256-259)
     request_tags = (
         safe_dumps(metadata.get("tags", []))
         if isinstance(metadata.get("tags", []), list)
