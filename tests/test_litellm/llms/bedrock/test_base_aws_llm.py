@@ -681,6 +681,158 @@ def test_get_request_headers_with_api_key_bearer_token():
         assert result == mock_prepared_request
 
 
+def _get_header_value_case_insensitive(headers: Any, header_name: str) -> Any:
+    for key in headers:
+        if key.lower() == header_name.lower():
+            return headers[key]
+    raise AssertionError(f"Missing header {header_name}; found {list(headers)}")
+
+
+def test_sign_request_replays_only_unsigned_original_headers():
+    """
+    Regression for #27513: on retry/fallback the caller headers can carry stale
+    SigV4 headers from a previous attempt. _sign_request must not replay headers
+    that are bound to the freshly computed signature, while still forwarding
+    unsigned custom/forwarded headers.
+    """
+    llm = BaseAWSLLM()
+    mock_credentials = Credentials("test_key", "test_secret", "test_token")
+    stale_authorization = (
+        "AWS4-HMAC-SHA256 Credential=old, "
+        "SignedHeaders=content-type;host;x-amz-date, Signature=old"
+    )
+    stale_amz_date = "19990101T000000Z"
+    stale_security_token = "old_token"
+    headers = {
+        "Authorization": stale_authorization,
+        "x-amz-date": stale_amz_date,
+        "x-amz-security-token": stale_security_token,
+        "X-Forwarded-For": "203.0.113.10",
+        "X-Custom-Header": "caller-value",
+    }
+
+    with (
+        patch("litellm.llms.bedrock.base_aws_llm.get_secret_str", return_value=None),
+        patch.object(llm, "get_credentials", return_value=mock_credentials),
+        patch.object(llm, "_get_aws_region_name", return_value="us-west-2"),
+    ):
+        result_headers, result_body = llm._sign_request(
+            service_name="bedrock",
+            headers=headers,
+            optional_params={
+                "aws_access_key_id": "test_key",
+                "aws_secret_access_key": "test_secret",
+                "aws_region_name": "us-west-2",
+            },
+            request_data={"prompt": "test"},
+            api_base="https://bedrock-runtime.us-west-2.amazonaws.com/model/test/invoke",
+        )
+
+    authorization = _get_header_value_case_insensitive(result_headers, "authorization")
+    amz_date = _get_header_value_case_insensitive(result_headers, "x-amz-date")
+    security_token = _get_header_value_case_insensitive(
+        result_headers, "x-amz-security-token"
+    )
+
+    # Fresh signature replaced the stale SigV4-bound headers.
+    assert authorization != stale_authorization
+    assert authorization.startswith("AWS4-HMAC-SHA256")
+    assert "SignedHeaders=" in authorization
+    assert amz_date != stale_amz_date
+    assert security_token != stale_security_token
+    # No stale value survives under any casing of the signed header names.
+    assert all(
+        value != stale_authorization
+        for key, value in result_headers.items()
+        if key.lower() == "authorization"
+    )
+    assert all(
+        value != stale_amz_date
+        for key, value in result_headers.items()
+        if key.lower() == "x-amz-date"
+    )
+    assert all(
+        value != stale_security_token
+        for key, value in result_headers.items()
+        if key.lower() == "x-amz-security-token"
+    )
+    # Unsigned forwarded/custom headers are preserved.
+    assert result_headers["X-Forwarded-For"] == "203.0.113.10"
+    assert result_headers["X-Custom-Header"] == "caller-value"
+    assert result_body is not None
+
+
+def test_get_request_headers_replays_only_unsigned_original_headers():
+    """
+    Regression for #27513: get_request_headers (the signing path for Converse,
+    invoke, embedding, and image handlers) must not replay caller headers bound
+    to the freshly computed signature, while still forwarding unsigned headers.
+    """
+    llm = BaseAWSLLM()
+    credentials = Credentials("test_key", "test_secret", "test_token")
+    stale_authorization = (
+        "AWS4-HMAC-SHA256 Credential=old, "
+        "SignedHeaders=content-type;host;x-amz-date, Signature=old"
+    )
+    stale_amz_date = "19990101T000000Z"
+    stale_security_token = "old_token"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": stale_authorization,
+        "x-amz-date": stale_amz_date,
+        "x-amz-security-token": stale_security_token,
+        "X-Forwarded-For": "203.0.113.10",
+        "X-Custom-Header": "caller-value",
+    }
+
+    with patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True):
+        prepped = llm.get_request_headers(
+            credentials=credentials,
+            aws_region_name="us-west-2",
+            extra_headers=None,
+            endpoint_url="https://bedrock-runtime.us-west-2.amazonaws.com/model/test/invoke",
+            data='{"prompt": "test"}',
+            headers=headers,
+        )
+
+    result_headers = prepped.headers
+    authorization = _get_header_value_case_insensitive(result_headers, "authorization")
+    amz_date = _get_header_value_case_insensitive(result_headers, "x-amz-date")
+    security_token = _get_header_value_case_insensitive(
+        result_headers, "x-amz-security-token"
+    )
+
+    # Fresh signature replaced the stale SigV4-bound headers.
+    assert authorization != stale_authorization
+    assert authorization.startswith("AWS4-HMAC-SHA256")
+    assert "SignedHeaders=" in authorization
+    assert amz_date != stale_amz_date
+    assert security_token != stale_security_token
+    # No stale value survives under any casing of the signed header names.
+    assert all(
+        value != stale_authorization
+        for key, value in result_headers.items()
+        if key.lower() == "authorization"
+    )
+    assert all(
+        value != stale_amz_date
+        for key, value in result_headers.items()
+        if key.lower() == "x-amz-date"
+    )
+    assert all(
+        value != stale_security_token
+        for key, value in result_headers.items()
+        if key.lower() == "x-amz-security-token"
+    )
+    # Unsigned forwarded/custom headers are preserved.
+    assert _get_header_value_case_insensitive(result_headers, "X-Forwarded-For") == (
+        "203.0.113.10"
+    )
+    assert _get_header_value_case_insensitive(result_headers, "X-Custom-Header") == (
+        "caller-value"
+    )
+
+
 def test_role_assumption_without_session_name():
     """
     Test for issue 12583: Role assumption should work when only aws_role_name is provided
@@ -880,7 +1032,11 @@ def test_different_roles_without_session_names_should_not_share_cache():
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
+    ids=[
+        "no_region_or_endpoint",
+        "bedrock_region_ignored_for_sts",
+        "explicit_sts_endpoint",
+    ],
 )
 def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     """
@@ -1272,7 +1428,11 @@ def test_sts_endpoint_region_matches_bedrock_region_param():
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
+    ids=[
+        "no_region_or_endpoint",
+        "bedrock_region_ignored_for_sts",
+        "explicit_sts_endpoint",
+    ],
 )
 def test_explicit_credentials_used_when_provided(role_kwargs, expected_client_kwargs):
     """
