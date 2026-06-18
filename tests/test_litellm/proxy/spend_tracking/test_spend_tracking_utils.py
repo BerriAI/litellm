@@ -28,6 +28,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_request_duration_ms,
     _get_response_for_spend_logs_payload,
     _get_spend_logs_metadata,
+    _get_status_for_spend_log,
     _get_vector_store_request_for_spend_logs_payload,
     _is_master_key,
     _redact_prompt_leaks_in_error_string,
@@ -2073,3 +2074,88 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
     assert sanitized is not None
     assert "leaked-via-pydantic-msg" not in sanitized["error_message"]
     assert REDACTED_BY_LITELM_STRING in sanitized["error_message"]
+
+
+class TestGetStatusForSpendLog:
+    def test_missing_status_key_defaults_to_success(self):
+        assert _get_status_for_spend_log(metadata={}) == "success"
+
+    def test_explicit_success_returns_success(self):
+        assert _get_status_for_spend_log(metadata={"status": "success"}) == "success"
+
+    def test_failure_returns_failure(self):
+        assert _get_status_for_spend_log(metadata={"status": "failure"}) == "failure"
+
+    def test_non_failure_value_returns_success(self):
+        assert _get_status_for_spend_log(metadata={"status": "error"}) == "success"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_cache_hit_appends_unique_suffix_to_request_id():
+    base_response_id = "chatcmpl-deterministic-base-id"
+    response_obj = {
+        "id": base_response_id,
+        "choices": [{"message": {"content": "hi"}}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+    }
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test-key"}},
+    }
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    no_cache_payload = get_logging_payload(
+        kwargs={**kwargs},
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    assert no_cache_payload["request_id"] == base_response_id
+
+    cache_payload = get_logging_payload(
+        kwargs={**kwargs, "cache_hit": True},
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    assert cache_payload["request_id"].startswith(base_response_id)
+    assert "_cache_hit" in cache_payload["request_id"]
+    assert cache_payload["request_id"] != base_response_id
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_failure_status_and_zero_spend():
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "response_cost": 0.0,
+        "litellm_params": {
+            "metadata": {"user_api_key": "sk-test-key", "status": "failure"}
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["status"] == "failure"
+    assert payload["spend"] == 0.0
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_default_status_success():
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test-key"}},
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["status"] == "success"

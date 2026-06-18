@@ -17,6 +17,14 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
     _update_database_and_spend_counters,
 )
 
+_UPDATE_DATABASE_RESPONSE_COST_ARG_INDEX = 9
+
+
+def _response_cost_from_update_database_call(call) -> float:
+    if "response_cost" in call.kwargs:
+        return call.kwargs["response_cost"]
+    return call.args[_UPDATE_DATABASE_RESPONSE_COST_ARG_INDEX]
+
 
 @pytest.mark.asyncio
 async def test_async_post_call_failure_hook():
@@ -252,6 +260,53 @@ async def test_track_cost_callback_releases_budget_reservation_when_spend_tracki
         mock_release_budget_reservation.assert_awaited_once_with(
             budget_reservation=budget_reservation,
         )
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_zeroes_response_cost_on_cache_hit():
+    logger = _ProxyDBLogger()
+    kwargs = {
+        "model": "gpt-4",
+        "call_type": "acompletion",
+        "cache_hit": True,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "test_user",
+                "user_api_key_team_id": "test_team",
+            }
+        },
+        "standard_logging_object": {
+            "response_cost": 0.25,
+            "request_tags": None,
+        },
+        "stream": False,
+    }
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+    mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters",
+            new_callable=AsyncMock,
+        ),
+        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
+    ):
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
+    recorded_cost = _response_cost_from_update_database_call(
+        mock_proxy_logging.db_spend_update_writer.update_database.await_args
+    )
+    assert recorded_cost == 0.0
 
 
 @pytest.mark.asyncio

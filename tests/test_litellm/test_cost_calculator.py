@@ -347,6 +347,36 @@ def test_transcription_cost_falls_back_to_duration():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
+def test_embedding_completion_cost_uses_input_cost_per_token():
+    from litellm.types.utils import EmbeddingResponse
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "text-embedding-3-small"
+    prompt_tokens = 100
+    response = EmbeddingResponse(
+        model=model,
+        data=[{"embedding": [0.1, 0.2, 0.3], "index": 0, "object": "embedding"}],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=0,
+            total_tokens=prompt_tokens,
+        ),
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        call_type="embedding",
+    )
+
+    expected = prompt_tokens * litellm.model_cost[model]["input_cost_per_token"]
+    assert pytest.approx(cost, rel=1e-6) == expected
+    assert cost > 0
+
+
 def test_handle_realtime_stream_cost_calculation():
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
 

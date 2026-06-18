@@ -53,6 +53,57 @@ def _build_prisma_mock():
 
 
 @pytest.mark.asyncio
+async def test_status_sync_to_complete_does_not_mark_batch_cost_tracked():
+    """
+    Regression for the batch cost-tracking gap.
+
+    When a user GET /v1/batches/{id} transitions a batch from validating ->
+    completed, the endpoint calls update_batch_in_database to sync the status. The
+    cost callback for that retrieve is enqueued asynchronously and can fail. The
+    batch_processed flag means "cost has been recorded" and is what CheckBatchCost
+    uses (batch_processed=False) to find batches whose cost still needs tracking.
+
+    If update_batch_in_database marks batch_processed=True just for syncing status,
+    a batch whose async cost callback failed is permanently hidden from CheckBatchCost
+    and its cost is never recorded. So a plain status sync to complete must NOT set
+    batch_processed=True; that flag belongs to the cost-recording path. This test
+    fails while the bug is present and passes once the flag is no longer set here.
+    """
+    batch_id = "batch_complete_status_sync"
+    unified_batch_id = (
+        "litellm_proxy;model_id:m;llm_batch_id:batch_complete_status_sync"
+    )
+    response = _build_batch_response(
+        batch_id=batch_id,
+        status="completed",
+        output_file_id=None,
+        hidden_params={"model_id": "m", "model_name": "openai/gpt-4o"},
+    )
+
+    mock_prisma = _build_prisma_mock()
+
+    await update_batch_in_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        response=response,
+        managed_files_obj=_build_managed_files_mock(),
+        prisma_client=mock_prisma,
+        verbose_proxy_logger=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-abc"),
+    )
+
+    update_data = mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs[
+        "data"
+    ]
+    assert update_data["status"] == "complete"
+    assert update_data.get("batch_processed") is not True, (
+        "A status sync to complete must not mark batch_processed=True; doing so hides "
+        "batches whose async cost callback failed from CheckBatchCost, so their cost "
+        "is never recorded."
+    )
+
+
+@pytest.mark.asyncio
 async def test_update_batch_in_database_stores_unified_output_file_id():
     raw_output_file_id = "file-rawoutput789"
     unified_output_file_id = "file-bWFuYWdlZF9vdXRwdXRfaWQ="
