@@ -1735,6 +1735,29 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params
             )
 
+        # GPT-5.4+ with tools + reasoning_effort requires routing to /responses.
+        # The bridge above handles openai/azure; for other providers, fail fast
+        # with a clear error rather than letting the request reach their API
+        # (which will return a confusing error from /chat/completions).
+        if (
+            responses_api_model_info.get("mode") != "responses"
+            and OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
+            and tools
+        ):
+            _effort = reasoning_effort or optional_params.get("reasoning_effort")
+            if _effort is not None:
+                raise litellm.BadRequestError(
+                    message=(
+                        f"Function tools with reasoning_effort are not supported "
+                        f"for {model} in /v1/chat/completions. "
+                        f"Use a provider that supports the /v1/responses bridge "
+                        f"(openai, azure), or remove one of the incompatible parameters. "
+                        f"See: https://github.com/BerriAI/litellm/issues/23156"
+                    ),
+                    model=model,
+                    llm_provider=custom_llm_provider,
+                )
+
         if custom_llm_provider == "azure":
             # azure configs
             ## check dynamic params ##

@@ -1039,6 +1039,26 @@ def test_responses_api_bridge_check_global_flag_default_false():
     assert model_info.get("mode") != "responses"
 
 
+def test_responses_api_bridge_check_github_copilot_gpt_5_4_tools_reasoning_no_bridge():
+    """github_copilot with gpt-5.4 + tools + reasoning_effort should NOT bridge
+    since the bridge only handles openai/azure. The caller should raise a clear error."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="github_copilot",
+            tools=[{"type": "function", "function": {"name": "test"}}],
+            reasoning_effort="low",
+        )
+
+    assert model_info.get("mode") != "responses", (
+        "Non-openai/azure providers should not be bridged "
+        "by responses_api_bridge_check"
+    )
+
+
 @pytest.mark.asyncio
 async def test_async_mock_delay():
     """Use asyncio await for mock delay on acompletion"""
