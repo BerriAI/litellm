@@ -5,7 +5,7 @@ otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 """
 
 import os
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.prisma_client import PrismaWrapper
@@ -117,7 +117,7 @@ class RoutingPrismaWrapper:
             )
 
     async def disconnect(self, *args: Any, **kwargs: Any) -> None:
-        first_error: Optional[BaseException] = None
+        first_error: BaseException | None = None
         for client in (self._writer, self._reader):
             try:
                 await client.disconnect(*args, **kwargs)
@@ -146,9 +146,9 @@ class RoutingPrismaWrapper:
     async def recreate_prisma_client(
         self,
         new_db_url: str,
-        http_client: Optional[Any] = None,
+        http_client: Any | None = None,
         *,
-        expected_generation: Optional[int] = None,
+        expected_generation: int | None = None,
     ) -> bool:
         """Recreate both writer and reader Prisma clients.
 
@@ -184,7 +184,7 @@ class RoutingPrismaWrapper:
             )
         return True
 
-    async def _recreate_reader(self, http_client: Optional[Any] = None) -> None:
+    async def _recreate_reader(self, http_client: Any | None = None) -> None:
         """Resolve the reader URL and recreate its Prisma client.
 
         IAM-enabled readers regenerate their token (host/port/user came from
