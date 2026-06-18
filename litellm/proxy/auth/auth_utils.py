@@ -352,6 +352,34 @@ def _check_banned_params(
         )
 
 
+_BASE_OVERRIDE_FIELDS: Tuple[str, ...] = ("api_base", "base_url")
+
+
+def _check_base_override_has_api_key(body: dict) -> None:
+    """Reject a permitted base-URL override that omits a caller ``api_key``.
+
+    Once ``api_base``/``base_url`` clears the banned-param gate via an admin
+    opt-in, the request retargets the upstream URL. With no caller-supplied
+    ``api_key`` the provider re-resolves a server-side credential from the
+    environment (``api_key or get_secret("OPENAI_API_KEY")`` and ~30 sibling
+    chains in ``litellm/main.py``) and forwards it to that caller-controlled
+    URL. Requiring a non-empty ``api_key`` alongside the override closes the
+    fallback; popping the deployment key upstream only changes which server
+    credential leaks.
+    """
+    if not any(field in body for field in _BASE_OVERRIDE_FIELDS):
+        return
+    api_key = body.get("api_key")
+    if isinstance(api_key, str) and api_key.strip():
+        return
+    raise ValueError(
+        "Rejected Request: api_base/base_url override requires a "
+        "caller-supplied api_key. Sending only a base override would cause "
+        "the proxy to fall back to a server-side credential. Supply your own "
+        "api_key in the request body to override the upstream URL."
+    )
+
+
 def is_request_body_safe(
     request_body: dict, general_settings: dict, llm_router: Optional[Router], model: str
 ) -> bool:
@@ -388,6 +416,7 @@ def is_request_body_safe(
         )
 
     _check_banned_params(request_body, general_settings, llm_router, model)
+    _check_base_override_has_api_key(request_body)
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:

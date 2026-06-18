@@ -1596,11 +1596,107 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
 
     def test_admin_opt_in_proxy_wide_still_allows(self):
         # ``general_settings.allow_client_side_credentials = True`` remains
-        # the documented proxy-wide BYOK opt-in.
+        # the documented proxy-wide BYOK opt-in. A base override must now be
+        # paired with the caller's own api_key (see
+        # TestIsRequestBodySafeBaseOverrideRequiresApiKey).
         assert (
             is_request_body_safe(
-                request_body={"model": "gpt-4", "api_base": "https://my-byok.example"},
+                request_body={
+                    "model": "gpt-4",
+                    "api_base": "https://my-byok.example",
+                    "api_key": "sk-caller-byok",
+                },
                 general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
+class TestIsRequestBodySafeBaseOverrideRequiresApiKey:
+    """A permitted ``api_base``/``base_url`` override must carry the caller's
+    own ``api_key``. Otherwise the provider re-resolves a server-side
+    credential from the environment (``api_key or get_secret("OPENAI_API_KEY")``
+    and ~30 sibling chains in ``litellm/main.py``) and forwards it to the
+    caller-controlled URL. The earlier deployment-key strip only changed which
+    server credential leaked; this closes the env fallback at the gate."""
+
+    @pytest.mark.parametrize("override_field", ["api_base", "base_url"])
+    def test_base_override_without_api_key_is_rejected(self, override_field):
+        with pytest.raises(ValueError, match="requires a caller-supplied api_key"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    override_field: "http://127.0.0.1:8911/v1",
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    @pytest.mark.parametrize("empty_key", [None, "", "   "])
+    def test_base_override_with_empty_api_key_is_rejected(self, empty_key):
+        with pytest.raises(ValueError, match="requires a caller-supplied api_key"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "api_base": "http://127.0.0.1:8911/v1",
+                    "api_key": empty_key,
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_base_override_with_api_key_is_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "api_base": "http://127.0.0.1:8911/v1",
+                    "api_key": "sk-caller-byok",
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_model_level_opt_in_base_override_without_api_key_is_rejected(self):
+        from litellm import Router
+
+        llm_router = Router(
+            model_list=[
+                {
+                    "model_name": "byok-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "configurable_clientside_auth_params": ["api_base"],
+                    },
+                }
+            ]
+        )
+        with pytest.raises(ValueError, match="requires a caller-supplied api_key"):
+            is_request_body_safe(
+                request_body={
+                    "model": "byok-model",
+                    "api_base": "http://127.0.0.1:8911/v1",
+                },
+                general_settings={},
+                llm_router=llm_router,
+                model="byok-model",
+            )
+
+    def test_request_without_base_override_is_unaffected(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                general_settings={},
                 llm_router=None,
                 model="gpt-4",
             )
