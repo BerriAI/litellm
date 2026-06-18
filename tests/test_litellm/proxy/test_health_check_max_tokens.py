@@ -49,8 +49,7 @@ async def test_update_litellm_params_max_tokens_wildcard():
 
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    # Should not be set to 1
-    assert "max_tokens" not in updated_params or updated_params["max_tokens"] != 1
+    assert "max_tokens" not in updated_params
 
 
 @pytest.mark.asyncio
