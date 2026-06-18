@@ -110,7 +110,7 @@ class HealthCheckHelpers:
                 user="",
                 optional_params={},
                 litellm_params={
-                    "api_base": "",
+                    "api_base": filtered_model_params.get("api_base", ""),
                     "metadata": _litellm_metadata.copy(),
                     "litellm_metadata": _litellm_metadata.copy(),
                 },
