@@ -205,7 +205,9 @@ async def plugin_proxy(
             headers=forward_headers,
             content=body,
         )
-        resp = await handler.client.send(req, follow_redirects=True)
+        # Do not follow redirects — a redirect to an internal URL would allow
+        # the plugin to SSRF the proxy into fetching arbitrary internal services.
+        resp = await handler.client.send(req, follow_redirects=False)
     except Exception:
         return Response(
             content=f"Cannot connect to plugin '{plugin_name}' at {plugin['url']}",
