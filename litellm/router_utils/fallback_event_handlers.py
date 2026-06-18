@@ -40,6 +40,38 @@ def _prefill_explicitly_unsupported(model: str) -> bool:
         return False
 
 
+def _resolve_dict_fallback_targets(
+    model_group: str, fallbacks: list[FallbackEntry]
+) -> tuple[str, ...]:
+    """Dict-format fallback targets configured for this group, mirroring
+    get_fallback_model_group's exact > stripped > wildcard priority. It iterates
+    directly rather than calling that helper because the helper pops string
+    entries mid-iteration, which skips the following entry and can drop a dict
+    target when a bare string precedes it in the list.
+    """
+    dict_entries = tuple(
+        (key, entry[key])
+        for entry in fallbacks
+        if isinstance(entry, dict) and entry
+        for key in (next(iter(entry)),)
+    )
+    exact = next((t for k, t in dict_entries if k == model_group), None)
+    if exact is not None:
+        return tuple(exact)
+    stripped = next(
+        (
+            t
+            for k, t in dict_entries
+            if _check_stripped_model_group(model_group=model_group, fallback_key=k)
+        ),
+        None,
+    )
+    if stripped is not None:
+        return tuple(stripped)
+    wildcard = next((t for k, t in dict_entries if k == "*"), None)
+    return tuple(wildcard or ())
+
+
 def _candidate_model_groups(
     model_group: str | None, fallbacks: list[FallbackEntry] | None
 ) -> tuple[str, ...]:
@@ -54,15 +86,8 @@ def _candidate_model_groups(
     if not fallbacks:
         return (model_group,)
     bare_strings = tuple(f for f in fallbacks if isinstance(f, str))
-    try:
-        # Copy: get_fallback_model_group pops string entries while iterating,
-        # which would mutate the caller's live fallbacks list.
-        dict_targets, _ = get_fallback_model_group(
-            fallbacks=list(fallbacks), model_group=model_group
-        )
-    except Exception:
-        dict_targets = None
-    return (model_group, *bare_strings, *(dict_targets or ()))
+    dict_targets = _resolve_dict_fallback_targets(model_group, fallbacks)
+    return (model_group, *bare_strings, *dict_targets)
 
 
 def _resolved_registry_model(

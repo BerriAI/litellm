@@ -243,6 +243,51 @@ def test_resolver_returning_prefill_supporting_model_keeps_legacy():
     _assert_legacy_prefill(result)
 
 
+def test_string_before_dict_fallback_does_not_skip_dict_target():
+    """A bare string preceding a dict entry must not hide the dict's
+    prefill-rejecting target. get_fallback_model_group pops string entries while
+    iterating, which skips the next entry; candidate collection iterates dict
+    entries directly so the target is still classified."""
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="gpt-4",
+        fallbacks=["gpt-4o", {"gpt-4": ["claude-sonnet-4-6"]}],
+    )
+    assert len(result) == 2
+    assert result[1]["role"] == "user"
+    assert PARTIAL in result[1]["content"]
+    assert all(m.get("prefix") is not True for m in result)
+
+
+def test_stripped_model_group_fallback_is_classified():
+    """Wildcard routing matches a provider-stripped group name against the
+    fallback key (e.g. "openai/gpt-3.5-turbo" -> "gpt-3.5-turbo"); a
+    prefill-rejecting target behind such a key must still flip the continuation."""
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="openai/gpt-3.5-turbo",
+        fallbacks=[{"gpt-3.5-turbo": ["claude-sonnet-4-6"]}],
+    )
+    assert len(result) == 2
+    assert result[1]["role"] == "user"
+    assert PARTIAL in result[1]["content"]
+
+
+def test_exact_group_match_takes_priority_over_wildcard():
+    """When both an exact group match and a wildcard fallback are configured,
+    only the exact target is tried, so a prefill-rejecting model behind the
+    wildcard must not flip a prefill-supporting exact chain."""
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="gpt-4",
+        fallbacks=[{"gpt-4": ["gpt-4o"]}, {"*": ["claude-sonnet-4-6"]}],
+    )
+    _assert_legacy_prefill(result)
+
+
 def test_malformed_fallback_entry_does_not_crash():
     """A malformed fallback entry (e.g. an empty dict) makes the underlying
     fallback-group resolution raise; the capability check must swallow it and
