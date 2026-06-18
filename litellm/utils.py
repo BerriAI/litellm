@@ -3954,6 +3954,7 @@ def pre_process_optional_params(
             and custom_llm_provider != "xai"
             and custom_llm_provider != "ai21_chat"
             and custom_llm_provider != "volcengine"
+            and custom_llm_provider != "tokenhub"
             and custom_llm_provider != "deepseek"
             and custom_llm_provider != "codestral"
             and custom_llm_provider != "mistral"
@@ -4605,6 +4606,17 @@ def get_optional_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "volcengine":
         optional_params = litellm.VolcEngineConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+    elif custom_llm_provider == "tokenhub":
+        optional_params = litellm.TokenHubConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -6566,6 +6578,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("VOLCENGINE_API_KEY")
+        elif custom_llm_provider == "tokenhub":
+            if "TOKENHUB_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("TOKENHUB_API_KEY")
         elif (
             custom_llm_provider == "codestral"
             or custom_llm_provider == "text-completion-codestral"
@@ -8260,6 +8277,7 @@ class ProviderConfigManager:
             LlmProviders.CEREBRAS: (lambda: litellm.CerebrasConfig(), False),
             LlmProviders.BASETEN: (lambda: litellm.BasetenConfig(), False),
             LlmProviders.VOLCENGINE: (lambda: litellm.VolcEngineConfig(), False),
+            LlmProviders.TOKENHUB: (lambda: litellm.TokenHubConfig(), False),
             LlmProviders.TEXT_COMPLETION_CODESTRAL: (
                 lambda: litellm.CodestralTextCompletionConfig(),
                 False,

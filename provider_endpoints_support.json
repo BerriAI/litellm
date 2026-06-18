@@ -2245,6 +2245,24 @@
         "interactions": true
       }
     },
+    "tokenhub": {
+      "display_name": "Tokenhub (`tokenhub`)",
+      "url": "https://docs.litellm.ai/docs/providers/tokenhub",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "voyage": {
       "display_name": "Voyage AI (`voyage`)",
       "url": "https://docs.litellm.ai/docs/providers/voyage",

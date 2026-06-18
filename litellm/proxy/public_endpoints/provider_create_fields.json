@@ -2879,6 +2879,34 @@
     "default_model_placeholder": "volcengine/<any-model-on-volcengine>"
   },
   {
+    "provider": "TokenHub",
+    "provider_display_name": "TokenHub (Tencent Cloud)",
+    "litellm_provider": "tokenhub",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "TokenHub API Key",
+        "placeholder": null,
+        "tooltip": "Get your API key from https://console.cloud.tencent.com/tokenhub/apikey",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://tokenhub.tencentmaas.com/v1",
+        "tooltip": "The base URL for TokenHub API. Defaults to https://tokenhub.tencentmaas.com/v1 if not specified.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://tokenhub.tencentmaas.com/v1"
+      }
+    ],
+    "default_model_placeholder": "tokenhub/deepseek-v4-pro"
+  },
+  {
     "provider": "Voyage",
     "provider_display_name": "Voyage AI",
     "litellm_provider": "voyage",
