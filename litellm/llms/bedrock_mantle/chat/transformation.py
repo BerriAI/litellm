@@ -41,7 +41,7 @@ class BedrockMantleChatConfig(OpenAILikeChatConfig):
         api_base: Optional[str],
         api_key: Optional[str],
         litellm_params: Optional[GenericLiteLLMParams] = None,
-        model: Optional[str] = None,
+        model: str | None = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         region = (
             (litellm_params.aws_region_name if litellm_params else None)

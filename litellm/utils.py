@@ -8403,28 +8403,6 @@ def _get_model_cost_entry_for_provider_config(
     return {}
 
 
-def _bedrock_mantle_supports_responses(model: str) -> bool:
-    """Whether a Bedrock Mantle model can serve the native Responses API.
-
-    Purely data-driven from the model's price-map capability signal -- either
-    /v1/responses in supported_endpoints, or mode=responses -- both overridable
-    via register_model and proxy model_info, so onboarding a model is a JSON
-    change, never a code change. There is deliberately NO model-name match here:
-    capability is per-model, not per-family (openai.gpt-oss-120b supports
-    Responses while openai.gpt-oss-safeguard-120b does not, despite sharing the
-    gpt-oss substring), so a substring gate would be wrong. An unmapped model
-    makes get_model_info raise; that is swallowed so the caller falls through to
-    chat-completions emulation rather than crashing.
-    """
-    entry = litellm.model_cost.get(f"bedrock_mantle/{model}", {})
-    if "/v1/responses" in (entry.get("supported_endpoints") or []):
-        return True
-    try:
-        return get_model_info(model, "bedrock_mantle").get("mode") == "responses"
-    except Exception:
-        return False
-
-
 class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
     # Stores tuples of (factory_function, needs_model_parameter)
@@ -9094,16 +9072,19 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
             # Both decisions are data-driven from the model's price-map entry, with
             # no model-name logic. Capability (can it serve Responses?) comes from
-            # _bedrock_mantle_supports_responses (supported_endpoints / mode);
+            # mantle_supports_responses (supported_endpoints / mode);
             # chat-only models (gpt-oss safeguard, nvidia, ...) return None and keep
             # the chat-completions emulation (responses/main.py "config is None").
             # The wire path comes from mantle_base_segment, which reads the
             # use_openai_responses_path flag: gpt-5.x and gemma-4-* on
             # /openai/v1/responses, everything else (incl. gpt-oss) on
             # /v1/responses.
-            from litellm.llms.bedrock_mantle.common_utils import mantle_base_segment
+            from litellm.llms.bedrock_mantle.common_utils import (
+                mantle_base_segment,
+                mantle_supports_responses,
+            )
 
-            if not model or not _bedrock_mantle_supports_responses(model):
+            if not model or not mantle_supports_responses(model, litellm.model_cost):
                 return None
             return litellm.BedrockMantleResponsesAPIConfig(
                 use_openai_path=mantle_base_segment(model, litellm.model_cost)

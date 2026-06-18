@@ -588,8 +588,8 @@ class TestBedrockMantleResponsesRegistry:
         assert cfg.use_openai_path is False
 
     def test_unmapped_model_degrades_to_none_without_crashing(self, restore_model_cost):
-        # A non-frontier model that is not in model_cost makes get_model_info
-        # raise; the gate must swallow it and return None rather than crash.
+        # A model absent from model_cost has no capability signal, so the gate
+        # returns None (chat-completions emulation) rather than crashing.
         from litellm.utils import ProviderConfigManager
 
         litellm.model_cost.pop("bedrock_mantle/somelab.unmapped-model", None)
@@ -606,6 +606,9 @@ class TestBedrockMantleResponsesRegistry:
         # place, so the snapshot must be a deepcopy: a shallow dict() copy would
         # share that nested dict and leave mode=responses after restore, making
         # the final assertion fail. The in-place clear+update mirrors the fixture.
+        # gpt-oss-safeguard is the right vehicle here: it is chat-only, so without
+        # the registered mode=responses it resolves to None, isolating the effect
+        # of the register/restore from the model's own (lack of) capability.
         from litellm.utils import ProviderConfigManager, register_model
 
         snapshot = copy.deepcopy(litellm.model_cost)
@@ -613,14 +616,14 @@ class TestBedrockMantleResponsesRegistry:
         try:
             register_model(
                 {
-                    "bedrock_mantle/openai.gpt-oss-120b": {
+                    "bedrock_mantle/openai.gpt-oss-safeguard-120b": {
                         "litellm_provider": "bedrock_mantle",
                         "mode": "responses",
                     }
                 }
             )
             during = ProviderConfigManager.get_provider_responses_api_config(
-                provider="bedrock_mantle", model="openai.gpt-oss-120b"
+                provider="bedrock_mantle", model="openai.gpt-oss-safeguard-120b"
             )
             assert isinstance(during, BedrockMantleResponsesAPIConfig)
         finally:
@@ -628,7 +631,7 @@ class TestBedrockMantleResponsesRegistry:
             litellm.model_cost.update(snapshot)
             litellm.get_model_info.cache_clear()
         after = ProviderConfigManager.get_provider_responses_api_config(
-            provider="bedrock_mantle", model="openai.gpt-oss-120b"
+            provider="bedrock_mantle", model="openai.gpt-oss-safeguard-120b"
         )
         assert after is None
 
@@ -669,6 +672,57 @@ class TestMantleBaseSegment:
         from litellm.llms.bedrock_mantle.common_utils import mantle_base_segment
 
         assert mantle_base_segment(model, model_cost) == expected
+
+
+class TestMantleSupportsResponses:
+    """The capability helper is data-driven (supported_endpoints / mode), with no
+    model-name match: per-model, so gpt-oss-120b is supported but the safeguard
+    variant is not despite the shared substring."""
+
+    @pytest.mark.parametrize(
+        "model,model_cost,expected",
+        [
+            # supported_endpoints lists responses -> supported
+            (
+                "openai.gpt-oss-120b",
+                {
+                    "bedrock_mantle/openai.gpt-oss-120b": {
+                        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+                    }
+                },
+                True,
+            ),
+            # chat-only supported_endpoints -> not supported (the discriminator)
+            (
+                "openai.gpt-oss-safeguard-120b",
+                {
+                    "bedrock_mantle/openai.gpt-oss-safeguard-120b": {
+                        "supported_endpoints": ["/v1/chat/completions"]
+                    }
+                },
+                False,
+            ),
+            # mode=responses (no supported_endpoints) -> supported
+            (
+                "somelab.future-model",
+                {"bedrock_mantle/somelab.future-model": {"mode": "responses"}},
+                True,
+            ),
+            # mode=chat, no responses endpoint -> not supported
+            (
+                "google.gemma-3-27b-it",
+                {"bedrock_mantle/google.gemma-3-27b-it": {"mode": "chat"}},
+                False,
+            ),
+            # absent from model_cost -> no signal -> not supported
+            ("somelab.unmapped", {}, False),
+            (None, {}, False),
+        ],
+    )
+    def test_supports_responses(self, model, model_cost, expected):
+        from litellm.llms.bedrock_mantle.common_utils import mantle_supports_responses
+
+        assert mantle_supports_responses(model, model_cost) is expected
 
 
 class TestBedrockMantlePerModelResponsesURL:
