@@ -2161,12 +2161,6 @@ async def ui_view_spend_logs(
 
         verbose_proxy_logger.debug("data= %s", json.dumps(data, indent=4, default=str))
 
-        session_scope_where = {
-            key: where_conditions[key]
-            for key in ("user", "team_id", "OR")
-            if key in where_conditions
-        }
-
         return await _build_ui_spend_logs_response(
             prisma_client,
             data,
@@ -2175,7 +2169,6 @@ async def ui_view_spend_logs(
             page_size,
             total_pages,
             enrich_session_counts=not is_v2,
-            session_scope_where=session_scope_where,
         )
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
@@ -3460,7 +3453,6 @@ async def _build_ui_spend_logs_response(
     page_size: int,
     total_pages: int,
     enrich_session_counts: bool = True,
-    session_scope_where: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """
     Build the paginated response for the UI spend-logs endpoint.
@@ -3485,19 +3477,12 @@ async def _build_ui_spend_logs_response(
         total_pages: Total number of pages.
         enrich_session_counts: Whether to add ``session_total_count`` to each
             row.  Defaults to ``True``.
-        session_scope_where: Optional Prisma ``where`` predicate carrying the
-            caller's authorization scope. It is merged into the session
-            aggregate query so the totals never sum logs the caller is not
-            allowed to see (``session_id`` is client-supplied and can collide
-            across tenants).
 
     Returns:
         A dict with ``data`` (enriched rows), ``total``, ``page``,
         ``page_size``, and ``total_pages``.
     """
     count_map: dict[str, int] = {}
-    spend_map: dict[str, float] = {}
-    duration_map: dict[str, int] = {}
     if enrich_session_counts:
         session_ids = list(
             {
@@ -3519,28 +3504,14 @@ async def _build_ui_spend_logs_response(
             # is bounded by page_size (typically 25-50 distinct session IDs).
             # If performance degrades at scale, consider short-lived caching or
             # folding the count into the main query via a window function.
-            grouped = await SpendLogsRepository(prisma_client).table.group_by(
+            counts = await SpendLogsRepository(prisma_client).table.group_by(
                 by=["session_id"],
-                where={
-                    "session_id": {"in": session_ids},
-                    **(session_scope_where or {}),
-                },
+                where={"session_id": {"in": session_ids}},
                 count={"session_id": True},
-                sum={"spend": True, "request_duration_ms": True},
             )
             count_map = {
                 r["session_id"]: r["_count"]["session_id"]
-                for r in grouped
-                if r.get("session_id")
-            }
-            spend_map = {
-                r["session_id"]: (r["_sum"]["spend"] or 0.0)
-                for r in grouped
-                if r.get("session_id")
-            }
-            duration_map = {
-                r["session_id"]: (r["_sum"]["request_duration_ms"] or 0)
-                for r in grouped
+                for r in counts
                 if r.get("session_id")
             }
 
@@ -3550,16 +3521,6 @@ async def _build_ui_spend_logs_response(
             row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")
             row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
-            row_dict["session_total_spend"] = (
-                spend_map.get(sid, row_dict.get("spend", 0.0))
-                if sid
-                else row_dict.get("spend", 0.0)
-            )
-            row_dict["session_total_duration"] = (
-                duration_map.get(sid, row_dict.get("request_duration_ms"))
-                if sid
-                else row_dict.get("request_duration_ms")
-            )
             enriched.append(row_dict)
         response_data: list = enriched
     else:
