@@ -158,7 +158,7 @@ export default function PluginSettings() {
           <Form.Item
             name="plugin_key"
             label="Plugin Key"
-            extra="The plugin's own auth key. Passed as ?token= so users don't need to log in separately."
+            extra="The plugin's own credential. Injected as Authorization: Bearer <key> on proxied requests. Used for encrypted iframe auth via LITELLM_SALT_KEY."
           >
             <Input.Password placeholder="sk-..." />
           </Form.Item>
