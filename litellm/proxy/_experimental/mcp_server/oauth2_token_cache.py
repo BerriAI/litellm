@@ -27,10 +27,20 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy._experimental.mcp_server.auth import token_exchange
-from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
-    resolve_v2_auth_value,
-)
 from litellm.types.llms.custom_http import httpxSpecialProvider
+
+# The v2 resolver bridge pulls in the v2 gateway package (and its `expression` dependency).
+# Guard the import so a missing optional dep degrades this graft to v1 rather than taking down
+# the entire MCP feature on startup.
+try:
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        resolve_v2_auth_value,
+    )
+except ImportError as _e:
+    verbose_logger.warning(
+        "v2 MCP resolver bridge unavailable (%s); using v1 resolution", _e
+    )
+    resolve_v2_auth_value = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -290,9 +300,10 @@ async def resolve_mcp_auth(
     """
     if mcp_auth_header:
         return mcp_auth_header
-    v2_auth_value = await resolve_v2_auth_value(server)
-    if v2_auth_value is not None:
-        return v2_auth_value
+    if resolve_v2_auth_value is not None:
+        v2_auth_value = await resolve_v2_auth_value(server)
+        if v2_auth_value is not None:
+            return v2_auth_value
     if server.has_token_exchange_config:
         if subject_token:
             return await token_exchange.mcp_token_exchange_handler.exchange_token(
