@@ -68,8 +68,8 @@ class MilvusRAGIngestion(BaseRAGIngestion):
 
     def __init__(
         self,
-        ingest_options: "RAGIngestOptions",
-        router: "Router | None" = None,
+        ingest_options: RAGIngestOptions,
+        router: Router | None = None,
     ):
         BaseRAGIngestion.__init__(self, ingest_options=ingest_options, router=router)
 
