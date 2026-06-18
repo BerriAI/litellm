@@ -79,17 +79,28 @@ def _fernet() -> Fernet:
     return Fernet(key)
 
 
+_TOKEN_TTL_SECONDS = 30  # tokens expire after 30 s to limit replay window
+
+
 def encrypt_token(token: str) -> str:
-    """Encrypt a token for safe delivery to a plugin iframe."""
+    """Encrypt a token for safe delivery to a plugin iframe.
+
+    Fernet embeds a timestamp; decrypt_token rejects tokens older than
+    _TOKEN_TTL_SECONDS, limiting the replay window to 30 seconds.
+    """
     return _fernet().encrypt(token.encode()).decode()
 
 
 def decrypt_token(ciphertext: str) -> str:
-    """Decrypt a token received from the proxy.  Raises ValueError on failure."""
+    """Decrypt a token received from the proxy.  Raises ValueError on failure.
+
+    Enforces a 30-second TTL — tokens older than that are rejected even if
+    the HMAC is valid, closing the indefinite-replay window.
+    """
     try:
-        return _fernet().decrypt(ciphertext.encode()).decode()
+        return _fernet().decrypt(ciphertext.encode(), ttl=_TOKEN_TTL_SECONDS).decode()
     except (InvalidToken, Exception) as exc:
-        raise ValueError("Invalid or tampered plugin auth token") from exc
+        raise ValueError("Invalid, tampered, or expired plugin auth token") from exc
 
 
 # ---------------------------------------------------------------------------
