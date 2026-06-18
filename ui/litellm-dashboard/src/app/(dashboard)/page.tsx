@@ -2,12 +2,10 @@
 
 import ApiKeysDashboard from "@/app/(dashboard)/api-keys/ApiKeysDashboard";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { Team } from "@/components/key_team_helpers/key_list";
-import { Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components/networking";
+import { Organization, proxyBaseUrl } from "@/components/networking";
 import { fetchOrganizations } from "@/components/organizations";
-import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
 import UserDashboard from "@/components/user_dashboard";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -32,18 +30,6 @@ function CreateKeyPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams()!;
   const [createClicked, setCreateClicked] = useState<boolean>(false);
-
-  const { data: uiSettingsData, isLoading: uiSettingsLoading } = useUISettings();
-  const nudgesDisabled = uiSettingsLoading || Boolean(uiSettingsData?.values?.disable_ui_nudges);
-
-  // Survey state - always show by default
-  const [showSurveyPrompt, setShowSurveyPrompt] = useState(true);
-  const [showSurveyModal, setShowSurveyModal] = useState(false);
-
-  // Claude Code feedback state
-  const [isClaudeCode, setIsClaudeCode] = useState(false);
-  const [showClaudeCodePrompt, setShowClaudeCodePrompt] = useState(false);
-  const [showClaudeCodeModal, setShowClaudeCodeModal] = useState(false);
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -131,90 +117,6 @@ function CreateKeyPageContent() {
     }
   }, [accessToken, userID, userRole]);
 
-  // Fetch in-product nudges configuration from backend
-  useEffect(() => {
-    if (nudgesDisabled) {
-      return;
-    }
-    if (accessToken && token) {
-      (async () => {
-        try {
-          const nudgesConfig = await getInProductNudgesCall(accessToken);
-          const isUsingClaudeCode = nudgesConfig?.is_claude_code_enabled || false;
-          setIsClaudeCode(isUsingClaudeCode);
-
-          // Show Claude Code prompt on login if enabled
-          if (isUsingClaudeCode) {
-            setShowClaudeCodePrompt(true);
-            // Don't show the regular survey prompt if showing Claude Code prompt
-            setShowSurveyPrompt(false);
-          }
-        } catch (error) {
-          console.error("Failed to fetch in-product nudges:", error);
-          // Silently fail and don't show Claude Code nudge
-        }
-      })();
-    }
-  }, [accessToken, token, nudgesDisabled]);
-
-  // Auto-dismiss survey prompt after 15 seconds
-  useEffect(() => {
-    if (showSurveyPrompt && !showSurveyModal) {
-      const timer = setTimeout(() => {
-        setShowSurveyPrompt(false);
-      }, 15000);
-      return () => clearTimeout(timer);
-    }
-  }, [showSurveyPrompt, showSurveyModal]);
-
-  // Auto-dismiss Claude Code prompt after 15 seconds
-  useEffect(() => {
-    if (showClaudeCodePrompt && !showClaudeCodeModal) {
-      const timer = setTimeout(() => {
-        setShowClaudeCodePrompt(false);
-      }, 15000);
-      return () => clearTimeout(timer);
-    }
-  }, [showClaudeCodePrompt, showClaudeCodeModal]);
-
-  const handleOpenSurvey = () => {
-    setShowSurveyPrompt(false);
-    setShowSurveyModal(true);
-  };
-
-  const handleDismissSurveyPrompt = () => {
-    setShowSurveyPrompt(false);
-  };
-
-  const handleSurveyComplete = () => {
-    setShowSurveyModal(false);
-  };
-
-  const handleSurveyModalClose = () => {
-    // If they close the modal without completing, show the prompt again
-    setShowSurveyModal(false);
-    setShowSurveyPrompt(true);
-  };
-
-  const handleOpenClaudeCode = () => {
-    setShowClaudeCodePrompt(false);
-    setShowClaudeCodeModal(true);
-  };
-
-  const handleDismissClaudeCodePrompt = () => {
-    setShowClaudeCodePrompt(false);
-  };
-
-  const handleClaudeCodeComplete = () => {
-    setShowClaudeCodeModal(false);
-  };
-
-  const handleClaudeCodeModalClose = () => {
-    // If they close the modal without completing, show the prompt again
-    setShowClaudeCodeModal(false);
-    setShowClaudeCodePrompt(true);
-  };
-
   if (authLoading || redirectToLogin || isLegacyRedirect) {
     return <LoadingScreen />;
   }
@@ -238,29 +140,7 @@ function CreateKeyPageContent() {
           createClicked={createClicked}
         />
       ) : (
-        <>
-          <ApiKeysDashboard />
-
-          {/* Survey Components */}
-          <SurveyPrompt
-            isVisible={showSurveyPrompt && !nudgesDisabled}
-            onOpen={handleOpenSurvey}
-            onDismiss={handleDismissSurveyPrompt}
-          />
-          <SurveyModal isOpen={showSurveyModal} onClose={handleSurveyModalClose} onComplete={handleSurveyComplete} />
-
-          {/* Claude Code Components */}
-          <ClaudeCodePrompt
-            isVisible={showClaudeCodePrompt && !nudgesDisabled}
-            onOpen={handleOpenClaudeCode}
-            onDismiss={handleDismissClaudeCodePrompt}
-          />
-          <ClaudeCodeModal
-            isOpen={showClaudeCodeModal}
-            onClose={handleClaudeCodeModalClose}
-            onComplete={handleClaudeCodeComplete}
-          />
-        </>
+        <ApiKeysDashboard />
       )}
     </>
   );

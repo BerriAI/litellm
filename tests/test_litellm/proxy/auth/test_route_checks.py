@@ -1985,7 +1985,6 @@ def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
 # corners of the codebase and represent the long tail of GETs we'd otherwise
 # need to enumerate manually. Default-allow makes them all work.
 ADMIN_VIEWER_REPORTED_GET_ROUTES = [
-    "/in_product_nudges",
     "/health/latest",
     "/credentials",
     "/v1/mcp/network/client-ip",

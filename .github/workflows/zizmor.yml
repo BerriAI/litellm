@@ -2,9 +2,9 @@ name: GitHub Actions Security Analysis
 
 on:
   push:
-    branches: [main]
+    branches: [main, litellm_internal_staging]
   pull_request:
-    branches: [main]
+    branches: [main, litellm_internal_staging]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
