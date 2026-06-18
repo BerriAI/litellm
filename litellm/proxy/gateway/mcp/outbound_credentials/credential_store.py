@@ -23,9 +23,14 @@ class CredentialKey(BaseModel):
 
 
 class CredentialStore(Protocol):
-    """Fetches the per-subject secret for an `api_key` per-user / BYOK server."""
+    """Fetches the per-subject secret for an `api_key` per-user / BYOK server.
 
-    def get(self, key: CredentialKey) -> str | None: ...
+    Async because the durable body queries Prisma / Redis on LiteLLM's async stack; a
+    synchronous read would block the event loop. Defined async now, before any caller, so the
+    signature does not break when that body lands.
+    """
+
+    async def get(self, key: CredentialKey) -> str | None: ...
 
 
 class InMemoryCredentialStore:
@@ -34,5 +39,5 @@ class InMemoryCredentialStore:
     def __init__(self, seeded: dict[CredentialKey, str] | None = None) -> None:
         self._values: dict[CredentialKey, str] = dict(seeded or {})
 
-    def get(self, key: CredentialKey) -> str | None:
+    async def get(self, key: CredentialKey) -> str | None:
         return self._values.get(key)

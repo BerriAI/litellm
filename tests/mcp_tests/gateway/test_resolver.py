@@ -63,8 +63,8 @@ def test_discriminated_union_picks_the_variant_by_kind():
     assert isinstance(spec.config, NoneConfig)
 
 
-def test_none_attaches_no_credential():
-    result = PROVIDER.resolve(SUBJECT, _spec(NoneConfig()))
+async def test_none_attaches_no_credential():
+    result = await PROVIDER.resolve(SUBJECT, _spec(NoneConfig()))
     assert isinstance(result, Ok)
     assert isinstance(result.ok, NoOpAuth)
     assert "Authorization" not in _applied_headers(result.ok)
@@ -80,9 +80,9 @@ def test_none_attaches_no_credential():
         ("raw", "k"),
     ],
 )
-def test_api_key_emits_the_right_scheme(scheme: str, expected: str):
+async def test_api_key_emits_the_right_scheme(scheme: str, expected: str):
     config = ApiKeyConfig(scheme=scheme, key_source=SharedKey(value="k"))  # type: ignore[arg-type]
-    result = PROVIDER.resolve(SUBJECT, _spec(config))
+    result = await PROVIDER.resolve(SUBJECT, _spec(config))
     assert isinstance(result, Ok)
     assert isinstance(result.ok, StaticHeaderAuth)
     assert _applied_headers(result.ok)["Authorization"] == expected
@@ -98,38 +98,40 @@ def test_secret_fields_are_masked_in_serialization():
 
 
 @pytest.mark.parametrize("source", [Byok(), PerUserEnvVar()])
-def test_api_key_per_user_pulls_the_subject_credential(source: object):
+async def test_api_key_per_user_pulls_the_subject_credential(source: object):
     store = InMemoryCredentialStore(
         {CredentialKey(tenant_id="t1", subject_id="u1", server_id="s1"): "user-secret"}
     )
     provider = UpstreamCredentialProvider(store)
-    result = provider.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=source)))  # type: ignore[arg-type]
+    result = await provider.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=source)))  # type: ignore[arg-type]
     assert isinstance(result, Ok)
     assert _applied_headers(result.ok)["Authorization"] == "Bearer user-secret"
 
 
-def test_api_key_byok_missing_returns_unauthorized():
+async def test_api_key_byok_missing_returns_unauthorized():
     # Missing BYOK credential -> 401 + WWW-Authenticate (the user must provide it).
-    result = PROVIDER.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=Byok())))
+    result = await PROVIDER.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=Byok())))
     assert isinstance(result, Error)
     assert result.error.tag == "unauthorized"
 
 
-def test_api_key_env_var_missing_returns_precondition_required():
+async def test_api_key_env_var_missing_returns_precondition_required():
     # Missing per-user env var -> 412 (a setup precondition), distinct from BYOK's 401.
-    result = PROVIDER.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=PerUserEnvVar())))
+    result = await PROVIDER.resolve(
+        SUBJECT, _spec(ApiKeyConfig(key_source=PerUserEnvVar()))
+    )
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
 
 
-def test_api_key_per_user_isolated_by_subject():
+async def test_api_key_per_user_isolated_by_subject():
     # The stored key belongs to (t1,u1,s1); a different subject must not receive it.
     store = InMemoryCredentialStore(
         {CredentialKey(tenant_id="t1", subject_id="u1", server_id="s1"): "u1-secret"}
     )
     provider = UpstreamCredentialProvider(store)
     other = Subject(tenant_id="t1", subject_id="u2")
-    result = provider.resolve(other, _spec(ApiKeyConfig(key_source=Byok())))
+    result = await provider.resolve(other, _spec(ApiKeyConfig(key_source=Byok())))
     assert isinstance(result, Error)
     assert result.error.tag == "unauthorized"
 
@@ -140,26 +142,26 @@ def test_missing_status_maps_byok_401_distinct_from_env_var_412():
     assert http_status(CredError.of_precondition_required("env var missing")) == 412
 
 
-def test_passthrough_forwards_the_inbound_token():
+async def test_passthrough_forwards_the_inbound_token():
     subject = Subject(tenant_id="t1", subject_id="u1", inbound_token="upstream-tok")
-    result = PROVIDER.resolve(subject, _spec(PassthroughConfig()))
+    result = await PROVIDER.resolve(subject, _spec(PassthroughConfig()))
     assert isinstance(result, Ok)
     assert _applied_headers(result.ok)["Authorization"] == "Bearer upstream-tok"
 
 
-def test_passthrough_without_a_token_fails_closed():
-    result = PROVIDER.resolve(SUBJECT, _spec(PassthroughConfig()))
+async def test_passthrough_without_a_token_fails_closed():
+    result = await PROVIDER.resolve(SUBJECT, _spec(PassthroughConfig()))
     assert isinstance(result, Error)
     assert result.error.tag == "unauthorized"
 
 
-def test_self_contained_arms_never_read_the_inbound_token():
+async def test_self_contained_arms_never_read_the_inbound_token():
     # The #30559 guard: none/api_key must produce the identical credential whether or not a
     # caller bearer is present, proving they never forward the gateway-bound token.
     with_token = Subject(tenant_id="t1", subject_id="u1", inbound_token="leak-me")
     for config in (NoneConfig(), ApiKeyConfig(key_source=SharedKey(value="k"))):
-        without = PROVIDER.resolve(SUBJECT, _spec(config))
-        present = PROVIDER.resolve(with_token, _spec(config))
+        without = await PROVIDER.resolve(SUBJECT, _spec(config))
+        present = await PROVIDER.resolve(with_token, _spec(config))
         assert isinstance(without, Ok) and isinstance(present, Ok)
         assert _applied_headers(without.ok).get("Authorization") == _applied_headers(
             present.ok
@@ -190,7 +192,7 @@ def test_self_contained_arms_never_read_the_inbound_token():
         {"kind": "aws_sigv4", "region": "us-east-1"},
     ],
 )
-def test_unimplemented_arms_fail_closed(config: dict):
-    result = PROVIDER.resolve(SUBJECT, _spec(config))
+async def test_unimplemented_arms_fail_closed(config: dict):
+    result = await PROVIDER.resolve(SUBJECT, _spec(config))
     assert isinstance(result, Error)
     assert result.error.tag == "misconfigured"

@@ -47,33 +47,33 @@ class UpstreamCredentialProvider:
     def __init__(self, credential_store: CredentialStore) -> None:
         self._credential_store = credential_store
 
-    def resolve(
+    async def resolve(
         self, subject: Subject, server: ServerSpec
     ) -> Result[httpx.Auth, CredError]:
         match server.config:
             case AuthorizationCodeConfig() as config:
-                return self._authorization_code(subject, server, config)
+                return await self._authorization_code(subject, server, config)
             case ClientCredentialsConfig() as config:
-                return self._client_credentials(subject, server, config)
+                return await self._client_credentials(subject, server, config)
             case TokenExchangeConfig() as config:
-                return self._token_exchange(subject, server, config)
+                return await self._token_exchange(subject, server, config)
             case ApiKeyConfig() as config:
-                return self._api_key(subject, server, config)
+                return await self._api_key(subject, server, config)
             case PassthroughConfig() as config:
-                return self._passthrough(subject, server, config)
+                return await self._passthrough(subject, server, config)
             case NoneConfig() as config:
-                return self._none(subject, server, config)
+                return await self._none(subject, server, config)
             case AwsSigV4Config() as config:
-                return self._aws_sigv4(subject, server, config)
+                return await self._aws_sigv4(subject, server, config)
         assert_never(server.config)
 
     # --- implemented arms -----------------------------------------------------------------
-    def _none(
+    async def _none(
         self, subject: Subject, server: ServerSpec, config: NoneConfig
     ) -> Result[httpx.Auth, CredError]:
         return Ok(NoOpAuth())
 
-    def _api_key(
+    async def _api_key(
         self, subject: Subject, server: ServerSpec, config: ApiKeyConfig
     ) -> Result[httpx.Auth, CredError]:
         match config.key_source:
@@ -84,7 +84,7 @@ class UpstreamCredentialProvider:
                     StaticHeaderAuth(config.header_for(source.value.get_secret_value()))
                 )
             case PerUserEnvVar():
-                value = self._per_user_value(subject, server)
+                value = await self._per_user_value(subject, server)
                 if value is None:
                     return Error(
                         CredError.of_precondition_required(
@@ -93,7 +93,7 @@ class UpstreamCredentialProvider:
                     )
                 return Ok(StaticHeaderAuth(config.header_for(value)))
             case Byok():
-                value = self._per_user_value(subject, server)
+                value = await self._per_user_value(subject, server)
                 if value is None:
                     return Error(
                         CredError.of_unauthorized(
@@ -103,8 +103,8 @@ class UpstreamCredentialProvider:
                 return Ok(StaticHeaderAuth(config.header_for(value)))
         assert_never(config.key_source)
 
-    def _per_user_value(self, subject: Subject, server: ServerSpec) -> str | None:
-        return self._credential_store.get(
+    async def _per_user_value(self, subject: Subject, server: ServerSpec) -> str | None:
+        return await self._credential_store.get(
             CredentialKey(
                 tenant_id=subject.tenant_id,
                 subject_id=subject.subject_id,
@@ -112,7 +112,7 @@ class UpstreamCredentialProvider:
             )
         )
 
-    def _passthrough(
+    async def _passthrough(
         self, subject: Subject, server: ServerSpec, config: PassthroughConfig
     ) -> Result[httpx.Auth, CredError]:
         # The one arm that forwards a caller-supplied token, and only one the client obtained
@@ -126,22 +126,22 @@ class UpstreamCredentialProvider:
         )
 
     # --- arms awaiting their collaborators (typed stubs, fail closed) ----------------------
-    def _authorization_code(
+    async def _authorization_code(
         self, subject: Subject, server: ServerSpec, config: AuthorizationCodeConfig
     ) -> Result[httpx.Auth, CredError]:
         return _todo(AuthSpecKind.authorization_code)
 
-    def _client_credentials(
+    async def _client_credentials(
         self, subject: Subject, server: ServerSpec, config: ClientCredentialsConfig
     ) -> Result[httpx.Auth, CredError]:
         return _todo(AuthSpecKind.client_credentials)
 
-    def _token_exchange(
+    async def _token_exchange(
         self, subject: Subject, server: ServerSpec, config: TokenExchangeConfig
     ) -> Result[httpx.Auth, CredError]:
         return _todo(AuthSpecKind.token_exchange)
 
-    def _aws_sigv4(
+    async def _aws_sigv4(
         self, subject: Subject, server: ServerSpec, config: AwsSigV4Config
     ) -> Result[httpx.Auth, CredError]:
         return _todo(AuthSpecKind.aws_sigv4)
