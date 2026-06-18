@@ -8321,12 +8321,26 @@ async def model_list(
     if blocked_names:
         all_models = [m for m in all_models if m not in blocked_names]
 
-    # Budget-exceeded models policy: when "free_only", return only zero-cost models
+    # Budget-exceeded models policy: only apply the filter when the caller's
+    # budget is actually exhausted (key, team, or user level).  The filter
+    # runs here, outside the scope=expand branch above, so scope=expand
+    # always returns the full model list regardless of budget policy.
     policy = settings.get("budget_exceeded_models_policy", "blocked")
     if policy == "free_only":
-        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+        # Determine whether any budget is exceeded for this caller
+        budget_exceeded = False
+        key_spend = user_api_key_dict.spend or 0
+        if user_api_key_dict.max_budget is not None and key_spend >= user_api_key_dict.max_budget:
+            budget_exceeded = True
+        elif user_api_key_dict.soft_budget is not None and key_spend >= user_api_key_dict.soft_budget:
+            budget_exceeded = True
+        elif user_api_key_dict.team_max_budget is not None and (user_api_key_dict.team_spend or 0) >= user_api_key_dict.team_max_budget:
+            budget_exceeded = True
 
-        all_models = [m for m in all_models if _is_model_cost_zero(m, llm_router)]
+        if budget_exceeded:
+            from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+
+            all_models = [m for m in all_models if _is_model_cost_zero(m, llm_router)]
 
     # Surface the public team name by default; legacy internal keys via flag.
     # The internal routing key drives the metadata/fallback lookup, while the

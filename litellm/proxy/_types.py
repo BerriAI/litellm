@@ -2614,9 +2614,12 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         "blocked",
         description=(
             "Controls model-list behavior when a team/user/key budget is exceeded. "
-            "'blocked' (default) returns 429 as before. "
-            "'all' returns the full model list regardless of budget. "
-            "'free_only' returns only zero-cost models. "
+            "Model-discovery routes (/models, /model/info) are read-only and do not "
+            "enforce budget at the auth layer, so 'blocked' (default) returns the "
+            "unfiltered model list even when the budget is exhausted. "
+            "'all' always returns the full model list. "
+            "'free_only' filters to zero-cost models when the key, team, or user "
+            "budget is exceeded. "
             "Inference calls always enforce the budget regardless of this setting."
         ),
     )
