@@ -1,5 +1,3 @@
-from typing import Optional
-
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
@@ -30,5 +28,5 @@ def convert_usage(usage_data: dict[str, int]) -> Usage:
     )
 
 
-def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+def get_api_base(api_base: str | None = None) -> str | None:
     return api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL

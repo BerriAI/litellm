@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, cast
 
 import httpx
 
@@ -24,13 +24,13 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         endpoint: str,
-        request_query_params: Optional[dict],
+        request_query_params: dict | None,
         litellm_params: dict,
-    ) -> Tuple["URL", str]:
+    ) -> tuple["URL", str]:
         """Get complete API URL for chat completions."""
         base_target_url = self.get_api_base(api_base)
 
@@ -48,11 +48,11 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Set up headers with OAuth token.
@@ -76,7 +76,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         request_data: dict,
         logging_obj: "LiteLLMLoggingObj",
         endpoint: str,
-    ) -> Optional["CostResponseTypes"]:
+    ) -> "CostResponseTypes" | None:
         from litellm import encoding
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
@@ -140,12 +140,12 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
 
     def handle_logging_collected_chunks(
         self,
-        all_chunks: List[str],
+        all_chunks: list[str],
         litellm_logging_obj: "LiteLLMLoggingObj",
         model: str,
         custom_llm_provider: str,
         endpoint: str,
-    ) -> Optional["CostResponseTypes"]:
+    ) -> "CostResponseTypes" | None:
         """
         1. Convert all_chunks to a ModelResponseStream
         2. combine model_response_stream to model_response
@@ -208,20 +208,20 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         return None
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(api_base: str | None = None) -> str | None:
         return api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
 
     @staticmethod
     def get_api_key(
-        api_key: Optional[str] = None,
-    ) -> Optional[str]:
+        api_key: str | None = None,
+    ) -> str | None:
         return api_key or get_secret_str("GIGACHAT_API_KEY")
 
     @staticmethod
-    def get_base_model(model: str) -> Optional[str]:
+    def get_base_model(model: str) -> str | None:
         return model
 
     def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[str]:
         return super().get_models(api_key, api_base)

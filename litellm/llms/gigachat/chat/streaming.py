@@ -4,7 +4,7 @@ GigaChat Streaming Response Handler
 
 import json
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from litellm.llms.gigachat.utils import convert_usage
 from litellm.types.llms.openai import (
@@ -21,7 +21,7 @@ class GigaChatModelResponseIterator:
         self,
         streaming_response: Any,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
@@ -30,9 +30,9 @@ class GigaChatModelResponseIterator:
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         """Parse a single streaming chunk from GigaChat."""
         text = ""
-        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        tool_use: ChatCompletionToolCallChunk | None = None
         is_finished = False
-        finish_reason: Optional[str] = None
+        finish_reason: str | None = None
 
         choices = chunk.get("choices", [])
         if not choices:

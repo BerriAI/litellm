@@ -9,7 +9,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from typing import Any, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Union, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -59,6 +59,11 @@ from litellm.utils import ProviderConfigManager
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
+
+
 vertex_llm_base = VertexBase()
 router = APIRouter()
 default_vertex_config = None
@@ -77,7 +82,7 @@ def create_request_copy(request: Request):
 
 
 def is_passthrough_request_using_router_model(
-    request_body: dict, llm_router: Optional[litellm.Router]
+    request_body: dict, llm_router: litellm.Router | None
 ) -> bool:
     """
     Returns True if the model is in the llm_router model names
@@ -225,7 +230,7 @@ async def gemini_proxy_route(
     )
 
     # Add or update query parameters
-    gemini_api_key: Optional[str] = passthrough_endpoint_router.get_credentials(
+    gemini_api_key: str | None = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="gemini",
         region_name=None,
     )
@@ -473,9 +478,9 @@ async def milvus_proxy_route(
     request_body = await get_request_body(request)
 
     # check collectionName
-    collection_name = cast(Optional[str], request_body.get("collectionName"))
+    collection_name = cast(str | None, request_body.get("collectionName"))
     extra_headers = {}
-    base_target_url: Optional[str] = None
+    base_target_url: str | None = None
     if not collection_name:
         raise HTTPException(
             status_code=400,
@@ -760,12 +765,12 @@ async def handle_bedrock_passthrough_router_model(
     general_settings: dict,
     proxy_config,
     select_data_generator,
-    user_model: Optional[str],
-    user_temperature: Optional[float],
-    user_request_timeout: Optional[float],
-    user_max_tokens: Optional[int],
-    user_api_base: Optional[str],
-    version: Optional[str],
+    user_model: str | None,
+    user_temperature: float | None,
+    user_request_timeout: float | None,
+    user_max_tokens: int | None,
+    user_api_base: str | None,
+    version: str | None,
 ) -> Union[Response, StreamingResponse]:
     """
     Handle Bedrock passthrough for router models (models defined in config.yaml).
@@ -1134,12 +1139,12 @@ async def bedrock_proxy_route(
 
 def _resolve_vertex_model_from_router(
     model_id: str,
-    llm_router: Optional[litellm.Router],
+    llm_router: litellm.Router | None,
     encoded_endpoint: str,
     endpoint: str,
-    vertex_project: Optional[str],
-    vertex_location: Optional[str],
-) -> Tuple[str, str, Optional[str], Optional[str]]:
+    vertex_project: str | None,
+    vertex_location: str | None,
+) -> tuple[str, str, str | None, str | None]:
     """
     Resolve Vertex AI model configuration from router.
 
@@ -1152,7 +1157,7 @@ def _resolve_vertex_model_from_router(
         vertex_location: Current vertex location (may be from URL)
 
     Returns:
-        Tuple of (encoded_endpoint, endpoint, vertex_project, vertex_location)
+        tuple of (encoded_endpoint, endpoint, vertex_project, vertex_location)
         with resolved values from router config
     """
     if not llm_router:
@@ -1501,42 +1506,42 @@ from abc import ABC, abstractmethod
 class BaseVertexAIPassThroughHandler(ABC):
     @staticmethod
     @abstractmethod
-    def get_default_base_target_url(vertex_location: Optional[str]) -> str:
+    def get_default_base_target_url(vertex_location: str | None) -> str:
         pass
 
     @staticmethod
     @abstractmethod
     def update_base_target_url_with_credential_location(
-        base_target_url: str, vertex_location: Optional[str]
+        base_target_url: str, vertex_location: str | None
     ) -> str:
         pass
 
 
 class VertexAIDiscoveryPassThroughHandler(BaseVertexAIPassThroughHandler):
     @staticmethod
-    def get_default_base_target_url(vertex_location: Optional[str]) -> str:
+    def get_default_base_target_url(vertex_location: str | None) -> str:
         return "https://discoveryengine.googleapis.com/"
 
     @staticmethod
     def update_base_target_url_with_credential_location(
-        base_target_url: str, vertex_location: Optional[str]
+        base_target_url: str, vertex_location: str | None
     ) -> str:
         return base_target_url
 
 
 class VertexAIPassThroughHandler(BaseVertexAIPassThroughHandler):
     @staticmethod
-    def get_default_base_target_url(vertex_location: Optional[str]) -> str:
+    def get_default_base_target_url(vertex_location: str | None) -> str:
         return get_vertex_base_url(vertex_location)
 
     @staticmethod
     def update_base_target_url_with_credential_location(
-        base_target_url: str, vertex_location: Optional[str]
+        base_target_url: str, vertex_location: str | None
     ) -> str:
         return get_vertex_base_url(vertex_location)
 
 
-def get_vertex_base_url(vertex_location: Optional[str]) -> str:
+def get_vertex_base_url(vertex_location: str | None) -> str:
     """
     Base URL for Vertex AI pass-through (trailing slash for URL joining).
 
@@ -1586,10 +1591,10 @@ def get_vertex_pass_through_handler(
 
 
 def _override_vertex_params_from_router_credentials(
-    router_credentials: Optional[Any],
-    vertex_project: Optional[str],
-    vertex_location: Optional[str],
-) -> Tuple[Optional[str], Optional[str]]:
+    router_credentials: Any | None,
+    vertex_project: str | None,
+    vertex_location: str | None,
+) -> tuple[str | None, str | None]:
     """
     Override vertex_project and vertex_location with values from router_credentials if available.
 
@@ -1599,7 +1604,7 @@ def _override_vertex_params_from_router_credentials(
         vertex_location: Current vertex location (from URL)
 
     Returns:
-        Tuple of (vertex_project, vertex_location) with overridden values if applicable
+        tuple of (vertex_project, vertex_location) with overridden values if applicable
     """
     if router_credentials is None:
         return vertex_project, vertex_location
@@ -1648,13 +1653,13 @@ def _override_vertex_params_from_router_credentials(
 
 async def _prepare_vertex_auth_headers(
     request: Request,
-    vertex_credentials: Optional[Any],
-    router_credentials: Optional[Any],
-    vertex_project: Optional[str],
-    vertex_location: Optional[str],
-    base_target_url: Optional[str],
+    vertex_credentials: Any | None,
+    router_credentials: Any | None,
+    vertex_project: str | None,
+    vertex_location: str | None,
+    base_target_url: str | None,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
-) -> Tuple[dict, Optional[str], bool, Optional[str], Optional[str]]:
+) -> tuple[dict, str | None, bool, str | None, str | None]:
     """
     Prepare authentication headers for Vertex AI pass-through requests.
 
@@ -1668,12 +1673,12 @@ async def _prepare_vertex_auth_headers(
         get_vertex_pass_through_handler: Handler for the specific Vertex AI service
 
     Returns:
-        Tuple containing:
+        tuple containing:
             - headers: dict - Authentication headers to use
-            - base_target_url: Optional[str] - Updated base target URL
+            - base_target_url: str | None - Updated base target URL
             - headers_passed_through: bool - Whether headers were passed through from request
-            - vertex_project: Optional[str] - Updated vertex project ID
-            - vertex_location: Optional[str] - Updated vertex location
+            - vertex_project: str | None - Updated vertex project ID
+            - vertex_location: str | None - Updated vertex location
     """
     vertex_llm_base = VertexBase()
     headers_passed_through = False
@@ -1746,8 +1751,8 @@ async def _base_vertex_proxy_route(
     request: Request,
     fastapi_response: Response,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-    router_credentials: Optional[Any] = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+    router_credentials: Any | None = None,
 ):
     """
     Base function for Vertex AI passthrough routes.
@@ -1793,8 +1798,8 @@ async def _base_vertex_proxy_route(
             user_api_key_dict=user_api_key_dict,
         )
 
-    vertex_project: Optional[str] = get_vertex_project_id_from_url(endpoint)
-    vertex_location: Optional[str] = get_vertex_location_from_url(endpoint)
+    vertex_project: str | None = get_vertex_project_id_from_url(endpoint)
+    vertex_location: str | None = get_vertex_location_from_url(endpoint)
 
     # Override with vector store credentials if available
     vertex_project, vertex_location = _override_vertex_params_from_router_credentials(
@@ -1919,7 +1924,7 @@ async def vertex_discovery_proxy_route(
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
     # Extract vector store ID from endpoint if present (e.g., dataStores/test-litellm-app_1761094730750)
-    vector_store_credentials: Optional[LiteLLM_ManagedVectorStore] = None
+    vector_store_credentials: LiteLLM_ManagedVectorStore | None = None
     vector_store_id_match = re.search(r"dataStores/([^/]+)", endpoint)
 
     if vector_store_id_match:
@@ -2057,9 +2062,9 @@ class BaseOpenAIPassThroughHandler:
         fastapi_response: Response,
         user_api_key_dict: UserAPIKeyAuth,
         base_target_url: str,
-        api_key: Optional[str],
+        api_key: str | None,
         custom_llm_provider: litellm.LlmProviders,
-        extra_headers: Optional[dict] = None,
+        extra_headers: dict | None = None,
     ):
         encoded_endpoint = httpx.URL(endpoint).path
         # Ensure endpoint starts with '/' for proper URL construction
@@ -2115,7 +2120,7 @@ class BaseOpenAIPassThroughHandler:
 
     @staticmethod
     def _assemble_headers(
-        api_key: Optional[str], request: Request, extra_headers: Optional[dict] = None
+        api_key: str | None, request: Request, extra_headers: dict | None = None
     ) -> dict:
         base_headers = {}
         if api_key is not None:
@@ -2251,10 +2256,10 @@ async def cursor_proxy_route(
 
 async def vertex_ai_live_websocket_passthrough(
     websocket: WebSocket,
-    model: Optional[str] = None,
-    vertex_project: Optional[str] = None,
-    vertex_location: Optional[str] = None,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    model: str | None = None,
+    vertex_project: str | None = None,
+    vertex_location: str | None = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     """
     Vertex AI Live API WebSocket Pass-through Function
@@ -2286,8 +2291,8 @@ async def vertex_ai_live_websocket_passthrough(
         )
 
     resolved_project = vertex_project
-    resolved_location: Optional[str] = vertex_location
-    credentials_value: Optional[str] = None
+    resolved_location: str | None = vertex_location
+    credentials_value: str | None = None
 
     if vertex_credentials_config is not None:
         resolved_project = resolved_project or vertex_credentials_config.vertex_project
@@ -2391,9 +2396,9 @@ def create_vertex_ai_live_websocket_endpoint():
 def create_generic_websocket_passthrough_endpoint(
     provider: str,
     target_url: str,
-    custom_headers: Optional[dict] = None,
+    custom_headers: dict | None = None,
     forward_headers: bool = False,
-    cost_per_request: Optional[float] = None,
+    cost_per_request: float | None = None,
 ):
     """
     Create a generic WebSocket passthrough endpoint for any provider.
@@ -2540,7 +2545,7 @@ async def gigachat_proxy_route(
         )
 
         return result
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise await base_llm_response_processor._handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
@@ -2556,16 +2561,16 @@ async def handle_gigachat_passthrough_router_model(
     fastapi_response: Response,
     llm_router: litellm.Router,
     user_api_key_dict: UserAPIKeyAuth,
-    proxy_logging_obj,
+    proxy_logging_obj: ProxyLogging,
     general_settings: dict,
-    proxy_config,
-    select_data_generator,
-    user_model: Optional[str],
-    user_temperature: Optional[float],
-    user_request_timeout: Optional[float],
-    user_max_tokens: Optional[int],
-    user_api_base: Optional[str],
-    version: Optional[str],
+    proxy_config: ProxyConfig,
+    select_data_generator: Callable,
+    user_model: str | None,
+    user_temperature: float | None,
+    user_request_timeout: float | None,
+    user_max_tokens: int | None,
+    user_api_base: str | None,
+    version: str | None,
 ) -> Union[Response, StreamingResponse]:
     """
     Handle Gigachat passthrough for router models (models defined in config.yaml).
@@ -2580,6 +2585,10 @@ async def handle_gigachat_passthrough_router_model(
         request_body: The parsed request body
         llm_router: The LiteLLM router instance
         user_api_key_dict: The user API key authentication dictionary
+        proxy_logging_obj: Proxy logging
+        general_settings: Proxy general settings
+        proxy_config: Proxy config
+        select_data_generator: Select data generator function
         (additional args for common processing)
 
     Returns:
@@ -2677,7 +2686,7 @@ async def handle_gigachat_passthrough_router_model(
             return result
 
         return result
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Use common exception handling
         raise await base_llm_response_processor._handle_llm_api_exception(
             e=e,
