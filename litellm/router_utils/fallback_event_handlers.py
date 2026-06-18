@@ -65,18 +65,28 @@ def build_mid_stream_continuation_messages(
     """
     candidate_models: list[Optional[str]] = [model_group]
     if fallbacks is not None and model_group is not None:
-        try:
-            # Shallow copy: get_fallback_model_group POPS a matching entry from
-            # flat string-format fallback lists — mutating the live list here
-            # would silently drop one fallback target before the actual
-            # fallback execution runs.
-            fallback_model_group, _ = get_fallback_model_group(
-                fallbacks=list(fallbacks), model_group=model_group
-            )
-            if fallback_model_group:
-                candidate_models.extend(fallback_model_group)
-        except Exception:
-            pass
+        if fallbacks and all(isinstance(f, str) for f in fallbacks):
+            # Flat string-format lists (["model-a", "model-b", ...]) are tried in
+            # order for every model_group. get_fallback_model_group surfaces only
+            # ONE entry from them — it pops a single string mid-iteration and
+            # leaves the rest hidden — so a prefill-rejecting model at a non-first
+            # position would slip through, and the once-built continuation that is
+            # reused across every hop would 400 when the chain reaches it. Check
+            # every entry directly instead.
+            candidate_models.extend(fallbacks)
+        else:
+            try:
+                # list() copy: get_fallback_model_group POPS string entries from a
+                # mixed fallbacks list while iterating — mutating the live list
+                # here would silently drop a fallback target before the actual
+                # fallback execution runs.
+                fallback_model_group, _ = get_fallback_model_group(
+                    fallbacks=list(fallbacks), model_group=model_group
+                )
+                if fallback_model_group:
+                    candidate_models.extend(fallback_model_group)
+            except Exception:
+                pass
 
     if any(_prefill_explicitly_unsupported(m) for m in candidate_models):
         return messages + [

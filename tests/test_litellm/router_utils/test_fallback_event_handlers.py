@@ -32,6 +32,7 @@ def local_model_cost_map(monkeypatch):
         litellm.model_cost = original_model_cost
         litellm.get_model_info.cache_clear()
 
+
 MESSAGES = [{"role": "user", "content": "Plan my trip to Tokyo"}]
 PARTIAL = "Here are the best flight options I found so"
 
@@ -66,6 +67,7 @@ def _assert_legacy_prefill(result):
         "vertex_ai/claude-sonnet-4-6",
         "claude-opus-4-6",
         "openrouter/anthropic/claude-sonnet-4.6",  # dot-variant registry key
+        "snowflake/claude-sonnet-4-6",  # snowflake provider entry
     ],
 )
 def test_prefill_rejecting_models_get_user_continuation(model):
@@ -143,3 +145,32 @@ def test_fallbacks_list_is_not_mutated_by_capability_check():
         fallbacks=dict_format_fallbacks,
     )
     assert dict_format_fallbacks == [{"gpt-4": ["claude-sonnet-4-6"]}]
+
+
+def test_flat_string_fallback_prefill_rejecter_at_non_first_position():
+    """Flat string-format lists are tried in order for every model group, but
+    get_fallback_model_group surfaces only one entry. A prefill-rejecting model
+    anywhere in the list — not just position 0 — must flip the reused
+    continuation to the user-message form."""
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="gpt-4",
+        fallbacks=["gpt-4o", "claude-sonnet-4-6", "gpt-3.5-turbo"],
+    )
+    assert len(result) == 2
+    assert result[1]["role"] == "user"
+    assert PARTIAL in result[1]["content"]
+    assert all(m.get("prefix") is not True for m in result)
+
+
+def test_flat_string_fallback_all_prefill_supporting_keeps_legacy():
+    """A flat string-format list with no prefill-rejecting model keeps the
+    legacy prefill resume."""
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="gpt-4",
+        fallbacks=["gpt-4o", "gpt-3.5-turbo"],
+    )
+    _assert_legacy_prefill(result)
