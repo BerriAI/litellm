@@ -256,7 +256,13 @@ def _is_model_cost_zero(
 
 
 def _as_cost(value: object) -> float | None:
-    """Return value as a float cost, or None if it isn't a number."""
+    """Return value as a float cost, or None if it isn't a number.
+
+    ``bool`` is excluded even though it subclasses ``int``, so a misconfigured
+    ``input_cost_per_token: true`` can't be coerced into a $1 price.
+    """
+    if isinstance(value, bool):
+        return None
     return float(value) if isinstance(value, (int, float)) else None
 
 

@@ -813,3 +813,8 @@ class TestAsCost:
         assert _as_cost(None) is None
         assert _as_cost("0.0") is None
         assert _as_cost({"input_cost_per_token": 1}) is None
+
+    def test_bool_is_not_a_cost(self):
+        # bool subclasses int, but a misconfigured `cost: true` is not a $1 price.
+        assert _as_cost(True) is None
+        assert _as_cost(False) is None
