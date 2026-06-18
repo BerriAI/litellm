@@ -910,17 +910,17 @@ class AmazonConverseConfig(BaseConfig):
                     non_default_params=non_default_params,
                     is_thinking_enabled=is_thinking_enabled,
                 )
-            if param == "max_tokens" or param == "max_completion_tokens":
+            elif param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = value
-            if param == "stream":
+            elif param == "stream":
                 optional_params["stream"] = value
-            if param == "stop":
+            elif param == "stop":
                 if isinstance(value, str):
                     if len(value) == 0:  # converse raises error for empty strings
                         continue
                     value = [value]
                 optional_params["stopSequences"] = value
-            if param == "temperature" or param == "top_p":
+            elif param == "temperature" or param == "top_p":
                 AnthropicConfig._apply_sampling_param(
                     optional_params=optional_params,
                     model=model,
@@ -929,14 +929,14 @@ class AmazonConverseConfig(BaseConfig):
                     drop_params=drop_params,
                     output_key="topP" if param == "top_p" else param,
                 )
-            if param == "tools" and isinstance(value, list):
+            elif param == "tools" and isinstance(value, list):
                 self._apply_tool_call_transformation(
                     tools=cast(List[OpenAIChatCompletionToolParam], value),
                     model=model,
                     non_default_params=non_default_params,
                     optional_params=optional_params,
                 )
-            if param == "tool_choice":
+            elif param == "tool_choice":
                 _tool_choice_value = self.map_tool_choice_values(
                     model=model,
                     tool_choice=value,
@@ -944,12 +944,12 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
-            if param == "parallel_tool_calls":
+            elif param == "parallel_tool_calls":
                 disable_parallel = not value
                 optional_params["_parallel_tool_use_config"] = {
                     "tool_choice": {"disable_parallel_tool_use": disable_parallel}
                 }
-            if param == "thinking":
+            elif param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
@@ -957,9 +957,9 @@ class AmazonConverseConfig(BaseConfig):
                 )
             elif param == "context_management" and isinstance(value, (dict, list)):
                 self._map_context_management_param(value, optional_params)
-            if param == "requestMetadata":
+            elif param == "requestMetadata":
                 self._map_request_metadata_param(value, optional_params)
-            if param == "service_tier" and isinstance(value, str):
+            elif param == "service_tier" and isinstance(value, str):
                 self._map_service_tier_param(value, optional_params)
 
             if param == "web_search_options" and isinstance(value, dict):
