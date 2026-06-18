@@ -48,6 +48,12 @@ def _resolve_dict_fallback_targets(
     directly rather than calling that helper because the helper pops string
     entries mid-iteration, which skips the following entry and can drop a dict
     target when a bare string precedes it in the list.
+
+    Within each tier this matches the helper's pick: exact match breaks on the
+    first hit (first wins), while stripped and wildcard hits keep overwriting
+    without a break (last wins). Mirroring last-wins for those tiers keeps the
+    capability scan aligned with the target the runtime fallback hop will
+    actually call.
     """
     dict_entries = tuple(
         (key, entry[key])
@@ -58,18 +64,17 @@ def _resolve_dict_fallback_targets(
     exact = next((t for k, t in dict_entries if k == model_group), None)
     if exact is not None:
         return tuple(exact)
-    stripped = next(
-        (
-            t
-            for k, t in dict_entries
-            if _check_stripped_model_group(model_group=model_group, fallback_key=k)
-        ),
-        None,
+    stripped_matches = tuple(
+        t
+        for k, t in dict_entries
+        if _check_stripped_model_group(model_group=model_group, fallback_key=k)
     )
-    if stripped is not None:
-        return tuple(stripped)
-    wildcard = next((t for k, t in dict_entries if k == "*"), None)
-    return tuple(wildcard or ())
+    if stripped_matches:
+        return tuple(stripped_matches[-1])
+    wildcard_matches = tuple(t for k, t in dict_entries if k == "*")
+    if wildcard_matches:
+        return tuple(wildcard_matches[-1])
+    return ()
 
 
 def _candidate_model_groups(

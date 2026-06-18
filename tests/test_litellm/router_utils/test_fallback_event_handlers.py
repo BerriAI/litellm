@@ -275,6 +275,45 @@ def test_stripped_model_group_fallback_is_classified():
     assert PARTIAL in result[1]["content"]
 
 
+def test_duplicate_stripped_keys_pick_last_match():
+    """get_fallback_model_group keeps overwriting stripped matches without
+    breaking, so the last duplicate key in the list is the one the runtime
+    fallback hop calls. The capability scan must mirror that or it will miss
+    a prefill-rejecting target hidden behind a prefill-supporting first hit."""
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="openai/gpt-3.5-turbo",
+        fallbacks=[
+            {"gpt-3.5-turbo": ["gpt-4o"]},
+            {"gpt-3.5-turbo": ["claude-sonnet-4-6"]},
+        ],
+    )
+    assert len(result) == 2
+    assert result[1]["role"] == "user"
+    assert PARTIAL in result[1]["content"]
+    assert all(m.get("prefix") is not True for m in result)
+
+
+def test_duplicate_wildcard_keys_pick_last_match():
+    """Same last-wins semantics for wildcard entries: get_fallback_model_group
+    rewrites generic_fallback_idx for every ``*`` entry, so the last one is
+    the runtime target."""
+    result = build_mid_stream_continuation_messages(
+        messages=MESSAGES,
+        generated_content=PARTIAL,
+        model_group="some-unmatched-group",
+        fallbacks=[
+            {"*": ["gpt-4o"]},
+            {"*": ["claude-sonnet-4-6"]},
+        ],
+    )
+    assert len(result) == 2
+    assert result[1]["role"] == "user"
+    assert PARTIAL in result[1]["content"]
+    assert all(m.get("prefix") is not True for m in result)
+
+
 def test_exact_group_match_takes_priority_over_wildcard():
     """When both an exact group match and a wildcard fallback are configured,
     only the exact target is tried, so a prefill-rejecting model behind the
