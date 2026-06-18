@@ -261,17 +261,21 @@ def _is_model_cost_zero(
 
 def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
     """
-    Check if any deployment in the model group has cost fields explicitly
-    set in its litellm.model_cost entry.
+    Check if any deployment serving this model group has cost fields
+    explicitly set in its litellm.model_cost entry.
+
+    Uses ``Router.get_model_list`` so wildcard deployments (e.g. ``anthropic/*``)
+    are resolved against the concrete requested model, matching how
+    ``get_model_group_info`` reads pricing, instead of relying on an exact
+    ``model_name`` equality that wildcards never satisfy.
 
     When Router._create_deployment() registers a model not in the global
     cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
     fields. _get_model_info_helper() then defaults missing costs to 0.
     This function detects that scenario by checking the raw model_cost entry.
     """
-    for deployment in llm_router.model_list:
-        if deployment.get("model_name") != model:
-            continue
+    deployments = llm_router.get_model_list(model_name=model) or []
+    for deployment in deployments:
         model_id = deployment.get("model_info", {}).get("id")
         if model_id is None:
             continue
@@ -727,9 +731,17 @@ async def common_checks(
         # Fail closed on unbounded consumption (OWASP LLM10 Denial of Wallet):
         # refuse models whose cost can't be measured, since their spend (and
         # therefore any budget) can't be enforced. Opt-in via general_settings.
+        # Fall back to ``general_settings.completion_model`` when the request
+        # body has no ``model``, mirroring ``common_request_processing`` which
+        # applies that default downstream; otherwise an unpriced server
+        # default would bypass the guard at auth time.
         _block_unknown_cost_models_check(
             enabled=general_settings.get("block_unknown_cost_models") is True,
-            model=_model,
+            model=(
+                _model
+                if _model is not None
+                else general_settings.get("completion_model")
+            ),
             llm_router=llm_router,
             route=route,
         )

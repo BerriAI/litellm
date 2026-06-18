@@ -9,6 +9,7 @@ See: https://github.com/BerriAI/litellm/issues/24770
 
 import copy
 import logging
+from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -397,6 +398,41 @@ class TestBlockUnknownCostModelsCheck:
                 route="/v1/chat/completions",
             )
 
+    def test_flag_on_allows_wildcard_with_explicit_zero_cost(self):
+        """
+        Wildcard deployments with explicit ``input_cost_per_token=0`` /
+        ``output_cost_per_token=0`` must classify as EXPLICIT_ZERO for any
+        concrete model they match, so the fail-closed guard does not block
+        legitimately free traffic. Before the fix, ``_is_cost_explicitly_configured``
+        compared the requested model against ``deployment["model_name"]`` directly,
+        which never matched a wildcard pattern like ``free-wildcard/*`` and
+        misclassified the request as UNKNOWN.
+        """
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-wildcard/*",
+                    "litellm_params": {
+                        "model": "openai/free-wildcard/*",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {
+                        "id": "free-wildcard-id",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+            ]
+        )
+        _block_unknown_cost_models_check(
+            enabled=True,
+            model="free-wildcard/any-concrete-model",
+            llm_router=router,
+            route="/v1/chat/completions",
+        )
+
 
 class TestBlockUnknownCostModelsViaCommonChecks:
     """End-to-end wiring through common_checks (the actual auth call site)."""
@@ -408,11 +444,15 @@ class TestBlockUnknownCostModelsViaCommonChecks:
         litellm.model_cost = self._saved_model_cost
 
     async def _run_common_checks(
-        self, model: str, general_settings: dict, proxy_logging
+        self,
+        model: str,
+        general_settings: dict,
+        proxy_logging,
+        request_body: Optional[dict] = None,
     ):
         router = _router_with_mixed_costs()
         return await common_checks(
-            request_body={"model": model},
+            request_body=request_body if request_body is not None else {"model": model},
             team_object=None,
             user_object=None,
             end_user_object=None,
@@ -452,6 +492,41 @@ class TestBlockUnknownCostModelsViaCommonChecks:
             model="paid-model",
             general_settings={"block_unknown_cost_models": True},
             proxy_logging=mock_proxy_logging,
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_unmapped_completion_model_default_blocked_when_flag_on(
+        self, mock_proxy_logging
+    ):
+        """When a request omits ``model`` but ``general_settings.completion_model``
+        names an unpriced model, the fail-closed guard must classify the
+        server default; otherwise ``common_request_processing`` would silently
+        substitute the default after auth, reopening the Denial-of-Wallet gap."""
+        with pytest.raises(ProxyException) as exc_info:
+            await self._run_common_checks(
+                model="",
+                general_settings={
+                    "block_unknown_cost_models": True,
+                    "completion_model": _UNMAPPED_MODEL,
+                },
+                proxy_logging=mock_proxy_logging,
+                request_body={},
+            )
+        assert "brand-new-unmapped-model-xyz" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_known_completion_model_default_allowed_when_flag_on(
+        self, mock_proxy_logging
+    ):
+        result = await self._run_common_checks(
+            model="",
+            general_settings={
+                "block_unknown_cost_models": True,
+                "completion_model": "paid-model",
+            },
+            proxy_logging=mock_proxy_logging,
+            request_body={},
         )
         assert result is True
 
