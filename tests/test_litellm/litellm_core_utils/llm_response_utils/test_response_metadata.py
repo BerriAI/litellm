@@ -8,6 +8,8 @@ through _hidden_params to the x-litellm-callback-duration-ms response header.
 import datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
 import litellm.proxy.common_request_processing as common_request_processing_mod
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -90,6 +92,32 @@ class TestCallbackDurationMs:
         assert hidden.get("callback_duration_ms") == 5.5
         # overhead should also be set
         assert hidden.get("litellm_overhead_time_ms") is not None
+
+    def test_overhead_computed_for_routes_without_pre_existing_value(self):
+        """GH#30566: overhead is set even when _hidden_params
+        does not already contain litellm_overhead_time_ms.
+        This simulates non-chat-completions routes that skip
+        the SDK-level update_response_metadata call."""
+        result = ModelResponse()
+        logging_obj = self._make_logging_obj(llm_api_duration_ms=900.0)
+        logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.litellm_call_id = "test-gh30566"
+
+        start = datetime.datetime(2025, 1, 1, 0, 0, 0)
+        end = datetime.datetime(2025, 1, 1, 0, 0, 1)
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="gpt-4",
+            kwargs={},
+            start_time=start,
+            end_time=end,
+        )
+
+        hidden = result._hidden_params
+        assert hidden.get("litellm_overhead_time_ms") == pytest.approx(100.0, rel=0.01)
+        assert hidden.get("_response_ms") == pytest.approx(1000.0, rel=0.01)
 
 
 class TestCallbackDurationInCustomHeaders:
