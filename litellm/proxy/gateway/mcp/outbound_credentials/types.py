@@ -138,15 +138,22 @@ ApiKeyScheme = Literal["bearer", "apikey", "basic", "token", "raw"]
 
 
 class AuthorizationCodeConfig(BaseModel):
-    """Per-user 3LO; the gateway is the OAuth client and stores the user's token."""
+    """Per-user 3LO; the gateway is the OAuth client and stores the user's token.
+
+    Endpoints are discovered (RFC 9728 -> RFC 8414) and the client is registered via DCR
+    (RFC 7591), so the common case carries none of the fields below; they are optional manual
+    overrides for IdPs without discovery / DCR. The discovered endpoints and the DCR-registered
+    client are persisted by the AS surface, not here; `resolve()` reads the per-user token from
+    the `TokenStore`.
+    """
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.authorization_code] = AuthSpecKind.authorization_code
-    client_id: str
-    client_secret: SecretStr
-    authorization_url: str
-    token_url: str
     scopes: tuple[str, ...] = ()
+    client_id: str | None = None
+    client_secret: SecretStr | None = None
+    authorization_url: str | None = None
+    token_url: str | None = None
 
 
 class ClientCredentialsConfig(BaseModel):

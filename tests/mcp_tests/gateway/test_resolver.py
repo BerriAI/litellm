@@ -186,9 +186,16 @@ def test_auth_spec_kind_is_derived_from_config():
 
 
 def test_discriminated_union_rejects_config_missing_required_fields():
-    # authorization_code requires client_id/secret/urls; an empty body must fail at construction.
+    # client_credentials requires client_id/secret/token_url; an empty body must fail.
     with pytest.raises(ValidationError):
-        _spec({"kind": "authorization_code"})
+        _spec({"kind": "client_credentials"})
+
+
+def test_authorization_code_config_allows_discovery_defaults():
+    # Discovery + DCR: endpoints and client creds are obtained at runtime, so an empty
+    # authorization_code config is valid - the fields are optional manual overrides.
+    spec = _spec({"kind": "authorization_code"})
+    assert isinstance(spec.config, AuthorizationCodeConfig)
 
 
 def test_discriminated_union_picks_the_variant_by_kind():
