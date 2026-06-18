@@ -1,5 +1,6 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
+from enum import Enum
 from typing import Any, List
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
@@ -21,6 +22,20 @@ class CaptureMessageContent(str):
     SPAN_ONLY = "span_only"
     EVENT_ONLY = "event_only"
     SPAN_AND_EVENT = "span_and_event"
+
+
+class ExporterOwner(str, Enum):
+    """The preset that contributed an exporter. Values match the callback names
+    in ``presets.PRESET_BY_CALLBACK`` so per-request dynamic-credential routing
+    can match an exporter's owner against the credential source's callback name.
+    A ``str`` enum so the value compares equal to the bare callback-name string."""
+
+    ARIZE = "arize"
+    ARIZE_PHOENIX = "arize_phoenix"
+    LANGFUSE_OTEL = "langfuse_otel"
+    WEAVE_OTEL = "weave_otel"
+    LEVO = "levo"
+    AGENTOPS = "agentops"
 
 
 class _OTelV2Flag(BaseSettings):
@@ -49,13 +64,13 @@ class ExporterSpec(BaseModel):
     )
     endpoint: str | None = None
     headers: str | None = None
-    owner: str | None = Field(
+    owner: ExporterOwner | None = Field(
         default=None,
         description=(
-            "Callback name of the preset that contributed this exporter (e.g. "
-            "'arize'). Per-request dynamic OTLP credentials are applied only to "
-            "the exporter whose owner matches the credential source, so one "
-            "tenant's vendor key never lands on a different backend's exporter."
+            "The preset that contributed this exporter. Per-request dynamic OTLP "
+            "credentials are applied only to the exporter whose owner matches the "
+            "credential source, so one tenant's vendor key never lands on a "
+            "different backend's exporter."
         ),
     )
     options: dict[str, str] | None = Field(

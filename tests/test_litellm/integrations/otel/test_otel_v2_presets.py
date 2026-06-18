@@ -63,10 +63,12 @@ def test_dynamic_cred_presets_tag_exporter_with_matching_owner(monkeypatch):
     monkeypatch.setenv("WANDB_API_KEY", "w")
     monkeypatch.setenv("WANDB_PROJECT_ID", "entity/project")
 
+    from litellm.integrations.otel.model.config import ExporterOwner
+
     for callback_name in DYNAMIC_HEADERS_BY_CALLBACK:
         cfg = PRESET_BY_CALLBACK[callback_name]()
         owners = {e.owner for e in cfg.exporters}
-        assert callback_name in owners, (
+        assert ExporterOwner(callback_name) in owners, (
             f"{callback_name} preset did not tag its exporter with "
             f"owner={callback_name!r}; tenant credentials would leak across "
             f"exporters. owners present: {owners}"
