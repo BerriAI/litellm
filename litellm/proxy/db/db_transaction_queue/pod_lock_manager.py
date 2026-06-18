@@ -1,4 +1,5 @@
 import asyncio
+import json
 from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -167,8 +168,11 @@ end
                     self._release_lock_script = script_register(
                         self._COMPARE_AND_DELETE_LOCK_SCRIPT
                     )
+                # acquire_lock stores the pod_id via async_set_cache, which
+                # JSON-encodes the value; compare against the same encoding so
+                # the Lua equality check matches and the lock is released
                 result = await self._release_lock_script(
-                    keys=[lock_key], args=[self.pod_id]
+                    keys=[lock_key], args=[json.dumps(self.pod_id)]
                 )
                 return int(result or 0)
             except Exception:
