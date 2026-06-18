@@ -61,9 +61,7 @@ def oci_signer():
     if "security_token_file" in config:
         with open(os.path.expanduser(config["security_token_file"])) as f:
             token = f.read().strip()
-        private_key = oci.signer.load_private_key_from_file(
-            config["key_file"], config.get("pass_phrase")
-        )
+        private_key = oci.signer.load_private_key_from_file(config["key_file"], config.get("pass_phrase"))
         return oci.auth.signers.SecurityTokenSigner(token, private_key)
 
     return oci.Signer(
@@ -388,6 +386,95 @@ async def test_async_tool_use(m: _M, oci_params):
 
 
 # ---------------------------------------------------------------------------
+# Cohere tool-schema regression
+#
+# MLflow {{trace}} judge tools have params typed as JSON-schema arrays. The
+# array type used to map to a bare ``List``, which OCI's Cohere backend rejected
+# with HTTP 500.
+# ---------------------------------------------------------------------------
+
+# A tool whose parameter is a JSON-schema array — the shape that 500'd on Cohere.
+_TRACE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_span",
+        "description": "Fetch a span and selected attributes.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "attributes_to_fetch": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Attribute names to fetch.",
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
+
+@pytest.mark.parametrize("model", ["cohere.command-latest", "cohere.command-a-03-2025"])
+def test_cohere_tool_with_array_param(model, oci_params):
+    """A Cohere tool whose parameter is a JSON-schema array (e.g. MLflow's
+    {{trace}} judge tools). The array type used to map to a bare ``List``, which
+    OCI's Cohere backend rejected with HTTP 500."""
+    import litellm
+
+    resp = litellm.completion(
+        model=f"oci/{model}",
+        messages=[
+            {
+                "role": "user",
+                "content": "Use get_span to fetch the 'inputs' attribute.",
+            }
+        ],
+        tools=[_TRACE_TOOL],
+        max_tokens=150,
+        **oci_params,
+    )
+    # The model may call the tool or answer directly; either proves OCI accepted
+    # the request (no 400/500).
+    assert resp.choices[0].finish_reason is not None
+
+
+@pytest.mark.parametrize("model", ["cohere.command-latest", "cohere.command-a-03-2025"])
+def test_cohere_tool_result_continuation(model, oci_params):
+    """The agentic continuation MLflow {{trace}} judges drive: the conversation
+    ends with a tool result. OCI rejects a populated `message` alongside tool
+    results and requires them in the top-level `toolResults` field, so this used
+    to 400/500. The model should now produce a final answer."""
+    import litellm
+
+    resp = litellm.completion(
+        model=f"oci/{model}",
+        messages=[
+            {"role": "user", "content": "How many spans are in the trace?"},
+            {
+                "role": "assistant",
+                "content": "I will look at the root span.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_span", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": '{"span_count": 47}',
+            },
+        ],
+        tools=[_TRACE_TOOL],
+        max_tokens=150,
+        **oci_params,
+    )
+    assert resp.choices[0].finish_reason is not None
+
+
+# ---------------------------------------------------------------------------
 # Reasoning-effort tests (reasoning models only)
 # ---------------------------------------------------------------------------
 
@@ -452,7 +539,6 @@ def test_reasoning_tokens_in_usage(oci_params):
 
 
 class TestOCIEmbeddings:
-
     def test_english_v3_basic(self, oci_params):
         import litellm
 
@@ -534,9 +620,7 @@ class TestOCIEmbeddings:
         stock = resp.data[2]["embedding"]
         sim_cats = cosine(cat1, cat2)
         sim_diff = cosine(cat1, stock)
-        assert (
-            sim_cats > sim_diff
-        ), f"Expected similar sentences to score higher ({sim_cats:.3f} vs {sim_diff:.3f})"
+        assert sim_cats > sim_diff, f"Expected similar sentences to score higher ({sim_cats:.3f} vs {sim_diff:.3f})"
 
     def test_embed_v4(self, oci_params):
         import litellm
@@ -569,7 +653,6 @@ class TestOCIEmbeddings:
 
 
 class TestOCIAsyncEmbeddings:
-
     @pytest.mark.asyncio
     async def test_async_embedding_basic(self, oci_params):
         import litellm
