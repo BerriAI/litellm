@@ -19,34 +19,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import Request, Response
 
+from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.proxy_server import chat_completion
 
 
-@pytest.mark.asyncio
-async def test_streaming_modify_response_uses_request_data_logging_obj():
+async def _run_streaming_block_and_get_wrapper(exception):
+    """Drive chat_completion's streaming guardrail-passthrough handler for the
+    given pre-call block exception and return the patched CustomStreamWrapper.
+
+    The outer request body (what _read_request_body returns) is a streaming
+    request that does NOT carry litellm_logging_obj -- mirroring production,
+    where the outer body diverges from the processor's data at function_setup.
+    Only the processor copy (exposed as exception.request_data) carries it.
+    """
     request = MagicMock(spec=Request)
     fastapi_response = MagicMock(spec=Response)
     user_api_key_dict = UserAPIKeyAuth()
-
-    # The outer request body (what _read_request_body returns) is a streaming
-    # request that does NOT carry litellm_logging_obj.
     outer_body = {"model": "gpt-4o", "messages": [], "stream": True}
-
-    # The exception carries the processor's data, which DOES carry the logging
-    # object (litellm attaches it after function_setup).
-    sentinel_logging_obj = MagicMock(name="litellm_logging_obj")
-    exception = ModifyResponseException(
-        message="blocked by guardrail",
-        model="gpt-4o",
-        request_data={
-            "model": "gpt-4o",
-            "stream": True,
-            "litellm_logging_obj": sentinel_logging_obj,
-        },
-        guardrail_name="test-guardrail",
-    )
 
     with patch(
         "litellm.proxy.proxy_server._read_request_body",
@@ -72,7 +63,48 @@ async def test_streaming_modify_response_uses_request_data_logging_obj():
             user_api_key_dict=user_api_key_dict,
         )
 
+    return mock_csw
+
+
+@pytest.mark.asyncio
+async def test_streaming_modify_response_uses_request_data_logging_obj():
+    sentinel_logging_obj = MagicMock(name="litellm_logging_obj")
+    exception = ModifyResponseException(
+        message="blocked by guardrail",
+        model="gpt-4o",
+        request_data={
+            "model": "gpt-4o",
+            "stream": True,
+            "litellm_logging_obj": sentinel_logging_obj,
+        },
+        guardrail_name="test-guardrail",
+    )
+
+    mock_csw = await _run_streaming_block_and_get_wrapper(exception)
+
     # The wrapper must be built with the logging object from e.request_data,
     # NOT None (which is what the outer body would have yielded).
+    mock_csw.assert_called_once()
+    assert mock_csw.call_args.kwargs["logging_obj"] is sentinel_logging_obj
+
+
+@pytest.mark.asyncio
+async def test_streaming_rejected_request_uses_request_data_logging_obj():
+    # RejectedRequestError gets the identical fix in its own streaming
+    # passthrough handler, so it needs the same regression guard.
+    sentinel_logging_obj = MagicMock(name="litellm_logging_obj")
+    exception = RejectedRequestError(
+        message="rejected by guardrail",
+        model="gpt-4o",
+        llm_provider="openai",
+        request_data={
+            "model": "gpt-4o",
+            "stream": True,
+            "litellm_logging_obj": sentinel_logging_obj,
+        },
+    )
+
+    mock_csw = await _run_streaming_block_and_get_wrapper(exception)
+
     mock_csw.assert_called_once()
     assert mock_csw.call_args.kwargs["logging_obj"] is sentinel_logging_obj
