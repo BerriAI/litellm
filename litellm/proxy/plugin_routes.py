@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 router = APIRouter()
 
@@ -218,7 +219,9 @@ async def plugin_proxy(
     if user_role:
         forward_headers["x-litellm-user-role"] = str(user_role)
 
-    handler = get_async_httpx_client(llm_provider=None)
+    handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PassThroughEndpoint
+    )
     try:
         req = handler.client.build_request(
             method=request.method,
