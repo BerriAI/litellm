@@ -30,7 +30,10 @@ class ExporterOwner(str, Enum):
     can match an exporter's owner against the credential source's callback name.
     A ``str`` enum so the value compares equal to the bare callback-name string."""
 
-    ARIZE = "arize"
+    # Arize AX (the hosted platform) and Arize Phoenix (the open-source / Phoenix
+    # Cloud tracer) are distinct backends with separate config and auth, so they
+    # are separate owners. The member value stays the public callback name.
+    ARIZE_AX = "arize"
     ARIZE_PHOENIX = "arize_phoenix"
     LANGFUSE_OTEL = "langfuse_otel"
     WEAVE_OTEL = "weave_otel"
