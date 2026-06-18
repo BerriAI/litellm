@@ -25,3 +25,19 @@ def test_get_complete_url_encodes_model_path_segment():
             optional_params={},
             litellm_params={},
         )
+
+
+def test_validate_environment_content_type():
+    """Test that the content-type header is correctly set to application/json."""
+    config = CloudflareChatConfig()
+    headers = config.validate_environment(
+        headers={},
+        model="@cf/meta/llama",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={},
+        api_key="fake-key",
+    )
+
+    assert headers["content-type"] == "application/json"
+    assert headers["Authorization"] == "Bearer fake-key"
