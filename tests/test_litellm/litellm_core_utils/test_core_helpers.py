@@ -7,12 +7,16 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
+<<<<<<< HEAD
     LITELLM_INTERNAL_PARAMS,
     RESPONSE_COST_HEADER,
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
     drop_params_env_flag,
     drop_params_flag,
+=======
+    MCP_INTERNAL_REQUEST_KEYS,
+>>>>>>> 8957cc20e7 (rename constant to MCP_INTERNAL_REQUEST_KEYS per review (avoid all_litellm_params name echo))
     filter_internal_params,
     get_or_create_metadata_bucket,
     get_provider_response_headers_from_hidden_params,
@@ -585,9 +589,9 @@ class TestFilterInternalParams:
         assert out == {"keep": 1}
 
     def test_registry_not_mutated_by_additional_params(self):
-        baseline = set(LITELLM_INTERNAL_PARAMS)
+        baseline = set(MCP_INTERNAL_REQUEST_KEYS)
         filter_internal_params({"x": 1}, additional_internal_params={"adhoc_key"})
-        assert LITELLM_INTERNAL_PARAMS == baseline
+        assert MCP_INTERNAL_REQUEST_KEYS == baseline
 
     def test_non_dict_passes_through(self):
         assert filter_internal_params("not-a-dict") == "not-a-dict"
