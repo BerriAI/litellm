@@ -61,6 +61,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         content_type: Optional[str],
         chunks: List[str],
         embeddings: Optional[List[List[float]]],
+        existing_file_id: str | None = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Store content in Gemini File Search store.
@@ -75,6 +76,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             content_type: MIME type
             chunks: Ignored - Gemini handles chunking
             embeddings: Ignored - Gemini handles embedding
+            existing_file_id: Existing provider file ID, unsupported for Gemini
 
         Returns:
             Tuple of (vector_store_id, file_id)

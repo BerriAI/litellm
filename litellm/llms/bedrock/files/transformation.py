@@ -1,23 +1,37 @@
+import base64
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from collections.abc import Mapping, MutableMapping
+from types import MappingProxyType
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 from urllib.parse import unquote
 
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
+from pydantic import BaseModel, ConfigDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
+    BEDROCK_MANAGED_S3_PREFIXES,
     BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
     build_managed_cloud_object_name,
     encode_s3_object_key_for_url,
     sanitize_cloud_object_component,
+    should_allow_legacy_cloud_file_ids,
     split_configured_cloud_bucket_name,
+    validate_managed_cloud_file_id,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -28,17 +42,97 @@ from litellm.llms.base_llm.files.transformation import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
+    FileContentRequest,
     FileTypes,
     HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
     PathLike,
 )
-from litellm.types.utils import ExtractedFileData, LlmProviders
+from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums
 from litellm.utils import get_llm_provider
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
+
+# litellm_params key used to hand the SigV4-signed GET headers from
+# `transform_file_content_request` to `validate_environment` (the only hook
+# the shared file-content HTTP handler exposes for setting request headers).
+# Same pattern as the `upload_url` handoff in `transform_create_file_request`.
+S3_SIGNED_GET_HEADERS_PARAM = "_s3_signed_get_headers"
+
+
+class _BedrockS3RequestParams(BaseModel):
+    """Typed view of the credential/region params the S3 GetObject path reads."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+    aws_region_name: str | None = None
+    aws_session_name: str | None = None
+    aws_profile_name: str | None = None
+    aws_role_name: str | None = None
+    aws_web_identity_token: str | None = None
+    aws_sts_endpoint: str | None = None
+    s3_region_name: str | None = None
+    s3_endpoint_url: str | None = None
+
+
+class _TrustedS3ModelCredentials(BaseModel):
+    """The S3 bucket the server trusts file ids against, from the deployment snapshot."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    s3_bucket_name: str | None = None
+
+
+def extract_s3_uri_from_file_id(file_id: str) -> str:
+    """
+    Resolve a Bedrock file id to its S3 URI.
+
+    Accepts either a base64-encoded LiteLLM unified file id (whose decoded
+    form carries `llm_output_file_id,s3://...`) or a direct `s3://` URI.
+    """
+    try:
+        padded = file_id + "=" * (-len(file_id) % 4)
+        decoded = base64.urlsafe_b64decode(padded).decode()
+
+        if decoded.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
+            if "llm_output_file_id," in decoded:
+                return decoded.split("llm_output_file_id,")[1].split(";")[0]
+    except Exception:
+        pass
+
+    if file_id.startswith("s3://"):
+        return file_id
+
+    raise ValueError("file_id must be a managed LiteLLM S3 file id")
+
+
+def get_configured_s3_bucket_name(litellm_params: Mapping[str, object]) -> str:
+    """
+    Resolve the server-configured S3 bucket for Bedrock file operations.
+
+    Only trusts the immutable server-side credential snapshot or the
+    environment; never a request-supplied param, since the bucket is what
+    `validate_managed_cloud_file_id` checks file ids against.
+    """
+    trusted_model_credentials = litellm_params.get(
+        "_litellm_internal_model_credentials"
+    )
+    bucket_name: str | None = None
+    if isinstance(trusted_model_credentials, MappingProxyType):
+        snapshot: dict[str, object] = {}
+        snapshot.update(trusted_model_credentials)  # any-ok: untyped snapshot
+        bucket_name = _TrustedS3ModelCredentials.model_validate(snapshot).s3_bucket_name
+    bucket_name = bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
+    if not bucket_name:
+        raise ValueError(
+            "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
+        )
+    return bucket_name
 
 
 class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
@@ -63,16 +157,21 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: MutableMapping[str, object],
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        litellm_params: MutableMapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        # No additional headers needed for S3 uploads - AWS credentials handled by BaseAWSLLM
-        return headers
+        result: dict[str, object] = {}
+        result.update(headers)
+        signed_headers = litellm_params.pop(S3_SIGNED_GET_HEADERS_PARAM, None)
+        if isinstance(signed_headers, Mapping):
+            result.update(signed_headers)  # any-ok: untyped handoff headers
+        # otherwise no extra headers - AWS credentials are handled by BaseAWSLLM
+        return result
 
     def _get_content_from_openai_file(self, openai_file_content: FileTypes) -> str:
         """
@@ -927,13 +1026,100 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
     def transform_file_content_request(
         self,
-        file_content_request,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> tuple[str, dict]:
-        raise NotImplementedError(
-            "BedrockFilesConfig does not support file content retrieval"
+        file_content_request: FileContentRequest,
+        optional_params: Mapping[str, object],
+        litellm_params: MutableMapping[str, object],
+    ) -> tuple[str, dict[str, str]]:
+        """
+        Build a SigV4-signed S3 GetObject request for a Bedrock batch file.
+
+        Bedrock batch file ids are `s3://bucket/key` URIs (or unified ids
+        that decode to one); the bucket and key are validated against the
+        server-configured bucket before any request is signed.
+        """
+        file_id = file_content_request.get("file_id")
+        if not file_id:
+            raise ValueError("file_id is required for Bedrock file content retrieval")
+
+        s3_uri = extract_s3_uri_from_file_id(file_id)
+        bucket_name, object_key = validate_managed_cloud_file_id(
+            file_id=s3_uri,
+            scheme="s3://",
+            configured_bucket_name=get_configured_s3_bucket_name(litellm_params),
+            allowed_object_prefixes=BEDROCK_MANAGED_S3_PREFIXES,
+            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(
+                litellm_params
+            ),
         )
+
+        # The shared file-content handler passes optional_params={}, so AWS
+        # credentials/region arrive via litellm_params here (unlike the upload
+        # path). s3_region_name wins over aws_region_name, same priority as
+        # get_complete_file_url above.
+        merged_params: dict[str, object] = {}
+        merged_params.update(litellm_params)
+        merged_params.update(optional_params)
+        request_params = _BedrockS3RequestParams.model_validate(merged_params)
+
+        region_preference = (
+            request_params.s3_region_name or request_params.aws_region_name
+        )
+        region_params: dict[str, str | None] = {"aws_region_name": region_preference}
+        aws_region_name = self._get_aws_region_name(
+            optional_params=region_params, model=""
+        )
+
+        s3_endpoint_url = (
+            request_params.s3_endpoint_url
+            or f"https://s3.{aws_region_name}.amazonaws.com"
+        ).rstrip("/")
+        url = f"{s3_endpoint_url}/{bucket_name}/{encode_s3_object_key_for_url(object_key)}"
+
+        litellm_params[S3_SIGNED_GET_HEADERS_PARAM] = self._sign_s3_get_request(
+            api_base=url,
+            aws_region_name=aws_region_name,
+            request_params=request_params,
+        )
+        return url, {}
+
+    def _sign_s3_get_request(
+        self,
+        api_base: str,
+        aws_region_name: str,
+        request_params: _BedrockS3RequestParams,
+    ) -> dict[str, str]:
+        """
+        SigV4-sign an S3 GetObject request, mirroring `_sign_s3_request` (PUT).
+        """
+        try:
+            import hashlib
+
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+        except ImportError:
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+
+        credentials = self.get_credentials(  # any-ok: boto3 Credentials is untyped
+            aws_access_key_id=request_params.aws_access_key_id,
+            aws_secret_access_key=request_params.aws_secret_access_key,
+            aws_session_token=request_params.aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=request_params.aws_session_name,
+            aws_profile_name=request_params.aws_profile_name,
+            aws_role_name=request_params.aws_role_name,
+            aws_web_identity_token=request_params.aws_web_identity_token,
+            aws_sts_endpoint=request_params.aws_sts_endpoint,
+        )
+
+        empty_body_hash = hashlib.sha256(b"").hexdigest()
+        aws_request = AWSRequest(  # any-ok: botocore AWSRequest is untyped
+            method="GET",
+            url=api_base,
+            headers={"x-amz-content-sha256": empty_body_hash},
+        )
+        auth = SigV4Auth(credentials, "s3", aws_region_name)  # any-ok: botocore untyped
+        auth.add_auth(aws_request)  # any-ok: botocore request mutation is untyped
+        return dict(aws_request.headers)  # any-ok: botocore headers are untyped
 
     def transform_file_content_response(
         self,
@@ -941,9 +1127,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> HttpxBinaryResponseContent:
-        raise NotImplementedError(
-            "BedrockFilesConfig does not support file content retrieval"
-        )
+        if raw_response.status_code >= 400:
+            raise BedrockError(
+                status_code=raw_response.status_code,
+                message=raw_response.text,
+                headers=raw_response.headers,
+            )
+        return HttpxBinaryResponseContent(response=raw_response)
 
 
 class BedrockJsonlFilesTransformation:
