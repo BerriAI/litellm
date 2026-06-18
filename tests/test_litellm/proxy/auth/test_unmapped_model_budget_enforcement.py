@@ -8,10 +8,84 @@ See: https://github.com/BerriAI/litellm/issues/24770
 """
 
 import copy
+from unittest.mock import MagicMock
+
+import pytest
 
 import litellm
-from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import (
+    ModelCostClass,
+    _block_unknown_cost_models_check,
+    _classify_model_group_cost,
+    _is_model_cost_zero,
+    _request_has_unknown_cost_model,
+    common_checks,
+)
+from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+
+
+def _router_with_mixed_costs() -> Router:
+    """Router exposing the three cost classes through one wildcard plus two
+    explicitly-priced deployments, so tests don't depend on the live cost map:
+
+    * ``anthropic/*`` -> unmapped concrete models resolve to UNKNOWN cost
+    * ``paid-model``  -> explicit positive pricing (KNOWN_POSITIVE)
+    * ``free-model``  -> explicit $0 pricing (EXPLICIT_ZERO)
+    """
+    return Router(
+        model_list=[
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {"model": "anthropic/*", "api_key": "sk-fake"},
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {
+                    "model": "openai/some-paid-model",
+                    "api_key": "sk-fake",
+                    "input_cost_per_token": 0.000002,
+                    "output_cost_per_token": 0.000008,
+                },
+                "model_info": {
+                    "id": "paid-model-id",
+                    "input_cost_per_token": 0.000002,
+                    "output_cost_per_token": 0.000008,
+                },
+            },
+            {
+                "model_name": "free-model",
+                "litellm_params": {
+                    "model": "ollama/llama2",
+                    "api_base": "http://localhost:11434",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {
+                    "id": "free-model-id",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+        ]
+    )
+
+
+# A model id that cannot appear in any cost map (neither remote nor backup),
+# so it deterministically resolves to UNKNOWN cost through the wildcard route.
+_UNMAPPED_MODEL = "anthropic/brand-new-unmapped-model-xyz"
+
+
+@pytest.fixture
+def mock_proxy_logging() -> ProxyLogging:
+    proxy_logging = ProxyLogging(user_api_key_cache=None)
+
+    async def _noop_budget_alerts(*args, **kwargs):
+        return None
+
+    proxy_logging.budget_alerts = _noop_budget_alerts
+    return proxy_logging
 
 
 class TestUnmappedModelBudgetEnforcement:
@@ -183,3 +257,196 @@ class TestUnmappedModelBudgetEnforcement:
 
         result = _is_model_cost_zero(model="paid-model", llm_router=mock_router)
         assert result is False
+
+
+class TestClassifyModelGroupCost:
+    """The tri-state classifier must distinguish 'free' from 'unknown' cost."""
+
+    def setup_method(self):
+        self._saved_model_cost = copy.deepcopy(litellm.model_cost)
+
+    def teardown_method(self):
+        litellm.model_cost = self._saved_model_cost
+
+    def test_unmapped_wildcard_model_is_unknown(self):
+        router = _router_with_mixed_costs()
+        assert (
+            _classify_model_group_cost(_UNMAPPED_MODEL, router)
+            == ModelCostClass.UNKNOWN
+        )
+
+    def test_explicitly_priced_model_is_known_positive(self):
+        router = _router_with_mixed_costs()
+        assert (
+            _classify_model_group_cost("paid-model", router)
+            == ModelCostClass.KNOWN_POSITIVE
+        )
+
+    def test_explicitly_free_model_is_explicit_zero(self):
+        router = _router_with_mixed_costs()
+        assert (
+            _classify_model_group_cost("free-model", router)
+            == ModelCostClass.EXPLICIT_ZERO
+        )
+
+
+class TestRequestHasUnknownCostModel:
+    """Detector backing the fail-closed check."""
+
+    def setup_method(self):
+        self._saved_model_cost = copy.deepcopy(litellm.model_cost)
+
+    def teardown_method(self):
+        litellm.model_cost = self._saved_model_cost
+
+    def test_unmapped_model_is_unknown(self):
+        router = _router_with_mixed_costs()
+        assert _request_has_unknown_cost_model(_UNMAPPED_MODEL, router) is True
+
+    def test_known_paid_model_is_not_unknown(self):
+        router = _router_with_mixed_costs()
+        assert _request_has_unknown_cost_model("paid-model", router) is False
+
+    def test_explicitly_free_model_is_not_unknown(self):
+        router = _router_with_mixed_costs()
+        assert _request_has_unknown_cost_model("free-model", router) is False
+
+    def test_any_unmapped_model_in_list_is_unknown(self):
+        router = _router_with_mixed_costs()
+        assert (
+            _request_has_unknown_cost_model(["paid-model", _UNMAPPED_MODEL], router)
+            is True
+        )
+
+    def test_none_model_is_not_unknown(self):
+        router = _router_with_mixed_costs()
+        assert _request_has_unknown_cost_model(None, router) is False
+
+
+class TestBlockUnknownCostModelsCheck:
+    """Fail-closed gate (OWASP LLM10 Denial of Wallet) on unknown-cost models."""
+
+    def setup_method(self):
+        self._saved_model_cost = copy.deepcopy(litellm.model_cost)
+
+    def teardown_method(self):
+        litellm.model_cost = self._saved_model_cost
+
+    def test_flag_off_allows_unmapped_model(self):
+        router = _router_with_mixed_costs()
+        # No exception: the flag is opt-in, default behavior is unchanged.
+        _block_unknown_cost_models_check(
+            enabled=False,
+            model=_UNMAPPED_MODEL,
+            llm_router=router,
+            route="/v1/chat/completions",
+        )
+
+    def test_flag_on_blocks_unmapped_model(self):
+        router = _router_with_mixed_costs()
+        with pytest.raises(ProxyException) as exc_info:
+            _block_unknown_cost_models_check(
+                enabled=True,
+                model=_UNMAPPED_MODEL,
+                llm_router=router,
+                route="/v1/chat/completions",
+            )
+        assert str(exc_info.value.code) == "400"
+        assert "brand-new-unmapped-model-xyz" in exc_info.value.message
+        assert "block_unknown_cost_models" in exc_info.value.message
+
+    def test_flag_on_allows_known_paid_model(self):
+        router = _router_with_mixed_costs()
+        _block_unknown_cost_models_check(
+            enabled=True,
+            model="paid-model",
+            llm_router=router,
+            route="/v1/chat/completions",
+        )
+
+    def test_flag_on_allows_explicitly_free_model(self):
+        router = _router_with_mixed_costs()
+        _block_unknown_cost_models_check(
+            enabled=True,
+            model="free-model",
+            llm_router=router,
+            route="/v1/chat/completions",
+        )
+
+    def test_flag_on_ignores_non_llm_route(self):
+        router = _router_with_mixed_costs()
+        # Management routes never call an LLM, so there is no spend to enforce.
+        _block_unknown_cost_models_check(
+            enabled=True,
+            model=_UNMAPPED_MODEL,
+            llm_router=router,
+            route="/key/generate",
+        )
+
+    def test_flag_on_blocks_list_containing_unmapped_model(self):
+        router = _router_with_mixed_costs()
+        with pytest.raises(ProxyException):
+            _block_unknown_cost_models_check(
+                enabled=True,
+                model=["paid-model", _UNMAPPED_MODEL],
+                llm_router=router,
+                route="/v1/chat/completions",
+            )
+
+
+class TestBlockUnknownCostModelsViaCommonChecks:
+    """End-to-end wiring through common_checks (the actual auth call site)."""
+
+    def setup_method(self):
+        self._saved_model_cost = copy.deepcopy(litellm.model_cost)
+
+    def teardown_method(self):
+        litellm.model_cost = self._saved_model_cost
+
+    async def _run_common_checks(
+        self, model: str, general_settings: dict, proxy_logging
+    ):
+        router = _router_with_mixed_costs()
+        return await common_checks(
+            request_body={"model": model},
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings=general_settings,
+            route="/v1/chat/completions",
+            llm_router=router,
+            proxy_logging_obj=proxy_logging,
+            valid_token=UserAPIKeyAuth(token="test-token"),
+            request=MagicMock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_unmapped_model_allowed_when_flag_off(self, mock_proxy_logging):
+        # Demonstrates the Denial-of-Wallet gap: without the flag, an unmapped
+        # model (whose spend can't be tracked) passes auth unimpeded.
+        result = await self._run_common_checks(
+            model=_UNMAPPED_MODEL,
+            general_settings={},
+            proxy_logging=mock_proxy_logging,
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_unmapped_model_blocked_when_flag_on(self, mock_proxy_logging):
+        with pytest.raises(ProxyException) as exc_info:
+            await self._run_common_checks(
+                model=_UNMAPPED_MODEL,
+                general_settings={"block_unknown_cost_models": True},
+                proxy_logging=mock_proxy_logging,
+            )
+        assert "brand-new-unmapped-model-xyz" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_known_model_allowed_when_flag_on(self, mock_proxy_logging):
+        result = await self._run_common_checks(
+            model="paid-model",
+            general_settings={"block_unknown_cost_models": True},
+            proxy_logging=mock_proxy_logging,
+        )
+        assert result is True

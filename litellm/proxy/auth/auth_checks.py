@@ -13,6 +13,7 @@ import asyncio
 import math
 import re
 import time
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import HTTPException, Request, status
@@ -150,27 +151,88 @@ def _get_router_zero_cost_cache(llm_router: Router) -> Optional[Dict[str, bool]]
     return cache if isinstance(cache, dict) else None
 
 
+class ModelCostClass(str, Enum):
+    """Tri-state classification of a model group's per-token pricing.
+
+    EXPLICIT_ZERO  pricing is configured and is exactly $0 (a deliberately free
+                   deployment); safe to bypass spend-based budget checks.
+    KNOWN_POSITIVE pricing is configured and greater than $0; budgets are
+                   enforceable because spend can be measured.
+    UNKNOWN        pricing cannot be determined (model not in the cost map,
+                   sparse auto-registration with no cost fields, or a lookup
+                   error). Spend cannot be measured, so a budget protecting the
+                   caller would silently never trip.
+    """
+
+    EXPLICIT_ZERO = "explicit_zero"
+    KNOWN_POSITIVE = "known_positive"
+    UNKNOWN = "unknown"
+
+
+def _classify_model_group_cost(model_name: str, llm_router: Router) -> ModelCostClass:
+    """Classify one model group's per-token pricing.
+
+    Uses the router's get_model_group_info so pattern/wildcard deployments
+    (e.g. ``anthropic/*``) resolve the same way they do during cost tracking.
+    A zero cost is only trusted when explicitly configured; a zero defaulted
+    from sparse auto-registration is treated as UNKNOWN.
+    See: https://github.com/BerriAI/litellm/issues/24770
+    """
+    safe_name = str(model_name).replace("\n", "").replace("\r", "")
+    try:
+        model_group_info = llm_router.get_model_group_info(model_group=model_name)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Error classifying cost for model %s: %s; treating as unknown cost",
+            safe_name,
+            str(e),
+        )
+        return ModelCostClass.UNKNOWN
+
+    if model_group_info is None:
+        verbose_proxy_logger.debug(
+            "No model group info found for %s; treating as unknown cost", safe_name
+        )
+        return ModelCostClass.UNKNOWN
+
+    input_cost = model_group_info.input_cost_per_token
+    output_cost = model_group_info.output_cost_per_token
+    if input_cost is None or output_cost is None:
+        verbose_proxy_logger.debug(
+            "Model %s has undefined cost (input: %s, output: %s); treating as "
+            "unknown cost",
+            safe_name,
+            input_cost,
+            output_cost,
+        )
+        return ModelCostClass.UNKNOWN
+    if input_cost > 0 or output_cost > 0:
+        return ModelCostClass.KNOWN_POSITIVE
+    if _is_cost_explicitly_configured(model_name, llm_router):
+        return ModelCostClass.EXPLICIT_ZERO
+    verbose_proxy_logger.debug(
+        "Model %s has zero cost but no explicit cost configuration; treating as "
+        "unknown cost (enforce budget)",
+        safe_name,
+    )
+    return ModelCostClass.UNKNOWN
+
+
 def _is_model_cost_zero(
     model: Optional[Union[str, List[str]]], llm_router: Optional[Router]
 ) -> bool:
     """
-    Check if a model has zero cost (no configured pricing).
+    Check if a model has zero cost (explicitly configured $0 pricing).
 
-    Uses the router's get_model_group_info method to get pricing information.
-
-    Args:
-        model: The model name or list of model names
-        llm_router: The LiteLLM router instance
-
-    Returns:
-        bool: True if all costs for the model are zero, False otherwise
+    Returns True only when every requested model group is an explicitly
+    configured free deployment. Unmapped / unknown-cost models return False so
+    spend-based budget checks are still enforced.
+    See: https://github.com/BerriAI/litellm/issues/24770
     """
     if model is None or llm_router is None:
         return False
 
-    # Handle list of models
     model_list = [model] if isinstance(model, str) else model
-
     zero_cost_cache = _get_router_zero_cost_cache(llm_router)
 
     for model_name in model_list:
@@ -180,75 +242,16 @@ def _is_model_cost_zero(
                 if cached is False:
                     return False
                 continue
-        try:
-            # Use router's get_model_group_info method directly for better reliability
-            model_group_info = llm_router.get_model_group_info(model_group=model_name)
 
-            if model_group_info is None:
-                # Model not found or no pricing info available
-                # Conservative approach: assume it has cost
-                verbose_proxy_logger.debug(
-                    f"No model group info found for {model_name}, assuming it has cost"
-                )
-                if zero_cost_cache is not None:
-                    zero_cost_cache[model_name] = False
-                return False
-
-            # Check costs for this model
-            # Only allow bypass if BOTH costs are explicitly set to 0 (not None)
-            input_cost = model_group_info.input_cost_per_token
-            output_cost = model_group_info.output_cost_per_token
-
-            # If costs are not explicitly configured (None), assume it has cost
-            if input_cost is None or output_cost is None:
-                verbose_proxy_logger.debug(
-                    f"Model {model_name} has undefined cost (input: {input_cost}, output: {output_cost}), assuming it has cost"
-                )
-                if zero_cost_cache is not None:
-                    zero_cost_cache[model_name] = False
-                return False
-
-            # If either cost is non-zero, return False
-            if input_cost > 0 or output_cost > 0:
-                verbose_proxy_logger.debug(
-                    f"Model {model_name} has non-zero cost (input: {input_cost}, output: {output_cost})"
-                )
-                if zero_cost_cache is not None:
-                    zero_cost_cache[model_name] = False
-                return False
-
-            # Costs are 0 — verify this is from explicit configuration,
-            # not from defaulted sparse auto-registration entries.
-            # See: https://github.com/BerriAI/litellm/issues/24770
-            safe_name = str(model_name).replace("\n", "").replace("\r", "")
-            if not _is_cost_explicitly_configured(model_name, llm_router):
-                verbose_proxy_logger.debug(
-                    "Model %s has zero cost but no explicit cost "
-                    "configuration in model_cost entry — treating as unknown "
-                    "cost (enforce budget)",
-                    safe_name,
-                )
-                if zero_cost_cache is not None:
-                    zero_cost_cache[model_name] = False
-                return False
-
-            verbose_proxy_logger.debug(
-                "Model %s has zero cost explicitly configured (input: %s, output: %s)",
-                safe_name,
-                input_cost,
-                output_cost,
-            )
-            if zero_cost_cache is not None:
-                zero_cost_cache[model_name] = True
-
-        except Exception as e:
-            # If we can't determine the cost, assume it has cost (conservative approach)
-            verbose_proxy_logger.debug(
-                f"Error checking cost for model {model_name}: {str(e)}, assuming it has cost"
-            )
+        is_explicit_zero = (
+            _classify_model_group_cost(model_name, llm_router)
+            == ModelCostClass.EXPLICIT_ZERO
+        )
+        if zero_cost_cache is not None:
+            zero_cost_cache[model_name] = is_explicit_zero
+        if not is_explicit_zero:
             return False
 
-    # All models checked have zero cost
     return True
 
 
@@ -272,6 +275,60 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
         if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
             return True
     return False
+
+
+def _request_has_unknown_cost_model(
+    model: str | list[str] | None, llm_router: Router | None
+) -> bool:
+    """Return True if any requested model group has a cost LiteLLM cannot
+    determine, meaning its spend cannot be measured for budget enforcement."""
+    if model is None or llm_router is None:
+        return False
+    model_list = [model] if isinstance(model, str) else model
+    return any(
+        _classify_model_group_cost(model_name, llm_router) == ModelCostClass.UNKNOWN
+        for model_name in model_list
+    )
+
+
+def _block_unknown_cost_models_check(
+    enabled: bool,
+    model: str | list[str] | None,
+    llm_router: Router | None,
+    route: str,
+) -> None:
+    """Fail closed against Denial of Wallet (OWASP LLM10 Unbounded Consumption).
+
+    When ``enabled`` (general_settings.block_unknown_cost_models), reject
+    inference requests whose per-token cost LiteLLM cannot determine. An
+    unpriced model yields a $0 cost that never moves the spend counters, so any
+    budget protecting the caller would silently never trip; a cap that can't
+    measure spend is no cap at all. Explicitly free deployments (cost configured
+    as 0) are unaffected because their budget checks are already skipped
+    upstream.
+    """
+    if not enabled:
+        return
+    if not RouteChecks.is_llm_api_route(route=route):
+        return
+    if not _request_has_unknown_cost_model(model=model, llm_router=llm_router):
+        return
+
+    model_str = model if isinstance(model, str) else ", ".join(model or [])
+    raise ProxyException(
+        message=(
+            f"Budget enforcement failed closed: LiteLLM does not know the cost "
+            f"of model '{model_str}', so its spend cannot be tracked and a "
+            f"configured budget cannot be enforced (OWASP LLM10 Denial of "
+            f"Wallet). Add the model to the cost map "
+            f"(model_prices_and_context_window.json) or set input_cost_per_token "
+            f"and output_cost_per_token on the deployment. To allow models with "
+            f"unknown cost, disable general_settings.block_unknown_cost_models."
+        ),
+        type=ProxyErrorTypes.bad_request_error,
+        param="model",
+        code=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 async def _run_project_checks(
@@ -656,6 +713,16 @@ async def common_checks(
 
     # If this is a free model, skip all budget checks
     if not skip_budget_checks:
+        # Fail closed on unbounded consumption (OWASP LLM10 Denial of Wallet):
+        # refuse models whose cost can't be measured, since their spend (and
+        # therefore any budget) can't be enforced. Opt-in via general_settings.
+        _block_unknown_cost_models_check(
+            enabled=general_settings.get("block_unknown_cost_models") is True,
+            model=_model,
+            llm_router=llm_router,
+            route=route,
+        )
+
         # 3. If team is in budget
         with tracer.trace("litellm.proxy.auth.common_checks.team_max_budget_check"):
             await _team_max_budget_check(

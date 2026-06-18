@@ -2367,6 +2367,23 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
+    block_unknown_cost_models: bool | None = Field(
+        None,
+        description=(
+            "Fail closed against Denial of Wallet (OWASP LLM10 Unbounded "
+            "Consumption). When True, the proxy rejects LLM API requests for "
+            "models whose per-token cost it cannot determine, e.g. a brand new "
+            "model reached via a wildcard route like 'anthropic/*' that is not "
+            "yet in the model cost map. Such models produce a $0 cost that never "
+            "moves the spend counters, so any configured key/user/team budget "
+            "would silently never trip and could be spent without limit. "
+            "Explicitly free deployments (input_cost_per_token and "
+            "output_cost_per_token set to 0) are unaffected. To serve an "
+            "unmapped model under this flag, add it to "
+            "model_prices_and_context_window.json or set explicit per-token "
+            "pricing on the deployment. Default is False."
+        ),
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
