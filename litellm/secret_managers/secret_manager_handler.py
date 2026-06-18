@@ -23,7 +23,7 @@ def _is_base64(s):
         return False
 
 
-def get_secret_from_manager(  # noqa: PLR0915
+def get_secret_from_manager(
     client: Any,
     key_manager: str,
     secret_name: str,

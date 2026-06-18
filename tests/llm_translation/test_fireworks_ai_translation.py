@@ -43,12 +43,14 @@ def test_map_openai_params_tool_choice():
 
 def test_map_response_format():
     """
-    Test that the response format is translated correctly.
+    json_schema response_format is passed through to Fireworks unchanged.
 
-    h/t to https://github.com/DaveDeCaprio (@DaveDeCaprio) for the test case
+    Fireworks accepts the OpenAI strict json_schema shape natively. The earlier
+    downgrade to {type: json_object, schema: ...} silently dropped `strict` and
+    `name`, producing a request that Fireworks treats as "any valid JSON" per
+    its docs, disabling grammar-guided decoding.
 
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/6797
-    Fireworks AI Ref: https://docs.fireworks.ai/structured-responses/structured-response-formatting#step-1-import-libraries
+    Ref: https://docs.fireworks.ai/structured-responses/structured-response-formatting
     """
     response_format = {
         "type": "json_schema",
@@ -65,16 +67,12 @@ def test_map_response_format():
     result = fireworks.map_openai_params(
         {"response_format": response_format}, {}, "some_model", drop_params=False
     )
-    assert result == {
-        "response_format": {
-            "type": "json_object",
-            "schema": {
-                "properties": {"result": {"type": "boolean"}},
-                "required": ["result"],
-                "type": "object",
-            },
-        }
-    }
+    assert result == {"response_format": response_format}
+
+
+_AUDIO_FILE_PATH = os.path.join(
+    os.path.dirname(os.path.realpath(__file__)), "gettysburg.wav"
+)
 
 
 class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
@@ -87,26 +85,92 @@ class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.FIREWORKS_AI
 
+    def test_audio_transcription(self):
+        from unittest.mock import MagicMock
+
+        from openai.types.audio import Transcription
+
+        audio_file = open(_AUDIO_FILE_PATH, "rb")
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions.create.return_value = Transcription(
+            text="four score and seven years ago"
+        )
+
+        transcript = transcription(
+            **self.get_base_audio_transcription_call_args(),
+            file=audio_file,
+            api_key="fw-test-key",
+            client=mock_client,
+        )
+
+        assert transcript.text == "four score and seven years ago"
+        sent = mock_client.audio.transcriptions.create.call_args.kwargs
+        assert sent["model"] == "whisper-v3"
+        assert sent["file"] is audio_file
+
+    @pytest.mark.asyncio
+    async def test_audio_transcription_async(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from openai.types.audio import Transcription
+
+        audio_file = open(_AUDIO_FILE_PATH, "rb")
+        raw_response = MagicMock()
+        raw_response.headers = {}
+        raw_response.parse.return_value = Transcription(
+            text="four score and seven years ago"
+        )
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions.with_raw_response.create = AsyncMock(
+            return_value=raw_response
+        )
+
+        transcript = await litellm.atranscription(
+            **self.get_base_audio_transcription_call_args(),
+            file=audio_file,
+            api_key="fw-test-key",
+            client=mock_client,
+        )
+
+        assert transcript.text == "four score and seven years ago"
+        sent = (
+            mock_client.audio.transcriptions.with_raw_response.create.call_args.kwargs
+        )
+        assert sent["model"] == "whisper-v3"
+        assert sent["file"] is audio_file
+
 
 @pytest.mark.parametrize(
     "disable_add_transform_inline_image_block",
     [True, False],
 )
 def test_document_inlining_example(disable_add_transform_inline_image_block):
-    litellm.set_verbose = True
-    if disable_add_transform_inline_image_block is True:
-        with pytest.raises(Exception):
-            completion = litellm.completion(
-                model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+    """
+    Document inlining appends ``#transform=inline`` to image/PDF URLs in the
+    outgoing request unless explicitly disabled. Assert the transform on the
+    serialized payload rather than making a live Fireworks call — the live
+    call only proved the model responded and broke whenever Fireworks rotated
+    its serverless model catalog.
+    """
+    from unittest.mock import patch
+
+    from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    pdf_url = "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
                 messages=[
                     {
                         "role": "user",
                         "content": [
                             {
                                 "type": "image_url",
-                                "image_url": {
-                                    "url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
-                                },
+                                "image_url": {"url": pdf_url},
                             },
                             {
                                 "type": "text",
@@ -116,19 +180,19 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
                     }
                 ],
                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
+                client=client,
             )
-    else:
-        completion = litellm.completion(
-            model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a test request, write a short poem",
-                },
-            ],
-            disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
-        )
-        print(completion)
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        sent_url = json_data["messages"][0]["content"][0]["image_url"]["url"]
+        if disable_add_transform_inline_image_block is True:
+            assert sent_url == pdf_url
+            assert "#transform=inline" not in sent_url
+        else:
+            assert sent_url == pdf_url + "#transform=inline"
 
 
 @pytest.mark.parametrize(
@@ -215,7 +279,7 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
     ) as mock_post:
         try:
             completion(
-                model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
                 messages=[
                     {
                         "role": "user",

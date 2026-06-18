@@ -138,7 +138,7 @@ class SagemakerLLM(BaseAWSLLM):
 
         return prepped_request
 
-    def completion(  # noqa: PLR0915
+    def completion(
         self,
         model: str,
         messages: list,
@@ -578,7 +578,7 @@ class SagemakerLLM(BaseAWSLLM):
         logger_fn=None,
     ):
         """
-        Supports both Huggingface Jumpstart embeddings and Voyage models
+        Supports Hugging Face (TGI), Voyage, and Cohere embedding endpoints
         """
         ### BOTO3 INIT
         import boto3

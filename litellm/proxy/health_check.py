@@ -6,6 +6,7 @@ import random
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from typing import List, Optional
 
 import litellm
@@ -29,8 +30,69 @@ ILLEGAL_DISPLAY_PARAMS = [
     "exception",  # internal; not JSON-serializable, never for display
     "litellm_metadata",  # internal tracking metadata with auth objects; not for display
 ]
+# Provider routing fields. Allowed for proxy admins so they can see which
+# region/version a deployment is checking; gated at the endpoint layer for
+# non-admin callers (see _strip_admin_only_fields_from_health_result).
+ADMIN_ONLY_HEALTH_DISPLAY_PARAMS = ("api_base", "api_version")
 
 MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
+
+# Modes whose health-check probe is a chat-style completion call and
+# therefore accept `max_tokens`. Other modes (embedding, image_generation,
+# audio_*, rerank, video_generation, ocr, search, moderation, ...) hit
+# endpoints that reject unknown fields with 400 "Unknown parameter:
+# 'max_tokens'". Allow-list so new modes are safe by default.
+# Per-deployment override: `model_info.health_check_supports_max_tokens`.
+_MAX_TOKEN_SUPPORT_MODES: frozenset[str] = frozenset(
+    {"chat", "completion", "responses"}
+)
+
+
+def _resolve_health_check_mode(
+    model_info: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> str | None:
+    """
+    Effective mode for a deployment's health-check probe.
+
+    Prefers operator-set `model_info.mode`; otherwise resolves it from the model
+    cost map, which understands `bedrock/` and cross-region inference-profile
+    prefixes (`us.`, `eu.`, `apac.`). Without this, non-chat Bedrock deployments
+    (e.g. embeddings) are probed as chat, so `max_tokens` is injected and the
+    request 400s on "extraneous key [max_tokens]".
+    """
+    explicit_mode = model_info.get("mode")
+    if isinstance(explicit_mode, str):
+        return explicit_mode
+    model = litellm_params.get("model")
+    if not isinstance(model, str):
+        return None
+    try:
+        return litellm.get_model_info(model=model).get("mode")
+    except Exception:
+        return None
+
+
+def _should_inject_health_check_max_tokens(
+    model_info: Mapping[str, object], mode: str | None
+) -> bool:
+    """
+    Whether the health-check probe should include `max_tokens`.
+
+    Order:
+      1. `model_info.health_check_supports_max_tokens` (operator override).
+      2. `_MAX_TOKEN_SUPPORT_MODES`. An unresolvable mode is treated as `chat`
+         for backward compatibility.
+    """
+    explicit = model_info.get("health_check_supports_max_tokens")
+    if explicit is not None:
+        return bool(explicit)
+    return (mode or "chat") in _MAX_TOKEN_SUPPORT_MODES
+
+
+# Health-check modes that forward `reasoning_effort` to the provider (chat-style calls).
+_HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT = frozenset(
+    (None, "chat", "completion")
+)
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -77,6 +139,24 @@ def _clean_endpoint_data(endpoint_data: dict, details: Optional[bool] = True):
     )
 
 
+def health_check_filter_kwargs_from_general_settings(
+    general_settings: Optional[dict],
+) -> dict:
+    """
+    Build kwargs for ``perform_health_check`` from ``general_settings``.
+
+    When ``health_check_skip_disabled_background_models`` is true, deployments with
+    ``model_info.disable_background_health_check`` are omitted from health runs
+    (including on-demand ``GET /health``), matching the background loop behavior.
+    """
+    g = general_settings or {}
+    return {
+        "health_check_skip_disabled_background_models": bool(
+            g.get("health_check_skip_disabled_background_models", False)
+        ),
+    }
+
+
 def filter_deployments_by_id(
     model_list: List,
 ) -> List:
@@ -113,7 +193,9 @@ async def run_with_timeout(task, timeout):
 async def _run_model_health_check(model: dict):
     litellm_params = model["litellm_params"]
     model_info = model.get("model_info", {})
-    mode = model_info.get("mode", None)
+    mode = _resolve_health_check_mode(
+        model_info, litellm_params  # any-ok: untyped router config dict
+    )
     litellm_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
 
@@ -362,19 +444,38 @@ def _update_litellm_params_for_health_check(
     Update the litellm params for health check.
 
     - gets a short `messages` param for health check
+    - adds a bounded `max_tokens` when the deployment is a chat-style mode
+      (`chat`, `completion`, `responses`) or the operator explicitly opts in
+      via `model_info.health_check_supports_max_tokens`. Non-chat endpoints
+      (image, embedding, audio_*, rerank, video, ocr, search, moderation, ...)
+      reject unknown fields with 400 "Unknown parameter: 'max_tokens'".
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
-    - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID
+    - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
     """
+    mode = _resolve_health_check_mode(
+        model_info, litellm_params  # any-ok: untyped router config dict
+    )
     litellm_params["messages"] = _get_random_llm_message()
-    _resolved_max_tokens = _resolve_health_check_max_tokens(model_info, litellm_params)
-    if _resolved_max_tokens is not None:
-        litellm_params["max_tokens"] = _resolved_max_tokens
+    if _should_inject_health_check_max_tokens(
+        model_info, mode  # any-ok: untyped router config dict
+    ):
+        _resolved_max_tokens = _resolve_health_check_max_tokens(
+            model_info, litellm_params
+        )
+        if _resolved_max_tokens is not None:
+            litellm_params["max_tokens"] = _resolved_max_tokens
+
+    # Per-model reasoning effort for health checks only (e.g. reasoning_effort=none).
+    if mode in _HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT:
+        _hc_reasoning_effort = model_info.get("health_check_reasoning_effort", None)
+        if _hc_reasoning_effort is not None:
+            litellm_params["reasoning_effort"] = _hc_reasoning_effort
 
     _health_check_model = model_info.get("health_check_model", None)
     if _health_check_model is not None:
         litellm_params["model"] = _health_check_model
-    if model_info.get("mode", None) == "audio_speech":
+    if mode == "audio_speech":
         litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
 
     # Handle Bedrock region routing format: bedrock/region/model
@@ -411,6 +512,10 @@ def _update_litellm_params_for_health_check(
 
         model = "/".join(filtered_parts)
         litellm_params["model"] = model
+        if not litellm_params.get("custom_llm_provider"):  # any-ok: untyped router dict
+            litellm_params["custom_llm_provider"] = (  # any-ok: untyped router dict
+                "bedrock"
+            )
 
     return litellm_params
 
@@ -423,6 +528,7 @@ async def perform_health_check(
     model_id: Optional[str] = None,
     max_concurrency: Optional[int] = None,
     instrumentation_context: Optional[dict] = None,
+    health_check_skip_disabled_background_models: bool = False,
 ):
     """
     Perform a health check on the system.
@@ -430,6 +536,12 @@ async def perform_health_check(
     When model_id is provided, only the deployment with that id is checked
     (so models that share the same name but have different ids are checked separately).
     When model (name) is provided, all deployments matching that name are checked.
+
+    When ``health_check_skip_disabled_background_models`` is True (via
+    ``general_settings.health_check_skip_disabled_background_models``), deployments
+    with ``model_info.disable_background_health_check: true`` are omitted from
+    this run (including targeted ``/health`` queries), consistent with the
+    background health loop.
 
     Returns:
         (bool): True if the health check passes, False otherwise.
@@ -470,6 +582,23 @@ async def perform_health_check(
         if _new_model_list == []:
             _new_model_list = [x for x in model_list if x["model_name"] == model]
         model_list = _new_model_list
+
+    if health_check_skip_disabled_background_models:
+        model_list = [
+            x
+            for x in model_list
+            if not (x.get("model_info") or {}).get(
+                "disable_background_health_check", False
+            )
+        ]
+    if not model_list:
+        if instrumentation_enabled:
+            logger.debug(
+                "health_check_cycle_skipped source=%s cycle_id=%s reason=no_models_after_filter",
+                source,
+                cycle_id,
+            )
+        return [], [], {}
 
     post_filter_model_count = len(model_list)
     model_list = filter_deployments_by_id(

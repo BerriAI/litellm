@@ -25,8 +25,8 @@ async def make_calls_until_budget_exceeded(session, key: str, call_function, **k
 
         # Check error structure and values that should be consistent
         assert (
-            error_dict["code"] == "400"
-        ), f"Expected error code 400, got: {error_dict['code']}"
+            error_dict["code"] == "429"
+        ), f"Expected error code 429, got: {error_dict['code']}"
         assert (
             error_dict["type"] == "budget_exceeded"
         ), f"Expected error type budget_exceeded, got: {error_dict['type']}"

@@ -86,6 +86,76 @@ def test_check_if_part_exists_in_parts_camel_case_snake_case():
     assert check_if_part_exists_in_parts(parts_mixed, part_mixed_casing)
 
 
+def test_cached_content_respects_modify_params_for_cache_incompatible_fields():
+    """Regression: cachedContent drops system/tools/toolConfig only when modify_params=True."""
+    import litellm
+
+    cache_name = "projects/p/locations/us-central1/cachedContents/abc123"
+    messages = [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "hi"},
+    ]
+    optional_params = {
+        "tools": [
+            {
+                "functionDeclarations": [
+                    {"name": "get_weather", "description": "Get weather"},
+                ]
+            }
+        ],
+        "tool_choice": {"functionCallingConfig": {"mode": "AUTO"}},
+    }
+
+    original_modify_params = litellm.modify_params
+    try:
+        # With modify_params=False (default), keep fields even with cachedContent.
+        litellm.modify_params = False
+        result = _transform_request_body(
+            messages=list(messages),
+            model="gemini-2.5-pro",
+            optional_params=dict(optional_params),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=cache_name,
+        )
+        assert result.get("cachedContent") == cache_name
+        assert "system_instruction" in result
+        assert "tools" in result
+        assert "toolConfig" in result
+        assert "contents" in result
+
+        # With modify_params=True, drop cache-incompatible fields.
+        litellm.modify_params = True
+        result_modify_true = _transform_request_body(
+            messages=list(messages),
+            model="gemini-2.5-pro",
+            optional_params=dict(optional_params),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=cache_name,
+        )
+        assert result_modify_true.get("cachedContent") == cache_name
+        assert "system_instruction" not in result_modify_true
+        assert "tools" not in result_modify_true
+        assert "toolConfig" not in result_modify_true
+        assert "contents" in result_modify_true
+
+        # Without cache, fields are always included.
+        result_no_cache = _transform_request_body(
+            messages=list(messages),
+            model="gemini-2.5-pro",
+            optional_params=dict(optional_params),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=None,
+        )
+        assert "system_instruction" in result_no_cache
+        assert "tools" in result_no_cache
+        assert "toolConfig" in result_no_cache
+    finally:
+        litellm.modify_params = original_modify_params
+
+
 # Tests for issue #14556: Labels field provider-aware filtering
 def test_google_genai_excludes_labels():
     """Test that Google GenAI/AI Studio endpoints exclude labels when custom_llm_provider='gemini'"""
@@ -213,6 +283,80 @@ def test_extra_body_tags_not_forwarded_to_vertex_ai():
     assert "tags" not in result
     assert "custom_param" in result
     assert result["custom_param"] == "allowed"
+
+
+def test_extra_body_google_maps_rewrites_json_response_format():
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "response_mime_type": "application/json",
+        "response_schema": {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+        },
+        "extra_body": {
+            "tools": [{"googleMaps": {}}],
+        },
+    }
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-2.5-pro",
+        optional_params=optional_params,
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    generation_config = result["generationConfig"]
+    assert "response_mime_type" not in generation_config
+    assert generation_config["responseFormat"] == {
+        "text": {
+            "mimeType": "APPLICATION_JSON",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+            },
+        }
+    }
+
+
+def test_extra_body_generation_config_cannot_restore_google_maps_json_mime_type():
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "tools": [{"googleMaps": {}}],
+        "response_mime_type": "application/json",
+        "extra_body": {
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "response_json_schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                },
+            },
+        },
+    }
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-2.5-pro",
+        optional_params=optional_params,
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    generation_config = result["generationConfig"]
+    assert "response_mime_type" not in generation_config
+    assert "response_json_schema" not in generation_config
+    assert generation_config["responseFormat"] == {
+        "text": {
+            "mimeType": "APPLICATION_JSON",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+            },
+        }
+    }
 
 
 def test_metadata_to_labels_vertex_only():
@@ -1084,42 +1228,80 @@ def test_convert_tool_response_with_base64_image():
         ]
     }
 
-    # Convert tool response (returns list when image is present)
+    # Convert tool response with nested multimodal functionResponse.parts.
     result = convert_to_gemini_tool_call_result(
         tool_message, last_message_with_tool_calls
     )
 
-    # Verify results - should be a list with 2 parts (function_response + inline_data)
-    assert isinstance(
-        result, list
-    ), f"Expected list when image present, got {type(result)}"
-    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-
-    # Find function_response part and inline_data part
-    function_response_part = None
-    inline_data_part = None
-    for part in result:
-        if "function_response" in part:
-            function_response_part = part
-        elif "inline_data" in part:
-            inline_data_part = part
-
-    # Check function_response exists
-    assert function_response_part is not None, "Missing function_response part"
-    function_response = function_response_part["function_response"]
+    assert isinstance(result, list), "Should return a parts list when media is present"
+    assert len(result) == 1, "Should return one function_response part"
+    result_part = result[0]
+    assert "function_response" in result_part
+    assert "inline_data" not in result_part
+    function_response = result_part["function_response"]
     assert function_response["name"] == "click_at"
     assert "response" in function_response
     # Verify JSON response is parsed correctly
     assert "url" in function_response["response"]
     assert function_response["response"]["url"] == "https://example.com"
 
-    # Check inline_data exists
-    assert inline_data_part is not None, "Missing inline_data part"
-    inline_data: BlobType = inline_data_part["inline_data"]
+    # Check inline_data is nested under functionResponse.parts.
+    assert "parts" in function_response
+    assert len(function_response["parts"]) == 1
+    inline_data: BlobType = function_response["parts"][0]["inline_data"]
     assert "data" in inline_data
     assert "mime_type" in inline_data
     assert inline_data["mime_type"] == "image/png"
     assert inline_data["data"] == test_image_base64
+
+
+def test_gemini_history_nests_multimodal_tool_response_parts():
+    """Full history conversion should not emit sibling inline_data tool result parts."""
+    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    messages = [
+        {"role": "user", "content": "Get me an image"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_get_image",
+                    "type": "function",
+                    "function": {"name": "get_image", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_get_image",
+            "content": [
+                {"type": "text", "text": '{"image_ref": "inline"}'},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": test_image_base64,
+                    },
+                },
+            ],
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+
+    tool_response_parts = contents[-1]["parts"]
+    assert len(tool_response_parts) == 1
+    assert "inline_data" not in tool_response_parts[0]
+    function_response = tool_response_parts[0]["function_response"]
+    assert function_response["parts"] == [
+        {
+            "inline_data": {
+                "data": test_image_base64,
+                "mime_type": "image/png",
+            }
+        }
+    ]
 
 
 def test_convert_tool_response_with_url_image():
@@ -1155,24 +1337,20 @@ def test_convert_tool_response_with_url_image():
             tool_message, last_message_with_tool_calls
         )
 
-        # Should be a list with 2 parts when image is present
         assert isinstance(
             result, list
-        ), f"Expected list when image present, got {type(result)}"
-        assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-
-        # Find parts
-        function_response_part = next(p for p in result if "function_response" in p)
-        inline_data_part = next(p for p in result if "inline_data" in p)
-
-        # Check function_response exists
-        assert function_response_part is not None, "Missing function_response part"
-        function_response = function_response_part["function_response"]
+        ), "Should return a parts list when media is present"
+        assert len(result) == 1, "Should return one function_response part"
+        result_part = result[0]
+        assert "function_response" in result_part
+        assert "inline_data" not in result_part
+        function_response = result_part["function_response"]
         assert function_response["name"] == "type_text_at"
 
-        # Check inline_data exists (URL should be downloaded and converted)
-        assert inline_data_part is not None, "Missing inline_data part"
-        inline_data: BlobType = inline_data_part["inline_data"]
+        # Check inline_data is nested under functionResponse.parts.
+        assert "parts" in function_response
+        assert len(function_response["parts"]) == 1
+        inline_data: BlobType = function_response["parts"][0]["inline_data"]
         assert "data" in inline_data
         assert "mime_type" in inline_data
     except Exception as e:
@@ -1291,6 +1469,53 @@ def test_file_data_field_order_gcs_urls():
     ), "mime_type must come before file_uri in the file_data dict"
 
 
+def test_gemini_files_api_uri_without_format():
+    """
+    Test that Gemini Files API URIs work WITHOUT an explicit format/mime_type.
+
+    When a user uploads a file via the Gemini Files API and then references it
+    by URI (https://generativelanguage.googleapis.com/v1beta/files/...),
+    the file is already on Google's servers. These URLs return 403 when
+    fetched directly, so _process_gemini_media must NOT try to resolve the
+    MIME type via HTTP.  Instead it should pass the URI through as file_data
+    and let the Gemini API resolve the type from its stored metadata.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/24907
+    """
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+
+    file_url = "https://generativelanguage.googleapis.com/v1beta/files/37eh7rsw1vfe"
+
+    # Should NOT raise — previously this hit the generic https:// handler
+    # which called _get_image_mime_type_from_url() and got a 403.
+    result = _process_gemini_media(image_url=file_url)
+
+    assert "file_data" in result
+    file_data = result["file_data"]
+    assert file_data["file_uri"] == file_url
+    # When no format is provided, mime_type should be absent so the
+    # Gemini API infers it from the stored file metadata.
+    assert "mime_type" not in file_data
+
+
+def test_gemini_files_api_uri_with_format():
+    """
+    Test that Gemini Files API URIs correctly forward an explicit format.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/24907
+    """
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+
+    file_url = "https://generativelanguage.googleapis.com/v1beta/files/n1vhxa28lyaw"
+
+    result = _process_gemini_media(image_url=file_url, format="text/plain")
+
+    assert "file_data" in result
+    file_data = result["file_data"]
+    assert file_data["file_uri"] == file_url
+    assert file_data["mime_type"] == "text/plain"
+
+
 def test_extract_file_data_with_path_object():
     """
     Test that filename is correctly extracted from Path objects for MIME type detection.
@@ -1337,40 +1562,34 @@ def test_extract_file_data_with_path_object():
         os.unlink(tmp_path)
 
 
-def test_extract_file_data_with_string_path():
-    """Test that filename is correctly extracted from string paths."""
+def test_extract_file_data_with_pathlib_path():
+    """Test that filename is correctly extracted from pathlib.Path inputs.
+    Bare str paths are rejected — when this runs in a proxy request handler
+    the value is attacker-controlled and opening it as a path is an LFI."""
     import os
     import tempfile
+    from pathlib import Path
 
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         extract_file_data,
     )
 
-    # Create a temporary WAV file
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(b"fake wav content")
-        tmp_path = tmp.name
+        tmp_path = Path(tmp.name)
 
     try:
-        # Test with string path
         extracted = extract_file_data(tmp_path)
 
-        # Verify filename was extracted
         assert extracted["filename"] is not None
         assert extracted["filename"].endswith(".wav")
-
-        # Verify MIME type was correctly detected (can be audio/wav or audio/x-wav depending on system)
         assert extracted["content_type"] in [
             "audio/wav",
             "audio/x-wav",
         ], f"Expected 'audio/wav' or 'audio/x-wav' but got '{extracted['content_type']}'"
-
-        # Verify content was read
         assert extracted["content"] == b"fake wav content"
-
     finally:
-        # Clean up temporary file
-        os.unlink(tmp_path)
+        os.unlink(str(tmp_path))
 
 
 def test_extract_file_data_with_tuple_format():
@@ -1393,35 +1612,29 @@ def test_extract_file_data_with_tuple_format():
 
 
 def test_extract_file_data_fallback_to_octet_stream():
-    """Test that unknown file types fall back to application/octet-stream."""
+    """Unknown file types fall back to application/octet-stream."""
     import os
     import tempfile
+    from pathlib import Path
 
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         extract_file_data,
     )
 
-    # Create a temporary file with unknown extension
     with tempfile.NamedTemporaryFile(suffix=".xyz123", delete=False) as tmp:
         tmp.write(b"unknown content")
-        tmp_path = tmp.name
+        tmp_path = Path(tmp.name)
 
     try:
-        # Test with unknown file type
         extracted = extract_file_data(tmp_path)
 
-        # Verify filename was extracted
         assert extracted["filename"] is not None
         assert extracted["filename"].endswith(".xyz123")
-
-        # Verify MIME type falls back to octet-stream
         assert (
             extracted["content_type"] == "application/octet-stream"
         ), f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
-
     finally:
-        # Clean up temporary file
-        os.unlink(tmp_path)
+        os.unlink(str(tmp_path))
 
 
 def test_convert_tool_response_with_pdf_file():
@@ -1453,38 +1666,27 @@ def test_convert_tool_response_with_pdf_file():
         ]
     }
 
-    # Convert tool response (returns list when file is present)
+    # Convert tool response with nested multimodal functionResponse.parts.
     result = convert_to_gemini_tool_call_result(
         tool_message, last_message_with_tool_calls
     )
 
-    # Verify results - should be a list with 2 parts (function_response + inline_data)
-    assert isinstance(
-        result, list
-    ), f"Expected list when file present, got {type(result)}"
-    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-
-    # Find function_response part and inline_data part
-    function_response_part = None
-    inline_data_part = None
-    for part in result:
-        if "function_response" in part:
-            function_response_part = part
-        elif "inline_data" in part:
-            inline_data_part = part
-
-    # Check function_response exists
-    assert function_response_part is not None, "Missing function_response part"
-    function_response = function_response_part["function_response"]
+    assert isinstance(result, list), "Should return a parts list when media is present"
+    assert len(result) == 1, "Should return one function_response part"
+    result_part = result[0]
+    assert "function_response" in result_part
+    assert "inline_data" not in result_part
+    function_response = result_part["function_response"]
     assert function_response["name"] == "analyze_document"
     assert "response" in function_response
     # Verify JSON response is parsed correctly
     assert "status" in function_response["response"]
     assert function_response["response"]["status"] == "success"
 
-    # Check inline_data exists
-    assert inline_data_part is not None, "Missing inline_data part"
-    inline_data: BlobType = inline_data_part["inline_data"]
+    # Check inline_data is nested under functionResponse.parts.
+    assert "parts" in function_response
+    assert len(function_response["parts"]) == 1
+    inline_data: BlobType = function_response["parts"][0]["inline_data"]
     assert "data" in inline_data
     assert "mime_type" in inline_data
     assert inline_data["mime_type"] == "application/pdf"
@@ -1519,21 +1721,13 @@ def test_convert_tool_response_with_input_file_type():
         tool_message, last_message_with_tool_calls
     )
 
-    # Verify results
-    assert isinstance(
-        result, list
-    ), f"Expected list when file present, got {type(result)}"
-    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-
-    # Find inline_data part
-    inline_data_part = None
-    for part in result:
-        if "inline_data" in part:
-            inline_data_part = part
-
-    # Check inline_data exists
-    assert inline_data_part is not None, "Missing inline_data part"
-    assert inline_data_part["inline_data"]["mime_type"] == "application/pdf"
+    # Check inline_data is nested under functionResponse.parts.
+    assert isinstance(result, list), "Should return a parts list when media is present"
+    assert len(result) == 1, "Should return one function_response part"
+    function_response = result[0]["function_response"]
+    assert (
+        function_response["parts"][0]["inline_data"]["mime_type"] == "application/pdf"
+    )
 
 
 def test_convert_tool_response_with_nested_file_object():
@@ -1564,21 +1758,11 @@ def test_convert_tool_response_with_nested_file_object():
         tool_message, last_message_with_tool_calls
     )
 
-    # Verify results - should be a list with 2 parts
-    assert isinstance(
-        result, list
-    ), f"Expected list when file present, got {type(result)}"
-    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-
-    # Find inline_data part
-    inline_data_part = None
-    for part in result:
-        if "inline_data" in part:
-            inline_data_part = part
-
-    # Check inline_data exists
-    assert inline_data_part is not None, "Missing inline_data part"
-    inline_data: BlobType = inline_data_part["inline_data"]
+    # Check inline_data is nested under functionResponse.parts.
+    assert isinstance(result, list), "Should return a parts list when media is present"
+    assert len(result) == 1, "Should return one function_response part"
+    function_response = result[0]["function_response"]
+    inline_data: BlobType = function_response["parts"][0]["inline_data"]
     assert "data" in inline_data
     assert "mime_type" in inline_data
     assert inline_data["mime_type"] == "application/pdf"

@@ -19,7 +19,10 @@ def cost_router(call_type: CallTypes) -> Literal["cost_per_token", "cost_per_sec
 
 
 def cost_per_token(
-    model: str, usage: Usage, service_tier: Optional[str] = None
+    model: str,
+    usage: Usage,
+    service_tier: Optional[str] = None,
+    data_residency: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -27,6 +30,9 @@ def cost_per_token(
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
+        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us"),
+          inferred from api_base. Applies the model's regional-processing
+          uplift multiplier when set.
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -37,6 +43,7 @@ def cost_per_token(
         usage=usage,
         custom_llm_provider="openai",
         service_tier=service_tier,
+        data_residency=data_residency,
     )
     # ### Non-cached text tokens
     # non_cached_text_tokens = usage.prompt_tokens

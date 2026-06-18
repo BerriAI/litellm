@@ -25,7 +25,6 @@ else:
     LiteLLMLoggingObj = Any
 
 MILVUS_OPTIONAL_PARAMS = {
-    "dbName",
     "annsField",
     "limit",
     "filter",
@@ -33,7 +32,6 @@ MILVUS_OPTIONAL_PARAMS = {
     "groupingField",
     "outputFields",
     "searchParams",
-    "partitionNames",
     "consistencyLevel",
 }
 
@@ -130,6 +128,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Transform search request for Azure AI Search API
@@ -172,12 +171,20 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         url = f"{api_base}/v2/vectordb/entities/search"
 
         # Build the request body for Azure AI Search with vector search
-        request_body = {
+        request_body: Dict[str, Any] = {
             "collectionName": index_name,
             "data": [query_vector],
             "annsField": "book_intro_vector",
             **vector_store_search_optional_params,
         }
+
+        db_name = litellm_params.get("milvus_db_name")
+        if db_name:
+            request_body["dbName"] = db_name
+
+        partition_names = litellm_params.get("milvus_partition_names")
+        if partition_names:
+            request_body["partitionNames"] = partition_names
 
         #########################################################
         # Update logging object with details of the request

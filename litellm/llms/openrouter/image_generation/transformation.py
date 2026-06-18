@@ -49,7 +49,6 @@ from litellm.types.utils import (
 )
 from litellm.llms.openrouter.common_utils import OpenRouterException
 
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:

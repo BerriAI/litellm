@@ -3,6 +3,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   ApiOutlined,
+  ApartmentOutlined,
   AppstoreOutlined,
   AuditOutlined,
   BankOutlined,
@@ -31,37 +32,19 @@ import {
 import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
-import { all_admin_roles, internalUserRoles, isAdminRole, isUserTeamAdminForAnyTeam, rolesWithWriteAccess } from "../utils/roles";
+import {
+  all_admin_roles,
+  internalUserRoles,
+  isAdminRole,
+  isUserTeamAdminForAnyTeam,
+  rolesAllowedToViewWriteScopedPages,
+  rolesWithWriteAccess,
+} from "../utils/roles";
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import UsageIndicator from "./UsageIndicator";
-import { serverRootPath } from "./networking";
+import { MIGRATED_PAGES, migratedHref, legacyPageHref } from "@/utils/migratedPages";
 const { Sider } = Layout;
-
-/**
- * Pages migrated to path-based routing under (dashboard)/.
- * Key = legacy page id, Value = route segment.
- * Keep in sync with MIGRATED_PAGES in (dashboard)/layout.tsx and
- * LEGACY_REDIRECTS in app/page.tsx.
- */
-const MIGRATED_PAGES: Record<string, string> = {
-  "api-reference": "api-reference",
-};
-
-/** Build an absolute href for a migrated page, respecting base URL + serverRootPath. */
-function migratedHref(routeSegment: string): string {
-  const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
-  const trimmed = raw.replace(/^\/+|\/+$/g, "");
-  let base = trimmed ? `/${trimmed}/` : "/";
-
-  if (serverRootPath && serverRootPath !== "/") {
-    const cleanRoot = serverRootPath.replace(/\/+$/, "");
-    const cleanBase = base.replace(/^\/+/, "");
-    base = `${cleanRoot}/${cleanBase}`;
-  }
-
-  return `${base}${routeSegment}`;
-}
 
 // Define the props type
 interface SidebarProps {
@@ -117,14 +100,38 @@ const menuGroups: MenuGroup[] = [
         page: "models",
         label: "Models + Endpoints",
         icon: <BlockOutlined />,
-        roles: rolesWithWriteAccess,
+        // Admin Viewer can view models read-only (write actions are
+        // hidden inside the page); Playground above stays write-only.
+        roles: rolesAllowedToViewWriteScopedPages,
       },
       {
-        key: "agents",
-        page: "agents",
-        label: "Agents",
+        key: "agentic",
+        page: "agentic",
+        label: "Agentic",
         icon: <RobotOutlined />,
-        roles: rolesWithWriteAccess,
+        children: [
+          {
+            key: "agents",
+            page: "agents",
+            label: "Agents",
+            icon: <RobotOutlined />,
+            // Admin Viewer can view agents read-only (write actions are
+            // hidden inside the page); Playground above stays write-only.
+            roles: rolesAllowedToViewWriteScopedPages,
+          },
+          {
+            key: "workflows",
+            page: "workflows",
+            label: "Workflow Runs",
+            icon: <ApartmentOutlined />,
+          },
+          {
+            key: "memory",
+            page: "memory",
+            label: "Memory",
+            icon: <BookOutlined />,
+          },
+        ],
       },
       {
         key: "mcp-servers",
@@ -140,12 +147,6 @@ const menuGroups: MenuGroup[] = [
         roles: all_admin_roles,
       },
       {
-        key: "memory",
-        page: "memory",
-        label: "Memory",
-        icon: <BookOutlined />,
-      },
-      {
         key: "guardrails",
         page: "guardrails",
         label: "Guardrails",
@@ -154,11 +155,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "policies",
         page: "policies",
-        label: (
-          <span className="flex items-center gap-4">
-            Policies
-          </span>
-        ),
+        label: <span className="flex items-center gap-4">Policies</span>,
         icon: <AuditOutlined />,
         roles: all_admin_roles,
       },
@@ -269,8 +266,8 @@ const menuGroups: MenuGroup[] = [
     groupLabel: "DEVELOPER TOOLS",
     items: [
       {
-        key: "api-reference",
-        page: "api-reference",
+        key: "api_ref",
+        page: "api_ref",
         label: "API Reference",
         icon: <ApiOutlined />,
       },
@@ -327,7 +324,7 @@ const menuGroups: MenuGroup[] = [
             page: "usage",
             label: "Old Usage",
             icon: <BarChartOutlined />,
-          }
+          },
         ],
       },
     ],
@@ -366,7 +363,10 @@ const menuGroups: MenuGroup[] = [
             page: "admin-panel",
             label: (
               <span className="flex items-center gap-2">
-                Admin Settings <NewBadge dot><span /></NewBadge>
+                Admin Settings{" "}
+                <NewBadge dot>
+                  <span />
+                </NewBadge>
               </span>
             ),
             icon: <SettingOutlined />,
@@ -392,7 +392,17 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers, enableProjectsUI, disableAgentsForInternalUsers, allowAgentsForTeamAdmins, disableVectorStoresForInternalUsers, allowVectorStoresForTeamAdmins }) => {
+const Sidebar: React.FC<SidebarProps> = ({
+  setPage,
+  defaultSelectedKey,
+  collapsed = false,
+  enabledPagesInternalUsers,
+  enableProjectsUI,
+  disableAgentsForInternalUsers,
+  allowAgentsForTeamAdmins,
+  disableVectorStoresForInternalUsers,
+  allowVectorStoresForTeamAdmins,
+}) => {
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
@@ -408,26 +418,13 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
   // Check if user is a team admin for any team
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
 
-  // Navigate to page helper
-  const navigateToPage = (page: string) => {
-    // For migrated pages, just call setPage — the parent layout handles routing
-    if (MIGRATED_PAGES[page]) {
-      setPage(page);
-      return;
-    }
-    const newSearchParams = new URLSearchParams(window.location.search);
-    newSearchParams.set("page", page);
-    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
-    setPage(page);
-  };
+  // The parent (legacy root page or dashboard layout) owns navigation for both
+  // migrated and legacy pages; the sidebar only reports the selected page.
+  const navigateToPage = (page: string) => setPage(page);
 
   // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
   // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
-  const renderNavLink = (
-    label: React.ReactNode,
-    page: string,
-    externalUrl?: string,
-  ): React.ReactNode => {
+  const renderNavLink = (label: React.ReactNode, page: string, externalUrl?: string): React.ReactNode => {
     if (externalUrl) {
       return (
         <a
@@ -441,11 +438,8 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         </a>
       );
     }
-    // For migrated pages, generate a path-based href for right-click "Open in new tab"
     const migratedRoute = MIGRATED_PAGES[page];
-    const href = migratedRoute
-      ? migratedHref(migratedRoute)
-      : (() => { const params = new URLSearchParams(window.location.search); params.set("page", page); return `?${params.toString()}`; })();
+    const href = migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(page);
     return (
       <a
         href={href}
@@ -501,8 +495,20 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
         // Hide agents and vector-stores pages for non-admin users when disabled,
         // unless allow_*_for_team_admins is on and the user is a team admin.
-        if (!isAdmin && item.key === "agents" && disableAgentsForInternalUsers && !(allowAgentsForTeamAdmins && isTeamAdmin)) return false;
-        if (!isAdmin && item.key === "vector-stores" && disableVectorStoresForInternalUsers && !(allowVectorStoresForTeamAdmins && isTeamAdmin)) return false;
+        if (
+          !isAdmin &&
+          item.key === "agents" &&
+          disableAgentsForInternalUsers &&
+          !(allowAgentsForTeamAdmins && isTeamAdmin)
+        )
+          return false;
+        if (
+          !isAdmin &&
+          item.key === "vector-stores" &&
+          disableVectorStoresForInternalUsers &&
+          !(allowVectorStoresForTeamAdmins && isTeamAdmin)
+        )
+          return false;
 
         // Existing role check
         if (item.roles && !item.roles.includes(userRole)) return false;
@@ -511,9 +517,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
           // If item has children, check if any children are visible
           if (item.children && item.children.length > 0) {
-            const hasVisibleChildren = item.children.some((child) =>
-              enabledPagesInternalUsers.includes(child.page)
-            );
+            const hasVisibleChildren = item.children.some((child) => enabledPagesInternalUsers.includes(child.page));
             if (hasVisibleChildren) {
               console.log(`[LeftNav] Parent "${item.page}" (${item.key}): VISIBLE (has visible children)`);
               return true;
@@ -578,12 +582,12 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           })),
           onClick: !item.children
             ? () => {
-              if (item.external_url) {
-                window.open(item.external_url, "_blank");
-              } else {
-                navigateToPage(item.page);
+                if (item.external_url) {
+                  window.open(item.external_url, "_blank");
+                } else {
+                  navigateToPage(item.page);
+                }
               }
-            }
             : undefined,
         })),
       });

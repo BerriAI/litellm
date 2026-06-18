@@ -87,9 +87,7 @@ class PromptManagementBase(ABC):
         try:
             messages = compiled_prompt_client["prompt_template"] + client_messages
         except Exception as e:
-            raise ValueError(
-                f"Error compiling prompt: {e}. Prompt id={prompt_id}, prompt_variables={prompt_variables}, client_messages={client_messages}, dynamic_callback_params={dynamic_callback_params}"
-            )
+            raise ValueError(f"Error compiling prompt: {e}. Prompt id={prompt_id}")
 
         compiled_prompt_client["completed_messages"] = messages
         return compiled_prompt_client
@@ -116,9 +114,7 @@ class PromptManagementBase(ABC):
         try:
             messages = compiled_prompt_client["prompt_template"] + client_messages
         except Exception as e:
-            raise ValueError(
-                f"Error compiling prompt: {e}. Prompt id={prompt_id}, prompt_variables={prompt_variables}, client_messages={client_messages}, dynamic_callback_params={dynamic_callback_params}"
-            )
+            raise ValueError(f"Error compiling prompt: {e}. Prompt id={prompt_id}")
 
         compiled_prompt_client["completed_messages"] = messages
         return compiled_prompt_client

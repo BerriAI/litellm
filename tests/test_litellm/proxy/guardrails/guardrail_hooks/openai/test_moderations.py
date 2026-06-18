@@ -2,6 +2,7 @@
 """
 Test OpenAI Moderation Guardrail
 """
+
 import os
 import sys
 
@@ -820,3 +821,165 @@ def test_openai_moderation_process_error_metadata_none_edge_case():
 
         # Internal key cleaned up
         assert "_openai_moderation_response" not in request_data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_logs_violation_categories_harmful_content():
+    """Flagged content surfaces only the violated category names in
+    StandardLoggingGuardrailInformation.violation_categories, so OTEL can index
+    a short ``guardrail_violation_categories`` attribute instead of the full
+    response blob (LIT-3801)."""
+    from fastapi import HTTPException
+
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(guardrail_name="test-openai-moderation")
+
+        mock_response = OpenAIModerationResponse(
+            id="modr-violations",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=True,
+                    categories={
+                        "sexual": False,
+                        "hate": False,
+                        "self-harm": True,
+                        "self-harm/intent": True,
+                        "violence": True,
+                    },
+                    category_scores={
+                        "sexual": 0.0001,
+                        "hate": 0.0001,
+                        "self-harm": 0.97,
+                        "self-harm/intent": 0.98,
+                        "violence": 0.35,
+                    },
+                    category_applied_input_types={},
+                )
+            ],
+        )
+
+        with patch.object(guardrail, "async_make_request", return_value=mock_response):
+            request_data = {"metadata": {}}
+            with pytest.raises(HTTPException):
+                await guardrail.apply_guardrail(
+                    inputs=GenericGuardrailAPIInputs(
+                        structured_messages=[{"role": "user", "content": "harmful"}]
+                    ),
+                    request_data=request_data,
+                    input_type="request",
+                )
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"][0]
+
+        # Only the flagged categories, never the unflagged ones or the scores
+        assert info["violation_categories"] == [
+            "self-harm",
+            "self-harm/intent",
+            "violence",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_no_violation_categories_safe_content():
+    """Safe content carries no violation_categories key, so the short attribute
+    is absent rather than empty on allowed requests (LIT-3801)."""
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(guardrail_name="test-openai-moderation")
+
+        mock_response = OpenAIModerationResponse(
+            id="modr-safe",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=False,
+                    categories={"hate": False, "violence": False},
+                    category_scores={"hate": 0.001, "violence": 0.002},
+                    category_applied_input_types={},
+                )
+            ],
+        )
+
+        with patch.object(guardrail, "async_make_request", return_value=mock_response):
+            request_data = {"metadata": {}}
+            await guardrail.apply_guardrail(
+                inputs=GenericGuardrailAPIInputs(
+                    structured_messages=[{"role": "user", "content": "hi"}]
+                ),
+                request_data=request_data,
+                input_type="request",
+            )
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert "violation_categories" not in info
+
+
+def test_openai_moderation_build_tracing_detail_non_dict_responses():
+    """Non-dict guardrail responses (the "allow" sentinel, a raw Exception) yield
+    no tracing detail so logging never crashes when no moderation call ran."""
+    assert OpenAIModerationGuardrail._build_tracing_detail("allow") is None
+    assert OpenAIModerationGuardrail._build_tracing_detail(ValueError("boom")) is None
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_guardrail_streaming_defaults():
+    """Defaults match the unified dispatcher: sampled in-stream, every 5th chunk."""
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(guardrail_name="test")
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 5
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_guardrail_streaming_overrides():
+    """Constructor-level overrides for the two streaming flags are stored on self."""
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test",
+            streaming_end_of_stream_only=False,
+            streaming_sampling_rate=3,
+        )
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 3
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_initialize_guardrail_forwards_streaming_flags():
+    """initialize_guardrail forwards streaming knobs from litellm_params (extra='allow')."""
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.openai import (
+        initialize_guardrail as openai_initialize_guardrail,
+    )
+    from litellm.types.guardrails import (
+        Guardrail,
+        LitellmParams,
+        SupportedGuardrailIntegrations,
+    )
+
+    litellm.logging_callback_manager._reset_all_callbacks()
+    try:
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            litellm_params = LitellmParams(
+                guardrail=SupportedGuardrailIntegrations.OPENAI_MODERATION,
+                api_key="test-key",
+                model="omni-moderation-latest",
+                mode="post_call",
+                streaming_end_of_stream_only=False,
+                streaming_sampling_rate=2,
+            )
+            guardrail = openai_initialize_guardrail(
+                litellm_params=litellm_params,
+                guardrail=Guardrail(
+                    guardrail_name="test-openai-moderation",
+                    litellm_params=litellm_params,
+                ),
+            )
+
+            assert guardrail.streaming_end_of_stream_only is False
+            assert guardrail.streaming_sampling_rate == 2
+    finally:
+        litellm.logging_callback_manager._reset_all_callbacks()

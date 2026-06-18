@@ -118,3 +118,5 @@ class CachedEmbedding(TypedDict):
     index: Optional[int]
     object: Optional[str]
     model: Optional[str]
+    prompt_tokens: Optional[int]
+    prompt_tokens_details: Optional[dict]

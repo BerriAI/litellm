@@ -1,8 +1,10 @@
+import asyncio
 import io
 import os
 import pathlib
 import ssl
 import sys
+import threading
 from unittest.mock import MagicMock, patch
 
 import certifi
@@ -18,9 +20,109 @@ from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    MaskedHTTPStatusError,
     _get_httpx_client,
     get_ssl_configuration,
 )
+
+
+@pytest.mark.asyncio
+async def test_async_post_streaming_status_error_should_not_wait_forever_for_body(
+    monkeypatch,
+):
+    """
+    Vertex Anthropic streamRawPredict can return a pre-stream 4xx where the
+    streamed error body never terminates. The handler must still surface the
+    status promptly instead of blocking the downstream client.
+    """
+
+    class HangingErrorStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            await asyncio.Event().wait()
+            if False:
+                yield b""
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            request=request,
+            headers={"content-type": "application/json"},
+            stream=HangingErrorStream(),
+        )
+
+    monkeypatch.setattr(
+        "litellm.llms.custom_httpx.http_handler._STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    litellm_handler = AsyncHTTPHandler()
+    await litellm_handler.client.aclose()
+    litellm_handler.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(mock_handler)
+    )
+    try:
+        with pytest.raises(MaskedHTTPStatusError) as exc_info:
+            await asyncio.wait_for(
+                litellm_handler.post(
+                    "https://vertex.example/streamRawPredict",
+                    stream=True,
+                ),
+                timeout=0.2,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.response.status_code == 400
+    finally:
+        await litellm_handler.close()
+
+
+def test_sync_post_streaming_status_error_should_not_wait_forever_for_body(
+    monkeypatch,
+):
+    """
+    Keep the sync streaming error path aligned with the async path so a
+    non-terminating streamed error body cannot block a worker thread forever.
+    """
+
+    class HangingSyncErrorStream(httpx.SyncByteStream):
+        def __init__(self):
+            self.closed_event = threading.Event()
+
+        def __iter__(self):
+            self.closed_event.wait()
+            if False:
+                yield b""
+
+        def close(self):
+            self.closed_event.set()
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            request=request,
+            headers={"content-type": "application/json"},
+            stream=HangingSyncErrorStream(),
+        )
+
+    monkeypatch.setattr(
+        "litellm.llms.custom_httpx.http_handler._STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    litellm_handler = HTTPHandler()
+    litellm_handler.client.close()
+    litellm_handler.client = httpx.Client(transport=httpx.MockTransport(mock_handler))
+    try:
+        with pytest.raises(MaskedHTTPStatusError) as exc_info:
+            litellm_handler.post(
+                "https://vertex.example/streamRawPredict",
+                stream=True,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.response.status_code == 400
+    finally:
+        litellm_handler.close()
 
 
 @pytest.mark.asyncio
@@ -696,3 +798,56 @@ def test_get_httpx_client_applies_httpx_timeout_object_without_mocking_handler()
         assert handler.client.timeout == t
     finally:
         handler.close()
+
+
+def test_sync_get_forwards_per_request_timeout():
+    """HTTPHandler.get(timeout=...) must apply the timeout to that request,
+    overriding the client default rather than silently ignoring it."""
+    captured = {}
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        captured["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = HTTPHandler()
+    handler.client.close()
+    handler.client = httpx.Client(
+        transport=httpx.MockTransport(mock_handler),
+        timeout=httpx.Timeout(5.0),
+    )
+    try:
+        handler.get("https://example.com/poll", timeout=99.0)
+        assert captured["timeout"] == {
+            "connect": 99.0,
+            "read": 99.0,
+            "write": 99.0,
+            "pool": 99.0,
+        }
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_get_forwards_per_request_timeout():
+    captured = {}
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        captured["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = AsyncHTTPHandler()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(mock_handler),
+        timeout=httpx.Timeout(5.0),
+    )
+    try:
+        await handler.get("https://example.com/poll", timeout=99.0)
+        assert captured["timeout"] == {
+            "connect": 99.0,
+            "read": 99.0,
+            "write": 99.0,
+            "pool": 99.0,
+        }
+    finally:
+        await handler.close()

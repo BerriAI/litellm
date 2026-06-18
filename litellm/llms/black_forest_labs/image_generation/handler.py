@@ -28,6 +28,7 @@ from ..common_utils import (
     DEFAULT_MAX_POLLING_TIME,
     DEFAULT_POLLING_INTERVAL,
     BlackForestLabsError,
+    assert_bfl_polling_url,
 )
 from .transformation import BlackForestLabsImageGenerationConfig
 
@@ -171,6 +172,10 @@ class BlackForestLabsImageGeneration:
             raw_response=final_response,
             model_response=model_response,
             logging_obj=logging_obj,
+            request_data=data,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            encoding=None,
         )
 
     async def async_image_generation(
@@ -273,6 +278,10 @@ class BlackForestLabsImageGeneration:
             raw_response=final_response,
             model_response=model_response,
             logging_obj=logging_obj,
+            request_data=data,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            encoding=None,
         )
 
     def _poll_for_result_sync(
@@ -316,6 +325,12 @@ class BlackForestLabsImageGeneration:
                 status_code=500,
                 message="No polling_url in BFL response",
             )
+
+        # Reject polling URLs that don't belong to BFL-controlled infrastructure.
+        # BFL uses regional subdomains (e.g. gateway.bfl.ai) that differ from the
+        # submission host (api.bfl.ai), so we validate against the registered
+        # domain rather than doing a strict same-origin check. VERIA-51.
+        assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
         polling_headers = {"x-key": headers.get("x-key", "")}
@@ -401,6 +416,12 @@ class BlackForestLabsImageGeneration:
                 status_code=500,
                 message="No polling_url in BFL response",
             )
+
+        # Reject polling URLs that don't belong to BFL-controlled infrastructure.
+        # BFL uses regional subdomains (e.g. gateway.bfl.ai) that differ from the
+        # submission host (api.bfl.ai), so we validate against the registered
+        # domain rather than doing a strict same-origin check. VERIA-51.
+        assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
         polling_headers = {"x-key": headers.get("x-key", "")}
