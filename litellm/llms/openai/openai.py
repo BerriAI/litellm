@@ -608,7 +608,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
         return streaming_response
 
-    def completion(  # type: ignore # noqa: PLR0915
+    def completion(  # type: ignore
         self,
         model_response: ModelResponse,
         timeout: Union[float, httpx.Timeout],

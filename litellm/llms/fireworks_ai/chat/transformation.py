@@ -392,7 +392,10 @@ class FireworksAIConfig(OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         if not model.startswith("accounts/") and "#" not in model:
-            model = f"accounts/fireworks/models/{model}"
+            if model.endswith("-fast"):
+                model = f"accounts/fireworks/routers/{model}"
+            else:
+                model = f"accounts/fireworks/models/{model}"
         messages = self._transform_messages_helper(
             messages=messages, model=model, litellm_params=litellm_params
         )

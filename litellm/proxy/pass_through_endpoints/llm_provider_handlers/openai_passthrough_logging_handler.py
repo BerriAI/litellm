@@ -275,7 +275,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         return litellm_model_response, response_cost
 
     @staticmethod
-    def openai_passthrough_handler(  # noqa: PLR0915
+    def openai_passthrough_handler(
         httpx_response: httpx.Response,
         response_body: dict,
         logging_obj: LiteLLMLoggingObj,

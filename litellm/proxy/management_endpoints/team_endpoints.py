@@ -933,7 +933,7 @@ def _check_team_budget_update_authority(
     response_model=LiteLLM_TeamTable,
 )
 @management_endpoint_wrapper
-async def new_team(  # noqa: PLR0915
+async def new_team(
     data: NewTeamRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1637,7 +1637,7 @@ def validate_team_org_change(
     "/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
 @management_endpoint_wrapper
-async def update_team(  # noqa: PLR0915
+async def update_team(
     data: UpdateTeamRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -2961,6 +2961,7 @@ async def team_member_update(
     returned_team_info: TeamInfoResponseObject = await team_info(
         http_request=http_request,
         team_id=data.team_id,
+        key_limit=None,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -3577,6 +3578,9 @@ async def team_info(
     team_id: str = fastapi.Query(
         default=None, description="Team ID in the request parameters"
     ),
+    key_limit: int | None = fastapi.Query(
+        default=None, description="Limit the number of keys returned", gt=0
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -3632,6 +3636,7 @@ async def team_info(
             table_name="key",
             query_type="find_all",
             expires=datetime.now(),
+            limit=key_limit,
         )
 
         if keys is None:

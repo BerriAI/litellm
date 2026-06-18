@@ -1086,7 +1086,7 @@ def _build_custom_pricing_entry(
 
 @tracer.wrap()
 @client
-def completion(  # type: ignore # noqa: PLR0915
+def completion(  # type: ignore
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
@@ -4878,7 +4878,7 @@ def embedding(
 
 
 @client
-def embedding(  # noqa: PLR0915
+def embedding(
     model,
     input=[],
     # Optional params
@@ -6125,7 +6125,7 @@ async def atext_completion(
 
 
 @client
-def text_completion(  # noqa: PLR0915
+def text_completion(
     prompt: Union[
         str, List[Union[str, List[Union[str, List[int]]]]]
     ],  # Required: The prompt(s) to generate completions for.
@@ -6664,7 +6664,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
 
 
 @client
-def transcription(  # noqa: PLR0915
+def transcription(
     model: str,
     file: FileTypes,
     ## OPTIONAL OPENAI PARAMS ##
@@ -6971,7 +6971,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
 
 
 @client
-def speech(  # noqa: PLR0915
+def speech(
     model: str,
     input: str,
     voice: Optional[Union[str, dict]] = None,
@@ -7434,22 +7434,7 @@ def speech(  # noqa: PLR0915
 
 async def ahealth_check(
     model_params: dict,
-    mode: Optional[
-        Literal[
-            "chat",
-            "completion",
-            "embedding",
-            "audio_speech",
-            "audio_transcription",
-            "image_generation",
-            "video_generation",
-            "batch",
-            "rerank",
-            "realtime",
-            "responses",
-            "ocr",
-        ]
-    ] = "chat",
+    mode: str | None = "chat",
     prompt: Optional[str] = None,
     input: Optional[List] = None,
 ):
@@ -7662,7 +7647,7 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-def stream_chunk_builder(  # noqa: PLR0915
+def stream_chunk_builder(
     chunks: list,
     messages: Optional[list] = None,
     start_time=None,

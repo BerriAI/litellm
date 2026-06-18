@@ -311,7 +311,7 @@ def get_redis_url_from_environment():
     return f"{redis_protocol}://{auth_part}{os.environ['REDIS_HOST']}:{os.environ['REDIS_PORT']}"
 
 
-def _get_redis_client_logic(**env_overrides):  # noqa: PLR0915
+def _get_redis_client_logic(**env_overrides):
     """
     Common functionality across sync + async redis client implementations
     """
