@@ -23,6 +23,7 @@ from typing import (
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
+    normalize_system_role_in_anthropic_messages,
     strip_empty_text_blocks_from_anthropic_messages,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -214,6 +215,13 @@ async def anthropic_messages(
     # already handles this in anthropic_messages_pt; sanitize the native
     # Anthropic Messages path here for the same guarantee.  See #22930.
     messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+
+    # Anthropic's Messages API rejects role="system" entries inside messages[]
+    # with "Unexpected role \"system\". The Messages API accepts a top-level
+    # `system` parameter, not \"system\" as an input message role."  OpenAI-style
+    # clients routinely send the system prompt as messages[0]; lift those up to
+    # the top-level `system` parameter so the request stays valid.  See #30705.
+    messages, system = normalize_system_role_in_anthropic_messages(messages, system)
 
     original_stream = stream or kwargs.get(
         "_websearch_interception_converted_stream", False

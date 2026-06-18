@@ -3,7 +3,7 @@ This file contains common utils for anthropic calls.
 """
 
 import copy
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -987,6 +987,72 @@ def _is_empty_text_block(block: Any) -> bool:
         return False
     text = block.get("text")
     return not isinstance(text, str) or not text.strip()
+
+
+def normalize_system_role_in_anthropic_messages(
+    messages: List[Any],
+    system: Optional[Union[str, List[Any]]] = None,
+) -> Tuple[List[Any], Optional[Union[str, List[Any]]]]:
+    """
+    Promote any ``role == "system"`` entries in ``messages`` to the top-level
+    ``system`` parameter and return ``(messages, system)``.
+
+    Anthropic's Messages API rejects requests that include ``system`` in
+    ``messages[]`` with ``"Unexpected role \\"system\\". The Messages API
+    accepts a top-level \\`system\\` parameter, not \\"system\\" as an input
+    message role."``  Many OpenAI-style clients send the system prompt as a
+    ``messages[0]`` entry instead of the top-level field, so we lift those
+    entries up to keep the request valid.
+
+    The returned message list is a fresh list; the caller's list and message
+    dicts are never mutated.  The existing ``system`` value (string or list of
+    content blocks) is preserved and prepended so the assistant sees both the
+    top-level prompt and any in-message system entries in their original order.
+
+    Strings in role=system messages are appended as ``{"type": "text",
+    "text": <str>}`` content blocks so the result is always a list when more
+    than one system source is concatenated.
+    """
+    if not messages:
+        return messages, system
+
+    promoted_blocks: List[Any] = []
+    kept: List[Any] = []
+    for m in messages:
+        if isinstance(m, dict) and m.get("role") == "system":
+            content = m.get("content")
+            if isinstance(content, str):
+                if content:
+                    promoted_blocks.append({"type": "text", "text": content})
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        promoted_blocks.append(block)
+                    elif isinstance(block, str) and block:
+                        promoted_blocks.append({"type": "text", "text": block})
+            elif content is not None and not isinstance(content, str):
+                # Best-effort: stringify unknown content shapes so callers
+                # don't silently lose information.
+                promoted_blocks.append(
+                    {"type": "text", "text": str(content)}
+                )
+        else:
+            kept.append(m)
+
+    if not promoted_blocks:
+        return kept, system
+
+    if isinstance(system, str):
+        merged: List[Any] = []
+        if system:
+            merged.append({"type": "text", "text": system})
+        merged.extend(promoted_blocks)
+        return kept, merged
+
+    if isinstance(system, list):
+        return kept, [*system, *promoted_blocks]
+
+    return kept, promoted_blocks or system
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:
