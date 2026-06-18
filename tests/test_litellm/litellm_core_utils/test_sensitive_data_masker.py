@@ -126,6 +126,28 @@ def test_lists_with_sensitive_keys_are_masked():
     assert masked["tags"] == ["prod", "test"]
 
 
+def test_short_secrets_are_fully_masked():
+    """
+    Regression test: secrets at or below the reveal threshold (visible_prefix +
+    visible_suffix, 8 by default) were returned verbatim instead of masked.
+    An exactly-8-char value hit masked_length == 0 and round-tripped unchanged;
+    anything shorter hit the early return. Both leaked short credentials (e.g. an
+    8-char redis password) in plaintext through mask_dict.
+    """
+    masker = SensitiveDataMasker()
+
+    # Boundary: exactly 8 chars previously returned verbatim.
+    assert masker._mask_value("abcd1234") == "********"
+    # Below threshold previously hit the early return and leaked verbatim.
+    assert masker._mask_value("sk-12") == "*****"
+    # Values above the threshold must still partially reveal, not over-mask.
+    assert masker._mask_value("abcd12345") == "abcd*2345"
+
+    masked = masker.mask_dict({"redis_password": "pass1234", "api_key": "sk-7a"})
+    assert masked["redis_password"] == "********"
+    assert masked["api_key"] == "*****"
+
+
 def test_cost_per_token_fields_not_masked():
     """
     Regression test: cost fields like input_cost_per_token contain "token" in their name

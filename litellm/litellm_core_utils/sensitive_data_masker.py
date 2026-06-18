@@ -40,10 +40,12 @@ class SensitiveDataMasker:
         self.mask_char = mask_char
 
     def _mask_value(self, value: str) -> str:
-        if not value or len(str(value)) < (self.visible_prefix + self.visible_suffix):
-            return value
-
         value_str = str(value)
+        if not value_str:
+            return value
+        if len(value_str) <= (self.visible_prefix + self.visible_suffix):
+            return self.mask_char * len(value_str)
+
         masked_length = len(value_str) - (self.visible_prefix + self.visible_suffix)
 
         # Handle the case where visible_suffix is 0 to avoid showing the entire string
