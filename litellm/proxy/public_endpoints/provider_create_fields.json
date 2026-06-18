@@ -2916,7 +2916,7 @@
         "label": "API Base",
         "placeholder": "https://tokenhub.tencentmaas.com/v1",
         "tooltip": "The base URL for TokenHub API. Defaults to https://tokenhub.tencentmaas.com/v1 if not specified.",
-        "required": true,
+        "required": false,
         "field_type": "text",
         "options": null,
         "default_value": "https://tokenhub.tencentmaas.com/v1"

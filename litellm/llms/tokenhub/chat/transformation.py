@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import litellm
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
+from litellm.utils import supports_reasoning
 
 
 class TokenHubChatConfig(OpenAILikeChatConfig):
@@ -92,9 +93,10 @@ class TokenHubChatConfig(OpenAILikeChatConfig):
             "parallel_tool_calls",
         ]
 
-        # Add thinking support for models that support it
-        params.append("thinking")
-        params.append("reasoning_effort")
+        # Only add thinking/reasoning params for models that support it
+        if supports_reasoning(model=model, custom_llm_provider="tokenhub"):
+            params.append("thinking")
+            params.append("reasoning_effort")
 
         return params
 

@@ -5,11 +5,7 @@ Reference: https://cloud.tencent.com/document/product/1823/130051
 """
 
 from .chat.transformation import TokenHubChatConfig
-from .common_utils import (
-    TokenHubError,
-    get_tokenhub_base_url,
-    get_tokenhub_headers,
-)
+from .common_utils import TokenHubError
 
 # For backward compatibility
 TokenHubConfig = TokenHubChatConfig
@@ -18,6 +14,4 @@ __all__ = [
     "TokenHubChatConfig",
     "TokenHubConfig",
     "TokenHubError",
-    "get_tokenhub_base_url",
-    "get_tokenhub_headers",
 ]
