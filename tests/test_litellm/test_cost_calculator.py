@@ -2285,6 +2285,105 @@ def test_completion_cost_non_string_service_tier_defers_to_served_tier():
     assert cost == pytest.approx(expected_priority)
 
 
+def test_completion_cost_non_string_response_service_tier_defers_to_served_tier():
+    """
+    Regression: a non-string ``service_tier`` on the response object must not
+    crash cost tracking.
+
+    Before the fix ``completion_cost`` read the response-level value verbatim and
+    passed it to ``_get_service_tier_cost_key``, which called ``service_tier.lower()``
+    on the dict and raised ``AttributeError``. The non-string preference is not a
+    billable tier, so pricing defers to the concrete tier the provider served on
+    the usage object instead of crashing.
+    """
+    from litellm import completion_cost
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-response-non-string-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "service_tier": "priority",
+        },
+        reasoning_content=None,
+    )
+    response = ModelResponse(
+        usage=usage, model=model, service_tier={"name": "priority"}
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="anthropic",
+    )
+
+    expected_priority = 1000 * 6e-6 + 500 * 30e-6
+    assert cost == pytest.approx(expected_priority)
+
+
+def test_completion_cost_non_string_usage_service_tier_prices_standard():
+    """
+    Regression: a non-string ``service_tier`` on the usage object must not crash
+    cost tracking.
+
+    The dict reaches ``completion_cost`` via the usage extraction path with no
+    concrete tier to defer to, so pricing falls back to the standard rate instead
+    of raising ``AttributeError`` in ``_get_service_tier_cost_key``.
+    """
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "claude-test-usage-non-string-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "input_cost_per_token_priority": 6e-6,
+                "output_cost_per_token_priority": 30e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        service_tier={"name": "priority"},
+    )
+    response = ModelResponse(usage=usage, model=model)
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="anthropic",
+    )
+
+    expected_standard = 1000 * 3e-6 + 500 * 15e-6
+    assert cost == pytest.approx(expected_standard)
+
+
 def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier():
     """
     Regression for the cache/tier interaction in the Anthropic geo/speed path.
