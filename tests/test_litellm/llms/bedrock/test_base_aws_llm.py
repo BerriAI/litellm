@@ -163,6 +163,77 @@ def test_aws_profile_path_not_cached_in_iam_cache():
         assert mock_profile.call_count == 2
 
 
+def test_aws_profile_not_found_raises_generic_error():
+    """boto3 ProfileNotFound carries the resolved profile name (which may
+    be an os.environ/ secret). _auth_with_aws_profile must map it to a generic error that
+    never reflects the user-supplied/resolved value into logs or tracebacks."""
+    from botocore.exceptions import ProfileNotFound
+
+    secret_profile_value = "super-secret-resolved-profile-name"
+
+    fake_boto3 = MagicMock()
+    fake_boto3.Session.side_effect = ProfileNotFound(profile=secret_profile_value)
+
+    base = BaseAWSLLM()
+    with patch.dict("sys.modules", {"boto3": fake_boto3}):
+        with pytest.raises(AwsAuthError) as exc_info:
+            base._auth_with_aws_profile(secret_profile_value)
+
+    err = exc_info.value
+    assert secret_profile_value not in err.message
+    assert secret_profile_value not in str(err)
+    assert err.message == "The specified AWS profile could not be found."
+
+    # the original ProfileNotFound (which embeds the profile value) must not
+    # be rendered as a chained cause/context, or a handler that logs the full
+    # traceback would re-leak it
+    assert err.__cause__ is None
+    assert err.__suppress_context__ is True
+    import traceback
+
+    rendered = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+    assert secret_profile_value not in rendered
+
+
+def test_get_credentials_does_not_log_aws_profile_value():
+    """get_credentials logs aws_profile_name as a [set=True] boolean only. The
+    resolved profile value can itself be a secret (os.environ/ or an upper-case
+    env lookup), so it must never be reflected into the verbose debug log. This
+    fails if the format string is changed to interpolate the value (e.g.
+    'aws_profile_name=%s')."""
+    import logging
+
+    sentinel = "super-secret-profile-do-not-log"
+
+    captured = []
+
+    class _ListHandler(logging.Handler):
+        def emit(self, record):
+            captured.append(record.getMessage())
+
+    handler = _ListHandler()
+    verbose_logger = logging.getLogger("LiteLLM")
+    previous_level = verbose_logger.level
+    verbose_logger.addHandler(handler)
+    verbose_logger.setLevel(logging.DEBUG)
+
+    base = BaseAWSLLM()
+    try:
+        with patch.object(
+            base,
+            "_auth_with_aws_profile",
+            return_value=(Credentials("prof-ak", "prof-sk", None), None),
+        ):
+            base.get_credentials(aws_profile_name=sentinel)
+    finally:
+        verbose_logger.removeHandler(handler)
+        verbose_logger.setLevel(previous_level)
+
+    combined = "\n".join(captured)
+    assert sentinel not in combined
+    assert "aws_profile_name=[set=True]" in combined
+
+
 def test_web_identity_path_not_cached_in_iam_cache():
     base = BaseAWSLLM()
     with patch.object(
@@ -880,7 +951,11 @@ def test_different_roles_without_session_names_should_not_share_cache():
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
+    ids=[
+        "no_region_or_endpoint",
+        "bedrock_region_ignored_for_sts",
+        "explicit_sts_endpoint",
+    ],
 )
 def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     """
@@ -1272,7 +1347,11 @@ def test_sts_endpoint_region_matches_bedrock_region_param():
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
+    ids=[
+        "no_region_or_endpoint",
+        "bedrock_region_ignored_for_sts",
+        "explicit_sts_endpoint",
+    ],
 )
 def test_explicit_credentials_used_when_provided(role_kwargs, expected_client_kwargs):
     """
