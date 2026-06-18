@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import json
 import os
+import signal
 import smtplib
 import ssl
 import sys
@@ -3036,21 +3037,26 @@ class PrismaClient:
         self._db_reconnect_lock = asyncio.Lock()
         self._db_health_watchdog_task: Optional[asyncio.Task] = None
         self._db_last_reconnect_attempt_ts: float = 0.0
+        self._db_last_health_watchdog_reconnect_attempt_ts: float = 0.0
         self._db_reconnect_cooldown_seconds: int = max(
             1, int(os.getenv("PRISMA_RECONNECT_COOLDOWN_SECONDS", "15"))
         )
         self._db_health_watchdog_interval_seconds: int = max(
-            5, int(os.getenv("PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS", "30"))
+            5, int(os.getenv("PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS", "120"))
         )
         self._db_health_watchdog_enabled: bool = (
             str_to_bool(os.getenv("PRISMA_HEALTH_WATCHDOG_ENABLED", "true")) is True
         )
         self._db_health_watchdog_probe_timeout_seconds: float = max(
             0.5,
-            float(os.getenv("PRISMA_HEALTH_WATCHDOG_PROBE_TIMEOUT_SECONDS", "5.0")),
+            float(os.getenv("PRISMA_HEALTH_WATCHDOG_PROBE_TIMEOUT_SECONDS", "15")),
+        )
+        self._db_health_watchdog_reconnect_cooldown_seconds: int = max(
+            1,
+            int(os.getenv("PRISMA_HEALTH_WATCHDOG_RECONNECT_COOLDOWN_SECONDS", "120")),
         )
         self._db_watchdog_reconnect_timeout_seconds: float = max(
-            1.0, float(os.getenv("PRISMA_WATCHDOG_RECONNECT_TIMEOUT_SECONDS", "30.0"))
+            1.0, float(os.getenv("PRISMA_WATCHDOG_RECONNECT_TIMEOUT_SECONDS", "60.0"))
         )
         self._db_auth_reconnect_timeout_seconds: float = max(
             0.5, float(os.getenv("PRISMA_AUTH_RECONNECT_TIMEOUT_SECONDS", "2.0"))
@@ -4403,6 +4409,65 @@ class PrismaClient:
             return True
 
     @staticmethod
+    def _format_signal_name(signal_number: int) -> str:
+        try:
+            return signal.Signals(signal_number).name
+        except ValueError:
+            return f"UNKNOWN_SIGNAL_{signal_number}"
+
+    @staticmethod
+    def _format_engine_wait_status(wait_status: int) -> str:
+        if os.WIFEXITED(wait_status):
+            return f"exit_code={os.WEXITSTATUS(wait_status)}"
+        elif os.WIFSIGNALED(wait_status):
+            signal_number = os.WTERMSIG(wait_status)
+            signal_name = PrismaClient._format_signal_name(signal_number)
+            core_dumped = (
+                os.WCOREDUMP(wait_status) if hasattr(os, "WCOREDUMP") else False
+            )
+            return (
+                f"signal={signal_name} signal_number={signal_number} "
+                f"core_dumped={core_dumped}"
+            )
+        elif os.WIFSTOPPED(wait_status):
+            signal_number = os.WSTOPSIG(wait_status)
+            signal_name = PrismaClient._format_signal_name(signal_number)
+            return f"stopped_by_signal={signal_name} signal_number={signal_number}"
+        elif hasattr(os, "WIFCONTINUED") and os.WIFCONTINUED(wait_status):
+            return "continued=True"
+        else:
+            return f"raw_wait_status={wait_status}"
+
+    @staticmethod
+    def _format_prisma_engine_exit_reason(
+        *,
+        detection_method: str,
+        wait_status: Optional[int],
+    ) -> str:
+        if wait_status is None:
+            return f"detection_method={detection_method} exit_status=unavailable"
+        return (
+            f"detection_method={detection_method} "
+            f"{PrismaClient._format_engine_wait_status(wait_status)}"
+        )
+
+    @staticmethod
+    def _log_prisma_engine_exit_reason(
+        *,
+        pid: int,
+        detection_method: str,
+        wait_status: Optional[int],
+    ) -> None:
+        verbose_proxy_logger.error(
+            "prisma-query-engine PID %s exited; %s; triggering reconnect.",
+            pid,
+            PrismaClient._format_prisma_engine_exit_reason(
+                detection_method=detection_method,
+                wait_status=wait_status,
+            ),
+        )
+
+    @staticmethod
     def _reap_all_zombies() -> set:
         """Reap ALL zombie child processes via waitpid(-1, WNOHANG).
 
@@ -4440,7 +4505,7 @@ class PrismaClient:
         if sys.platform == "win32":
             return False
         try:
-            probe_pid, _ = os.waitpid(pid, os.WNOHANG)
+            probe_pid, wait_status = os.waitpid(pid, os.WNOHANG)
         except ChildProcessError:
             verbose_proxy_logger.debug(
                 "PID %s is not a child process; skipping waitpid watch.",
@@ -4449,9 +4514,10 @@ class PrismaClient:
             return False
 
         if probe_pid == pid:
-            verbose_proxy_logger.warning(
-                "prisma-query-engine PID %s already dead at watch start.",
-                pid,
+            self._log_prisma_engine_exit_reason(
+                pid=pid,
+                detection_method="waitpid watch start",
+                wait_status=wait_status,
             )
             self._engine_confirmed_dead = True
             self._reap_all_zombies()
@@ -4486,26 +4552,32 @@ class PrismaClient:
         in its SIGCHLD handler. In that case our waitpid raises ChildProcessError.
         we still notify the event loop because the engine is dead either way.
         """
+        wait_status: Optional[int] = None
         try:
-            os.waitpid(pid, 0)
+            _, wait_status = os.waitpid(pid, 0)
         except ChildProcessError:
             pass
         except OSError:
             pass
         try:
-            loop.call_soon_threadsafe(self._on_engine_death_from_thread, pid)
+            loop.call_soon_threadsafe(
+                self._on_engine_death_from_thread, pid, wait_status
+            )
         except RuntimeError:
             pass
 
-    def _on_engine_death_from_thread(self, dead_pid: int) -> None:
+    def _on_engine_death_from_thread(
+        self, dead_pid: int, wait_status: Optional[int] = None
+    ) -> None:
         """Called on the event loop thread when the waitpid thread detects engine death."""
         if self._engine_confirmed_dead:
             return
         if dead_pid != self._engine_pid:
             return
-        verbose_proxy_logger.error(
-            "prisma-query-engine PID %s exited (waitpid thread); triggering reconnect.",
-            dead_pid,
+        self._log_prisma_engine_exit_reason(
+            pid=dead_pid,
+            detection_method="waitpid thread",
+            wait_status=wait_status,
         )
         self._engine_confirmed_dead = True
         self._reap_all_zombies()
@@ -4557,9 +4629,10 @@ class PrismaClient:
                 self._engine_pidfd = -1
             return
         dead_pid = self._engine_pid
-        verbose_proxy_logger.error(
-            "prisma-query-engine PID %s exited (pidfd event); triggering reconnect.",
-            dead_pid,
+        self._log_prisma_engine_exit_reason(
+            pid=dead_pid,
+            detection_method="pidfd event",
+            wait_status=None,
         )
         self._engine_confirmed_dead = True
         self._reap_all_zombies()
@@ -4580,9 +4653,11 @@ class PrismaClient:
             try:
                 os.kill(self._engine_pid, 0)
             except ProcessLookupError:
-                verbose_proxy_logger.error(
-                    "prisma-query-engine PID %s gone; triggering reconnect.",
-                    self._engine_pid,
+                dead_pid = self._engine_pid
+                self._log_prisma_engine_exit_reason(
+                    pid=dead_pid,
+                    detection_method="os.kill polling",
+                    wait_status=None,
                 )
                 self._engine_confirmed_dead = True
                 self._reap_all_zombies()
@@ -4902,9 +4977,9 @@ class PrismaClient:
             self._db_health_watchdog_loop()
         )
         verbose_proxy_logger.info(
-            "Started Prisma DB health watchdog (interval=%ss, reconnect_cooldown=%ss, probe_timeout=%ss, reconnect_timeout=%ss)",
+            "Started Prisma DB health watchdog (interval=%ss, watchdog_reconnect_cooldown=%ss, probe_timeout=%ss, reconnect_timeout=%ss)",
             self._db_health_watchdog_interval_seconds,
-            self._db_reconnect_cooldown_seconds,
+            self._db_health_watchdog_reconnect_cooldown_seconds,
             self._db_health_watchdog_probe_timeout_seconds,
             self._db_watchdog_reconnect_timeout_seconds,
         )
@@ -4937,8 +5012,19 @@ class PrismaClient:
                 if isinstance(
                     e, asyncio.TimeoutError
                 ) or PrismaDBExceptionHandler.is_database_connection_error(e):
+                    now = time.time()
+                    if (
+                        now - self._db_last_health_watchdog_reconnect_attempt_ts
+                        < self._db_health_watchdog_reconnect_cooldown_seconds
+                    ):
+                        verbose_proxy_logger.debug(
+                            "Skipping DB health watchdog reconnect due to watchdog cooldown."
+                        )
+                        continue
+                    self._db_last_health_watchdog_reconnect_attempt_ts = now
                     await self.attempt_db_reconnect(
                         reason="db_health_watchdog_connection_error",
+                        force=True,
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
                     )
                 else:
