@@ -309,6 +309,8 @@ def _classify_deployment_cost(
     if explicit_output is None:
         explicit_output = _as_cost(model_info_dict.get("output_cost_per_token"))
     if explicit_input is not None and explicit_output is not None:
+        if explicit_input > 0 or explicit_output > 0:
+            return ModelCostClass.KNOWN_POSITIVE
         return ModelCostClass.EXPLICIT_ZERO
     return ModelCostClass.UNKNOWN
 

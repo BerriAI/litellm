@@ -17,7 +17,9 @@ import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     ModelCostClass,
+    _as_cost,
     _block_unknown_cost_models_check,
+    _classify_deployment_cost,
     _classify_model_group_cost,
     _is_model_cost_zero,
     _request_has_unknown_cost_model,
@@ -681,3 +683,133 @@ class TestBlockUnknownCostModelsWithoutRouter:
             llm_router=None,
             route="/v1/chat/completions",
         )
+
+
+class TestClassifyDeploymentCost:
+    """Per-deployment classifier branches the group-level tests don't reach,
+    including the fallback that runs when a deployment never resolves through
+    ``get_deployment_model_info`` (no ``model_info.id``)."""
+
+    def setup_method(self):
+        self._saved_model_cost = copy.deepcopy(litellm.model_cost)
+
+    def teardown_method(self):
+        litellm.model_cost = self._saved_model_cost
+
+    def test_positive_explicit_cost_without_model_id_is_known_positive(self):
+        # Regression: a deployment that never reaches get_deployment_model_info
+        # (no model_info.id) but carries a positive explicit price must be
+        # KNOWN_POSITIVE, not EXPLICIT_ZERO. Misclassifying it free would make
+        # _is_model_cost_zero return True and silently skip every budget check.
+        router = MagicMock(spec=Router)
+        deployment = {
+            "model_name": "no-id-paid",
+            "litellm_params": {
+                "model": "openai/some-paid-model",
+                "input_cost_per_token": 0.000002,
+                "output_cost_per_token": 0.000008,
+            },
+            "model_info": {},
+        }
+        assert (
+            _classify_deployment_cost(deployment, router)
+            == ModelCostClass.KNOWN_POSITIVE
+        )
+        router.get_deployment_model_info.assert_not_called()
+
+    def test_zero_explicit_cost_without_model_id_is_explicit_zero(self):
+        router = MagicMock(spec=Router)
+        deployment = {
+            "model_name": "no-id-free",
+            "litellm_params": {
+                "model": "openai/some-free-model",
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            },
+            "model_info": {},
+        }
+        assert (
+            _classify_deployment_cost(deployment, router)
+            == ModelCostClass.EXPLICIT_ZERO
+        )
+
+    def test_no_explicit_cost_and_no_resolution_is_unknown(self):
+        # No model_info.id, no explicit price, nothing to resolve: fail closed
+        # to UNKNOWN rather than silently treating it as free.
+        router = MagicMock(spec=Router)
+        deployment = {
+            "model_name": "no-id-unpriced",
+            "litellm_params": {"model": "openai/whatever"},
+            "model_info": None,
+        }
+        assert _classify_deployment_cost(deployment, router) == ModelCostClass.UNKNOWN
+
+    def test_get_deployment_model_info_error_falls_back_to_explicit(self):
+        # If resolving the deployment's cost raises, the classifier must still
+        # honor an explicit deployment price rather than propagate the error.
+        router = MagicMock(spec=Router)
+        router.get_deployment_model_info.side_effect = RuntimeError("boom")
+        deployment = {
+            "model_name": "err-priced",
+            "litellm_params": {
+                "model": "openai/some-paid-model",
+                "input_cost_per_token": 0.000002,
+                "output_cost_per_token": 0.000008,
+            },
+            "model_info": {"id": "err-priced-id"},
+        }
+        assert (
+            _classify_deployment_cost(deployment, router)
+            == ModelCostClass.KNOWN_POSITIVE
+        )
+        router.get_deployment_model_info.assert_called_once()
+
+    def test_explicit_cost_from_model_info_when_absent_in_litellm_params(self):
+        # The explicit price lives only in model_info; the model_info fallback
+        # must still classify it as explicitly free.
+        router = MagicMock(spec=Router)
+        router.get_deployment_model_info.return_value = None
+        deployment = {
+            "model_name": "mi-free",
+            "litellm_params": {"model": "openai/mi-free"},
+            "model_info": {
+                "id": "mi-free-id",
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            },
+        }
+        assert (
+            _classify_deployment_cost(deployment, router)
+            == ModelCostClass.EXPLICIT_ZERO
+        )
+
+    def test_resolved_positive_cost_is_known_positive(self):
+        router = MagicMock(spec=Router)
+        router.get_deployment_model_info.return_value = {
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000009,
+        }
+        deployment = {
+            "model_name": "resolved-paid",
+            "litellm_params": {"model": "openai/resolved-paid"},
+            "model_info": {"id": "resolved-paid-id"},
+        }
+        assert (
+            _classify_deployment_cost(deployment, router)
+            == ModelCostClass.KNOWN_POSITIVE
+        )
+
+
+class TestAsCost:
+    """``_as_cost`` coerces only real numbers, so non-numeric pricing values
+    can't masquerade as a measurable cost."""
+
+    def test_numbers_pass_through_as_float(self):
+        assert _as_cost(0) == 0.0
+        assert _as_cost(5) == 5.0
+        assert _as_cost(0.000002) == 0.000002
+
+    def test_non_numbers_become_none(self):
+        assert _as_cost(None) is None
+        assert _as_cost("0.0") is None
+        assert _as_cost({"input_cost_per_token": 1}) is None
