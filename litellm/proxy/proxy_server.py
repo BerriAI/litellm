@@ -2676,11 +2676,20 @@ async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
 async def _increment_spend_counter_cache(counter_key: str, increment: float):
     if spend_counter_cache.redis_cache is not None:
         try:
-            current_value = await spend_counter_cache.redis_cache.async_increment(
-                key=counter_key,
-                value=increment,
-                refresh_ttl=True,
-            )
+            redis_cache = spend_counter_cache.redis_cache
+            if callable(getattr(redis_cache, "async_increment_idempotent", None)):
+                current_value = await redis_cache.async_increment_idempotent(
+                    key=counter_key,
+                    value=increment,
+                    dedup_id=str(uuid.uuid4()),
+                    refresh_ttl=True,
+                )
+            else:
+                current_value = await redis_cache.async_increment(
+                    key=counter_key,
+                    value=increment,
+                    refresh_ttl=True,
+                )
         except Exception:
             await _invalidate_spend_counter(counter_key=counter_key)
             raise

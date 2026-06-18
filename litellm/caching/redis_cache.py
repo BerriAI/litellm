@@ -258,6 +258,12 @@ class RedisCache(BaseCache):
             recovery_timeout=REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
             enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
         )
+        self._dedup_increment_script: Optional[Any] = None
+        self._dedup_increment_script_disabled: bool = False
+        # Keys for which the dedup gate cannot be co-located (user-controlled
+        # key components containing braces). Only these keys fall back to
+        # plain increments; all other counters keep the idempotent path.
+        self._dedup_unsafe_keys: set = set()
 
         self._setup_health_pings()
 
@@ -939,6 +945,127 @@ class RedisCache(BaseCache):
         if isinstance(result, bytes):
             result = result.decode()
         return float(result)
+
+    _SPEND_DEDUP_INCREMENT_SCRIPT = """
+if redis.call('SET', KEYS[2], '1', 'NX', 'EX', tonumber(ARGV[2])) then
+    local v = redis.call('INCRBYFLOAT', KEYS[1], tonumber(ARGV[1]))
+    if ARGV[3] ~= '' then
+        redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+    end
+    return v
+else
+    local v = redis.call('GET', KEYS[1])
+    if v == false then return '0' else return v end
+end
+"""
+
+    async def async_increment_idempotent(
+        self,
+        key: str,
+        value: float,
+        dedup_id: str,
+        ttl: Optional[int] = None,
+        refresh_ttl: bool = False,
+    ) -> float:
+        """
+        Atomically increment a spend counter at most once per (key, dedup_id) pair.
+
+        Uses a Lua script with SET NX as a dedup gate so a re-issued INCRBYFLOAT
+        (e.g. cluster-mode retry after a client-side timeout) is a no-op on the
+        second run rather than double-applying the increment. Falls back to the
+        plain async_increment when scripting is unavailable. The dedup_id should
+        be a server-generated UUID (uuid4) to avoid client-supplied values
+        suppressing spend tracking.
+        """
+        if self._dedup_increment_script_disabled:
+            return await self.async_increment(
+                key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
+            )
+
+        key = self.check_and_fix_namespace(key=key)
+        if key in self._dedup_unsafe_keys:
+            return await self.async_increment(
+                key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
+            )
+        slot_tag = self._redis_slot_tag(key)
+        if slot_tag is None:
+            # Redis Cluster hashes the whole key, and that input contains a
+            # "}" which a wrapped "{...}" dedup key cannot reproduce. Fall
+            # back for this key only; every other counter keeps the
+            # idempotent path instead of one odd key disabling it globally.
+            self._dedup_unsafe_keys.add(key)
+            return await self.async_increment(
+                key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
+            )
+        _used_ttl = self.get_ttl(ttl=ttl)
+        dedup_key = f"{{{slot_tag}}}:dedup:{dedup_id}"
+        counter_ttl_arg = (
+            str(_used_ttl) if refresh_ttl and _used_ttl is not None else ""
+        )
+
+        script_register = getattr(self, "async_register_script", None)
+        if not callable(script_register):
+            return await self.async_increment(
+                key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
+            )
+
+        try:
+            if self._dedup_increment_script is None:
+                self._dedup_increment_script = script_register(
+                    self._SPEND_DEDUP_INCREMENT_SCRIPT
+                )
+
+            raw = await self._dedup_increment_script(
+                keys=[key, dedup_key],
+                args=[str(value), "300", counter_ttl_arg],
+            )
+
+            if inspect.isawaitable(raw):
+                raw = await raw
+
+            result = float(raw)
+            return result
+        except Exception as exc:
+            if "CROSSSLOT" in str(exc):
+                # The two keys landed on different slots despite the tag
+                # derivation (e.g. a key whose hash input embeds braces):
+                # this is a property of the key, not of the script, so
+                # degrade this key only and leave the script enabled.
+                self._dedup_unsafe_keys.add(key)
+                return await self.async_increment(
+                    key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
+                )
+            self._dedup_increment_script_disabled = True
+            verbose_logger.warning(
+                "LiteLLM Redis: idempotent increment Lua script failed, falling back to plain increment",
+            )
+            return await self.async_increment(
+                key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
+            )
+
+    @staticmethod
+    def _redis_slot_tag(key: str) -> Optional[str]:
+        """
+        Return the exact hash-tag input Redis Cluster uses to slot `key`, or
+        None when that input cannot be embedded back into a co-located
+        synthetic key (it contains "}", so wrapping it in braces would make
+        Redis read back a different, shorter tag and split the slots).
+
+        Redis Cluster hashes the substring between the first "{" and the
+        first "}" after it when that substring is non-empty, and the whole
+        key otherwise.
+        """
+        start = key.find("{")
+        if start != -1:
+            end = key.find("}", start + 1)
+            if end != -1 and end > start + 1:
+                # A real tag never contains "}", so "{tag}..." reads back
+                # as the same tag and slots identically to the key.
+                return key[start + 1 : end]
+        # No usable tag: the whole key is the hash input. Wrapping it stays
+        # correct only while it contains no "}" — a "{" is fine, because the
+        # closing brace we append is still the first one Redis finds.
+        return key if "}" not in key else None
 
     async def flush_cache_buffer(self):
         print_verbose(
