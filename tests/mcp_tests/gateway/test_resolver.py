@@ -4,10 +4,13 @@ Clean-room litmus: every case constructs `Subject` / `ServerSpec` directly, with
 fixtures. If an arm could not be exercised without a v1 request object, the seam has leaked.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import httpx
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
+from litellm.proxy.gateway.mcp._spike_exhaustiveness import http_status
 from litellm.proxy.gateway.mcp.outbound_credentials.credential_store import (
     CredentialKey,
     InMemoryCredentialStore,
@@ -16,9 +19,17 @@ from litellm.proxy.gateway.mcp.outbound_credentials.httpx_auth import (
     NoOpAuth,
     StaticHeaderAuth,
 )
-from litellm.proxy.gateway.mcp._spike_exhaustiveness import http_status
+from litellm.proxy.gateway.mcp.outbound_credentials.resolver import (
+    UpstreamCredentialProvider,
+)
+from litellm.proxy.gateway.mcp.outbound_credentials.token_store import (
+    InMemoryTokenStore,
+    StoredToken,
+    TokenKey,
+)
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     ApiKeyConfig,
+    AuthorizationCodeConfig,
     AuthSpecKind,
     Byok,
     CredError,
@@ -29,17 +40,62 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     SharedKey,
     Subject,
 )
-from litellm.proxy.gateway.mcp.outbound_credentials.resolver import (
-    UpstreamCredentialProvider,
-)
-from litellm.proxy.gateway.mcp.result import Error, Ok
+from litellm.proxy.gateway.mcp.result import Error, Ok, Result
 
-PROVIDER = UpstreamCredentialProvider(InMemoryCredentialStore())
+RESOURCE = "https://up.example/mcp"
+NOW = datetime(2026, 6, 17, 12, 0, 0, tzinfo=timezone.utc)
 SUBJECT = Subject(tenant_id="t1", subject_id="u1")
 
 
+class FixedClock:
+    def now(self) -> datetime:
+        return NOW
+
+
+class FakeRefresher:
+    def __init__(self, result: Result[StoredToken, CredError]) -> None:
+        self._result = result
+
+    async def refresh(
+        self, config: AuthorizationCodeConfig, refresh_token: SecretStr
+    ) -> Result[StoredToken, CredError]:
+        return self._result
+
+
+def _provider(
+    *,
+    credential_store: InMemoryCredentialStore | None = None,
+    token_store: InMemoryTokenStore | None = None,
+    refresher: FakeRefresher | None = None,
+    clock: FixedClock | None = None,
+) -> UpstreamCredentialProvider:
+    return UpstreamCredentialProvider(
+        credential_store=credential_store or InMemoryCredentialStore(),
+        token_store=token_store or InMemoryTokenStore(),
+        token_refresher=refresher
+        or FakeRefresher(Error(CredError.of_upstream_unavailable("unused"))),
+        clock=clock or FixedClock(),
+    )
+
+
+PROVIDER = _provider()
+
+
 def _spec(config: object) -> ServerSpec:
-    return ServerSpec(server_id="s1", resource="https://up.example/mcp", config=config)  # type: ignore[arg-type]
+    return ServerSpec(server_id="s1", resource=RESOURCE, config=config)  # type: ignore[arg-type]
+
+
+def _token_key() -> TokenKey:
+    return TokenKey(tenant_id="t1", subject_id="u1", server_id="s1", resource=RESOURCE)
+
+
+def _authz_cfg() -> AuthorizationCodeConfig:
+    return AuthorizationCodeConfig(
+        client_id="c",
+        client_secret="s",
+        authorization_url="https://idp/auth",
+        token_url="https://idp/token",
+    )
 
 
 def _applied_headers(auth: httpx.Auth) -> httpx.Headers:
@@ -102,7 +158,7 @@ async def test_api_key_per_user_pulls_the_subject_credential(source: object):
     store = InMemoryCredentialStore(
         {CredentialKey(tenant_id="t1", subject_id="u1", server_id="s1"): "user-secret"}
     )
-    provider = UpstreamCredentialProvider(store)
+    provider = _provider(credential_store=store)
     result = await provider.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=source)))  # type: ignore[arg-type]
     assert isinstance(result, Ok)
     assert _applied_headers(result.ok)["Authorization"] == "Bearer user-secret"
@@ -129,7 +185,7 @@ async def test_api_key_per_user_isolated_by_subject():
     store = InMemoryCredentialStore(
         {CredentialKey(tenant_id="t1", subject_id="u1", server_id="s1"): "u1-secret"}
     )
-    provider = UpstreamCredentialProvider(store)
+    provider = _provider(credential_store=store)
     other = Subject(tenant_id="t1", subject_id="u2")
     result = await provider.resolve(other, _spec(ApiKeyConfig(key_source=Byok())))
     assert isinstance(result, Error)
@@ -172,13 +228,6 @@ async def test_self_contained_arms_never_read_the_inbound_token():
     "config",
     [
         {
-            "kind": "authorization_code",
-            "client_id": "c",
-            "client_secret": "s",
-            "authorization_url": "https://idp/auth",
-            "token_url": "https://idp/token",
-        },
-        {
             "kind": "client_credentials",
             "client_id": "c",
             "client_secret": "s",
@@ -196,3 +245,108 @@ async def test_unimplemented_arms_fail_closed(config: dict):
     result = await PROVIDER.resolve(SUBJECT, _spec(config))
     assert isinstance(result, Error)
     assert result.error.tag == "misconfigured"
+
+
+async def test_authorization_code_returns_a_valid_stored_token():
+    store = InMemoryTokenStore(
+        {
+            _token_key(): StoredToken(
+                access_token="valid", expires_at=NOW + timedelta(hours=1)
+            )
+        }
+    )
+    result = await _provider(token_store=store).resolve(SUBJECT, _spec(_authz_cfg()))
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"] == "Bearer valid"
+
+
+async def test_authorization_code_without_a_token_fails_closed():
+    # No stored token -> unauthorized, which the edge turns into the 401 that starts the dance.
+    result = await _provider().resolve(SUBJECT, _spec(_authz_cfg()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+async def test_authorization_code_expired_without_refresh_fails_closed():
+    store = InMemoryTokenStore(
+        {
+            _token_key(): StoredToken(
+                access_token="old", expires_at=NOW - timedelta(minutes=1)
+            )
+        }
+    )
+    result = await _provider(token_store=store).resolve(SUBJECT, _spec(_authz_cfg()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+async def test_authorization_code_refreshes_proactively_near_expiry():
+    store = InMemoryTokenStore(
+        {
+            _token_key(): StoredToken(
+                access_token="old",
+                expires_at=NOW + timedelta(seconds=30),  # within the 60s refresh buffer
+                refresh_token="r",
+            )
+        }
+    )
+    fresh = StoredToken(
+        access_token="new", expires_at=NOW + timedelta(hours=1), refresh_token="r2"
+    )
+    provider = _provider(token_store=store, refresher=FakeRefresher(Ok(fresh)))
+    result = await provider.resolve(SUBJECT, _spec(_authz_cfg()))
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"] == "Bearer new"
+    persisted = await store.get(_token_key())
+    assert persisted is not None
+    assert persisted.access_token.get_secret_value() == "new"
+
+
+async def test_authorization_code_refresh_rejected_fails_closed():
+    store = InMemoryTokenStore(
+        {
+            _token_key(): StoredToken(
+                access_token="old",
+                expires_at=NOW - timedelta(minutes=1),
+                refresh_token="r",
+            )
+        }
+    )
+    provider = _provider(
+        token_store=store,
+        refresher=FakeRefresher(Error(CredError.of_unauthorized("refresh revoked"))),
+    )
+    result = await provider.resolve(SUBJECT, _spec(_authz_cfg()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+async def test_authorization_code_refresh_unreachable_is_upstream_unavailable():
+    store = InMemoryTokenStore(
+        {
+            _token_key(): StoredToken(
+                access_token="old",
+                expires_at=NOW - timedelta(minutes=1),
+                refresh_token="r",
+            )
+        }
+    )
+    provider = _provider(
+        token_store=store,
+        refresher=FakeRefresher(
+            Error(CredError.of_upstream_unavailable("token endpoint timeout"))
+        ),
+    )
+    result = await provider.resolve(SUBJECT, _spec(_authz_cfg()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+def test_stored_token_secrets_are_masked():
+    token = StoredToken(
+        access_token="ACCESS-SECRET", expires_at=NOW, refresh_token="REFRESH-SECRET"
+    )
+    dumped = token.model_dump_json()
+    assert "ACCESS-SECRET" not in dumped
+    assert "REFRESH-SECRET" not in dumped
+    assert "**********" in dumped
