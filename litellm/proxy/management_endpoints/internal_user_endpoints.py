@@ -455,7 +455,10 @@ async def new_user(
         teams = data.teams
         if teams is None:
             teams = check_if_default_team_set()
-        organization_ids = cast(Optional[List[str]], data_json.pop("organizations", None))
+        organization_ids = cast(
+            Optional[List[str]], data_json.pop("organizations", None)
+        )
+        owner_ids = cast(Optional[List[str]], data_json.pop("owner_ids", None))
 
         response = await generate_key_helper_fn(request_type="user", **data_json)
         # Admin UI Logic
@@ -488,6 +491,21 @@ async def new_user(
                 organizations=organization_ids,
                 prisma_client=prisma_client,
                 user_api_key_dict=user_api_key_dict,
+            )
+
+        # If owner_ids provided, create a service account entry linked to this user
+        if owner_ids is not None and len(owner_ids) > 0 and user_id is not None:
+            if len(owner_ids) < 2:
+                raise HTTPException(
+                    status_code=400,
+                    detail="owner_ids must contain at least 2 user IDs",
+                )
+            await prisma_client.db.litellm_serviceaccounttable.upsert(
+                where={"user_id": user_id},
+                data={
+                    "create": {"user_id": user_id, "owner_ids": owner_ids},
+                    "update": {"owner_ids": owner_ids},
+                },
             )
 
         special_keys = ["token", "token_id"]

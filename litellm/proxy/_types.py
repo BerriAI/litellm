@@ -1537,6 +1537,7 @@ class NewUserRequest(GenerateRequestBase):
     send_invite_email: Optional[bool] = None
     sso_user_id: Optional[str] = None
     organizations: Optional[List[str]] = None
+    owner_ids: Optional[List[str]] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
