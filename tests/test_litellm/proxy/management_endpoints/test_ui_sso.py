@@ -6937,6 +6937,8 @@ async def _render_legacy_login_page(env_overrides, general_settings):
     mock_request.base_url = "http://proxy.example.com/"
 
     with (
+        # snapshot os.environ so the mutations below are reverted on exit
+        patch.dict(os.environ, {}, clear=False),
         patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.premium_user", False),
