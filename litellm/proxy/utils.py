@@ -46,6 +46,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
 try:
@@ -6312,28 +6313,24 @@ def create_model_info_response(
     include_metadata: bool = False,
     fallback_type: Optional[str] = None,
     llm_router: Optional["Router"] = None,
-) -> dict:
+) -> ModelInfoResponse:
     """
-    Create a standardized model info response.
+    Create a standardized OpenAI-compatible model object.
 
-    Args:
-        model_id: The model ID
-        provider: The model provider
-        include_metadata: Whether to include metadata
-        fallback_type: Type of fallbacks to include
-        llm_router: LiteLLM router instance
-
-    Returns:
-        Dictionary containing model information
+    When include_metadata is true, attaches the model's configured fallbacks
+    (resolved via the router under fallback_type, defaulting to "general").
+    Raises HTTPException(400) for an unknown fallback_type.
     """
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    model_info = {
+    base: ModelInfoResponse = {
         "id": model_id,
         "object": "model",
         "created": DEFAULT_MODEL_CREATED_AT_TIME,
         "owned_by": provider,
     }
+    if not include_metadata:
+        return base
 
     # Surface context-window limits for OpenAI-compatible discovery clients.
     # Only emitted when known, so wildcard routes and limitless backends stay clean.
@@ -6379,11 +6376,13 @@ def create_model_info_response(
             llm_router=llm_router,
             fallback_type=effective_fallback_type,
         )
-        metadata["fallbacks"] = fallbacks
 
-        model_info["metadata"] = metadata
-
-    return model_info
+    fallbacks = get_all_fallbacks(
+        model=model_id,
+        llm_router=llm_router,
+        fallback_type=effective_fallback_type,
+    )
+    return {**base, "metadata": {"fallbacks": fallbacks}}
 
 
 def validate_model_access(
