@@ -1,6 +1,5 @@
 "use client";
 
-import ModelsAndEndpointsView from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
@@ -34,7 +33,7 @@ function CreateKeyPageContent() {
 
   const router = useRouter();
   const searchParams = useSearchParams()!;
-  const [modelData, setModelData] = useState<any>({ data: [] });
+  const [modelData] = useState<any>({ data: [] });
   const [createClicked, setCreateClicked] = useState<boolean>(false);
 
   const { data: uiSettingsData, isLoading: uiSettingsLoading } = useUISettings();
@@ -307,15 +306,6 @@ function CreateKeyPageContent() {
               createClicked={createClicked}
               autoOpenCreate={autoOpenCreate}
               prefillData={prefillData}
-            />
-          ) : page == "models" ? (
-            <ModelsAndEndpointsView
-              token={token}
-              keys={keys}
-              modelData={modelData}
-              setModelData={setModelData}
-              premiumUser={premiumUser}
-              teams={teams}
             />
           ) : page == "pass-through-settings" ? (
             <PassThroughSettings
