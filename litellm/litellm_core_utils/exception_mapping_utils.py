@@ -170,7 +170,7 @@ def get_error_message(error_obj) -> Optional[str]:
 
 
 ####### EXCEPTION MAPPING ################
-def _get_body_error_code(error_str: str) -> Optional[int]:
+def _get_body_error_code(error_str: str) -> int | None:
     """Return error.code from a JSON error body, or None if not parseable."""
     try:
         body = json.loads(error_str)

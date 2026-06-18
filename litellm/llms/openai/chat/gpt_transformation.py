@@ -431,8 +431,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def _should_preserve_cache_control_for_endpoint(
         self,
-        custom_llm_provider: Optional[str],
-        api_base: Optional[str],
+        custom_llm_provider: str | None,
+        api_base: str | None,
     ) -> bool:
         """
         The generic `openai` provider also reaches OpenAI-compatible endpoints
