@@ -2917,8 +2917,6 @@ class Router:
                             chunk = await aiter.__anext__()
                         else:
                             remaining = deadline - loop.time()
-                            if remaining <= 0:
-                                raise asyncio.TimeoutError
                             chunk = await asyncio.wait_for(
                                 aiter.__anext__(), timeout=remaining
                             )
