@@ -90,6 +90,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
+from litellm.types.router import DeploymentTypedDict
 from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
@@ -173,13 +174,13 @@ class ModelCostClass(str, Enum):
 def _classify_model_group_cost(model_name: str, llm_router: Router) -> ModelCostClass:
     """Classify one model group's per-token pricing, memoized per router.
 
-    Uses the router's get_model_group_info so pattern/wildcard deployments
-    (e.g. ``anthropic/*``) resolve the same way they do during cost tracking.
-    A zero cost is only trusted when explicitly configured; a zero defaulted
-    from sparse auto-registration is treated as UNKNOWN. The classification is
-    cached on the router so the free-model bypass (``_is_model_cost_zero``) and
-    the unknown-cost block check (``_request_has_unknown_cost_model``) share a
-    single ``get_model_group_info`` lookup per model per request.
+    Classifies every deployment the request could route to (see
+    ``_compute_model_group_cost_class``); a zero cost is only trusted when
+    explicitly configured, and a zero defaulted from sparse auto-registration is
+    treated as UNKNOWN. The classification is cached on the router so the
+    free-model bypass (``_is_model_cost_zero``) and the unknown-cost block check
+    (``_request_has_unknown_cost_model``) share a single resolution per model
+    per request.
     See: https://github.com/BerriAI/litellm/issues/24770
     """
     cache = _get_router_cost_class_cache(llm_router)
@@ -197,9 +198,17 @@ def _classify_model_group_cost(model_name: str, llm_router: Router) -> ModelCost
 def _compute_model_group_cost_class(
     model_name: str, llm_router: Router
 ) -> ModelCostClass:
+    """Classify a model group from every deployment a request could route to.
+
+    A request to a model group is load balanced across its deployments, so the
+    group is only safe to trust when every deployment's cost is measurable.
+    Aggregating with ``get_model_group_info`` keeps the maximum cost across
+    deployments, which would hide an unpriced deployment behind a priced one and
+    let calls that land on it record $0; classifying each deployment avoids that.
+    """
     safe_name = str(model_name).replace("\n", "").replace("\r", "")
     try:
-        model_group_info = llm_router.get_model_group_info(model_group=model_name)
+        deployments = llm_router.get_model_list(model_name=model_name)
     except Exception as e:
         verbose_proxy_logger.debug(
             "Error classifying cost for model %s: %s; treating as unknown cost",
@@ -208,33 +217,20 @@ def _compute_model_group_cost_class(
         )
         return ModelCostClass.UNKNOWN
 
-    if model_group_info is None:
+    if not deployments:
         verbose_proxy_logger.debug(
-            "No model group info found for %s; treating as unknown cost", safe_name
+            "No deployments found for %s; treating as unknown cost", safe_name
         )
         return ModelCostClass.UNKNOWN
 
-    input_cost = model_group_info.input_cost_per_token
-    output_cost = model_group_info.output_cost_per_token
-    if input_cost is None or output_cost is None:
-        verbose_proxy_logger.debug(
-            "Model %s has undefined cost (input: %s, output: %s); treating as "
-            "unknown cost",
-            safe_name,
-            input_cost,
-            output_cost,
-        )
-        return ModelCostClass.UNKNOWN
-    if input_cost > 0 or output_cost > 0:
-        return ModelCostClass.KNOWN_POSITIVE
-    if _is_cost_explicitly_configured(model_name, llm_router):
-        return ModelCostClass.EXPLICIT_ZERO
-    verbose_proxy_logger.debug(
-        "Model %s has zero cost but no explicit cost configuration; treating as "
-        "unknown cost (enforce budget)",
-        safe_name,
+    classes = tuple(
+        _classify_deployment_cost(deployment, llm_router) for deployment in deployments
     )
-    return ModelCostClass.UNKNOWN
+    if any(c == ModelCostClass.UNKNOWN for c in classes):
+        return ModelCostClass.UNKNOWN
+    if all(c == ModelCostClass.EXPLICIT_ZERO for c in classes):
+        return ModelCostClass.EXPLICIT_ZERO
+    return ModelCostClass.KNOWN_POSITIVE
 
 
 def _is_model_cost_zero(
@@ -259,30 +255,62 @@ def _is_model_cost_zero(
     )
 
 
-def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
-    """
-    Check if any deployment serving this model group has cost fields
-    explicitly set in its litellm.model_cost entry.
+def _as_cost(value: object) -> float | None:
+    """Return value as a float cost, or None if it isn't a number."""
+    return float(value) if isinstance(value, (int, float)) else None
 
-    Uses ``Router.get_model_list`` so wildcard deployments (e.g. ``anthropic/*``)
-    are resolved against the concrete requested model, matching how
-    ``get_model_group_info`` reads pricing, instead of relying on an exact
-    ``model_name`` equality that wildcards never satisfy.
 
-    When Router._create_deployment() registers a model not in the global
-    cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
-    fields. _get_model_info_helper() then defaults missing costs to 0.
-    This function detects that scenario by checking the raw model_cost entry.
+def _classify_deployment_cost(
+    deployment: DeploymentTypedDict, llm_router: Router
+) -> ModelCostClass:
+    """Classify a single router deployment's per-token pricing.
+
+    The cost is resolved the way cost tracking resolves it
+    (``get_deployment_model_info`` reads the built-in cost map for known models
+    and defaults unmapped models to $0). A positive cost is KNOWN_POSITIVE; a
+    zero is only trusted as EXPLICIT_ZERO when both input and output pricing are
+    explicitly set on the deployment, otherwise it is a sparse auto-registration
+    default and treated as UNKNOWN. ``get_model_list`` rewrites wildcard
+    deployments to the concrete requested model, so the resolved cost reflects
+    the model that will actually run.
     """
-    deployments = llm_router.get_model_list(model_name=model) or []
-    for deployment in deployments:
-        model_id = deployment.get("model_info", {}).get("id")
-        if model_id is None:
-            continue
-        raw_entry = litellm.model_cost.get(model_id, {})
-        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
-            return True
-    return False
+    litellm_params = deployment["litellm_params"]
+    model_info = deployment.get("model_info")
+    model_info_dict = (
+        cast("dict[str, object]", model_info) if isinstance(model_info, dict) else {}
+    )
+
+    underlying_model = litellm_params.get("model")
+    model_id = model_info_dict.get("id")
+    resolved_info = None
+    if isinstance(underlying_model, str) and isinstance(model_id, str):
+        try:
+            resolved_info = llm_router.get_deployment_model_info(
+                model_id=model_id, model_name=underlying_model
+            )
+        except Exception:
+            resolved_info = None
+
+    resolved_input = (
+        _as_cost(resolved_info.get("input_cost_per_token")) if resolved_info else None
+    )
+    resolved_output = (
+        _as_cost(resolved_info.get("output_cost_per_token")) if resolved_info else None
+    )
+    if (resolved_input is not None and resolved_input > 0) or (
+        resolved_output is not None and resolved_output > 0
+    ):
+        return ModelCostClass.KNOWN_POSITIVE
+
+    explicit_input = _as_cost(litellm_params.get("input_cost_per_token"))
+    if explicit_input is None:
+        explicit_input = _as_cost(model_info_dict.get("input_cost_per_token"))
+    explicit_output = _as_cost(litellm_params.get("output_cost_per_token"))
+    if explicit_output is None:
+        explicit_output = _as_cost(model_info_dict.get("output_cost_per_token"))
+    if explicit_input is not None and explicit_output is not None:
+        return ModelCostClass.EXPLICIT_ZERO
+    return ModelCostClass.UNKNOWN
 
 
 def _classify_model_from_cost_map(model_name: str) -> ModelCostClass:

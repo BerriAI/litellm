@@ -246,16 +246,18 @@ class TestUnmappedModelBudgetEnforcement:
         compute a correct answer, just without caching."""
         from unittest.mock import MagicMock
 
-        from litellm.types.router import ModelGroupInfo
-
         mock_router = MagicMock(spec=Router)
-        mock_router.model_list = []
-        mock_router.get_model_group_info.return_value = ModelGroupInfo(
-            model_group="paid-model",
-            providers=["openai"],
-            input_cost_per_token=0.001,
-            output_cost_per_token=0.002,
-        )
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "paid-model",
+                "litellm_params": {"model": "openai/some-paid-model"},
+                "model_info": {"id": "paid-id"},
+            }
+        ]
+        mock_router.get_deployment_model_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+        }
         # Strip the attribute so the helper falls back to the no-cache path.
         del mock_router._model_cost_class_cache
 
@@ -432,6 +434,44 @@ class TestBlockUnknownCostModelsCheck:
             route="/v1/chat/completions",
         )
 
+    def test_flag_on_blocks_mixed_group_with_unpriced_deployment(self):
+        """A model group that load balances across a priced and an unpriced
+        deployment must be blocked: get_model_group_info reports the maximum
+        cost across deployments, so the priced one would mask the unpriced one,
+        yet a call routed to the unpriced deployment records $0 and bypasses
+        budgets."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "mixed-group",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-fake",
+                    },
+                    "model_info": {"id": "mixed-priced"},
+                },
+                {
+                    "model_name": "mixed-group",
+                    "litellm_params": {
+                        "model": "openai/totally-unmapped-deployment-zzz",
+                        "api_key": "sk-fake",
+                    },
+                    "model_info": {"id": "mixed-unpriced"},
+                },
+            ]
+        )
+        assert (
+            _classify_model_group_cost("mixed-group", router) == ModelCostClass.UNKNOWN
+        )
+        with pytest.raises(ProxyException) as exc_info:
+            _block_unknown_cost_models_check(
+                enabled=True,
+                model="mixed-group",
+                llm_router=router,
+                route="/v1/chat/completions",
+            )
+        assert "mixed-group" in exc_info.value.message
+
 
 class TestBlockUnknownCostModelsViaCommonChecks:
     """End-to-end wiring through common_checks (the actual auth call site)."""
@@ -560,16 +600,16 @@ class TestCostClassificationCaching:
     def teardown_method(self):
         litellm.model_cost = self._saved_model_cost
 
-    def test_both_callers_share_a_single_get_model_group_info_lookup(self):
+    def test_both_callers_share_a_single_deployment_lookup(self):
         router = _router_with_mixed_costs()
         lookups = {"count": 0}
-        original_get_model_group_info = router.get_model_group_info
+        original_get_model_list = router.get_model_list
 
-        def counting_get_model_group_info(*args, **kwargs):
+        def counting_get_model_list(*args, **kwargs):
             lookups["count"] += 1
-            return original_get_model_group_info(*args, **kwargs)
+            return original_get_model_list(*args, **kwargs)
 
-        router.get_model_group_info = counting_get_model_group_info
+        router.get_model_list = counting_get_model_list
 
         # First caller resolves and caches the classification (one lookup).
         assert _request_has_unknown_cost_model(_UNMAPPED_MODEL, router) is True
@@ -597,7 +637,7 @@ class TestCostClassificationCaching:
         def fail_if_called(*args, **kwargs):
             raise AssertionError("classification cache was bypassed")
 
-        router.get_model_group_info = fail_if_called
+        router.get_model_list = fail_if_called
         assert (
             _classify_model_group_cost("paid-model", router)
             == ModelCostClass.KNOWN_POSITIVE
