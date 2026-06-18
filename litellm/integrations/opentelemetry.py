@@ -208,7 +208,12 @@ def _response_obj_as_mapping(response_obj: Optional[Any]) -> Optional[Dict[str, 
     if callable(model_dump):
         try:
             dumped = model_dump()
-        except Exception:
+        except Exception as e:
+            verbose_logger.debug(
+                "OpenTelemetry: failed to coerce response_obj of type %s via model_dump: %s",
+                type(response_obj).__name__,
+                e,
+            )
             return None
         if isinstance(dumped, dict):
             return dumped
