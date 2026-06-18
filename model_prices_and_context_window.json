@@ -43446,5 +43446,83 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
+    },
+    "pinstripes/ps/glm-4.5-air": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.00000045,
+        "litellm_provider": "pinstripes",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_reasoning": true,
+        "source": "https://pinstripes.io/pricing"
+    },
+    "pinstripes/ps/qwen3.6-35b-a3b": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.00000014,
+        "output_cost_per_token": 0.00000045,
+        "litellm_provider": "pinstripes",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_reasoning": true,
+        "source": "https://pinstripes.io/pricing"
+    },
+    "pinstripes/ps/qwen3-30b-a3b": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.00000009,
+        "output_cost_per_token": 0.0000002,
+        "litellm_provider": "pinstripes",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_reasoning": true,
+        "source": "https://pinstripes.io/pricing"
+    },
+    "pinstripes/ps/qwen3-coder-30b-a3b": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "pinstripes",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_reasoning": false,
+        "source": "https://pinstripes.io/pricing"
+    },
+    "pinstripes/ps/deepseek-v4-flash": {
+        "max_tokens": 163840,
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000002,
+        "litellm_provider": "pinstripes",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_reasoning": true,
+        "source": "https://pinstripes.io/pricing"
+    },
+    "pinstripes/ps/minimax-m2.7": {
+        "max_tokens": 1000192,
+        "max_input_tokens": 1000192,
+        "max_output_tokens": 1000192,
+        "input_cost_per_token": 0.000000255,
+        "output_cost_per_token": 0.00000055,
+        "litellm_provider": "pinstripes",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_reasoning": false,
+        "source": "https://pinstripes.io/pricing"
     }
 }
