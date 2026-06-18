@@ -7,23 +7,24 @@ every PR/issue Agent Shin would close once the rollout completes. The point
 is to give contributors a full week to fix their description before the bot
 ever takes a destructive action, so nobody is surprised by an auto-close.
 
-The script is designed to run **exactly once**, on the merge commit of the
-rollout PR. Re-runs are safe: every comment is stamped with the hidden
-``HEADS_UP_MARKER`` and PRs/issues that already carry the marker are skipped.
+The script is designed to run **exactly once** at rollout, fired by a manual
+``workflow_dispatch`` (``dry_run=false``) on the heads-up workflow. Re-runs
+are safe: every comment is stamped with the hidden ``HEADS_UP_MARKER`` and
+PRs/issues that already carry the marker are skipped.
 
 Dry-run vs. real run
 --------------------
-Defaults to dry-run. The matching GitHub Action passes ``--close`` to flip
-into real mode. Every GitHub mutation goes through ``_agent_shin_actions``,
-which has a one-line ``if dry_run: log else: do_it`` per call — so the only
-difference between a dry-run preview and the real run is the call site that
-actually hits the GitHub API.
+Defaults to dry-run. Passing ``--close`` flips into real mode. Every GitHub
+mutation goes through ``_agent_shin_actions``, which has a one-line
+``if dry_run: log else: do_it`` per call, so the only difference between a
+dry-run preview and the real run is the call site that actually hits the
+GitHub API.
 
 Local preview::
 
     python3 .github/scripts/triage_rollout_heads_up.py --repo BerriAI/litellm
 
-Real run (the workflow uses this)::
+Real run (the manual rollout dispatch uses this)::
 
     python3 .github/scripts/triage_rollout_heads_up.py --repo BerriAI/litellm --close
 """

@@ -215,6 +215,49 @@ def test_triage_requirements_are_fully_hash_pinned() -> None:
         )
 
 
+def _heads_up_run_step() -> dict:
+    workflow = _load_workflow("triage_rollout_heads_up.yml")
+    for step in workflow["jobs"]["heads-up"]["steps"]:
+        if isinstance(step.get("run"), str) and "triage_rollout_heads_up.py" in step["run"]:
+            return step
+    raise AssertionError("no run step invokes triage_rollout_heads_up.py")
+
+
+def test_rollout_heads_up_push_trigger_never_posts() -> None:
+    """Merging the heads-up script to staging must stay inert: the automatic
+    push trigger only ever runs dry-run. The real one-shot sweep is a
+    deliberate manual `workflow_dispatch` with `dry_run=false`, the sole path
+    that adds `--close`.
+
+    This guards the "inert by default" invariant for the one workflow that is
+    intentionally not gated on AGENT_SHIN_ENABLED (it has to warn contributors
+    before that flag flips on). A regression to auto-`--close`-on-push would
+    post real comments on every push that touches the script.
+    """
+    run = _heads_up_run_step()["run"]
+    assert '"${GITHUB_EVENT_NAME:-}" = "workflow_dispatch"' in run, (
+        "the real (--close) run must be a manual workflow_dispatch, not the automatic push trigger"
+    )
+    assert '"${DRY_RUN_INPUT:-true}" = "false"' in run, (
+        "the real run must require the dry_run input to be the exact string 'false' (fail-safe); any other value stays dry-run"
+    )
+    assert run.count("ARGS+=(--close)") == 1, (
+        "--close must appear once, inside the manual real-run branch; a second occurrence means the push path posts real comments on merge"
+    )
+
+
+def test_rollout_heads_up_key_is_dispatch_gated() -> None:
+    """OPENAI_API_KEY is exposed only on the manual dispatch (the real-run
+    trigger), never unconditionally. The sibling triage workflows gate the key
+    the same way; an unconditional `secrets.OPENAI_API_KEY` here would hand the
+    key to the automatic push run, which must stay a no-op dry-run preview.
+    """
+    key_expr = (_heads_up_run_step().get("env") or {}).get("OPENAI_API_KEY", "")
+    assert "github.event_name == 'workflow_dispatch'" in key_expr, (
+        f"OPENAI_API_KEY must be gated on workflow_dispatch so the automatic push trigger gets no key; found: {key_expr!r}"
+    )
+
+
 def _reconsider_steps() -> list[dict]:
     workflow = _load_workflow("triage_reconsider.yml")
     return workflow["jobs"]["reconsider"]["steps"]

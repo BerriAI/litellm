@@ -1,15 +1,22 @@
 name: Agent Shin — rollout heads-up (one-shot)
 
 # Fires the 7-day heads-up comment on every open external PR/issue that the
-# new triage bot would auto-close. Designed to run **once**, on the merge
-# commit of the rollout PR — but the script is idempotent (skips items that
-# already carry the `<!-- agent-shin:rollout-heads-up -->` marker), so an
-# accidental re-run is harmless.
+# new triage bot would auto-close. The real sweep is a deliberate one-shot:
+# trigger it at rollout via a manual `workflow_dispatch` with `dry_run=false`.
+# The script is idempotent (skips items that already carry the
+# `<!-- agent-shin:rollout-heads-up -->` marker), so a re-run is harmless.
+#
+# The automatic push trigger runs DRY-RUN only, so merging the script to
+# `litellm_internal_staging` never posts a comment; it just confirms the
+# workflow is wired up. Posting real comments requires the manual dispatch,
+# which is also the only trigger that exposes `OPENAI_API_KEY`. The heads-up
+# is intentionally NOT gated on `AGENT_SHIN_ENABLED`: it has to warn
+# contributors while that flag is still off, ahead of the flip that turns on
+# auto-closing.
 #
 # The workflow is a thin shell over `.github/scripts/triage_rollout_heads_up.py`.
-# Dry-run vs. real run differ in EXACTLY one CLI flag (`--close`) — the
-# auto-trigger uses `--close`, the manual `workflow_dispatch` trigger defaults
-# to dry-run so you can preview before the real fire.
+# Dry-run vs. real run differ in EXACTLY one CLI flag (`--close`), added only
+# on a manual dispatch with `dry_run=false`.
 
 on:
   push:
@@ -58,28 +65,28 @@ jobs:
       - name: Run heads-up sweep
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Only the manual dispatch (the real-run trigger) needs the LLM key.
+          # The automatic push trigger runs dry-run and never posts, so it gets
+          # no key. Mirrors the sibling triage workflows, which expose the key
+          # only on an enabled/dispatched run rather than unconditionally.
+          OPENAI_API_KEY: ${{ github.event_name == 'workflow_dispatch' && secrets.OPENAI_API_KEY || '' }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
-          # Auto-trigger from push -> always real (`--close`). For
-          # workflow_dispatch we honor the dry_run input. Use the EXACT
-          # string "true"/"false" comparison so unexpected input values
-          # fail-closed to dry-run (mirrors the AGENT_SHIN_ENABLED pattern
-          # in the sibling workflows).
+          # The real run is a deliberate manual dispatch with dry_run=false.
+          # Use the EXACT "false" comparison so any unexpected input value
+          # fail-closes to dry-run (mirrors the AGENT_SHIN_ENABLED pattern in
+          # the sibling workflows). The automatic push trigger always stays
+          # dry-run, so merging the script never posts.
           DRY_RUN_INPUT: ${{ github.event.inputs.dry_run }}
         run: |
           set -euo pipefail
           ARGS=(--repo "${{ github.repository }}")
-          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
-            if [ "${DRY_RUN_INPUT:-true}" = "false" ]; then
-              ARGS+=(--close)
-              echo "::notice::Manual dispatch with dry_run=false -> comments WILL be posted."
-            else
-              echo "::notice::Manual dispatch in dry-run mode -> no comments will be posted."
-            fi
-          else
-            # push to litellm_internal_staging = the rollout merge -> real run
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && [ "${DRY_RUN_INPUT:-true}" = "false" ]; then
             ARGS+=(--close)
-            echo "::notice::Rollout-merge trigger -> heads-up comments WILL be posted."
+            echo "::notice::Manual rollout dispatch with dry_run=false -> heads-up comments WILL be posted."
+          elif [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            echo "::notice::Manual dispatch in dry-run mode -> previewing only, no comments will be posted."
+          else
+            echo "::notice::Automatic push trigger -> dry-run preview only. Fire the real rollout sweep with a manual workflow_dispatch (dry_run=false)."
           fi
           python3 .github/scripts/triage_rollout_heads_up.py "${ARGS[@]}"
