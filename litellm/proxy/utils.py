@@ -3432,6 +3432,7 @@ class PrismaClient:
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all" and team_id is not None:
                     response = await VerificationTokenRepository(self).table.find_many(
+                        take=limit,
                         where={"team_id": team_id},
                         include={"litellm_budget_table": True},
                     )
@@ -6328,15 +6329,37 @@ def create_model_info_response(
         "created": DEFAULT_MODEL_CREATED_AT_TIME,
         "owned_by": provider,
     }
+
+    # Surface context-window limits for OpenAI-compatible discovery clients.
+    # Only emitted when known, so wildcard routes and limitless backends stay clean.
+    # Limits are best-effort enrichment, so a single malformed deployment degrades
+    # to the base response rather than 500-ing the whole listing.
+    if llm_router is not None:
+        try:
+            model_group_info = llm_router.get_model_group_info(model_id)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "create_model_info_response: get_model_group_info failed for %s: %s",
+                model_id,
+                e,
+            )
+            model_group_info = None
+        if model_group_info is not None:
+            if model_group_info.max_input_tokens is not None:
+                base["max_input_tokens"] = int(model_group_info.max_input_tokens)
+            if model_group_info.max_output_tokens is not None:
+                base["max_output_tokens"] = int(model_group_info.max_output_tokens)
+
     if not include_metadata:
         return base
 
     effective_fallback_type = fallback_type if fallback_type is not None else "general"
-    valid_fallback_types = ("general", "context_window", "content_policy")
+
+    valid_fallback_types = ["general", "context_window", "content_policy"]
     if effective_fallback_type not in valid_fallback_types:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid fallback_type. Must be one of: {list(valid_fallback_types)}",
+            detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
         )
 
     fallbacks = get_all_fallbacks(

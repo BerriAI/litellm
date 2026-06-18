@@ -218,8 +218,20 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         - Qualifier goes as query parameter
         - Only the payload goes in the request body
 
+        Payload shape:
+        - ``prompt`` is always present and contains the text-only flatten of the
+          last message's content (existing behavior).
+        - ``content`` is added ONLY when the ``forward_multimodal_content`` litellm
+          param is truthy AND the last message's ``content`` is a list containing a
+          non-text block (e.g. ``image_url``, ``file``, ``input_audio``). The list is
+          forwarded verbatim so the agent's ``@app.entrypoint`` handler can parse the
+          OpenAI-shaped multimodal blocks. This is opt-in because an AgentCore agent
+          must be explicitly written to read ``payload["content"]``; by default the
+          payload stays byte-identical to the legacy ``{"prompt": "..."}`` shape.
+
         Returns:
-            dict: Payload dict containing the prompt
+            dict: Payload dict containing the prompt and (optionally) the OpenAI
+            content list.
         """
         verbose_logger.debug(
             f"AgentCore transform_request - optional_params keys: {list(optional_params.keys())}"
@@ -230,6 +242,20 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
         # Create the payload - this is what goes in the body (raw JSON)
         payload: dict = {"prompt": prompt}
+
+        # Opt-in: when forward_multimodal_content is set, forward the OpenAI content
+        # list verbatim under "content" so an attachment-aware agent can read the raw
+        # blocks (image_url, file, etc.). Default off keeps the payload byte-identical
+        # to the legacy {"prompt": "..."} shape for agents that only read the prompt.
+        if self._should_forward_multimodal_content(optional_params, litellm_params):
+            last_content = messages[-1].get("content")
+            if isinstance(last_content, list) and any(
+                isinstance(block, dict) and block.get("type") not in (None, "text")
+                for block in last_content
+            ):
+                # Copy so the payload never aliases messages[-1]["content"]; shallow,
+                # not deep, to avoid cloning large base64 media on the request path.
+                payload["content"] = list(last_content)
 
         # Get or generate session ID - this goes in the header
         runtime_session_id = self._get_runtime_session_id(optional_params)
@@ -245,6 +271,29 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
         verbose_logger.debug(f"PAYLOAD: {payload}")
         return payload
+
+    @staticmethod
+    def _should_forward_multimodal_content(
+        optional_params: dict, litellm_params: dict
+    ) -> bool:
+        """Whether to forward raw OpenAI content blocks under ``payload["content"]``.
+
+        Opt-in via the ``forward_multimodal_content`` litellm param (default ``False``)
+        because AgentCore agents must be explicitly written to read the field. The
+        value may arrive as a bool or a config/env string ("true", "1", ...). Checks
+        ``optional_params`` first (where other AgentCore params land), then
+        ``litellm_params``.
+        """
+        for source in (optional_params, litellm_params):
+            if not isinstance(source, dict):
+                continue
+            value = source.get("forward_multimodal_content")
+            if value is None:
+                continue
+            if isinstance(value, str):
+                return value.strip().lower() in ("1", "true", "yes", "on")
+            return bool(value)
+        return False
 
     def _extract_sse_json(self, line: str) -> Optional[Dict]:
         """Extract and parse JSON from an SSE data line."""

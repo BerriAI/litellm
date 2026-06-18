@@ -321,6 +321,29 @@ class TestNativeFinishReason:
         assert choice.provider_specific_fields["native_finish_reason"] == "MAX_TOKENS"
 
 
+def test_parallel_request_limiter_internal_fields_in_all_litellm_params():
+    """
+    Regression test: internal fields written by parallel_request_limiter_v3 must
+    be in all_litellm_params so they are stripped before forwarding to upstream
+    providers.  If missing, they are sent as extra body parameters and providers
+    like OpenAI reject the request with a 400 invalid_request_error.
+    """
+    from litellm.types.utils import all_litellm_params
+
+    internal_fields = [
+        "_litellm_rate_limit_descriptors",
+        "_litellm_tpm_reserved_tokens",
+        "_litellm_tpm_reserved_model",
+        "_litellm_tpm_reserved_scopes",
+        "_litellm_tpm_reservation_released",
+    ]
+    for field in internal_fields:
+        assert field in all_litellm_params, (
+            f"{field!r} is not in all_litellm_params. "
+            "It will be forwarded to upstream providers and cause 400 errors."
+        )
+
+
 def test_delta_maps_reasoning_to_reasoning_content():
     """
     Test that Delta maps 'reasoning' field to 'reasoning_content'.

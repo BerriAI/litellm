@@ -554,3 +554,31 @@ def test_map_response_format_json_object_unchanged():
         drop_params=False,
     )
     assert result == {"response_format": {"type": "json_object"}}
+
+
+def test_transform_request_routes_short_form_router_to_routers_path():
+    """A bare router model name ending in -fast must be rewritten to the
+    ``accounts/fireworks/routers/`` path, not the default ``models/`` path."""
+    config = FireworksAIConfig()
+    result = config.transform_request(
+        model="glm-5p1-fast",
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert result["model"] == "accounts/fireworks/routers/glm-5p1-fast"
+
+
+def test_transform_request_routes_short_form_model_to_models_path():
+    """A bare direct-model name must still be rewritten to the
+    ``accounts/fireworks/models/`` path."""
+    config = FireworksAIConfig()
+    result = config.transform_request(
+        model="glm-5p2",
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert result["model"] == "accounts/fireworks/models/glm-5p2"

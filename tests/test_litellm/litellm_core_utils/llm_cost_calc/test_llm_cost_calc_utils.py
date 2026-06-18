@@ -35,6 +35,7 @@ sys.path.insert(
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     PromptTokensDetailsResult,
     _calculate_input_cost,
+    _get_token_base_cost,
     calculate_cache_writing_cost,
     generic_cost_per_token,
 )
@@ -296,6 +297,26 @@ def test_generic_cost_per_token_above_200k_tokens():
         * usage.completion_tokens,
         10,
     )
+
+
+def test_get_token_base_cost_picks_highest_crossed_tier():
+    """Regression test for #30345.
+
+    With graduated tiers at 90k and 128k whose keys have different digit lengths, a request
+    crossing both must be billed at the highest tier it crosses (128k), not the lower one that
+    happens to sort first lexicographically.
+    """
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_90k_tokens": 5e-6,
+        "input_cost_per_token_above_128k_tokens": 9e-6,
+    }
+    usage = Usage(prompt_tokens=150_000, completion_tokens=10, total_tokens=150_010)
+
+    prompt_base_cost = _get_token_base_cost(model_info, usage)[0]
+
+    assert prompt_base_cost == 9e-6
 
 
 def test_generic_cost_per_token_gpt54_above_272k_tokens():

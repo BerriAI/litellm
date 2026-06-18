@@ -397,7 +397,7 @@ def _set_object_metadata_field(
         field_name: Name of the metadata field to set
         value: Value to set for the field
     """
-    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium and value:
         _premium_user_check(field_name)
 
     object_data.metadata = object_data.metadata or {}
@@ -563,13 +563,11 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
         field_name: Name of the metadata field being updated
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        value = updated_kv.get(field_name)
-        # Skip the premium check for empty collections ([] or {}).
-        # The UI sends these as defaults even when the user hasn't configured
-        # any enterprise features (see issue #20304).  However, we still
-        # proceed with the update so that users can intentionally clear a
-        # previously-set field by sending an empty list/dict.
-        if value is not None and value != [] and value != {}:
+        # The UI sends falsy defaults (False, [], {}) even when the user has not
+        # enabled any enterprise feature (see #20304, #30285); require a license
+        # only for a truthy value. The falsy value is still persisted below so a
+        # previously-set field can be cleared.
+        if updated_kv.get(field_name):
             _premium_user_check()
 
     if field_name in updated_kv and updated_kv[field_name] is not None:

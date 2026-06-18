@@ -130,6 +130,12 @@ async def _prepare_client_secret_session(
     session_model = req.session.model if req.session else None
     model: str = session_model or req.model or _DEFAULT_REALTIME_MODEL
     if session_type != "transcription":
+        await can_key_call_resolved_model(
+            model=model,
+            valid_token=user_api_key_dict,
+            llm_model_list=llm_model_list,
+            llm_router=llm_router,
+        )
         return model, session_data, session_type
 
     transcription_model_candidates = _transcription_model_candidates_from_session(

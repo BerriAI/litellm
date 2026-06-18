@@ -5,6 +5,7 @@ Tests:
 - Accept header fix (sign_request sets Accept: application/json, text/event-stream)
 - JSON response parsing fallback chain (_parse_json_response supports multiple schemas)
 - Streaming Content-Type fallback (JSON responses converted to single-chunk streams)
+- Multimodal content preservation (transform_request forwards OpenAI content blocks)
 """
 
 import json
@@ -389,3 +390,249 @@ class TestAgentCoreStreamingJsonFallback:
                     client=client,
                     api_key="test-jwt-token",
                 )
+
+
+class TestAgentCoreMultimodalContent:
+    """Tests for transform_request forwarding OpenAI multimodal content blocks.
+
+    AgentCore Runtime is schemaless on the agent side — the agent author's
+    @app.entrypoint handler parses whatever JSON arrives. transform_request
+    only emits {"prompt": "<text>"} by default and drops image_url, file, and
+    other non-text blocks.
+
+    When the ``forward_multimodal_content`` litellm param is set, the OpenAI
+    content list is forwarded verbatim under a "content" field whenever the last
+    message contains a non-text block. This is opt-in: an agent must be written
+    to read payload["content"]. Without the flag, the payload is byte-identical
+    to the legacy {"prompt": "..."} shape.
+    """
+
+    @pytest.fixture
+    def config(self):
+        return AmazonAgentCoreConfig()
+
+    @pytest.fixture
+    def transform_kwargs(self):
+        """Default kwargs — forwarding is OFF (no opt-in flag)."""
+        return {
+            "model": "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:111111111111:runtime/test_agent",
+            "optional_params": {},
+            "litellm_params": {},
+            "headers": {},
+        }
+
+    @pytest.fixture
+    def opted_in_kwargs(self, transform_kwargs):
+        """Kwargs with the opt-in flag set in optional_params."""
+        return {
+            **transform_kwargs,
+            "optional_params": {"forward_multimodal_content": True},
+        }
+
+    def test_string_content_payload_byte_identical_to_legacy(
+        self, config, transform_kwargs
+    ):
+        """String content → exactly {"prompt": "<text>"}, no extra fields."""
+        messages = [{"role": "user", "content": "hello agent"}]
+        payload = config.transform_request(messages=messages, **transform_kwargs)
+        assert payload == {"prompt": "hello agent"}
+
+    def test_file_block_not_forwarded_by_default(self, config, transform_kwargs):
+        """Default (no opt-in flag): file blocks are NOT forwarded — backward compat."""
+        content = [
+            {"type": "text", "text": "summarize this report"},
+            {
+                "type": "file",
+                "file": {
+                    "filename": "report.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+                },
+            },
+        ]
+        messages = [{"role": "user", "content": content}]
+        payload = config.transform_request(messages=messages, **transform_kwargs)
+        assert payload == {"prompt": "summarize this report"}
+        assert "content" not in payload
+
+    def test_text_only_list_content_no_content_field(self, config, opted_in_kwargs):
+        """All-text content list → no "content" field even when opted in."""
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hello agent"}],
+            }
+        ]
+        payload = config.transform_request(messages=messages, **opted_in_kwargs)
+        assert payload == {"prompt": "hello agent"}
+        assert "content" not in payload
+
+    def test_file_data_block_passthrough(self, config, opted_in_kwargs):
+        """Opted in: a file block → "content" carries the original list verbatim."""
+        content = [
+            {"type": "text", "text": "summarize this report"},
+            {
+                "type": "file",
+                "file": {
+                    "filename": "report.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+                },
+            },
+        ]
+        messages = [{"role": "user", "content": content}]
+        payload = config.transform_request(messages=messages, **opted_in_kwargs)
+        assert payload["prompt"] == "summarize this report"
+        # Contents forwarded verbatim, but as a distinct list (no aliasing).
+        assert payload["content"] == content
+        assert payload["content"] is not content
+
+    def test_image_url_block_passthrough(self, config, opted_in_kwargs):
+        """Opted in: an image_url block → "content" carries it verbatim."""
+        content = [
+            {"type": "text", "text": "what is in this image?"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        messages = [{"role": "user", "content": content}]
+        payload = config.transform_request(messages=messages, **opted_in_kwargs)
+        assert payload["prompt"] == "what is in this image?"
+        assert payload["content"] == content
+        assert payload["content"] is not content
+
+    def test_mixed_text_and_files_payload_shape(self, config, opted_in_kwargs):
+        """Opted in: text + file + image → both "prompt" (text-only) and "content"."""
+        content = [
+            {"type": "text", "text": "first sentence."},
+            {
+                "type": "file",
+                "file": {
+                    "filename": "report.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+                },
+            },
+            {"type": "text", "text": "second sentence."},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        messages = [{"role": "user", "content": content}]
+        payload = config.transform_request(messages=messages, **opted_in_kwargs)
+        # prompt is the text-only flatten produced by convert_content_list_to_str.
+        assert "first sentence." in payload["prompt"]
+        assert "second sentence." in payload["prompt"]
+        assert "JVBERi0xLjQK" not in payload["prompt"]
+        assert "iVBORw0KGgo=" not in payload["prompt"]
+        # content carries every block in original order.
+        assert payload["content"] == content
+
+    def test_forwarded_content_does_not_alias_message(self, config, opted_in_kwargs):
+        """Regression: the forwarded list is a shallow copy, so mutating the
+        returned payload before serialization must not leak back into the caller's
+        messages[-1]["content"]."""
+        content = [
+            {"type": "text", "text": "describe this"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        messages = [{"role": "user", "content": content}]
+        payload = config.transform_request(messages=messages, **opted_in_kwargs)
+
+        payload["content"].append({"type": "text", "text": "injected"})
+
+        assert len(messages[-1]["content"]) == 2
+        assert {"type": "text", "text": "injected"} not in messages[-1]["content"]
+
+    def test_only_last_message_content_preserved(self, config, opted_in_kwargs):
+        """Opted in: file blocks in earlier messages don't trigger "content" — last only."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "context"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "old.pdf",
+                            "file_data": "data:application/pdf;base64,Zm9v",
+                        },
+                    },
+                ],
+            },
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "follow-up question with no files"},
+        ]
+        payload = config.transform_request(messages=messages, **opted_in_kwargs)
+        assert payload == {"prompt": "follow-up question with no files"}
+        assert "content" not in payload
+
+    def test_unknown_non_text_block_type_passthrough(self, config, opted_in_kwargs):
+        """Opted in: unknown block types (e.g. input_audio) flow through."""
+        content = [
+            {"type": "text", "text": "transcribe this"},
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "U29tZUF1ZGlvQnl0ZXM=", "format": "wav"},
+            },
+        ]
+        messages = [{"role": "user", "content": content}]
+        payload = config.transform_request(messages=messages, **opted_in_kwargs)
+        assert payload["prompt"] == "transcribe this"
+        assert payload["content"] == content
+        assert payload["content"] is not content
+
+    def test_forward_flag_as_string_true(self, config, transform_kwargs):
+        """The opt-in flag accepts config/env string values like "true"."""
+        content = [
+            {"type": "text", "text": "hi"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        messages = [{"role": "user", "content": content}]
+        kwargs = {
+            **transform_kwargs,
+            "optional_params": {"forward_multimodal_content": "true"},
+        }
+        payload = config.transform_request(messages=messages, **kwargs)
+        assert payload["content"] == content
+        assert payload["content"] is not content
+
+    def test_forward_flag_false_explicit(self, config, transform_kwargs):
+        """Explicit falsy flag → no content field."""
+        content = [
+            {"type": "text", "text": "hi"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        messages = [{"role": "user", "content": content}]
+        kwargs = {
+            **transform_kwargs,
+            "optional_params": {"forward_multimodal_content": False},
+        }
+        payload = config.transform_request(messages=messages, **kwargs)
+        assert "content" not in payload
+
+    def test_forward_flag_via_litellm_params(self, config, transform_kwargs):
+        """The opt-in flag is also honored when set in litellm_params."""
+        content = [
+            {"type": "text", "text": "hi"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        messages = [{"role": "user", "content": content}]
+        kwargs = {
+            **transform_kwargs,
+            "litellm_params": {"forward_multimodal_content": True},
+        }
+        payload = config.transform_request(messages=messages, **kwargs)
+        assert payload["content"] == content
+        assert payload["content"] is not content

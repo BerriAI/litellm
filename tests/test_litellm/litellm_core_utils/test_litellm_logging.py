@@ -2116,6 +2116,88 @@ def test_get_error_information_error_code_priority():
     assert result["error_class"] == "NoCodeException"
 
 
+def test_get_error_information_prefers_message_attribute_over_str():
+    """
+    Regression for empty-error_message-in-spend-logs.
+
+    ProxyException sets `self.message` but does NOT call
+    `super().__init__(message)` nor define `__str__`, so `str(exc)`
+    returns the empty string. Before the fix, get_error_information
+    used `str(original_exception)` and silently stripped the
+    human-readable message from spend_logs.metadata.error_information,
+    making dashboard "LLM Failure" rows un-triagable.
+
+    Asserts the `.message` attribute is consulted first.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Simulate a ProxyException-shaped exception: .message set, but
+    # super().__init__() NOT called and no __str__ override.
+    class ProxyExceptionLike(Exception):
+        def __init__(self, message, code):
+            self.message = str(message)
+            self.code = str(code)
+            # NOTE: deliberately NOT calling super().__init__(message)
+
+    msg = "Authentication Error, Invalid proxy server token passed. key=..."
+    exc = ProxyExceptionLike(message=msg, code=401)
+
+    # Sanity check: this exception type's str() really is empty
+    assert str(exc) == "", (
+        "Test premise broken — bare-base Exception now returns message; "
+        "review whether ProxyException fix landed at the class level instead"
+    )
+
+    result = StandardLoggingPayloadSetup.get_error_information(exc)
+    assert (
+        result["error_message"] == msg
+    ), f"expected message from .message attribute, got {result['error_message']!r}"
+    assert result["error_code"] == "401"
+    assert result["error_class"] == "ProxyExceptionLike"
+
+
+def test_get_error_information_preserves_explicit_empty_message():
+    """
+    An exception that deliberately sets `.message = ""` must surface
+    the empty string verbatim, not fall through to `str(exc)`.
+
+    Regression for greptile P2 finding on PR #30381: a truthiness
+    check (`if message_attr:`) would silently mask an explicit empty
+    message and substitute `str(original_exception)` — which for
+    ProxyException-shaped objects is also empty, but for plain
+    `Exception("boom")` would inject the wrong string and corrupt
+    the error_information signal.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    class ProxyExceptionLike(Exception):
+        def __init__(self, message, code):
+            self.message = message
+            self.code = str(code)
+            super().__init__("unrelated-args-summary")
+
+    exc = ProxyExceptionLike(message="", code=500)
+    result = StandardLoggingPayloadSetup.get_error_information(exc)
+    assert result["error_message"] == "", (
+        "explicit empty .message must survive verbatim; got "
+        f"{result['error_message']!r}"
+    )
+
+
+def test_get_error_information_falls_back_to_str_when_no_message_attr():
+    """
+    Plain Exception (no `.message` attr) must still produce a useful
+    error_message via str(exc), preserving prior behavior for
+    non-litellm exception types.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    exc = ValueError("boom")
+    result = StandardLoggingPayloadSetup.get_error_information(exc)
+    assert result["error_message"] == "boom"
+    assert result["error_class"] == "ValueError"
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Tests for _get_assembled_streaming_response non-streaming early return
 # ──────────────────────────────────────────────────────────────────────
