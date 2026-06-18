@@ -8,7 +8,6 @@ See: https://github.com/BerriAI/litellm/issues/24770
 """
 
 import copy
-import logging
 from typing import Optional
 from unittest.mock import MagicMock
 
@@ -530,6 +529,26 @@ class TestBlockUnknownCostModelsViaCommonChecks:
         )
         assert result is True
 
+    @pytest.mark.asyncio
+    async def test_unpriced_completion_model_overrides_priced_request_model(
+        self, mock_proxy_logging
+    ):
+        """``completion_model`` takes precedence over the request body model in
+        ``common_request_processing``, so an unpriced server default must be
+        blocked even when the request itself names a priced model; otherwise the
+        priced model in the body masks the unpriced model that actually runs."""
+        with pytest.raises(ProxyException) as exc_info:
+            await self._run_common_checks(
+                model="paid-model",
+                general_settings={
+                    "block_unknown_cost_models": True,
+                    "completion_model": _UNMAPPED_MODEL,
+                },
+                proxy_logging=mock_proxy_logging,
+                request_body={"model": "paid-model"},
+            )
+        assert "brand-new-unmapped-model-xyz" in exc_info.value.message
+
 
 class TestCostClassificationCaching:
     """The free-model bypass and the unknown-cost block check must share one
@@ -586,27 +605,39 @@ class TestCostClassificationCaching:
 
 
 class TestBlockUnknownCostModelsWithoutRouter:
-    """When the flag is on but no router is configured, the guard cannot
-    classify cost; it must surface a warning instead of silently no-opping."""
+    """A proxy that routes directly through litellm (no Router) must still
+    enforce the guard via the global cost map, not silently pass the request."""
 
-    def test_router_none_warns_and_allows(self, caplog):
-        logger = logging.getLogger("LiteLLM Proxy")
-        previous_propagate = logger.propagate
-        logger.propagate = True
-        try:
-            with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-                # Must not raise: cost is unknowable without a router, so the
-                # request is allowed through (behavior unchanged), but loudly.
-                _block_unknown_cost_models_check(
-                    enabled=True,
-                    model=_UNMAPPED_MODEL,
-                    llm_router=None,
-                    route="/v1/chat/completions",
-                )
-        finally:
-            logger.propagate = previous_propagate
+    def setup_method(self):
+        self._saved_model_cost = copy.deepcopy(litellm.model_cost)
 
-        assert any(
-            "block_unknown_cost_models" in record.getMessage()
-            for record in caplog.records
+    def teardown_method(self):
+        litellm.model_cost = self._saved_model_cost
+
+    def test_no_router_blocks_unmapped_model(self):
+        # No router and no cost map entry: spend can't be measured, so the
+        # Denial-of-Wallet guard must fail closed instead of waving it through.
+        with pytest.raises(ProxyException) as exc_info:
+            _block_unknown_cost_models_check(
+                enabled=True,
+                model=_UNMAPPED_MODEL,
+                llm_router=None,
+                route="/v1/chat/completions",
+            )
+        assert "brand-new-unmapped-model-xyz" in exc_info.value.message
+
+    def test_no_router_allows_cost_mapped_model(self):
+        # A model whose cost litellm knows is measurable, so it must pass even
+        # without a router.
+        litellm.model_cost["nrouter-known-model"] = {
+            "input_cost_per_token": 0.000001,
+            "output_cost_per_token": 0.000002,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        }
+        _block_unknown_cost_models_check(
+            enabled=True,
+            model="nrouter-known-model",
+            llm_router=None,
+            route="/v1/chat/completions",
         )
