@@ -228,9 +228,7 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         return {}
 
 
-def get_logging_payload(  # noqa: PLR0915
-    kwargs, response_obj, start_time, end_time
-) -> SpendLogsPayload:
+def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
 

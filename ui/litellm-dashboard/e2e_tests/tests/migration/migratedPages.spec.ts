@@ -17,7 +17,7 @@ const ROOT = process.env.SERVER_ROOT_PATH ?? "";
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const pathRe = (segment: string) => new RegExp(`${esc(ROOT)}/ui/${esc(segment)}/?($|\\?)`);
-const legacyAnchor = (page: Page) => page.locator("a", { hasText: "Virtual Keys" });
+const legacyAnchor = (page: Page) => page.getByRole("link", { name: "Virtual Keys", exact: true });
 
 /** The dashboard shell is present (sidebar rendered); page didn't 404 / crash. */
 async function expectRendered(page: Page) {

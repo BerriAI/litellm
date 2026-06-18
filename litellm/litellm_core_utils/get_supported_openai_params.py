@@ -5,7 +5,7 @@ from litellm.exceptions import BadRequestError
 from litellm.types.utils import LlmProviders, LlmProvidersSet
 
 
-def get_supported_openai_params(  # noqa: PLR0915
+def get_supported_openai_params(
     model: str,
     custom_llm_provider: Optional[str] = None,
     request_type: Literal[

@@ -46,6 +46,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
 try:
@@ -2088,7 +2089,7 @@ class ProxyLogging:
             litellm_call_id=request_data.get("litellm_call_id", ""), status="fail"
         )
         if AlertType.llm_exceptions in self.alert_types and not isinstance(
-            original_exception, HTTPException
+            original_exception, (HTTPException, ProxyException)
         ):
             """
             Just alert on LLM API exceptions. Do not alert on user errors
@@ -2192,6 +2193,7 @@ class ProxyLogging:
         e.g should only return True for:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
+            - ProxyException (guardrail blocks, budget / rate-limit errors)
         """
 
         #########################################################
@@ -2208,7 +2210,7 @@ class ProxyLogging:
         ):
             return False
 
-        return isinstance(original_exception, HTTPException) or (
+        return isinstance(original_exception, (HTTPException, ProxyException)) or (
             error_type == ProxyErrorTypes.auth_error
         )
 
@@ -3430,6 +3432,7 @@ class PrismaClient:
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all" and team_id is not None:
                     response = await VerificationTokenRepository(self).table.find_many(
+                        take=limit,
                         where={"team_id": team_id},
                         include={"litellm_budget_table": True},
                     )
@@ -6310,56 +6313,61 @@ def create_model_info_response(
     include_metadata: bool = False,
     fallback_type: Optional[str] = None,
     llm_router: Optional["Router"] = None,
-) -> dict:
+) -> ModelInfoResponse:
     """
-    Create a standardized model info response.
+    Create a standardized OpenAI-compatible model object.
 
-    Args:
-        model_id: The model ID
-        provider: The model provider
-        include_metadata: Whether to include metadata
-        fallback_type: Type of fallbacks to include
-        llm_router: LiteLLM router instance
-
-    Returns:
-        Dictionary containing model information
+    When include_metadata is true, attaches the model's configured fallbacks
+    (resolved via the router under fallback_type, defaulting to "general").
+    Raises HTTPException(400) for an unknown fallback_type.
     """
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    model_info = {
+    base: ModelInfoResponse = {
         "id": model_id,
         "object": "model",
         "created": DEFAULT_MODEL_CREATED_AT_TIME,
         "owned_by": provider,
     }
 
-    # Add metadata if requested
-    if include_metadata:
-        metadata = {}
-
-        # Default fallback_type to "general" if include_metadata is true
-        effective_fallback_type = (
-            fallback_type if fallback_type is not None else "general"
-        )
-
-        # Validate fallback_type
-        valid_fallback_types = ["general", "context_window", "content_policy"]
-        if effective_fallback_type not in valid_fallback_types:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
+    # Surface context-window limits for OpenAI-compatible discovery clients.
+    # Only emitted when known, so wildcard routes and limitless backends stay clean.
+    # Limits are best-effort enrichment, so a single malformed deployment degrades
+    # to the base response rather than 500-ing the whole listing.
+    if llm_router is not None:
+        try:
+            model_group_info = llm_router.get_model_group_info(model_id)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "create_model_info_response: get_model_group_info failed for %s: %s",
+                model_id,
+                e,
             )
+            model_group_info = None
+        if model_group_info is not None:
+            if model_group_info.max_input_tokens is not None:
+                base["max_input_tokens"] = int(model_group_info.max_input_tokens)
+            if model_group_info.max_output_tokens is not None:
+                base["max_output_tokens"] = int(model_group_info.max_output_tokens)
 
-        fallbacks = get_all_fallbacks(
-            model=model_id,
-            llm_router=llm_router,
-            fallback_type=effective_fallback_type,
+    if not include_metadata:
+        return base
+
+    effective_fallback_type = fallback_type if fallback_type is not None else "general"
+
+    valid_fallback_types = ["general", "context_window", "content_policy"]
+    if effective_fallback_type not in valid_fallback_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
         )
-        metadata["fallbacks"] = fallbacks
 
-        model_info["metadata"] = metadata
-
-    return model_info
+    fallbacks = get_all_fallbacks(
+        model=model_id,
+        llm_router=llm_router,
+        fallback_type=effective_fallback_type,
+    )
+    return {**base, "metadata": {"fallbacks": fallbacks}}
 
 
 def validate_model_access(

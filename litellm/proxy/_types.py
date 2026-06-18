@@ -361,6 +361,16 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
+        # realtime (GA WebRTC HTTP routes)
+        "/realtime/client_secrets",
+        "/v1/realtime/client_secrets",
+        "/openai/v1/realtime/client_secrets",
+        "/realtime/calls",
+        "/v1/realtime/calls",
+        "/openai/v1/realtime/calls",
+        "/realtime/transcription_sessions",
+        "/v1/realtime/transcription_sessions",
+        "/openai/v1/realtime/transcription_sessions",
         # responses API
         "/responses",
         "/v1/responses",
@@ -2152,6 +2162,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     master_key: Optional[str] = Field(
         None, description="require a key for all calls to proxy"
+    )
+    allow_cli_sso_verification_uri_complete: bool | None = Field(
+        None,
+        description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
     )
     database_url: Optional[str] = Field(
         None,
