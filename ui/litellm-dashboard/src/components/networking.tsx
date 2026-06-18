@@ -18,17 +18,6 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
   }
 };
 
-export const getInProductNudgesCall = async (accessToken: string) => {
-  /**
-   * Get in-product nudges configuration.
-   */
-  try {
-    return await apiClient.get(`/in_product_nudges`, { accessToken });
-  } catch (error) {
-    console.error("Failed to get in-product nudges:", error);
-    throw error;
-  }
-};
 /**
  * Helper file for calls being made to proxy
  */
