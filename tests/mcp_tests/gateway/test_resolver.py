@@ -88,6 +88,15 @@ def test_api_key_emits_the_right_scheme(scheme: str, expected: str):
     assert _applied_headers(result.ok)["Authorization"] == expected
 
 
+def test_secret_fields_are_masked_in_serialization():
+    # SecretStr keeps the value out of model_dump / repr / logs but usable in the resolver.
+    config = ApiKeyConfig(key_source=SharedKey(value="SUPER-SECRET"))
+    dumped = config.model_dump_json()
+    assert "SUPER-SECRET" not in dumped
+    assert "**********" in dumped
+    assert config.key_source.value.get_secret_value() == "SUPER-SECRET"
+
+
 @pytest.mark.parametrize("source", [Byok(), PerUserEnvVar()])
 def test_api_key_per_user_pulls_the_subject_credential(source: object):
     store = InMemoryCredentialStore(

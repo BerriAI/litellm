@@ -28,7 +28,7 @@ from enum import Enum
 from typing import Annotated, Literal
 
 from expression import case, tag, tagged_union
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from typing_extensions import assert_never
 
 from ..result import Error, Ok, Result
@@ -133,7 +133,7 @@ class AuthorizationCodeConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.authorization_code] = AuthSpecKind.authorization_code
     client_id: str
-    client_secret: str
+    client_secret: SecretStr
     authorization_url: str
     token_url: str
     scopes: tuple[str, ...] = ()
@@ -145,7 +145,7 @@ class ClientCredentialsConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.client_credentials] = AuthSpecKind.client_credentials
     client_id: str
-    client_secret: str
+    client_secret: SecretStr
     token_url: str
     scopes: tuple[str, ...] = ()
 
@@ -165,7 +165,7 @@ class SharedKey(BaseModel):
 
     model_config = ConfigDict(frozen=True)
     source: Literal["shared"] = "shared"
-    value: str
+    value: SecretStr
 
 
 class PerUserEnvVar(BaseModel):
@@ -240,8 +240,8 @@ class AwsSigV4Config(BaseModel):
     region: str
     service: str = "bedrock-agentcore"
     access_key_id: str | None = None
-    secret_access_key: str | None = None
-    session_token: str | None = None
+    secret_access_key: SecretStr | None = None
+    session_token: SecretStr | None = None
     role_arn: str | None = None
     session_name: str | None = None
 
@@ -266,7 +266,7 @@ class Subject(BaseModel):
     tenant_id: str
     subject_id: str
     # Opaque, already-validated inbound identity. Only `token_exchange` / `passthrough` read it.
-    inbound_token: str | None = None
+    inbound_token: SecretStr | None = None
 
 
 class ServerSpec(BaseModel):

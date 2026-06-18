@@ -80,7 +80,9 @@ class UpstreamCredentialProvider:
             case SharedKey() as source:
                 # The shared key is read straight from ServerSpec.config, not the per-user
                 # store; it is the same credential for every caller.
-                return Ok(StaticHeaderAuth(config.header_for(source.value)))
+                return Ok(
+                    StaticHeaderAuth(config.header_for(source.value.get_secret_value()))
+                )
             case PerUserEnvVar():
                 value = self._per_user_value(subject, server)
                 if value is None:
@@ -119,7 +121,9 @@ class UpstreamCredentialProvider:
             return Error(
                 CredError.of_unauthorized("passthrough: no inbound token to forward")
             )
-        return Ok(StaticHeaderAuth(f"Bearer {subject.inbound_token}"))
+        return Ok(
+            StaticHeaderAuth(f"Bearer {subject.inbound_token.get_secret_value()}")
+        )
 
     # --- arms awaiting their collaborators (typed stubs, fail closed) ----------------------
     def _authorization_code(
