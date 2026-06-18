@@ -43187,6 +43187,17 @@
     "supported_endpoints": ["/v1/audio/transcriptions"],
     "supports_audio_input": true
   },
+  "soniox/stt-async-v5": {
+    "litellm_provider": "soniox",
+    "max_output_tokens": 8000,
+    "max_tokens": 8000,
+    "input_cost_per_second": 0.0,
+    "output_cost_per_second": 0.0000277778,
+    "mode": "audio_transcription",
+    "source": "https://soniox.com/pricing",
+    "supported_endpoints": ["/v1/audio/transcriptions"],
+    "supports_audio_input": true
+  },
   "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8": {
     "litellm_provider": "tensormesh",
     "mode": "chat",
