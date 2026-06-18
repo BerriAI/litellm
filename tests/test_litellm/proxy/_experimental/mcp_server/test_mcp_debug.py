@@ -47,6 +47,7 @@ class TestMask:
         masked = MCPDebug._mask("sk-1234")
         assert "sk-1234" not in masked
         assert set(masked) == {"*"}
+        assert len(masked) == len("sk-1234")
 
     def test_long_value_masked(self):
         result = MCPDebug._mask("Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9")
