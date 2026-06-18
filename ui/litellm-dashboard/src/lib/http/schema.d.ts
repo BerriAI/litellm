@@ -20988,12 +20988,18 @@ export interface components {
         };
         /** Body_audio_transcriptions_audio_transcriptions_post */
         Body_audio_transcriptions_audio_transcriptions_post: {
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
         };
         /** Body_audio_transcriptions_v1_audio_transcriptions_post */
         Body_audio_transcriptions_v1_audio_transcriptions_post: {
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
         };
         /** Body_convert_prompt_file_to_json_utils_dotprompt_json_converter_post */
@@ -21011,7 +21017,10 @@ export interface components {
              * @default openai
              */
             custom_llm_provider: string;
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
@@ -21035,7 +21044,10 @@ export interface components {
              * @default openai
              */
             custom_llm_provider: string;
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
@@ -21059,7 +21071,10 @@ export interface components {
              * @default openai
              */
             custom_llm_provider: string;
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
@@ -21080,34 +21095,34 @@ export interface components {
         Body_image_edit_api_images_edits_post: {
             /** Image */
             image?: string[] | null;
-            /** Image[] */
-            "image[]"?: string[] | null;
+            /** Image Array */
+            image_array?: string[] | null;
             /** Mask */
             mask?: string[] | null;
-            /** Mask[] */
-            "mask[]"?: string[] | null;
+            /** Mask Array */
+            mask_array?: string[] | null;
         };
         /** Body_image_edit_api_openai_deployments__model__images_edits_post */
         Body_image_edit_api_openai_deployments__model__images_edits_post: {
             /** Image */
             image?: string[] | null;
-            /** Image[] */
-            "image[]"?: string[] | null;
+            /** Image Array */
+            image_array?: string[] | null;
             /** Mask */
             mask?: string[] | null;
-            /** Mask[] */
-            "mask[]"?: string[] | null;
+            /** Mask Array */
+            mask_array?: string[] | null;
         };
         /** Body_image_edit_api_v1_images_edits_post */
         Body_image_edit_api_v1_images_edits_post: {
             /** Image */
             image?: string[] | null;
-            /** Image[] */
-            "image[]"?: string[] | null;
+            /** Image Array */
+            image_array?: string[] | null;
             /** Mask */
             mask?: string[] | null;
-            /** Mask[] */
-            "mask[]"?: string[] | null;
+            /** Mask Array */
+            mask_array?: string[] | null;
         };
         /** Body_test_model_connection_health_test_connection_post */
         Body_test_model_connection_health_test_connection_post: {
@@ -21134,21 +21149,30 @@ export interface components {
         };
         /** Body_upload_logo_upload_logo_post */
         Body_upload_logo_upload_logo_post: {
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
         };
         /** Body_video_create_character_v1_videos_characters_post */
         Body_video_create_character_v1_videos_characters_post: {
             /** Name */
             name: string;
-            /** Video */
+            /**
+             * Video
+             * Format: binary
+             */
             video: string;
         };
         /** Body_video_create_character_videos_characters_post */
         Body_video_create_character_videos_characters_post: {
             /** Name */
             name: string;
-            /** Video */
+            /**
+             * Video
+             * Format: binary
+             */
             video: string;
         };
         /** Body_video_generation_v1_videos_post */
@@ -22388,6 +22412,11 @@ export interface components {
              * @description Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.
              */
             pass_through_request_timeout?: number | null;
+            /**
+             * Plugins
+             * @description external services registered as embeddable UI plugins
+             */
+            plugins?: components["schemas"]["PluginConfig"][] | null;
             /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
@@ -28367,6 +28396,32 @@ export interface components {
             name: string;
         };
         /**
+         * PluginConfig
+         * @description A single external service registered as an embeddable UI plugin.
+         */
+        PluginConfig: {
+            /**
+             * Display Name
+             * @description human-readable label shown in the UI view switcher
+             */
+            display_name?: string | null;
+            /**
+             * Name
+             * @description unique plugin identifier (kebab-case)
+             */
+            name: string;
+            /**
+             * Plugin Key
+             * @description plugin's own credential, injected as Bearer auth only on /plugin-proxy/<name>/* reverse-proxy calls
+             */
+            plugin_key?: string | null;
+            /**
+             * Url
+             * @description base URL of the plugin service
+             */
+            url: string;
+        };
+        /**
          * PluginListItem
          * @description Plugin item in list responses.
          */
@@ -32492,10 +32547,6 @@ export interface components {
         };
         /** ValidationError */
         ValidationError: {
-            /** Context */
-            ctx?: Record<string, never>;
-            /** Input */
-            input?: unknown;
             /** Location */
             loc: (string | number)[];
             /** Message */
@@ -33684,7 +33735,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown[];
+                    "application/json": {
+                        [key: string]: string;
+                    }[];
                 };
             };
         };
@@ -43882,7 +43935,11 @@ export interface operations {
     };
     websocket_realtime_websocket_endpoint_get_3: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                intent?: string;
+                guardrails?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -46621,7 +46678,11 @@ export interface operations {
     };
     websocket_realtime_websocket_endpoint_get: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                intent?: string;
+                guardrails?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -46739,7 +46800,9 @@ export interface operations {
     };
     websocket_responses_websocket_endpoint_get: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -54388,7 +54451,11 @@ export interface operations {
     };
     websocket_realtime_websocket_endpoint_get_2: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                intent?: string;
+                guardrails?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -54466,7 +54533,9 @@ export interface operations {
     };
     websocket_responses_websocket_endpoint_get_2: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -57775,7 +57844,11 @@ export interface operations {
     };
     websocket_vertex_ai_live_passthrough_endpoint: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: string;
+                vertex_project?: string;
+                vertex_location?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
