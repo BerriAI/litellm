@@ -4,6 +4,7 @@ import sys
 import pytest
 
 from litellm.llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
+from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.types.rerank import (
     OptionalRerankParams,
     RerankBilledUnits,
@@ -51,11 +52,12 @@ class TestHostedVLLMRerankTransform:
 
     def test_map_cohere_rerank_params_passes_instruction_when_set(self):
         params = self.config.map_cohere_rerank_params(
-            non_default_params={"instruction": "Rank by relevance to genomics"},
+            non_default_params=None,
             model=self.model,
             drop_params=False,
             query="test query",
             documents=["doc1", "doc2"],
+            instruction="Rank by relevance to genomics",
         )
         assert params["instruction"] == "Rank by relevance to genomics"
 
@@ -141,3 +143,32 @@ class TestHostedVLLMRerankTransform:
         }
         with pytest.raises(ValueError, match="Missing required fields in the result="):
             self.config._transform_response(response_dict)
+
+
+class TestGetOptionalRerankParamsInstruction:
+    """`instruction` is threaded through get_optional_rerank_params only when set."""
+
+    def setup_method(self):
+        self.config = HostedVLLMRerankConfig()
+        self.model = "hosted-vllm-model"
+
+    def test_instruction_threaded_when_set(self):
+        params = get_optional_rerank_params(
+            rerank_provider_config=self.config,
+            model=self.model,
+            drop_params=False,
+            query="test query",
+            documents=["doc1", "doc2"],
+            instruction="Rank by relevance to genomics",
+        )
+        assert params["instruction"] == "Rank by relevance to genomics"
+
+    def test_instruction_absent_when_not_set(self):
+        params = get_optional_rerank_params(
+            rerank_provider_config=self.config,
+            model=self.model,
+            drop_params=False,
+            query="test query",
+            documents=["doc1", "doc2"],
+        )
+        assert "instruction" not in params

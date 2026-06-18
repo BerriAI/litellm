@@ -77,6 +77,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
+        instruction: Optional[str] = None,
     ) -> Dict:
         """
         Map parameters for Hosted VLLM rerank
@@ -93,9 +94,8 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         )
 
         # `instruction` is a vLLM-supported passthrough (folded into the model's
-        # chat_template_kwargs). It arrives via non_default_params; only forward
-        # it when explicitly set so omitting it leaves the request unchanged.
-        instruction = (non_default_params or {}).get("instruction")
+        # chat_template_kwargs). Only forward it when explicitly set so omitting
+        # it leaves the request unchanged.
         if instruction is not None:
             mapped_params["instruction"] = instruction
 

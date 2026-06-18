@@ -67,6 +67,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
+        instruction: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Map Cohere rerank params to Fireworks AI rerank params
