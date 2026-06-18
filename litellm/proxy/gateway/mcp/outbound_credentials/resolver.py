@@ -111,9 +111,7 @@ class UpstreamCredentialProvider:
             case SharedKey() as source:
                 # The shared key is read straight from ServerSpec.config, not the per-user
                 # store; it is the same credential for every caller.
-                return Ok(
-                    StaticHeaderAuth(config.header_for(source.value.get_secret_value()))
-                )
+                return Ok(_api_key_auth(config, source.value.get_secret_value()))
             case PerUserEnvVar():
                 fetched = await self._per_user_value(subject, server)
                 if isinstance(fetched, Error):
@@ -125,7 +123,7 @@ class UpstreamCredentialProvider:
                             "api_key: per-user env var not set for this subject"
                         )
                     )
-                return Ok(StaticHeaderAuth(config.header_for(value)))
+                return Ok(_api_key_auth(config, value))
             case Byok():
                 fetched = await self._per_user_value(subject, server)
                 if isinstance(fetched, Error):
@@ -137,7 +135,7 @@ class UpstreamCredentialProvider:
                             "api_key: no BYOK credential for this subject"
                         )
                     )
-                return Ok(StaticHeaderAuth(config.header_for(value)))
+                return Ok(_api_key_auth(config, value))
         assert_never(config.key_source)
 
     async def _per_user_value(
@@ -276,3 +274,8 @@ class UpstreamCredentialProvider:
 
 def _bearer(token: StoredToken) -> StaticHeaderAuth:
     return StaticHeaderAuth(f"Bearer {token.access_token.get_secret_value()}")
+
+
+def _api_key_auth(config: ApiKeyConfig, value: str) -> StaticHeaderAuth:
+    header_name, header_value = config.header(value)
+    return StaticHeaderAuth(header_value, header_name=header_name)

@@ -262,21 +262,28 @@ async def test_none_attaches_no_credential():
 
 
 @pytest.mark.parametrize(
-    "scheme,expected",
+    "header_name,value_prefix,expected_header,expected_value",
     [
-        ("bearer", "Bearer k"),
-        ("apikey", "ApiKey k"),
-        ("basic", "Basic k"),
-        ("token", "token k"),
-        ("raw", "k"),
+        ("Authorization", "Bearer", "Authorization", "Bearer k"),  # v1 bearer_token
+        ("Authorization", "Basic", "Authorization", "Basic k"),  # v1 basic
+        ("Authorization", "token", "Authorization", "token k"),  # v1 token
+        ("Authorization", "", "Authorization", "k"),  # v1 authorization (raw)
+        ("X-API-Key", "", "X-API-Key", "k"),  # v1 api_key (its own header, raw)
+        ("Ocp-Apim-Subscription-Key", "", "Ocp-Apim-Subscription-Key", "k"),  # custom
     ],
 )
-async def test_api_key_emits_the_right_scheme(scheme: str, expected: str):
-    config = ApiKeyConfig(scheme=scheme, key_source=SharedKey(value="k"))  # type: ignore[arg-type]
+async def test_api_key_writes_value_to_the_configured_header(
+    header_name: str, value_prefix: str, expected_header: str, expected_value: str
+):
+    config = ApiKeyConfig(
+        header_name=header_name,
+        value_prefix=value_prefix,
+        key_source=SharedKey(value="k"),
+    )
     result = await PROVIDER.resolve(SUBJECT, _spec(config))
     assert isinstance(result, Ok)
     assert isinstance(result.ok, StaticHeaderAuth)
-    assert _applied_headers(result.ok)["Authorization"] == expected
+    assert _applied_headers(result.ok)[expected_header] == expected_value
 
 
 def test_secret_fields_are_masked_in_serialization():

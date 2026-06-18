@@ -134,9 +134,6 @@ class CredError:
         assert_never(self.tag)
 
 
-ApiKeyScheme = Literal["bearer", "apikey", "basic", "token", "raw"]
-
-
 class AuthorizationCodeConfig(BaseModel):
     """Per-user 3LO; the gateway is the OAuth client and stores the user's token.
 
@@ -212,27 +209,20 @@ ApiKeySource = Annotated[
 
 class ApiKeyConfig(BaseModel):
     """A fixed credential injected as a header. The value is shared (in config) or seeded
-    per-user (pulled from the store); `scheme` is how it is written into the header."""
+    per-user (pulled from the store); `header_name` and `value_prefix` say where and how it is
+    written, modeled like OpenAPI's apiKey scheme so any upstream convention is expressible
+    (Authorization + Bearer, a raw value on X-API-Key, Ocp-Apim-Subscription-Key, etc.).
+    """
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.api_key] = AuthSpecKind.api_key
-    scheme: ApiKeyScheme = "bearer"
+    header_name: str = "Authorization"
+    value_prefix: str = "Bearer"
     key_source: ApiKeySource
 
-    def header_for(self, value: str) -> str:
-        # Reconstructs v1's per-scheme Authorization prefixes (mcp_server_manager.py:877-884).
-        match self.scheme:
-            case "bearer":
-                return f"Bearer {value}"
-            case "apikey":
-                return f"ApiKey {value}"
-            case "basic":
-                return f"Basic {value}"
-            case "token":
-                return f"token {value}"
-            case "raw":
-                return value
-        assert_never(self.scheme)
+    def header(self, value: str) -> tuple[str, str]:
+        formatted = f"{self.value_prefix} {value}" if self.value_prefix else value
+        return self.header_name, formatted
 
 
 class PassthroughConfig(BaseModel):
