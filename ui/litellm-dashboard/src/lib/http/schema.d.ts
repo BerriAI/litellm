@@ -22076,6 +22076,11 @@ export interface components {
              */
             background_health_checks?: boolean | null;
             /**
+             * Block Unknown Cost Models
+             * @description Fail closed against Denial of Wallet (OWASP LLM10 Unbounded Consumption). When True, the proxy rejects LLM API requests for models whose per-token cost it cannot determine, e.g. a brand new model reached via a wildcard route like 'anthropic/*' that is not yet in the model cost map. Such models produce a $0 cost that never moves the spend counters, so any configured key/user/team budget would silently never trip and could be spent without limit. Explicitly free deployments (input_cost_per_token and output_cost_per_token set to 0) are unaffected. To serve an unmapped model under this flag, add it to model_prices_and_context_window.json or set explicit per-token pricing on the deployment. Default is False.
+             */
+            block_unknown_cost_models?: boolean | null;
+            /**
              * Cancel On Disconnect
              * @description cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure
              */
