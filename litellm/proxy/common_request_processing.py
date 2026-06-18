@@ -1431,18 +1431,20 @@ class ProxyBaseLLMRequestProcessing:
         _hidden_params = getattr(response, "_hidden_params", {}) or {}
         if not _hidden_params.get("litellm_overhead_time_ms"):
             end_time = datetime.now()
-            from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
-                update_response_metadata,
-            )
+            logging_obj = self.data.get("litellm_logging_obj")
+            if logging_obj is not None:
+                from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+                    update_response_metadata,
+                )
 
-            update_response_metadata(
-                result=response,
-                logging_obj=self.data.get("litellm_logging_obj"),
-                model=self.data.get("model"),
-                kwargs=self.data,
-                start_time=end_time,
-                end_time=end_time,
-            )
+                update_response_metadata(
+                    result=response,
+                    logging_obj=logging_obj,
+                    model=self.data.get("model"),
+                    kwargs=self.data,
+                    start_time=end_time,
+                    end_time=end_time,
+                )
 
         _exception_raised = False
         try:
