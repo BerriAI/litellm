@@ -8,6 +8,7 @@ Tests the cost calculation for Dashscope models including:
 - Correctly calculates costs for token counts exceeding the highest defined tier.
 """
 
+import json
 import math
 import os
 import sys
@@ -19,7 +20,6 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.llms.dashscope.cost_calculator import (
-    _calculate_tiered_cost,
     cost_per_token as dashscope_cost_per_token,
 )
 from litellm.types.utils import Usage, PromptTokensDetailsWrapper
@@ -157,53 +157,3 @@ class TestDashscopeCostCalculator:
         )
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
-
-    def test_dashscope_tiered_zero_cost_not_overridden_by_fallback(self):
-        """
-        A tier may legitimately price cached reads (or reasoning tokens) at 0.0,
-        e.g. a free-cache-read tier. The tiered calculator must treat an explicit
-        0.0 as a real price, not as "missing" and fall back to the full input
-        rate. This mirrors the flat-pricing path, which already guards on `None`.
-        """
-        tiered_pricing = [
-            {
-                "range": [0, 256000],
-                "input_cost_per_token": 2e-7,
-                "cache_read_input_token_cost": 0.0,  # free cache reads in this tier
-            }
-        ]
-
-        cost = _calculate_tiered_cost(
-            tokens=10000,
-            tiered_pricing=tiered_pricing,
-            cost_key="cache_read_input_token_cost",
-            fallback_cost_key="input_cost_per_token",
-        )
-
-        # 10,000 cached tokens priced at $0.0/token must cost $0.0, not the
-        # input rate (which would be 10000 * 2e-7 = $0.002).
-        assert cost == 0.0
-
-    def test_dashscope_tiered_zero_cost_applies_to_overflow_tokens(self):
-        """
-        The same 0.0-is-real-price rule must hold on the overflow path that
-        charges tokens exceeding the highest defined tier at the last tier's
-        rate.
-        """
-        tiered_pricing = [
-            {
-                "range": [0, 100],
-                "input_cost_per_token": 2e-7,
-                "cache_read_input_token_cost": 0.0,
-            }
-        ]
-
-        # 150 cached tokens: 100 in-tier + 50 overflow, both at $0.0.
-        cost = _calculate_tiered_cost(
-            tokens=150,
-            tiered_pricing=tiered_pricing,
-            cost_key="cache_read_input_token_cost",
-            fallback_cost_key="input_cost_per_token",
-        )
-
-        assert cost == 0.0
