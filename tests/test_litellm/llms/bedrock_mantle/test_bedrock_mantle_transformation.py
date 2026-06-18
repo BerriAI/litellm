@@ -171,6 +171,13 @@ class TestBedrockMantleConfig:
         _, api_key = cfg._get_openai_compatible_provider_info(None, "explicit-key")
         assert api_key == "explicit-key"
 
+    def test_api_key_from_aws_bearer_token_bedrock_env(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "standard-bearer")
+        cfg = BedrockMantleChatConfig()
+        _, api_key = cfg._get_openai_compatible_provider_info(None, None)
+        assert api_key == "standard-bearer"
+
     def test_get_supported_openai_params(self):
         cfg = BedrockMantleChatConfig()
         params = cfg.get_supported_openai_params("openai.gpt-oss-120b")

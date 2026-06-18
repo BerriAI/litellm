@@ -87,13 +87,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = (
-            litellm_params.api_key
-            or get_secret_str("BEDROCK_MANTLE_API_KEY")
-            or get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
-        )
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        bearer = self._resolve_bearer_token(litellm_params.api_key)
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
         if litellm_params.aws_bedrock_project_id:
             headers["OpenAI-Project"] = litellm_params.aws_bedrock_project_id
         return headers

@@ -62,7 +62,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             or get_secret_str("BEDROCK_MANTLE_API_BASE")
             or f"https://bedrock-mantle.{region}.api.aws/v1"
         )
-        dynamic_api_key = api_key or get_secret_str("BEDROCK_MANTLE_API_KEY")
+        dynamic_api_key = self._resolve_bearer_token(api_key)
         return api_base, dynamic_api_key
 
     def validate_environment(
