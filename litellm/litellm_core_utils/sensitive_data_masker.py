@@ -12,6 +12,7 @@ class SensitiveDataMasker:
         visible_prefix: int = 4,
         visible_suffix: int = 4,
         mask_char: str = "*",
+        mask_short_values: bool = True,
     ):
         self.sensitive_patterns = sensitive_patterns or {
             "password",
@@ -38,13 +39,16 @@ class SensitiveDataMasker:
         self.visible_prefix = visible_prefix
         self.visible_suffix = visible_suffix
         self.mask_char = mask_char
+        self.mask_short_values = mask_short_values
 
     def _mask_value(self, value: str) -> str:
         value_str = str(value)
         if not value_str:
             return value
         if len(value_str) <= (self.visible_prefix + self.visible_suffix):
-            return self.mask_char * len(value_str)
+            return (
+                self.mask_char * len(value_str) if self.mask_short_values else value_str
+            )
 
         masked_length = len(value_str) - (self.visible_prefix + self.visible_suffix)
 

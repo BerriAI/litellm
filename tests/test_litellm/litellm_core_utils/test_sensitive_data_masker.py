@@ -148,6 +148,27 @@ def test_short_secrets_are_fully_masked():
     assert masked["api_key"] == "*****"
 
 
+def test_mask_short_values_false_keeps_short_values_readable():
+    """
+    mask_short_values=False opts out of full masking so short values are returned
+    as-is. This preserves the truncation use (e.g. CooldownCache shows the first 50
+    chars of an exception and only masks longer tails), while longer values are still
+    partially masked.
+    """
+    masker = SensitiveDataMasker(
+        visible_prefix=50, visible_suffix=0, mask_short_values=False
+    )
+
+    short = "Test exception for structure validation"
+    assert masker._mask_value(short) == short
+
+    long_value = "x" * 60
+    masked = masker._mask_value(long_value)
+    assert masked.startswith("x" * 50)
+    assert masked.endswith("*" * 10)
+    assert len(masked) == 60
+
+
 def test_cost_per_token_fields_not_masked():
     """
     Regression test: cost fields like input_cost_per_token contain "token" in their name
