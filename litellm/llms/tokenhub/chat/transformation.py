@@ -14,7 +14,6 @@ Supports:
 
 from typing import Any, Dict, List, Optional, Union
 
-import litellm
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.utils import supports_reasoning
 
