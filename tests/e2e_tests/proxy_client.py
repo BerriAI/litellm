@@ -54,7 +54,7 @@ class ProbeResult:
     def healthy(self) -> bool:
         # Route exists (not 404), handler did not crash (not 5xx), request
         # completed (not -1). A 4xx (missing params/auth) still means it ran.
-        return 200 <= self.status_code != 404 and self.status_code < 500
+        return 200 <= self.status_code < 500 and self.status_code != 404
 
     def __str__(self) -> str:
         return f"GET {self.url} -> {self.status_code}\n{self.body[:600]}"
