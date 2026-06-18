@@ -598,11 +598,6 @@ class OCIChatConfig(BaseConfig):
 
             non_system_messages = [m for m in messages if m.get("role") != "system"]
             tool_results = extract_cohere_tool_results(non_system_messages)
-            if not tool_results and not non_system_messages:
-                raise OCIError(
-                    status_code=400,
-                    message="No non-system messages found — Cohere models require at least one non-system message",
-                )
             # OCI carries the current turn's tool results in the top-level
             # ``toolResults`` field and rejects a populated ``message`` alongside
             # them. After tool execution (the agentic continuation MLflow judges

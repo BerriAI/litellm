@@ -111,9 +111,6 @@ class DatabaseURLSettings(BaseSettings):
         default=None, validation_alias="DATABASE_PASSWORD"
     )
 
-    # Prisma DIRECT_URL (connection pooler bypass for migrations/introspection).
-    direct_url: Optional[str] = Field(default=None, validation_alias="DIRECT_URL")
-
     # Read replica
     database_url_read_replica: str | None = Field(
         default=None, validation_alias="DATABASE_URL_READ_REPLICA"
@@ -291,7 +288,6 @@ class DatabaseURLSettings(BaseSettings):
             ("DATABASE_URL", self.database_url),
             ("DIRECT_URL", self.direct_url),
             ("DATABASE_URL_READ_REPLICA", self.database_url_read_replica),
-            ("DIRECT_URL", self.direct_url),
         ):
             if not url:
                 continue
