@@ -22487,6 +22487,11 @@ export interface components {
                 [key: string]: unknown;
             };
             /**
+             * Plugins
+             * @description external services registered as embeddable UI plugins
+             */
+            plugins?: components["schemas"]["PluginConfig"][] | null;
+            /**
              * Values
              * @description Current configuration values (sensitive fields decrypted)
              */
@@ -23882,6 +23887,32 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * PluginConfig
+         * @description A single external service registered as an embeddable UI plugin.
+         */
+        PluginConfig: {
+            /**
+             * Display Name
+             * @description human-readable label shown in the UI view switcher
+             */
+            display_name?: string | null;
+            /**
+             * Name
+             * @description unique plugin identifier (kebab-case)
+             */
+            name: string;
+            /**
+             * Plugin Key
+             * @description plugin's own credential, injected as *** only on /plugin-proxy/<name>/* reverse-proxy calls
+             */
+            plugin_key?: string | null;
+            /**
+             * Url
+             * @description base URL of the plugin service
+             */
+            url: string;
         };
         /**
          * HashicorpVaultConfig
@@ -33684,7 +33715,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown[];
+                    "application/json": {
+                        [key: string]: string;
+                    }[];
                 };
             };
         };
