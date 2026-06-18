@@ -2026,7 +2026,43 @@ def cost_tracking():
         )
 
 
-async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
+# Bounds authoritative DB re-reads when enforcing a budget against a
+# stale-low spend counter: at most one DB read per counter per window.
+SPEND_DB_FLOOR_CACHE_TTL_SECONDS = 5
+
+
+def _fail_closed_budget_enforcement() -> bool:
+    return general_settings.get("fail_closed_budget_enforcement") is True
+
+
+def _raise_budget_unverifiable(counter_key: str) -> None:
+    verbose_proxy_logger.warning(
+        "fail_closed_budget_enforcement: rejecting request — spend for %s could "
+        "not be verified against Redis or the database",
+        counter_key,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "error": (
+                "Budget enforcement unavailable: current spend could not be "
+                "verified against Redis or the database, and "
+                "fail_closed_budget_enforcement is enabled, so the request was "
+                "rejected to avoid exceeding the configured budget. Retry shortly."
+            )
+        },
+    )
+
+
+async def get_current_spend(
+    counter_key: str,
+    fallback_spend: float,
+    max_budget: float | None = None,
+    window_entity_type: str | None = None,
+    window_entity_id: str | None = None,
+    window_start: datetime | None = None,
+    fallback_authoritative: bool = False,
+) -> float:
     """
     Read current spend from the cross-pod spend counter.
 
@@ -2040,7 +2076,168 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     2. In-memory counter (single-instance or Redis failure)
     3. Reseed from authoritative DB spend (counter expired, cross-pod stale)
     4. Caller-supplied fallback (DB unavailable, cold start)
+
+    When ``max_budget`` is supplied, the counter is re-checked against the
+    authoritative recorded spend before a request is admitted. A Redis counter
+    that survived a Redis restart can return a stale-low value loaded from an
+    older RDB snapshot; that read is a hit (not a clean miss), so step 3 never
+    runs and a key can leak spend past ``max_budget`` indefinitely. The
+    authoritative source depends on the counter: primary key/team/user/org
+    counters read the DB row; per-window counters (``window_start`` supplied)
+    aggregate spend logs; end-user/tag counters have no DB row, so the caller's
+    ``fallback_spend`` (loaded fresh in auth) is authoritative. The DB read is
+    skipped for healthy primary counters (counter at or above recorded spend)
+    and cached in-process for a few seconds, so a persistently stale counter
+    drives at most one read per counter per window rather than one per request.
     """
+    current, verified = await _read_spend_counter_estimate(
+        counter_key=counter_key, fallback_spend=fallback_spend
+    )
+    if fallback_authoritative:
+        verified = True
+
+    if max_budget is None or current >= max_budget:
+        return current
+
+    # Cheap staleness signal for primary counters: the counter reads below the
+    # spend this caller already knows about. Window counters have no such signal
+    # (fallback is 0), so they always re-check, bounded by the cache. Strict mode
+    # (fail_closed_budget_enforcement) always re-checks against the authoritative
+    # source too, so a counter that is stale-low at the same time as the caller's
+    # cached spend cannot slip through; the 5s cache keeps that bounded.
+    is_window = window_start is not None
+    if fallback_spend > current or is_window or _fail_closed_budget_enforcement():
+        authoritative = await _authoritative_floor_spend(
+            counter_key=counter_key,
+            window_entity_type=window_entity_type,
+            window_entity_id=window_entity_id,
+            window_start=window_start,
+        )
+        if authoritative is not None:
+            verified = True
+            if authoritative > current:
+                await _repair_stale_spend_counter(
+                    counter_key=counter_key, db_spend=authoritative
+                )
+                return authoritative
+        elif fallback_spend > current:
+            # end-user / tag counters have no DB row; fallback_spend is the
+            # authoritative recorded value loaded in auth.
+            return fallback_spend
+
+    # Opt-in hard guarantee: when the spend backing this admit decision came
+    # only from a per-pod cache (Redis and DB both unreadable), reject rather
+    # than admit on an unverifiable budget. No-op unless the flag is set, so
+    # default behavior is unchanged.
+    if not verified and _fail_closed_budget_enforcement():
+        _raise_budget_unverifiable(counter_key)
+
+    return current
+
+
+async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None:
+    """Raise a counter that has fallen below the authoritative DB spend (e.g.
+    Redis restarted and reloaded an older snapshot) so every worker reads the
+    corrected value directly instead of re-deriving it per request, and so a
+    worker whose own cached spend is also stale still sees the true total.
+
+    The write is monotonic: it only ever raises the counter, so a repair that
+    carries a slightly-stale DB total cannot clobber a concurrent increment that
+    already pushed the counter higher (which would let racing requests
+    under-count). Redis enforces this atomically via async_set_max; the
+    in-memory copy is guarded by a read-compare-write with no await in between,
+    so it is atomic within the worker.
+    """
+    cached = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+    needs_update = True
+    if cached is not None:
+        try:
+            needs_update = float(cached) < db_spend
+        except (TypeError, ValueError):
+            needs_update = True
+    if needs_update:
+        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=db_spend)
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            await spend_counter_cache.redis_cache.async_set_max(
+                key=counter_key, value=db_spend
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Unable to repair stale spend counter %s in Redis",
+                counter_key,
+                exc_info=True,
+            )
+
+
+async def reseed_spend_counter_from_db(counter_key: str) -> None:
+    """Recover a counter that the reservation reconcile found in an inconsistent
+    state (missing, or where applying the reconcile delta would drive it
+    negative) by reseeding it from the DB instead of deleting it.
+
+    The DB row is a LAGGING authoritative floor, not post-request truth: the
+    entity .spend column is flushed in batches (every PROXY_BATCH_WRITE_AT), so
+    it can exclude this request's just-recorded cost and other buffered spend.
+    That is fine here: the monotonic set-max can only RAISE a stale-low counter
+    toward that floor (never lowers it or clobbers a concurrent increment), and
+    the read-time floor (_authoritative_floor_spend) converges to the true total
+    as the buffer flushes. The point is to restore enforcement to a real floor
+    rather than leave the counter deleted and unenforced (the prior fail-open).
+    Counters with no DB row (window/end-user/tag) are left untouched rather than
+    deleted, so enforcement keeps reading whatever value they hold.
+    """
+    db_spend = await SpendCounterReseed.from_db(
+        prisma_client=prisma_client, counter_key=counter_key
+    )
+    if db_spend is None:
+        return
+    await _repair_stale_spend_counter(counter_key=counter_key, db_spend=db_spend)
+
+
+async def _authoritative_floor_spend(
+    counter_key: str,
+    window_entity_type: str | None = None,
+    window_entity_id: str | None = None,
+    window_start: datetime | None = None,
+) -> float | None:
+    marker_key = f"spend_db_floor:{counter_key}"
+    cached = spend_counter_cache.in_memory_cache.get_cache(key=marker_key)
+    if cached is not None:
+        return float(cached)
+
+    db_spend = await SpendCounterReseed.from_db(
+        prisma_client=prisma_client, counter_key=counter_key
+    )
+    if (
+        db_spend is None
+        and window_entity_type is not None
+        and window_entity_id is not None
+        and window_start is not None
+    ):
+        db_spend = await SpendCounterReseed.window_from_spend_logs(
+            prisma_client=prisma_client,
+            entity_type=window_entity_type,
+            entity_id=window_entity_id,
+            window_start=window_start,
+        )
+    if db_spend is None:
+        return None
+
+    spend_counter_cache.in_memory_cache.set_cache(
+        key=marker_key,
+        value=db_spend,
+        ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
+    )
+    return db_spend
+
+
+async def _read_spend_counter_estimate(
+    counter_key: str, fallback_spend: float
+) -> tuple[float, bool]:
+    """Return (spend, authoritative). ``authoritative`` is True when the value
+    came from Redis or a fresh DB read (cross-pod truth), False when it came
+    from the per-pod in-memory copy or the caller's fallback. Only the
+    fail-closed path reads the flag; normal callers ignore it."""
     # 1. Redis first (cross-pod authoritative). On clean miss, skip
     # in-memory: per-pod in-memory only has this pod's writes, so it
     # would mask cross-pod increments.
@@ -2049,7 +2246,7 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
         try:
             val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
             if val is not None:
-                return float(val)
+                return float(val), True
             redis_clean_miss = True
         except Exception as e:
             verbose_proxy_logger.debug(
@@ -2062,7 +2259,7 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     if not redis_clean_miss:
         val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
         if val is not None:
-            return float(val)
+            return float(val), False
 
     # 3. Reseed from DB - fallback_spend lags cross-pod, would allow bypass.
     db_spend = await SpendCounterReseed.coalesced(
@@ -2071,10 +2268,10 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
         counter_key=counter_key,
     )
     if db_spend is not None:
-        return db_spend
+        return db_spend, True
 
     # 4. Caller-supplied fallback (DB unavailable).
-    return fallback_spend
+    return fallback_spend, False
 
 
 async def increment_spend_counters(
