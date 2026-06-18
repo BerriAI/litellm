@@ -2159,6 +2159,40 @@ async def test_proxy_model_group_alias_checks(hidden):
 
 
 @pytest.mark.asyncio
+async def test_model_info_expands_alias_per_backing_deployment():
+    """A model_group_alias backed by a multi-deployment group expands to one
+
+    `/v1/model/info` row per backing deployment -- the same per-deployment
+    granularity the endpoint already uses for non-alias groups -- so the alias
+    name is never dropped just because one backing deployment is filtered out.
+    See #30589.
+    """
+    from litellm.proxy.proxy_server import model_info_v1
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+
+    _model_list = [
+        {"model_name": "gpt-3.5-turbo", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        {"model_name": "gpt-3.5-turbo", "litellm_params": {"model": "gpt-3.5-turbo"}},
+    ]
+    router = litellm.Router(
+        model_list=_model_list,
+        model_group_alias={"gpt-4": {"model": "gpt-3.5-turbo", "hidden": False}},
+    )
+    setattr(litellm.proxy.proxy_server, "llm_router", router)
+    setattr(litellm.proxy.proxy_server, "llm_model_list", _model_list)
+
+    resp = await model_info_v1(user_api_key_dict=UserAPIKeyAuth(models=[]))
+    names = [item["model_name"] for item in resp["data"]]
+
+    # alias mirrors the backing group: one row per deployment, same as the
+    # real group it points at -- and never collides with a real model_name.
+    assert names.count("gpt-4") == 2
+    assert names.count("gpt-3.5-turbo") == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_proxy_model_group_info_rerank(prisma_client):
     """

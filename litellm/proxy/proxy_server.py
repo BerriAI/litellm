@@ -12948,9 +12948,16 @@ async def model_info_v1(
     # model_name to the alias and skips hidden (dict-style `hidden: true`)
     # entries; deep-copy so the downstream enrich/translate steps never mutate
     # the shared router deployment records.
+    #
+    # Like any model group, an alias backed by several deployments expands to one
+    # row per backing deployment -- this is the same per-deployment granularity
+    # /model/info already uses for non-alias groups, and it lets the access
+    # filters below keep exactly the deployments the caller can reach. The
+    # base_model_names guard only skips aliases whose name collides with a real
+    # model_list model_name, so an alias never double-lists an existing entry.
     base_model_names = {model.get("model_name") for model in all_models}
     all_models.extend(
-        copy.deepcopy(dict(alias_deployment))
+        copy.deepcopy(alias_deployment)
         for alias_deployment in llm_router.get_model_list_from_model_alias()
         if alias_deployment.get("model_name") not in base_model_names
     )
