@@ -162,7 +162,7 @@ async def test_get_supports_system_message():
         ("vertex_ai/gemini-3.1-pro-preview", True),
     ],
 )
-async def test_supports_response_json_schema(model: str, expected: bool):
+def test_supports_response_json_schema(model: str, expected: bool):
     """Test supports_response_json_schema correctly detects Gemini 2.0+ model names"""
 
     assert supports_response_json_schema(model) == expected
