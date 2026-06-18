@@ -28388,7 +28388,7 @@ export interface components {
             name: string;
             /**
              * Plugin Key
-             * @description plugin's own credential, injected as *** only on /plugin-proxy/<name>/* reverse-proxy calls
+             * @description plugin's own credential, injected as Bearer auth only on /plugin-proxy/<name>/* reverse-proxy calls
              */
             plugin_key?: string | null;
             /**
