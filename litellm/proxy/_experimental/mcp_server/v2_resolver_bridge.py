@@ -20,6 +20,9 @@ import httpx
 from pydantic import SecretStr
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.v2_port_bodies import (
+    HttpxClientCredentialsFetcher,
+)
 from litellm.proxy.gateway.mcp.outbound_credentials.clock import SystemClock
 from litellm.proxy.gateway.mcp.outbound_credentials.credential_store import (
     InMemoryCredentialStore,
@@ -94,7 +97,7 @@ def _provider() -> UpstreamCredentialProvider:
         token_refresher=unwired,
         clock=SystemClock(),
         service_token_store=InMemoryServiceTokenStore(),
-        client_credentials_fetcher=unwired,
+        client_credentials_fetcher=HttpxClientCredentialsFetcher(),
         token_exchanger=unwired,
         signer_factory=unwired,
     )
@@ -117,6 +120,22 @@ def _to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
                 header_name="X-API-Key",
                 value_prefix="",
                 key_source=SharedKey(value=SecretStr(token)),
+            ),
+        )
+    if (
+        server.has_client_credentials
+        and server.client_id
+        and server.client_secret
+        and server.token_url
+    ):
+        return ServerSpec(
+            server_id=server.server_id,
+            resource=resource,
+            config=ClientCredentialsConfig(
+                client_id=server.client_id,
+                client_secret=SecretStr(server.client_secret),
+                token_url=server.token_url,
+                scopes=tuple(server.scopes or ()),
             ),
         )
     return None  # other modes are not grafted yet

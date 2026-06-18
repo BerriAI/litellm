@@ -85,3 +85,57 @@ async def test_resolve_mcp_auth_hook_uses_v1_when_off(v2_off):
     # v1 returns the raw token string; MCPClient then maps it to the X-API-Key header
     server = _server(MCPAuth.api_key, "up-secret")
     assert await resolve_mcp_auth(server) == "up-secret"
+
+
+def _m2m_server():
+    return MCPServer(
+        server_id="m2m",
+        name="m2m",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        client_id="cid",
+        client_secret="csecret",
+        token_url="https://idp/token",
+        scopes=["a", "b"],
+    )
+
+
+async def test_client_credentials_maps_to_config():
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        _to_server_spec,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import (
+        ClientCredentialsConfig,
+    )
+
+    spec = _to_server_spec(_m2m_server())
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.client_id == "cid"
+    assert spec.config.token_url == "https://idp/token"
+    assert spec.config.client_secret.get_secret_value() == "csecret"
+    assert spec.config.scopes == ("a", "b")
+
+
+async def test_client_credentials_graft_end_to_end(v2_on, monkeypatch):
+    # M2M flows through the real fetcher; mock the IdP token endpoint and assert the Bearer.
+    from litellm.proxy._experimental.mcp_server import v2_port_bodies
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"access_token": "m2m-tok", "expires_in": 3600}
+
+    class _Client:
+        async def post(self, url, data=None):
+            return _Resp()
+
+    monkeypatch.setattr(
+        v2_port_bodies, "get_async_httpx_client", lambda **kw: _Client()
+    )
+    assert await resolve_v2_auth_value(_m2m_server()) == {
+        "Authorization": "Bearer m2m-tok"
+    }
