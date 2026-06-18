@@ -14,6 +14,9 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 
+from ..result import Ok, Result
+from .types import CredError
+
 
 class TokenKey(BaseModel):
     """Identifies a per-user upstream token. Per-tenant / per-user / per-audience isolation."""
@@ -35,11 +38,18 @@ class StoredToken(BaseModel):
 
 
 class TokenStore(Protocol):
-    """Persists and retrieves per-`(subject, server, resource)` OAuth tokens."""
+    """Persists and retrieves per-`(subject, server, resource)` OAuth tokens.
 
-    async def get(self, key: TokenKey) -> StoredToken | None: ...
+    Both methods return a `Result` so a store/DB outage (`Error(upstream_unavailable)`, 503)
+    is distinct from a genuine miss (`Ok(None)`, which drives the OAuth dance). Async because
+    the durable body queries Prisma / Redis on LiteLLM's async stack.
+    """
 
-    async def put(self, key: TokenKey, token: StoredToken) -> None: ...
+    async def get(self, key: TokenKey) -> Result[StoredToken | None, CredError]: ...
+
+    async def put(
+        self, key: TokenKey, token: StoredToken
+    ) -> Result[None, CredError]: ...
 
 
 class InMemoryTokenStore:
@@ -48,10 +58,11 @@ class InMemoryTokenStore:
     def __init__(self, seeded: dict[TokenKey, StoredToken] | None = None) -> None:
         self._tokens: dict[TokenKey, StoredToken] = dict(seeded or {})
 
-    async def get(self, key: TokenKey) -> StoredToken | None:
-        return self._tokens.get(key)
+    async def get(self, key: TokenKey) -> Result[StoredToken | None, CredError]:
+        return Ok(self._tokens.get(key))
 
-    async def put(self, key: TokenKey, token: StoredToken) -> None:
+    async def put(self, key: TokenKey, token: StoredToken) -> Result[None, CredError]:
         self._tokens[key] = (
             token  # mutable-ok: an in-memory store's backing must be mutable
         )
+        return Ok(None)

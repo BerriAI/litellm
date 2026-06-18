@@ -102,7 +102,10 @@ class UpstreamCredentialProvider:
                     StaticHeaderAuth(config.header_for(source.value.get_secret_value()))
                 )
             case PerUserEnvVar():
-                value = await self._per_user_value(subject, server)
+                fetched = await self._per_user_value(subject, server)
+                if isinstance(fetched, Error):
+                    return Error(fetched.error)  # store/DB down -> 503
+                value = fetched.ok
                 if value is None:
                     return Error(
                         CredError.of_precondition_required(
@@ -111,7 +114,10 @@ class UpstreamCredentialProvider:
                     )
                 return Ok(StaticHeaderAuth(config.header_for(value)))
             case Byok():
-                value = await self._per_user_value(subject, server)
+                fetched = await self._per_user_value(subject, server)
+                if isinstance(fetched, Error):
+                    return Error(fetched.error)  # store/DB down -> 503
+                value = fetched.ok
                 if value is None:
                     return Error(
                         CredError.of_unauthorized(
@@ -121,7 +127,9 @@ class UpstreamCredentialProvider:
                 return Ok(StaticHeaderAuth(config.header_for(value)))
         assert_never(config.key_source)
 
-    async def _per_user_value(self, subject: Subject, server: ServerSpec) -> str | None:
+    async def _per_user_value(
+        self, subject: Subject, server: ServerSpec
+    ) -> Result[str | None, CredError]:
         return await self._credential_store.get(
             CredentialKey(
                 tenant_id=subject.tenant_id,
@@ -155,7 +163,10 @@ class UpstreamCredentialProvider:
             server_id=server.server_id,
             resource=server.resource,
         )
-        token = await self._token_store.get(key)
+        fetched = await self._token_store.get(key)
+        if isinstance(fetched, Error):
+            return Error(fetched.error)  # store/DB down -> 503
+        token = fetched.ok
         if token is None:
             return Error(
                 CredError.of_unauthorized(
@@ -171,13 +182,15 @@ class UpstreamCredentialProvider:
                 )
             )
         refreshed = await self._token_refresher.refresh(config, token.refresh_token)
-        match refreshed:
-            case Ok(new_token):
-                await self._token_store.put(key, new_token)
-                return Ok(_bearer(new_token))
-            case Error(err):
-                return Error(err)
-        assert_never(refreshed)
+        if isinstance(refreshed, Error):
+            return Error(
+                refreshed.error
+            )  # refresh rejected (401) or endpoint down (503)
+        new_token = refreshed.ok
+        persisted = await self._token_store.put(key, new_token)
+        if isinstance(persisted, Error):
+            return Error(persisted.error)  # store/DB down on write -> 503
+        return Ok(_bearer(new_token))
 
     def _is_near_expiry(self, token: StoredToken) -> bool:
         return self._clock.now() >= token.expires_at - _REFRESH_BUFFER

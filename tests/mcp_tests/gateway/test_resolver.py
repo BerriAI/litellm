@@ -11,8 +11,10 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from litellm.proxy.gateway.mcp._spike_exhaustiveness import http_status
+from litellm.proxy.gateway.mcp.outbound_credentials.clock import Clock
 from litellm.proxy.gateway.mcp.outbound_credentials.credential_store import (
     CredentialKey,
+    CredentialStore,
     InMemoryCredentialStore,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.httpx_auth import (
@@ -22,10 +24,14 @@ from litellm.proxy.gateway.mcp.outbound_credentials.httpx_auth import (
 from litellm.proxy.gateway.mcp.outbound_credentials.resolver import (
     UpstreamCredentialProvider,
 )
+from litellm.proxy.gateway.mcp.outbound_credentials.token_refresher import (
+    TokenRefresher,
+)
 from litellm.proxy.gateway.mcp.outbound_credentials.token_store import (
     InMemoryTokenStore,
     StoredToken,
     TokenKey,
+    TokenStore,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     ApiKeyConfig,
@@ -62,12 +68,25 @@ class FakeRefresher:
         return self._result
 
 
+class FailingCredentialStore:
+    async def get(self, key: CredentialKey) -> Result[str | None, CredError]:
+        return Error(CredError.of_upstream_unavailable("credential store down"))
+
+
+class FailingTokenStore:
+    async def get(self, key: TokenKey) -> Result[StoredToken | None, CredError]:
+        return Error(CredError.of_upstream_unavailable("token store down"))
+
+    async def put(self, key: TokenKey, token: StoredToken) -> Result[None, CredError]:
+        return Error(CredError.of_upstream_unavailable("token store down"))
+
+
 def _provider(
     *,
-    credential_store: InMemoryCredentialStore | None = None,
-    token_store: InMemoryTokenStore | None = None,
-    refresher: FakeRefresher | None = None,
-    clock: FixedClock | None = None,
+    credential_store: CredentialStore | None = None,
+    token_store: TokenStore | None = None,
+    refresher: TokenRefresher | None = None,
+    clock: Clock | None = None,
 ) -> UpstreamCredentialProvider:
     return UpstreamCredentialProvider(
         credential_store=credential_store or InMemoryCredentialStore(),
@@ -300,8 +319,9 @@ async def test_authorization_code_refreshes_proactively_near_expiry():
     assert isinstance(result, Ok)
     assert _applied_headers(result.ok)["Authorization"] == "Bearer new"
     persisted = await store.get(_token_key())
-    assert persisted is not None
-    assert persisted.access_token.get_secret_value() == "new"
+    assert isinstance(persisted, Ok)
+    assert persisted.ok is not None
+    assert persisted.ok.access_token.get_secret_value() == "new"
 
 
 async def test_authorization_code_refresh_rejected_fails_closed():
@@ -352,3 +372,18 @@ def test_stored_token_secrets_are_masked():
     assert "ACCESS-SECRET" not in dumped
     assert "REFRESH-SECRET" not in dumped
     assert "**********" in dumped
+
+
+async def test_api_key_per_user_store_error_is_upstream_unavailable():
+    # A store/DB outage on read is distinct from a miss: 503, not the 401/412 of "not found".
+    provider = _provider(credential_store=FailingCredentialStore())
+    result = await provider.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=Byok())))
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+async def test_authorization_code_store_error_is_upstream_unavailable():
+    provider = _provider(token_store=FailingTokenStore())
+    result = await provider.resolve(SUBJECT, _spec(_authz_cfg()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"

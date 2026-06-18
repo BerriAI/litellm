@@ -12,6 +12,9 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from ..result import Ok, Result
+from .types import CredError
+
 
 class CredentialKey(BaseModel):
     """Identifies a per-user secret. Per-tenant / per-user isolation is the key shape."""
@@ -25,12 +28,14 @@ class CredentialKey(BaseModel):
 class CredentialStore(Protocol):
     """Fetches the per-subject secret for an `api_key` per-user / BYOK server.
 
+    Returns a `Result` so a store/DB outage (`Error(upstream_unavailable)`) is distinct from a
+    genuine miss (`Ok(None)`); the resolver maps the former to 503 and the latter to a 401/412.
     Async because the durable body queries Prisma / Redis on LiteLLM's async stack; a
-    synchronous read would block the event loop. Defined async now, before any caller, so the
-    signature does not break when that body lands.
+    synchronous read would block the event loop. Both are settled now, before any caller, so
+    the signature does not break when that body lands.
     """
 
-    async def get(self, key: CredentialKey) -> str | None: ...
+    async def get(self, key: CredentialKey) -> Result[str | None, CredError]: ...
 
 
 class InMemoryCredentialStore:
@@ -39,5 +44,5 @@ class InMemoryCredentialStore:
     def __init__(self, seeded: dict[CredentialKey, str] | None = None) -> None:
         self._values: dict[CredentialKey, str] = dict(seeded or {})
 
-    async def get(self, key: CredentialKey) -> str | None:
-        return self._values.get(key)
+    async def get(self, key: CredentialKey) -> Result[str | None, CredError]:
+        return Ok(self._values.get(key))
