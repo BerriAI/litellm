@@ -13,9 +13,9 @@ Implemented: `none`, `passthrough`, `api_key` (shared from config, or per-user /
 from the injected `CredentialStore`), `authorization_code` (per-user token read from the
 injected `TokenStore`, refreshed proactively via the `TokenRefresher`), and `client_credentials`
 (shared service-account token cached in the `ServiceTokenStore`, minted by the
-`ClientCredentialsFetcher`), and `token_exchange` (RFC 8693 OBO: the caller's inbound token is
-swapped for an upstream-audience token via the `TokenExchanger`, cached per-user). The
-`aws_sigv4` mode is a typed stub that fails closed until its signer is injected.
+`ClientCredentialsFetcher`), `token_exchange` (RFC 8693 OBO: the caller's inbound token is
+swapped for an upstream-audience token via the `TokenExchanger`, cached per-user), and
+`aws_sigv4` (per-request SigV4 signing via the `SignerFactory`). All seven arms are live.
 """
 
 from __future__ import annotations
@@ -31,13 +31,13 @@ from .clock import Clock
 from .credential_store import CredentialKey, CredentialStore
 from .httpx_auth import NoOpAuth, StaticHeaderAuth
 from .service_token_store import ServiceTokenKey, ServiceTokenStore
+from .signer_factory import SignerFactory
 from .token_exchanger import TokenExchanger
 from .token_refresher import TokenRefresher
 from .token_store import StoredToken, TokenKey, TokenStore
 from .types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
-    AuthSpecKind,
     AwsSigV4Config,
     Byok,
     ClientCredentialsConfig,
@@ -67,6 +67,7 @@ class UpstreamCredentialProvider:
         service_token_store: ServiceTokenStore,
         client_credentials_fetcher: ClientCredentialsFetcher,
         token_exchanger: TokenExchanger,
+        signer_factory: SignerFactory,
     ) -> None:
         self._credential_store = credential_store
         self._token_store = token_store
@@ -75,6 +76,7 @@ class UpstreamCredentialProvider:
         self._service_token_store = service_token_store
         self._client_credentials_fetcher = client_credentials_fetcher
         self._token_exchanger = token_exchanger
+        self._signer_factory = signer_factory
 
     async def resolve(
         self, subject: Subject, server: ServerSpec
@@ -264,18 +266,13 @@ class UpstreamCredentialProvider:
         )  # best-effort; token is re-exchangeable
         return Ok(_bearer(minted))
 
-    # --- arms awaiting their collaborators (typed stubs, fail closed) ----------------------
     async def _aws_sigv4(
         self, subject: Subject, server: ServerSpec, config: AwsSigV4Config
     ) -> Result[httpx.Auth, CredError]:
-        return _todo(AuthSpecKind.aws_sigv4)
+        # SigV4 signs every request from the gateway's own AWS identity (never the caller's),
+        # so the whole arm is the signer the factory builds for this server's credential source.
+        return await self._signer_factory.build(config)
 
 
 def _bearer(token: StoredToken) -> StaticHeaderAuth:
     return StaticHeaderAuth(f"Bearer {token.access_token.get_secret_value()}")
-
-
-def _todo(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
-    return Error(
-        CredError.of_not_implemented(f"{kind.value}: resolver arm not implemented yet")
-    )

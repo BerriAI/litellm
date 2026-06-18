@@ -249,20 +249,48 @@ class NoneConfig(BaseModel):
     kind: Literal[AuthSpecKind.none] = AuthSpecKind.none
 
 
+class StaticKeys(BaseModel):
+    """Long-lived AWS access keys configured on the server."""
+
+    model_config = ConfigDict(frozen=True)
+    source: Literal["static_keys"] = "static_keys"
+    access_key_id: str
+    secret_access_key: SecretStr
+    session_token: SecretStr | None = None
+
+
+class AssumeRole(BaseModel):
+    """An IAM role the gateway assumes via STS for short-lived, auto-refreshed credentials."""
+
+    model_config = ConfigDict(frozen=True)
+    source: Literal["assume_role"] = "assume_role"
+    role_arn: str
+    session_name: str | None = None
+    external_id: str | None = None
+
+
+class Ambient(BaseModel):
+    """The environment's default AWS credential chain (instance profile, IRSA, env vars)."""
+
+    model_config = ConfigDict(frozen=True)
+    source: Literal["ambient"] = "ambient"
+
+
+AwsCredentialSource = Annotated[
+    StaticKeys | AssumeRole | Ambient, Field(discriminator="source")
+]
+
+
 class AwsSigV4Config(BaseModel):
-    """AWS SigV4 per-request signing. Creds come from static keys, an assumed role, or
-    the ambient environment; that source is left loose here and tightened when the arm lands.
-    """
+    """AWS SigV4 per-request signing for an AWS-hosted upstream (e.g. Bedrock AgentCore). The
+    gateway signs with its own AWS identity, never the caller's; `credentials` selects how that
+    identity is obtained, defaulting to the ambient credential chain."""
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.aws_sigv4] = AuthSpecKind.aws_sigv4
     region: str
     service: str = "bedrock-agentcore"
-    access_key_id: str | None = None
-    secret_access_key: SecretStr | None = None
-    session_token: SecretStr | None = None
-    role_arn: str | None = None
-    session_name: str | None = None
+    credentials: AwsCredentialSource = Ambient()
 
 
 AuthConfig = Annotated[

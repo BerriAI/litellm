@@ -32,6 +32,9 @@ from litellm.proxy.gateway.mcp.outbound_credentials.service_token_store import (
     ServiceTokenKey,
     ServiceTokenStore,
 )
+from litellm.proxy.gateway.mcp.outbound_credentials.signer_factory import (
+    SignerFactory,
+)
 from litellm.proxy.gateway.mcp.outbound_credentials.token_exchanger import (
     TokenExchanger,
 )
@@ -45,9 +48,12 @@ from litellm.proxy.gateway.mcp.outbound_credentials.token_store import (
     TokenStore,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
+    Ambient,
     ApiKeyConfig,
+    AssumeRole,
     AuthorizationCodeConfig,
     AuthSpecKind,
+    AwsSigV4Config,
     Byok,
     ClientCredentialsConfig,
     CredError,
@@ -56,6 +62,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     PerUserEnvVar,
     ServerSpec,
     SharedKey,
+    StaticKeys,
     Subject,
     TokenExchangeConfig,
 )
@@ -144,6 +151,16 @@ class FakeExchanger:
         return self._result
 
 
+class FakeSignerFactory:
+    def __init__(self, result: Result[httpx.Auth, CredError]) -> None:
+        self._result = result
+        self.calls = 0
+
+    async def build(self, config: AwsSigV4Config) -> Result[httpx.Auth, CredError]:
+        self.calls += 1
+        return self._result
+
+
 def _provider(
     *,
     credential_store: CredentialStore | None = None,
@@ -153,6 +170,7 @@ def _provider(
     service_token_store: ServiceTokenStore | None = None,
     fetcher: ClientCredentialsFetcher | None = None,
     token_exchanger: TokenExchanger | None = None,
+    signer_factory: SignerFactory | None = None,
 ) -> UpstreamCredentialProvider:
     return UpstreamCredentialProvider(
         credential_store=credential_store or InMemoryCredentialStore(),
@@ -165,6 +183,8 @@ def _provider(
         or FakeFetcher(Error(CredError.of_upstream_unavailable("unused"))),
         token_exchanger=token_exchanger
         or FakeExchanger(Error(CredError.of_upstream_unavailable("unused"))),
+        signer_factory=signer_factory
+        or FakeSignerFactory(Error(CredError.of_upstream_unavailable("unused"))),
     )
 
 
@@ -200,6 +220,10 @@ def _svc_key() -> ServiceTokenKey:
 
 def _tx_cfg() -> TokenExchangeConfig:
     return TokenExchangeConfig()
+
+
+def _aws_cfg() -> AwsSigV4Config:
+    return AwsSigV4Config(region="us-east-1")
 
 
 def _applied_headers(auth: httpx.Auth) -> httpx.Headers:
@@ -334,19 +358,6 @@ async def test_self_contained_arms_never_read_the_inbound_token():
         assert _applied_headers(without.ok).get("Authorization") == _applied_headers(
             present.ok
         ).get("Authorization")
-
-
-@pytest.mark.parametrize(
-    "config",
-    [
-        {"kind": "aws_sigv4", "region": "us-east-1"},
-    ],
-)
-async def test_unimplemented_arms_fail_closed(config: dict):
-    # Stub arms signal not_implemented (-> 501), not misconfigured (-> 500 operator error).
-    result = await PROVIDER.resolve(SUBJECT, _spec(config))
-    assert isinstance(result, Error)
-    assert result.error.tag == "not_implemented"
 
 
 async def test_authorization_code_returns_a_valid_stored_token():
@@ -699,6 +710,94 @@ async def test_token_exchange_cache_failure_degrades_to_exchange():
 def test_token_exchange_config_allows_discovery_defaults():
     spec = _spec({"kind": "token_exchange"})
     assert isinstance(spec.config, TokenExchangeConfig)
+
+
+async def test_aws_sigv4_returns_the_signer():
+    signer = StaticHeaderAuth("AWS4-HMAC-SHA256 Credential=AKIA/...")
+    factory = FakeSignerFactory(Ok(signer))
+    result = await _provider(signer_factory=factory).resolve(SUBJECT, _spec(_aws_cfg()))
+    assert isinstance(result, Ok)
+    assert _applied_headers(result.ok)["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert factory.calls == 1
+
+
+async def test_aws_sigv4_config_error_is_misconfigured():
+    factory = FakeSignerFactory(Error(CredError.of_misconfigured("role not assumable")))
+    result = await _provider(signer_factory=factory).resolve(SUBJECT, _spec(_aws_cfg()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+
+
+async def test_aws_sigv4_sts_unreachable_is_upstream_unavailable():
+    factory = FakeSignerFactory(Error(CredError.of_upstream_unavailable("STS timeout")))
+    result = await _provider(signer_factory=factory).resolve(SUBJECT, _spec(_aws_cfg()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+async def test_aws_sigv4_never_reads_inbound_token():
+    # Signs with the gateway's AWS identity; the caller bearer never changes the result.
+    factory = FakeSignerFactory(Ok(StaticHeaderAuth("AWS4-HMAC-SHA256 sig")))
+    provider = _provider(signer_factory=factory)
+    without = await provider.resolve(SUBJECT, _spec(_aws_cfg()))
+    with_token = Subject(tenant_id="t1", subject_id="u1", inbound_token="leak-me")
+    present = await provider.resolve(with_token, _spec(_aws_cfg()))
+    assert isinstance(without, Ok) and isinstance(present, Ok)
+    header = _applied_headers(present.ok)["Authorization"]
+    assert _applied_headers(without.ok)["Authorization"] == header
+    assert "leak-me" not in header
+
+
+def test_aws_sigv4_credentials_default_to_ambient():
+    assert isinstance(AwsSigV4Config(region="us-east-1").credentials, Ambient)
+
+
+def test_aws_sigv4_credential_sources_select_by_discriminator():
+    static = _spec(
+        {
+            "kind": "aws_sigv4",
+            "region": "us-east-1",
+            "credentials": {
+                "source": "static_keys",
+                "access_key_id": "AKIA",
+                "secret_access_key": "shhh",
+            },
+        }
+    )
+    assert isinstance(static.config, AwsSigV4Config)
+    assert isinstance(static.config.credentials, StaticKeys)
+    role = _spec(
+        {
+            "kind": "aws_sigv4",
+            "region": "us-east-1",
+            "credentials": {
+                "source": "assume_role",
+                "role_arn": "arn:aws:iam::1:role/r",
+            },
+        }
+    )
+    assert isinstance(role.config, AwsSigV4Config)
+    assert isinstance(role.config.credentials, AssumeRole)
+
+
+def test_aws_sigv4_rejects_static_keys_missing_secret():
+    # The discriminated source makes illegal combos unrepresentable: static_keys needs a secret.
+    with pytest.raises(ValidationError):
+        _spec(
+            {
+                "kind": "aws_sigv4",
+                "region": "us-east-1",
+                "credentials": {"source": "static_keys", "access_key_id": "AKIA"},
+            }
+        )
+
+
+def test_aws_sigv4_static_keys_secret_is_masked():
+    config = AwsSigV4Config(
+        region="us-east-1",
+        credentials=StaticKeys(access_key_id="AKIA", secret_access_key="TOP-SECRET"),
+    )
+    assert "TOP-SECRET" not in config.model_dump_json()
 
 
 async def test_api_key_per_user_store_error_is_upstream_unavailable():
