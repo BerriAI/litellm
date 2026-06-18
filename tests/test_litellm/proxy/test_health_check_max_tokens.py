@@ -14,7 +14,7 @@ from litellm.proxy.health_check import (
 @pytest.mark.asyncio
 async def test_update_litellm_params_max_tokens_default(monkeypatch):
     """
-    Test that max_tokens defaults to 5 for non-wildcard models.
+    Test that max_tokens defaults to 16 for non-wildcard models.
     """
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
@@ -23,7 +23,7 @@ async def test_update_litellm_params_max_tokens_default(monkeypatch):
 
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated_params["max_tokens"] == 5
+    assert updated_params["max_tokens"] == 16
 
 
 @pytest.mark.asyncio
@@ -57,7 +57,7 @@ async def test_update_litellm_params_max_tokens_wildcard():
 async def test_ahealth_check_wildcard_models_respects_max_tokens():
     """
     Test that ahealth_check_wildcard_models respects max_tokens if passed,
-    otherwise defaults to 10.
+    otherwise defaults to 16.
     """
     with (
         patch(
@@ -66,7 +66,7 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
         ),
         patch("litellm.acompletion", new_callable=AsyncMock),
     ):
-        # Test Case 1: No max_tokens passed, should default to 10
+        # Test Case 1: No max_tokens passed, should default to 16
         model_params = {}
         await HealthCheckHelpers.ahealth_check_wildcard_models(
             model="openai/*",
@@ -74,7 +74,7 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
             model_params=model_params,
             litellm_logging_obj=MagicMock(),
         )
-        assert model_params["max_tokens"] == 10
+        assert model_params["max_tokens"] == 16
 
         # Test Case 2: Custom health_check_max_tokens passed via model_params, should be respected
         model_params = {"max_tokens": 3}
@@ -161,14 +161,14 @@ def test_explicit_health_check_max_tokens_beats_reasoning_specific():
 
 
 def test_reasoning_specific_falls_through_when_wrong_branch_only(monkeypatch):
-    """Only non-reasoning key set but model is reasoning → fall back to default 5."""
+    """Only non-reasoning key set but model is reasoning → fall back to default 16."""
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
     model_info = {"health_check_max_tokens_non_reasoning": 3}
     litellm_params = {"model": "openai/o1"}
 
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
-        assert _resolve_health_check_max_tokens(model_info, litellm_params) == 5
+        assert _resolve_health_check_max_tokens(model_info, litellm_params) == 16
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,7 @@ async def test_background_split_env_reasoning_vs_non_reasoning(monkeypatch):
 
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=False):
         updated = _update_litellm_params_for_health_check(model_info, litellm_params)
-        assert updated["max_tokens"] == 5
+        assert updated["max_tokens"] == 16
 
     litellm_params2 = {"model": "openai/o1"}
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
@@ -275,7 +275,7 @@ def test_chat_mode_still_injects_max_tokens():
 
     updated = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated["max_tokens"] == 5
+    assert updated["max_tokens"] == 16
 
 
 def test_no_mode_still_injects_max_tokens():
@@ -285,7 +285,7 @@ def test_no_mode_still_injects_max_tokens():
 
     updated = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated["max_tokens"] == 5
+    assert updated["max_tokens"] == 16
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ def test_chat_style_modes_inject_max_tokens(mode):
         {"mode": mode}, {"model": f"openai/dummy-{mode}"}
     )
 
-    assert updated["max_tokens"] == 5
+    assert updated["max_tokens"] == 16
 
 
 @pytest.mark.parametrize(
@@ -341,7 +341,7 @@ def test_explicit_override_true_forces_injection_outside_allowlist():
 
     updated = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated["max_tokens"] == 5
+    assert updated["max_tokens"] == 16
 
 
 def test_explicit_override_false_suppresses_injection_inside_allowlist():
@@ -451,7 +451,7 @@ def test_bedrock_chat_without_mode_still_injects_max_tokens_and_pins_provider():
         {}, {"model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"}
     )
 
-    assert updated["max_tokens"] == 5
+    assert updated["max_tokens"] == 16
     assert updated["custom_llm_provider"] == "bedrock"
     assert updated["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
