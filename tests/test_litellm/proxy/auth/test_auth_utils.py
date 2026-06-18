@@ -2395,3 +2395,40 @@ class TestGetDynamicLitellmParamsClearsApiKeyOnBaseOverride:
         )
         assert out["api_key"] == "sk-byok"
         assert "sk-admin-secret" not in str(out)
+
+
+_DEPLOYMENT_OWNED_EXTENSION_PARAMS = (
+    "aws_profile_name",
+    "oci_compartment_id",
+    "oci_region",
+    "litellm_credential_name",
+    "runtimeSessionId",
+)
+
+
+class TestIsRequestBodySafeBlocksDeploymentOwnedExtensions:
+    """Five deployment-owned fields that reach the operator's provider
+    credentials or retarget the outbound request: ``aws_profile_name`` selects
+    a local AWS profile, ``oci_compartment_id``/``oci_region`` retarget the OCI
+    request, ``litellm_credential_name`` selects a server-loaded credential by
+    name (no ownership check), and ``runtimeSessionId`` resumes a Bedrock
+    AgentCore session (AWS does not enforce session-to-user mapping). The gate
+    must reject each from the request body absent an admin opt-in."""
+
+    @pytest.mark.parametrize("param", _DEPLOYMENT_OWNED_EXTENSION_PARAMS)
+    def test_param_in_request_body_is_rejected(self, param):
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={"model": "gpt-4", param: f"caller-supplied-{param}"},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        assert param in str(exc.value)
+        assert "not allowed in request body" in str(exc.value)
+
+    @pytest.mark.parametrize("param", _DEPLOYMENT_OWNED_EXTENSION_PARAMS)
+    def test_param_in_router_strip_set(self, param):
+        from litellm.router import _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS
+
+        assert param in _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS

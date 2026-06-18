@@ -263,6 +263,7 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "vertex_project",
     "vertex_location",
     "aws_access_key_id",
+    "aws_profile_name",
     "aws_secret_access_key",
     "aws_session_token",
     "base_model",
@@ -272,8 +273,16 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "oci_tenancy",
     "oci_key",
     "oci_key_file",
+    "oci_compartment_id",
+    "oci_region",
     # SDK-only field; also rejected outright in is_request_body_safe
     "model_list",
+    "litellm_credential_name",
+    # Resumes a Bedrock AgentCore runtime session by id. AWS does not enforce
+    # session-to-user mapping (the client backend must), so a caller-supplied
+    # value resumes another tenant's session.
+    # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-sessions.html
+    "runtimeSessionId",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
     # ``extra_body``) and resolves it through ``get_secret`` before

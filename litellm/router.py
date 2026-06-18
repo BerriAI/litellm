@@ -248,6 +248,7 @@ _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS: FrozenSet[str] = frozenset(
         "vertex_ai_credentials",
         "region_name",
         "aws_access_key_id",
+        "aws_profile_name",
         "aws_secret_access_key",
         "aws_session_token",
         "aws_region_name",
@@ -258,6 +259,8 @@ _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS: FrozenSet[str] = frozenset(
         "aws_role_name",
         "watsonx_region_name",
         "base_model",
+        "litellm_credential_name",
+        "runtimeSessionId",
         "s3_endpoint_url",
         "sagemaker_base_url",
         "deployment_url",
@@ -267,6 +270,8 @@ _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS: FrozenSet[str] = frozenset(
         "oci_tenancy",
         "oci_key",
         "oci_key_file",
+        "oci_compartment_id",
+        "oci_region",
     }
 )
 
