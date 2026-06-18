@@ -3165,7 +3165,8 @@ class PrismaClient:
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema = os.getenv("DATABASE_SCHEMA", "public")
-            ret = await self.db.query_raw(f"""
+            ret = await self.db.query_raw(
+                f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
@@ -3177,7 +3178,8 @@ class PrismaClient:
                     (SELECT COUNT(*) FROM existing_views) AS view_count,
                     ARRAY_AGG(viewname) AS view_names
                 FROM existing_views
-                """)
+                """
+            )
             expected_total_views = len(expected_views)
             if ret[0]["view_count"] == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")
@@ -3186,7 +3188,8 @@ class PrismaClient:
                 ## check if required view exists ##
                 if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
-                    await self.db.execute_raw("""
+                    await self.db.execute_raw(
+                        """
                             CREATE VIEW "LiteLLM_VerificationTokenView" AS
                             SELECT
                             v.*,
@@ -3196,7 +3199,8 @@ class PrismaClient:
                             t.rpm_limit AS team_rpm_limit
                             FROM "LiteLLM_VerificationToken" v
                             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-                        """)
+                        """
+                    )
 
                     verbose_proxy_logger.info(
                         "LiteLLM_VerificationTokenView Created in DB!"
@@ -6329,8 +6333,6 @@ def create_model_info_response(
         "created": DEFAULT_MODEL_CREATED_AT_TIME,
         "owned_by": provider,
     }
-    if not include_metadata:
-        return base
 
     # Surface context-window limits for OpenAI-compatible discovery clients.
     # Only emitted when known, so wildcard routes and limitless backends stay clean.
@@ -6350,9 +6352,10 @@ def create_model_info_response(
             if model_group_info.max_input_tokens is not None:
                 base["max_input_tokens"] = int(model_group_info.max_input_tokens)
             if model_group_info.max_output_tokens is not None:
-                base["max_output_tokens"] = int(
-                    model_group_info.max_output_tokens
-                )
+                base["max_output_tokens"] = int(model_group_info.max_output_tokens)
+
+    if not include_metadata:
+        return base
 
     effective_fallback_type = fallback_type if fallback_type is not None else "general"
 
