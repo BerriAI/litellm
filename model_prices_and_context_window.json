@@ -36216,6 +36216,21 @@
             "video"
         ]
     },
+    "vertex_ai/veo-3.1-lite-generate-001": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.08,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#veo",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "voyage/rerank-2": {
         "input_cost_per_token": 5e-08,
         "litellm_provider": "voyage",
