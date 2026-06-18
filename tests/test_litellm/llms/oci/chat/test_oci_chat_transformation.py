@@ -1089,6 +1089,58 @@ class TestOCICohereParamMapping:
         assert result.get("temperature") == 0.5
 
 
+class TestOCICohereToolParameterTypes:
+    """OCI's Cohere backend returns HTTP 500 on a bare ``List`` parameter type
+    (e.g. MLflow judge tools whose params are JSON-schema arrays). Collection
+    types must map to the lowercase builtins. Verified live against us-chicago-1.
+    """
+
+    def _parameter_definitions(self) -> dict:
+        config = OCIChatConfig()
+        body = config.transform_request(
+            model="cohere.command-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={
+                **BASE_OCI_PARAMS,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_span",
+                            "description": "Fetch a span.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "attributes": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "attribute names",
+                                    },
+                                    "filters": {
+                                        "type": "object",
+                                        "description": "filter mapping",
+                                    },
+                                },
+                                "required": [],
+                            },
+                        },
+                    }
+                ],
+            },
+            litellm_params={},
+            headers={},
+        )
+        return body["chatRequest"]["tools"][0]["parameterDefinitions"]
+
+    def test_array_param_maps_to_lowercase_list(self):
+        params = self._parameter_definitions()
+        assert params["attributes"]["type"] == "list"
+
+    def test_object_param_maps_to_lowercase_dict(self):
+        params = self._parameter_definitions()
+        assert params["filters"]["type"] == "dict"
+
+
 class TestOCIDefaultMaxTokens:
     """Regression for OCI's tiny server-side token cap (~20 tokens), which
     silently truncated responses mid-string whenever the caller omitted
@@ -1478,6 +1530,7 @@ class TestOCIChatConfigErrorPaths:
             drop_params=False,
         )
         assert "max_retries" not in result
+
     def test_map_openai_params_cohere_n_default_dropped(self):
         """Cohere has no numGenerations field, but n=1 (and None) is the OpenAI
         default single-generation request. It must be dropped silently rather
