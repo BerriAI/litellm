@@ -101,6 +101,27 @@ class HealthCheckHelpers:
         """
         import litellm
 
+        # Bridge identity/tracking metadata into the logging object so callback
+        # handlers receive user_api_key_alias, tags, etc. in model_call_details.
+        #
+        # completion() does this via update_environment_variables (main.py), but
+        # alist_batches never makes that call. The @client decorator skips
+        # function_setup() when litellm_logging_obj already exists in kwargs
+        # (injected by ahealth_check), leaving litellm_params["metadata"] empty.
+        _logging_obj = filtered_model_params.get("litellm_logging_obj")
+        _litellm_metadata = filtered_model_params.get("litellm_metadata")
+        if _logging_obj is not None and isinstance(_litellm_metadata, dict):
+            _logging_obj.update_environment_variables(
+                model=filtered_model_params.get("model"),
+                user="",
+                optional_params={},
+                litellm_params={
+                    "api_base": "",
+                    "metadata": _litellm_metadata.copy(),
+                    "litellm_metadata": _litellm_metadata.copy(),
+                },
+            )
+
         if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS:
             return await litellm.alist_batches(**filtered_model_params)
         else:
