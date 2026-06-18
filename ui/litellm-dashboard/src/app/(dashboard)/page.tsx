@@ -1,6 +1,5 @@
 "use client";
 
-import ModelsAndEndpointsView from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
@@ -8,7 +7,6 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import { Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components/networking";
 import { CreateKeyPrefillData } from "@/components/organisms/create_key_button";
 import { fetchOrganizations } from "@/components/organizations";
-import PassThroughSettings from "@/components/pass_through_settings";
 import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
 import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
@@ -34,7 +32,6 @@ function CreateKeyPageContent() {
 
   const router = useRouter();
   const searchParams = useSearchParams()!;
-  const [modelData, setModelData] = useState<any>({ data: [] });
   const [createClicked, setCreateClicked] = useState<boolean>(false);
 
   const { data: uiSettingsData, isLoading: uiSettingsLoading } = useUISettings();
@@ -307,23 +304,6 @@ function CreateKeyPageContent() {
               createClicked={createClicked}
               autoOpenCreate={autoOpenCreate}
               prefillData={prefillData}
-            />
-          ) : page == "models" ? (
-            <ModelsAndEndpointsView
-              token={token}
-              keys={keys}
-              modelData={modelData}
-              setModelData={setModelData}
-              premiumUser={premiumUser}
-              teams={teams}
-            />
-          ) : page == "pass-through-settings" ? (
-            <PassThroughSettings
-              userID={userID}
-              userRole={userRole}
-              accessToken={accessToken}
-              modelData={modelData}
-              premiumUser={premiumUser}
             />
           ) : (
             <Usage
