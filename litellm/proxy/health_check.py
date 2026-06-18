@@ -432,7 +432,7 @@ def _resolve_health_check_max_tokens(
         return int(BACKGROUND_HEALTH_CHECK_MAX_TOKENS)
 
     if not is_wildcard:
-        return 5
+        return 16  # OpenAI GPT-5 models require max_output_tokens >= 16
 
     return None
 
