@@ -188,6 +188,8 @@ jobs:
       name: win/default
       shell: powershell.exe
     working_directory: ~/project
+    environment:
+      UV_PYTHON: "3.11"
     steps:
       - checkout
       - run:
@@ -220,7 +222,7 @@ jobs:
             if (-not (Select-String -Path $PROFILE -SimpleMatch $uvBin -Quiet)) {
               Add-Content -Path $PROFILE -Value "`$env:Path = `"$uvBin;`$env:Path`""
             }
-            uv sync --frozen --group dev --python (Get-Command python).Source
+            uv sync --frozen --group dev --python 3.11
       - run:
           name: Run Windows-specific test
           command: |
