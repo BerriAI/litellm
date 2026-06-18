@@ -696,6 +696,21 @@ general_settings:
   proxy_budget_rescheduler_max_time: 1
 ```
 
+## Hard budget enforcement (fail closed)
+
+Budget checks read current spend from a cross-pod counter in Redis, which keeps enforcement fast and consistent across workers and replicas. The counter is the source of truth on the hot path, and the database is reconciled in the background. If Redis restarts and reloads an older snapshot, the counter can come back lower than the spend already recorded in the database; on the hot path that stale value is trusted, which can let a key keep spending past its `max_budget` until the counter is corrected.
+
+For deployments where a configured budget must be a hard ceiling even while Redis is degraded, set `fail_closed_budget_enforcement`:
+
+```yaml
+general_settings:
+  fail_closed_budget_enforcement: true
+```
+
+With it enabled, every budgeted request validates spend against the authoritative database before being admitted (covering key, team, user, organization, end-user, tag, and per-window budgets), so a stale or missing Redis counter cannot under-report spend. The database read is coalesced and cached in-process for a few seconds, so the extra load is bounded to roughly one read per budgeted entity per cache window per worker rather than one read per request. If current spend can be verified against neither Redis nor the database, the request is rejected with a `503` instead of being admitted on an unverifiable budget.
+
+Leave the setting off (the default) to keep healthy under-budget traffic entirely off the database; in the default mode the counter is still cross-checked against the database whenever it reads below the caller's last-known recorded spend, which catches the common stale-counter case without a per-request database read.
+
 ## Set Rate Limits 
 
 You can set: 
