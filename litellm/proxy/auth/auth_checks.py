@@ -374,8 +374,8 @@ def _classify_model_from_cost_map(model_name: str) -> ModelCostClass:
         )
         return ModelCostClass.UNKNOWN
 
-    input_cost = model_info.get("input_cost_per_token")
-    output_cost = model_info.get("output_cost_per_token")
+    input_cost = _as_cost(model_info.get("input_cost_per_token"))
+    output_cost = _as_cost(model_info.get("output_cost_per_token"))
     if input_cost is None or output_cost is None:
         return ModelCostClass.UNKNOWN
     if input_cost > 0 or output_cost > 0:
@@ -836,23 +836,23 @@ async def common_checks(
     # Run before apply_key_tags_pre_auth injects key metadata.tags into request_body.
     _reject_clientside_metadata_tags_check(general_settings, request_body, route)
 
+    # Fail closed on unbounded consumption (OWASP LLM10 Denial of Wallet): refuse
+    # models whose cost can't be measured, since their spend (and therefore any
+    # budget) can't be enforced. Runs regardless of skip_budget_checks: that flag
+    # is derived from the request model, but common_request_processing gives
+    # general_settings.completion_model precedence, so an explicitly-free request
+    # model would otherwise skip the guard and let an unpriced server default
+    # through. Classifying completion_model first closes that gap. Opt-in.
+    _block_unknown_cost_models_check(
+        enabled=general_settings.get("block_unknown_cost_models") is True,
+        model=general_settings.get("completion_model") or _model,
+        llm_router=llm_router,
+        route=route,
+        team_id=valid_token.team_id if valid_token else None,
+    )
+
     # If this is a free model, skip all budget checks
     if not skip_budget_checks:
-        # Fail closed on unbounded consumption (OWASP LLM10 Denial of Wallet):
-        # refuse models whose cost can't be measured, since their spend (and
-        # therefore any budget) can't be enforced. Opt-in via general_settings.
-        # ``general_settings.completion_model`` takes precedence over the request
-        # body model in ``common_request_processing``, so classify it first;
-        # otherwise an unpriced server default would bypass the guard even when
-        # the request names a priced model.
-        _block_unknown_cost_models_check(
-            enabled=general_settings.get("block_unknown_cost_models") is True,
-            model=general_settings.get("completion_model") or _model,
-            llm_router=llm_router,
-            route=route,
-            team_id=valid_token.team_id if valid_token else None,
-        )
-
         # 3. If team is in budget
         with tracer.trace("litellm.proxy.auth.common_checks.team_max_budget_check"):
             await _team_max_budget_check(

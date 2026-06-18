@@ -627,6 +627,36 @@ class TestBlockUnknownCostModelsViaCommonChecks:
             )
         assert "brand-new-unmapped-model-xyz" in exc_info.value.message
 
+    @pytest.mark.asyncio
+    async def test_free_request_model_does_not_skip_guard_for_unpriced_default(
+        self, mock_proxy_logging
+    ):
+        """skip_budget_checks is derived from the request model upstream, but
+        completion_model overrides that model in common_request_processing. A
+        caller sending an explicitly-free model (so skip_budget_checks=True) must
+        still hit the guard when the server default is unpriced; gating the guard
+        on skip_budget_checks would let the unpriced default run untracked."""
+        router = _router_with_mixed_costs()
+        with pytest.raises(ProxyException) as exc_info:
+            await common_checks(
+                request_body={"model": "free-model"},
+                team_object=None,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={
+                    "block_unknown_cost_models": True,
+                    "completion_model": _UNMAPPED_MODEL,
+                },
+                route="/v1/chat/completions",
+                llm_router=router,
+                proxy_logging_obj=mock_proxy_logging,
+                valid_token=UserAPIKeyAuth(token="test-token"),
+                request=MagicMock(),
+                skip_budget_checks=True,
+            )
+        assert "brand-new-unmapped-model-xyz" in exc_info.value.message
+
 
 class TestCostClassificationCaching:
     """The free-model bypass and the unknown-cost block check must share one
