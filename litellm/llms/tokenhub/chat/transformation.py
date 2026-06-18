@@ -12,7 +12,7 @@ Supports:
 - Structured Output (response_format)
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.utils import supports_reasoning
@@ -28,34 +28,33 @@ class TokenHubChatConfig(OpenAILikeChatConfig):
     - All standard OpenAI chat completion parameters
     - thinking parameter for chain-of-thought control (enabled/disabled/adaptive)
     - reasoning_effort for GPT-series models
-    - output_config.effort for Claude-series models
     - Prompt caching via X-Session-ID header or prompt_cache_key body field
     """
 
-    frequency_penalty: Optional[float] = None
+    frequency_penalty: Optional[int] = None
     function_call: Optional[Union[str, dict]] = None
     functions: Optional[list] = None
     logit_bias: Optional[dict] = None
     max_tokens: Optional[int] = None
     n: Optional[int] = None
-    presence_penalty: Optional[float] = None
+    presence_penalty: Optional[int] = None
     stop: Optional[Union[str, list]] = None
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
+    temperature: Optional[int] = None
+    top_p: Optional[int] = None
     response_format: Optional[dict] = None
 
     def __init__(
         self,
-        frequency_penalty: Optional[float] = None,
+        frequency_penalty: Optional[int] = None,
         function_call: Optional[Union[str, dict]] = None,
         functions: Optional[list] = None,
         logit_bias: Optional[dict] = None,
         max_tokens: Optional[int] = None,
         n: Optional[int] = None,
-        presence_penalty: Optional[float] = None,
+        presence_penalty: Optional[int] = None,
         stop: Optional[Union[str, list]] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
+        temperature: Optional[int] = None,
+        top_p: Optional[int] = None,
         response_format: Optional[dict] = None,
     ) -> None:
         locals_ = locals().copy()
@@ -101,11 +100,11 @@ class TokenHubChatConfig(OpenAILikeChatConfig):
 
     def map_openai_params(
         self,
-        non_default_params: Dict[str, Any],
-        optional_params: Dict[str, Any],
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict:
         """
         Map OpenAI params to TokenHub params.
 
