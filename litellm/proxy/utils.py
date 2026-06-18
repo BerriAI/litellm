@@ -6348,33 +6348,19 @@ def create_model_info_response(
             model_group_info = None
         if model_group_info is not None:
             if model_group_info.max_input_tokens is not None:
-                model_info["max_input_tokens"] = int(model_group_info.max_input_tokens)
+                base["max_input_tokens"] = int(model_group_info.max_input_tokens)
             if model_group_info.max_output_tokens is not None:
-                model_info["max_output_tokens"] = int(
+                base["max_output_tokens"] = int(
                     model_group_info.max_output_tokens
                 )
 
-    # Add metadata if requested
-    if include_metadata:
-        metadata = {}
+    effective_fallback_type = fallback_type if fallback_type is not None else "general"
 
-        # Default fallback_type to "general" if include_metadata is true
-        effective_fallback_type = (
-            fallback_type if fallback_type is not None else "general"
-        )
-
-        # Validate fallback_type
-        valid_fallback_types = ["general", "context_window", "content_policy"]
-        if effective_fallback_type not in valid_fallback_types:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
-            )
-
-        fallbacks = get_all_fallbacks(
-            model=model_id,
-            llm_router=llm_router,
-            fallback_type=effective_fallback_type,
+    valid_fallback_types = ["general", "context_window", "content_policy"]
+    if effective_fallback_type not in valid_fallback_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
         )
 
     fallbacks = get_all_fallbacks(
