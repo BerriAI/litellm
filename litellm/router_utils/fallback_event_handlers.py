@@ -20,7 +20,7 @@ else:
 MID_STREAM_CONTINUATION_SYSTEM_PROMPT = "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: "
 
 
-def _prefill_explicitly_unsupported(model_group: Optional[str]) -> bool:
+def _prefill_explicitly_unsupported(model_group: str | None) -> bool:
     """True only when the model registry explicitly marks the model as NOT
     supporting assistant prefill (``supports_assistant_prefill: false``).
 
@@ -42,8 +42,8 @@ def _prefill_explicitly_unsupported(model_group: Optional[str]) -> bool:
 def build_mid_stream_continuation_messages(
     messages: list[Any],
     generated_content: str,
-    model_group: Optional[str],
-    fallbacks: Optional[list[Any]] = None,
+    model_group: str | None,
+    fallbacks: list[Any] | None = None,
 ) -> list[Any]:
     """Build the message list a mid-stream fallback uses to resume an interrupted stream.
 
@@ -63,7 +63,7 @@ def build_mid_stream_continuation_messages(
     configured fallback target for this model group is explicitly marked as
     not supporting prefill.
     """
-    candidate_models: list[Optional[str]] = [model_group]
+    candidate_models: list[str | None] = [model_group]
     if fallbacks is not None and model_group is not None:
         if fallbacks and all(isinstance(f, str) for f in fallbacks):
             # Flat string-format lists (["model-a", "model-b", ...]) are tried in
