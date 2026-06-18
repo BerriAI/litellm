@@ -547,11 +547,14 @@ export interface paths {
         };
         /**
          * Plugin Auth Token
-         * @description Return an encrypted copy of the caller's token for plugin iframe auth.
+         * @description Issue a short-lived, audience-scoped plugin session claim.
          *
-         *     The token is encrypted with a key derived from LITELLM_SALT_KEY.
-         *     The plugin decrypts it with the same shared key — the raw litellm
-         *     credential never appears in plaintext outside the proxy process.
+         *     The claim contains {user_id, user_role, plugin, exp}.  It does NOT
+         *     contain the caller's litellm bearer token — a compromised plugin can
+         *     only learn the caller's identity, not impersonate them against the proxy.
+         *
+         *     Encrypted with a key derived from HMAC(LITELLM_SALT_KEY, plugin_name),
+         *     so each plugin holds only its own key and cannot forge claims for others.
          *
          *     Requires LITELLM_SALT_KEY to be set; returns 503 otherwise.
          */
@@ -33688,7 +33691,9 @@ export interface operations {
     };
     plugin_auth_token_api_plugins_auth_token_get: {
         parameters: {
-            query?: never;
+            query?: {
+                plugin_name?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -33704,6 +33709,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -36,7 +36,7 @@ export function AgentControlPlaneView() {
     if (!accessToken) return;
     pluginApiClient
       .get("/api/plugins/auth-token", { accessToken })
-      .then((data: { encrypted_token?: string }) => setEncryptedToken(data?.encrypted_token ?? null))
+      .then((data: { session_claim?: string }) => setEncryptedToken(data?.session_claim ?? null))
       .catch(() => {});
   }, [accessToken]);
 
@@ -46,7 +46,7 @@ export function AgentControlPlaneView() {
     const iframe = iframeRef.current;
     if (!iframe || !encryptedToken || !agentPlatformUrl) return;
     const send = () => {
-      iframe.contentWindow?.postMessage({ type: "litellm-auth", encrypted_token: encryptedToken }, agentPlatformUrl);
+      iframe.contentWindow?.postMessage({ type: "litellm-auth", session_claim: encryptedToken }, agentPlatformUrl);
     };
     iframe.addEventListener("load", send);
     return () => iframe.removeEventListener("load", send);

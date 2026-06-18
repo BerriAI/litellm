@@ -21,7 +21,10 @@ Plugin iframe auth:
 
 import base64
 import hashlib
+import hmac as _hmac
+import json
 import os
+import time
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -65,42 +68,63 @@ _plugin_registry: dict = {}
 
 
 # ---------------------------------------------------------------------------
-# Key derivation — deterministic, so plugin and proxy agree without sharing
-# raw key material beyond LITELLM_SALT_KEY.
+# Key derivation — audience-scoped per plugin so compromising one plugin
+# cannot be used to forge claims for another.  LITELLM_SALT_KEY is NEVER
+# shared with plugins; each plugin only receives a key derived from
+# HMAC(LITELLM_SALT_KEY, plugin_name) which reveals nothing about the master.
 # ---------------------------------------------------------------------------
-def _fernet() -> Fernet:
-    """Build a Fernet cipher keyed from LITELLM_SALT_KEY.
+def _plugin_fernet(plugin_name: str) -> Fernet:
+    """Return a Fernet cipher whose key is scoped to a specific plugin.
 
-    SHA-256 stretches the salt into a 32-byte key, which is then
-    base64url-encoded as Fernet requires.
+    Key material: HMAC-SHA256(LITELLM_SALT_KEY, plugin_name).
+    A plugin possessing its own key cannot derive the master salt or
+    forge claims intended for a different plugin.
     """
-    salt = os.getenv("LITELLM_SALT_KEY", "")
-    key = base64.urlsafe_b64encode(hashlib.sha256(salt.encode()).digest())
-    return Fernet(key)
+    salt = os.getenv("LITELLM_SALT_KEY", "").encode()
+    derived = _hmac.new(salt, plugin_name.encode(), hashlib.sha256).digest()
+    return Fernet(base64.urlsafe_b64encode(derived))
 
 
-_TOKEN_TTL_SECONDS = 30  # tokens expire after 30 s to limit replay window
+_CLAIM_TTL_SECONDS = 30  # identity claims expire after 30 s
 
 
-def encrypt_token(token: str) -> str:
-    """Encrypt a token for safe delivery to a plugin iframe.
+def issue_plugin_session_claim(
+    plugin_name: str, user_id: str | None, user_role: str | None
+) -> str:
+    """Issue a short-lived, audience-scoped identity claim for the plugin.
 
-    Fernet embeds a timestamp; decrypt_token rejects tokens older than
-    _TOKEN_TTL_SECONDS, limiting the replay window to 30 seconds.
+    The claim contains {user_id, user_role, plugin, exp}.  Crucially it
+    contains NO litellm bearer token — the plugin can only derive the
+    caller's identity, not act as them against the proxy.
     """
-    return _fernet().encrypt(token.encode()).decode()
+    claim = {
+        "plugin": plugin_name,
+        "user_id": user_id or "",
+        "user_role": user_role or "",
+        "exp": int(time.time()) + _CLAIM_TTL_SECONDS,
+    }
+    return _plugin_fernet(plugin_name).encrypt(json.dumps(claim).encode()).decode()
 
 
-def decrypt_token(ciphertext: str) -> str:
-    """Decrypt a token received from the proxy.  Raises ValueError on failure.
+def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> dict:
+    """Verify and decode a plugin session claim.
 
-    Enforces a 30-second TTL — tokens older than that are rejected even if
-    the HMAC is valid, closing the indefinite-replay window.
+    Raises ValueError if the HMAC is invalid, the audience is wrong, or
+    the claim is expired.  Returns the decoded claim dict on success.
     """
     try:
-        return _fernet().decrypt(ciphertext.encode(), ttl=_TOKEN_TTL_SECONDS).decode()
+        raw = _plugin_fernet(plugin_name).decrypt(
+            ciphertext.encode(), ttl=_CLAIM_TTL_SECONDS
+        )
+        claim = json.loads(raw)
     except (InvalidToken, Exception) as exc:
-        raise ValueError("Invalid, tampered, or expired plugin auth token") from exc
+        raise ValueError("Invalid, tampered, or expired plugin session claim") from exc
+
+    if claim.get("plugin") != plugin_name:
+        raise ValueError("Plugin claim audience mismatch")
+    if int(claim.get("exp", 0)) < int(time.time()):
+        raise ValueError("Plugin session claim expired")
+    return claim
 
 
 # ---------------------------------------------------------------------------
@@ -148,12 +172,16 @@ async def list_plugins(
 @router.get("/api/plugins/auth-token", tags=["plugins"])
 async def plugin_auth_token(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    plugin_name: str = "litellm-platform-plugin",
 ) -> dict:
-    """Return an encrypted copy of the caller's token for plugin iframe auth.
+    """Issue a short-lived, audience-scoped plugin session claim.
 
-    The token is encrypted with a key derived from LITELLM_SALT_KEY.
-    The plugin decrypts it with the same shared key — the raw litellm
-    credential never appears in plaintext outside the proxy process.
+    The claim contains {user_id, user_role, plugin, exp}.  It does NOT
+    contain the caller's litellm bearer token — a compromised plugin can
+    only learn the caller's identity, not impersonate them against the proxy.
+
+    Encrypted with a key derived from HMAC(LITELLM_SALT_KEY, plugin_name),
+    so each plugin holds only its own key and cannot forge claims for others.
 
     Requires LITELLM_SALT_KEY to be set; returns 503 otherwise.
     """
@@ -162,10 +190,15 @@ async def plugin_auth_token(
             status_code=503,
             detail="LITELLM_SALT_KEY is not configured; plugin iframe auth unavailable.",
         )
-    token = getattr(user_api_key_dict, "api_key", None)
-    if not token:
-        raise HTTPException(status_code=401, detail="No token available to encrypt.")
-    return {"encrypted_token": encrypt_token(token)}
+    if plugin_name not in _plugin_registry:
+        raise HTTPException(
+            status_code=404, detail=f"Plugin '{plugin_name}' is not registered."
+        )
+    user_id = getattr(user_api_key_dict, "user_id", None)
+    user_role = getattr(user_api_key_dict, "user_role", None)
+    return {
+        "session_claim": issue_plugin_session_claim(plugin_name, user_id, user_role)
+    }
 
 
 @router.api_route(
