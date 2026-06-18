@@ -8,6 +8,7 @@ See: https://github.com/BerriAI/litellm/issues/24770
 """
 
 import copy
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -209,7 +210,10 @@ class TestUnmappedModelBudgetEnforcement:
         )
         # Warm the cache as zero-cost.
         assert _is_model_cost_zero(model="ramping-model", llm_router=router) is True
-        assert router._zero_cost_cache.get("ramping-model") is True
+        assert (
+            router._model_cost_class_cache.get("ramping-model")
+            == ModelCostClass.EXPLICIT_ZERO.value
+        )
 
         # In-place pricing update: same deployment count, same router id,
         # same model name. The pre-fix cache key was
@@ -232,13 +236,13 @@ class TestUnmappedModelBudgetEnforcement:
         )
 
         # Cache must have been cleared by ``_invalidate_model_group_info_cache``.
-        assert router._zero_cost_cache == {}
+        assert router._model_cost_class_cache == {}
         # Subsequent call sees the new pricing and enforces budget.
         assert _is_model_cost_zero(model="ramping-model", llm_router=router) is False
 
-    def test_handles_router_without_zero_cost_cache_attribute(self):
+    def test_handles_router_without_cost_class_cache_attribute(self):
         """Tolerate router-like objects (e.g. ``MagicMock`` stand-ins) that
-        do not expose ``_zero_cost_cache`` — the auth check must still
+        do not expose ``_model_cost_class_cache`` — the auth check must still
         compute a correct answer, just without caching."""
         from unittest.mock import MagicMock
 
@@ -253,7 +257,7 @@ class TestUnmappedModelBudgetEnforcement:
             output_cost_per_token=0.002,
         )
         # Strip the attribute so the helper falls back to the no-cache path.
-        del mock_router._zero_cost_cache
+        del mock_router._model_cost_class_cache
 
         result = _is_model_cost_zero(model="paid-model", llm_router=mock_router)
         assert result is False
@@ -450,3 +454,84 @@ class TestBlockUnknownCostModelsViaCommonChecks:
             proxy_logging=mock_proxy_logging,
         )
         assert result is True
+
+
+class TestCostClassificationCaching:
+    """The free-model bypass and the unknown-cost block check must share one
+    per-router classification, so a model is resolved at most once per request."""
+
+    def setup_method(self):
+        self._saved_model_cost = copy.deepcopy(litellm.model_cost)
+
+    def teardown_method(self):
+        litellm.model_cost = self._saved_model_cost
+
+    def test_both_callers_share_a_single_get_model_group_info_lookup(self):
+        router = _router_with_mixed_costs()
+        lookups = {"count": 0}
+        original_get_model_group_info = router.get_model_group_info
+
+        def counting_get_model_group_info(*args, **kwargs):
+            lookups["count"] += 1
+            return original_get_model_group_info(*args, **kwargs)
+
+        router.get_model_group_info = counting_get_model_group_info
+
+        # First caller resolves and caches the classification (one lookup).
+        assert _request_has_unknown_cost_model(_UNMAPPED_MODEL, router) is True
+        lookups_after_first = lookups["count"]
+        assert lookups_after_first >= 1
+
+        # The other caller for the same model must reuse the cached class with
+        # no additional router lookup (this is the double-lookup regression).
+        assert _is_model_cost_zero(model=_UNMAPPED_MODEL, llm_router=router) is False
+        assert lookups["count"] == lookups_after_first
+
+        assert (
+            router._model_cost_class_cache[_UNMAPPED_MODEL]
+            == ModelCostClass.UNKNOWN.value
+        )
+
+    def test_cache_hit_does_not_call_router_again(self):
+        router = _router_with_mixed_costs()
+        assert (
+            _classify_model_group_cost("paid-model", router)
+            == ModelCostClass.KNOWN_POSITIVE
+        )
+
+        # Once cached, a stale router lookup must never be consulted again.
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("classification cache was bypassed")
+
+        router.get_model_group_info = fail_if_called
+        assert (
+            _classify_model_group_cost("paid-model", router)
+            == ModelCostClass.KNOWN_POSITIVE
+        )
+
+
+class TestBlockUnknownCostModelsWithoutRouter:
+    """When the flag is on but no router is configured, the guard cannot
+    classify cost; it must surface a warning instead of silently no-opping."""
+
+    def test_router_none_warns_and_allows(self, caplog):
+        logger = logging.getLogger("LiteLLM Proxy")
+        previous_propagate = logger.propagate
+        logger.propagate = True
+        try:
+            with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+                # Must not raise: cost is unknowable without a router, so the
+                # request is allowed through (behavior unchanged), but loudly.
+                _block_unknown_cost_models_check(
+                    enabled=True,
+                    model=_UNMAPPED_MODEL,
+                    llm_router=None,
+                    route="/v1/chat/completions",
+                )
+        finally:
+            logger.propagate = previous_propagate
+
+        assert any(
+            "block_unknown_cost_models" in record.getMessage()
+            for record in caplog.records
+        )

@@ -135,10 +135,11 @@ def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     )
 
 
-def _get_router_zero_cost_cache(llm_router: Router) -> Optional[Dict[str, bool]]:
+def _get_router_cost_class_cache(llm_router: Router) -> Optional[Dict[str, str]]:
     """
-    Return the router's per-instance zero-cost cache, or ``None`` for objects
-    that don't expose one (e.g. ``MagicMock`` stand-ins in unit tests).
+    Return the router's per-instance model-cost classification cache (model name
+    -> ``ModelCostClass`` value), or ``None`` for objects that don't expose one
+    (e.g. ``MagicMock`` stand-ins in unit tests).
 
     The cache lives on the ``Router`` instance so it:
         * is invalidated by ``Router._invalidate_model_group_info_cache`` on
@@ -147,7 +148,7 @@ def _get_router_zero_cost_cache(llm_router: Router) -> Optional[Dict[str, bool]]
         * dies with the router itself — no risk of CPython reusing the
           previous router's ``id()`` and serving its cached entries.
     """
-    cache = getattr(llm_router, "_zero_cost_cache", None)
+    cache = getattr(llm_router, "_model_cost_class_cache", None)
     return cache if isinstance(cache, dict) else None
 
 
@@ -170,14 +171,32 @@ class ModelCostClass(str, Enum):
 
 
 def _classify_model_group_cost(model_name: str, llm_router: Router) -> ModelCostClass:
-    """Classify one model group's per-token pricing.
+    """Classify one model group's per-token pricing, memoized per router.
 
     Uses the router's get_model_group_info so pattern/wildcard deployments
     (e.g. ``anthropic/*``) resolve the same way they do during cost tracking.
     A zero cost is only trusted when explicitly configured; a zero defaulted
-    from sparse auto-registration is treated as UNKNOWN.
+    from sparse auto-registration is treated as UNKNOWN. The classification is
+    cached on the router so the free-model bypass (``_is_model_cost_zero``) and
+    the unknown-cost block check (``_request_has_unknown_cost_model``) share a
+    single ``get_model_group_info`` lookup per model per request.
     See: https://github.com/BerriAI/litellm/issues/24770
     """
+    cache = _get_router_cost_class_cache(llm_router)
+    if cache is not None:
+        cached = cache.get(model_name)
+        if cached is not None:
+            return ModelCostClass(cached)
+
+    classification = _compute_model_group_cost_class(model_name, llm_router)
+    if cache is not None:
+        cache[model_name] = classification.value
+    return classification
+
+
+def _compute_model_group_cost_class(
+    model_name: str, llm_router: Router
+) -> ModelCostClass:
     safe_name = str(model_name).replace("\n", "").replace("\r", "")
     try:
         model_group_info = llm_router.get_model_group_info(model_group=model_name)
@@ -233,26 +252,11 @@ def _is_model_cost_zero(
         return False
 
     model_list = [model] if isinstance(model, str) else model
-    zero_cost_cache = _get_router_zero_cost_cache(llm_router)
-
-    for model_name in model_list:
-        if zero_cost_cache is not None:
-            cached = zero_cost_cache.get(model_name)
-            if cached is not None:
-                if cached is False:
-                    return False
-                continue
-
-        is_explicit_zero = (
-            _classify_model_group_cost(model_name, llm_router)
-            == ModelCostClass.EXPLICIT_ZERO
-        )
-        if zero_cost_cache is not None:
-            zero_cost_cache[model_name] = is_explicit_zero
-        if not is_explicit_zero:
-            return False
-
-    return True
+    return all(
+        _classify_model_group_cost(model_name, llm_router)
+        == ModelCostClass.EXPLICIT_ZERO
+        for model_name in model_list
+    )
 
 
 def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
@@ -310,6 +314,13 @@ def _block_unknown_cost_models_check(
     if not enabled:
         return
     if not RouteChecks.is_llm_api_route(route=route):
+        return
+    if llm_router is None:
+        verbose_proxy_logger.warning(
+            "block_unknown_cost_models is enabled but no router is configured, so "
+            "unknown-cost models cannot be detected; the OWASP LLM10 Denial of "
+            "Wallet guard is inactive for this request."
+        )
         return
     if not _request_has_unknown_cost_model(model=model, llm_router=llm_router):
         return
