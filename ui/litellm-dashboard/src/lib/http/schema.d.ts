@@ -22384,6 +22384,11 @@ export interface components {
              */
             pass_through_endpoints?: components["schemas"]["PassThroughGenericEndpoint"][] | null;
             /**
+             * Plugins
+             * @description external services registered as embeddable UI plugins
+             */
+            plugins?: components["schemas"]["PluginConfig"][] | null;
+            /**
              * Pass Through Request Timeout
              * @description Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.
              */
@@ -22486,11 +22491,6 @@ export interface components {
             field_schema: {
                 [key: string]: unknown;
             };
-            /**
-             * Plugins
-             * @description external services registered as embeddable UI plugins
-             */
-            plugins?: components["schemas"]["PluginConfig"][] | null;
             /**
              * Values
              * @description Current configuration values (sensitive fields decrypted)
