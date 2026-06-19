@@ -23,11 +23,9 @@ from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.v2_port_bodies import (
     HttpxClientCredentialsFetcher,
     HttpxSigV4Signer,
+    V1ByokCredentialStore,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.clock import SystemClock
-from litellm.proxy.gateway.mcp.outbound_credentials.credential_store import (
-    InMemoryCredentialStore,
-)
 from litellm.proxy.gateway.mcp.outbound_credentials.resolver import (
     UpstreamCredentialProvider,
 )
@@ -44,6 +42,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     AssumeRole,
     AuthorizationCodeConfig,
     AwsSigV4Config,
+    Byok,
     ClientCredentialsConfig,
     CredError,
     NoneConfig,
@@ -97,7 +96,7 @@ def _provider() -> UpstreamCredentialProvider:
     # real bodies get wired in as their modes are grafted.
     unwired = _Unwired()
     return UpstreamCredentialProvider(
-        credential_store=InMemoryCredentialStore(),
+        credential_store=V1ByokCredentialStore(),
         token_store=InMemoryTokenStore(),
         token_refresher=unwired,
         clock=SystemClock(),
@@ -115,6 +114,17 @@ def _to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
             server_id=server.server_id, resource=resource, config=NoneConfig()
         )
     if server.auth_type == MCPAuth.api_key:
+        if server.is_byok:
+            # Per-user key; the arm pulls it from the CredentialStore keyed by the Subject.
+            return ServerSpec(
+                server_id=server.server_id,
+                resource=resource,
+                config=ApiKeyConfig(
+                    header_name="X-API-Key",
+                    value_prefix="",
+                    key_source=Byok(),
+                ),
+            )
         token = server.authentication_token
         if not token:
             return None  # api_key with no key: let v1 handle it (parity-safe)

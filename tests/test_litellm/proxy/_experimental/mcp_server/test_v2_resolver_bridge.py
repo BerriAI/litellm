@@ -274,3 +274,24 @@ async def test_resolve_v2_auth_value_threads_identity_without_breaking_static(v2
         server, user_api_key_auth=auth, subject_token="jwt"
     )
     assert result == {"X-API-Key": "up-secret"}
+
+
+async def test_byok_server_maps_to_byok_key_source():
+    from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+        _to_server_spec,
+    )
+    from litellm.proxy.gateway.mcp.outbound_credentials.types import ApiKeyConfig, Byok
+
+    server = MCPServer(
+        server_id="byok1",
+        name="byok1",
+        transport=MCPTransport.http,
+        url="https://up.example/mcp",
+        auth_type=MCPAuth.api_key,
+        is_byok=True,
+    )
+    spec = _to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, ApiKeyConfig)
+    assert isinstance(spec.config.key_source, Byok)
+    assert spec.config.header_name == "X-API-Key"

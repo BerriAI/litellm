@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
@@ -17,6 +17,9 @@ from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 from litellm.constants import MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy.gateway.mcp.outbound_credentials.clock import Clock, SystemClock
+from litellm.proxy.gateway.mcp.outbound_credentials.credential_store import (
+    CredentialKey,
+)
 from litellm.proxy.gateway.mcp.outbound_credentials.token_store import StoredToken
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     AssumeRole,
@@ -154,6 +157,45 @@ def _build_sigv4_auth(config: AwsSigV4Config) -> httpx.Auth:
             aws_service_name=config.service,
         )
     return MCPSigV4Auth(aws_region_name=config.region, aws_service_name=config.service)
+
+
+async def _read_v1_user_credential(subject_id: str, server_id: str) -> Optional[str]:
+    from litellm.proxy._experimental.mcp_server.db import get_user_credential
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise RuntimeError("no DB client available for BYOK credential lookup")
+    return await get_user_credential(prisma_client, subject_id, server_id)
+
+
+class V1ByokCredentialStore:
+    """Per-user BYOK credential store backed by v1's LiteLLM_MCPUserCredentials.
+
+    Bridges the v2 CredentialStore port to v1's existing read (`db.get_user_credential`, which
+    does the find_unique + credential_b64 decrypt), keyed by (subject_id == user_id, server_id).
+    A missing row is `Ok(None)` (the arm turns that into a 401); a DB outage is
+    `upstream_unavailable`. The reader is injected so the arm stays unit-testable without a DB.
+    """
+
+    def __init__(
+        self,
+        reader: Callable[
+            [str, str], Awaitable[Optional[str]]
+        ] = _read_v1_user_credential,
+    ) -> None:
+        self._reader = reader
+
+    async def get(self, key: CredentialKey) -> Result[Optional[str], CredError]:
+        if not key.subject_id:
+            # No authenticated identity -> no per-user credential; never share one slot.
+            return Ok(None)
+        try:
+            value = await self._reader(key.subject_id, key.server_id)
+        except Exception as e:
+            return Error(
+                CredError.of_upstream_unavailable(f"BYOK credential lookup failed: {e}")
+            )
+        return Ok(value)
 
 
 def _classify_sigv4_error(error: Exception) -> CredError:

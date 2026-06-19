@@ -11,7 +11,11 @@ from litellm.proxy._experimental.mcp_server import v2_port_bodies
 from litellm.proxy._experimental.mcp_server.v2_port_bodies import (
     HttpxClientCredentialsFetcher,
     HttpxSigV4Signer,
+    V1ByokCredentialStore,
     _classify_sigv4_error,
+)
+from litellm.proxy.gateway.mcp.outbound_credentials.credential_store import (
+    CredentialKey,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     AwsSigV4Config,
@@ -162,3 +166,44 @@ async def test_classify_sigv4_connection_error_is_upstream_unavailable():
 
 async def test_classify_sigv4_other_error_is_misconfigured():
     assert _classify_sigv4_error(ValueError("no creds")).tag == "misconfigured"
+
+
+def _cred_key(subject_id="u1", server_id="s1"):
+    return CredentialKey(tenant_id="org1", subject_id=subject_id, server_id=server_id)
+
+
+async def test_byok_store_returns_user_credential():
+    async def reader(subject_id, server_id):
+        assert (subject_id, server_id) == ("u1", "s1")
+        return "user-byok-key"
+
+    result = await V1ByokCredentialStore(reader=reader).get(_cred_key())
+    assert isinstance(result, Ok)
+    assert result.ok == "user-byok-key"
+
+
+async def test_byok_store_missing_credential_is_ok_none():
+    async def reader(subject_id, server_id):
+        return None
+
+    result = await V1ByokCredentialStore(reader=reader).get(_cred_key())
+    assert isinstance(result, Ok)
+    assert result.ok is None
+
+
+async def test_byok_store_empty_subject_skips_the_store():
+    async def reader(subject_id, server_id):
+        raise AssertionError("store must not be queried for an empty subject")
+
+    result = await V1ByokCredentialStore(reader=reader).get(_cred_key(subject_id=""))
+    assert isinstance(result, Ok)
+    assert result.ok is None
+
+
+async def test_byok_store_db_error_is_upstream_unavailable():
+    async def reader(subject_id, server_id):
+        raise RuntimeError("db down")
+
+    result = await V1ByokCredentialStore(reader=reader).get(_cred_key())
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
