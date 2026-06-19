@@ -1,5 +1,10 @@
 import json
 import ssl
+
+try:
+    import orjson
+except ImportError:  # pragma: no cover - orjson is a proxy extra, not a base SDK dep
+    orjson = None  # type: ignore[assignment]
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import (
     TYPE_CHECKING,
@@ -158,6 +163,21 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def _dumps_request_body(request_body: Any) -> str:
+    """Serialize a request body to a JSON string with orjson (~20-25x faster than
+    the stdlib encoder on large bodies). This runs synchronously on the event
+    loop, so the GIL-held time directly caps proxy throughput under concurrent
+    long-context traffic. Falls back to the stdlib encoder for the rare payload
+    orjson rejects (e.g. ints beyond 64 bits), and when orjson is not installed
+    (SDK-only environments without the proxy extras), to preserve prior behavior."""
+    if orjson is not None:
+        try:
+            return orjson.dumps(request_body).decode("utf-8")
+        except (TypeError, orjson.JSONEncodeError):
+            pass
+    return json.dumps(request_body)
 
 
 def _google_genai_streaming_hidden_params(
@@ -1917,7 +1937,7 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=request_url,
                     headers=headers,
-                    data=signed_json_body or json.dumps(request_body),
+                    data=signed_json_body or _dumps_request_body(request_body),
                     stream=stream or False,
                     logging_obj=logging_obj,
                 )
@@ -2098,7 +2118,7 @@ class BaseLLMHTTPHandler:
         # (e.g. Bedrock) keep their signed body untouched. The HTTP-error
         # retry path mutates + re-signs the body, so it still re-serializes
         # internally -- this only deduplicates the success path.
-        request_body_json = json.dumps(request_body)
+        request_body_json = _dumps_request_body(request_body)
 
         logging_obj.pre_call(
             input=[{"role": "user", "content": request_body_json}],
