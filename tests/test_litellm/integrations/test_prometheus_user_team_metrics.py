@@ -927,3 +927,28 @@ def test_custom_latency_buckets():
                 REGISTRY.unregister(collector)
             except Exception:
                 pass
+
+
+def test_user_team_count_metrics_pass_config_validation(monkeypatch):
+    """litellm_total_users and litellm_teams_count must be configurable via
+    prometheus_metrics_config without raising a validation error.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/30839
+    """
+    import litellm
+
+    monkeypatch.setattr(
+        litellm,
+        "prometheus_metrics_config",
+        [
+            {
+                "group": "my_metrics",
+                "metrics": ["litellm_total_users", "litellm_teams_count"],
+            }
+        ],
+    )
+
+    logger = PrometheusLogger()
+
+    assert "litellm_total_users" in logger.enabled_metrics
+    assert "litellm_teams_count" in logger.enabled_metrics

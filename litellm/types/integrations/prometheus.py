@@ -224,6 +224,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_user_budget_metric",
     "litellm_user_max_budget_metric",
     "litellm_user_budget_remaining_hours_metric",
+    # User and team count metrics
+    "litellm_total_users",
+    "litellm_teams_count",
     "litellm_deployment_state",
     "litellm_deployment_failure_responses",
     "litellm_deployment_total_requests",
