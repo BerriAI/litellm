@@ -23,6 +23,13 @@ INTERACTIONS_API_OPTIONAL_PARAMS = {
     "agent_config",
 }
 
+_VERTEX_AI_LYRIA_INTERACTIONS_MODELS = frozenset(
+    {
+        "lyria-3-clip-preview",
+        "lyria-3-pro-preview",
+    }
+)
+
 
 def get_provider_interactions_api_config(
     provider: str,
@@ -47,7 +54,22 @@ def get_provider_interactions_api_config(
 
         return GoogleAIStudioInteractionsConfig()
 
+    if provider == LlmProviders.VERTEX_AI.value or provider == "vertex_ai":
+        if _is_vertex_ai_lyria_interactions_model(model=model):
+            from litellm.llms.vertex_ai.interactions.transformation import (
+                VertexAIInteractionsConfig,
+            )
+
+            return VertexAIInteractionsConfig()
+
     return None
+
+
+def _is_vertex_ai_lyria_interactions_model(model: Optional[str]) -> bool:
+    if model is None:
+        return False
+
+    return model.replace("vertex_ai/", "", 1) in _VERTEX_AI_LYRIA_INTERACTIONS_MODELS
 
 
 class InteractionsAPIRequestUtils:

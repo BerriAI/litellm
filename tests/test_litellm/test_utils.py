@@ -886,6 +886,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/images/variations",
                             "/v1/images/edits",
                             "/v1/batch",
+                            "/v1beta/interactions",
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
@@ -3157,6 +3158,42 @@ def test_gemini_lyria_3_preview_models_in_cost_map():
     assert clip["litellm_provider"] == "gemini" and pro["litellm_provider"] == "gemini"
     assert clip["max_input_tokens"] == 131072 == pro["max_input_tokens"]
     assert clip["output_cost_per_image"] == 0.04
+
+
+def test_vertex_ai_lyria_models_in_cost_map():
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    lyria_2 = model_cost.get("vertex_ai/lyria-002")
+    clip = model_cost.get("vertex_ai/lyria-3-clip-preview")
+    pro = model_cost.get("vertex_ai/lyria-3-pro-preview")
+
+    assert lyria_2 is not None
+    assert clip is not None
+    assert pro is not None
+    assert lyria_2["litellm_provider"] == "vertex_ai"
+    assert clip["litellm_provider"] == "vertex_ai"
+    assert pro["litellm_provider"] == "vertex_ai"
+    assert lyria_2["output_cost_per_second"] == 0.002
+    assert lyria_2["supported_modalities"] == ["text"]
+    assert lyria_2["supported_output_modalities"] == ["audio"]
+    assert lyria_2["supports_audio_output"] is True
+    assert clip["output_cost_per_image"] == 0.04
+    assert pro["output_cost_per_image"] == 0.08
+    assert clip["supported_endpoints"] == ["/v1beta/interactions"]
+    assert pro["supported_endpoints"] == ["/v1beta/interactions"]
+    assert clip["supported_modalities"] == ["text", "image"]
+    assert pro["supported_modalities"] == ["text", "image"]
+    assert clip["supported_regions"] == ["global"]
+    assert pro["supported_regions"] == ["global"]
+    assert clip["supports_audio_output"] is True
+    assert pro["supports_audio_output"] is True
+    assert clip["supports_image_input"] is True
+    assert pro["supports_image_input"] is True
 
 
 def test_model_info_for_fireworks_short_form_models():

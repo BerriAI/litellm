@@ -37228,6 +37228,87 @@
         "output_cost_per_token": 4e-07,
         "supports_tool_choice": true
     },
+    "vertex_ai/lyria-002": {
+        "litellm_provider": "vertex_ai",
+        "max_audio_length_hours": 0.009111111111111111,
+        "max_audio_per_prompt": 4,
+        "mode": "chat",
+        "output_cost_per_second": 0.002,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#lyria",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_output": true
+    },
+    "vertex_ai/lyria-3-clip-preview": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_image": 0.04,
+        "output_cost_per_token": 0,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#lyria",
+        "supported_endpoints": [
+            "/v1beta/interactions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supported_regions": [
+            "global"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true,
+        "supports_function_calling": false,
+        "supports_image_input": true,
+        "supports_prompt_caching": false,
+        "supports_response_schema": false,
+        "supports_system_messages": false,
+        "supports_vision": true,
+        "supports_web_search": false
+    },
+    "vertex_ai/lyria-3-pro-preview": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_image": 0.08,
+        "output_cost_per_token": 0,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#lyria",
+        "supported_endpoints": [
+            "/v1beta/interactions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supported_regions": [
+            "global"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true,
+        "supports_function_calling": false,
+        "supports_image_input": true,
+        "supports_prompt_caching": false,
+        "supports_response_schema": false,
+        "supports_system_messages": false,
+        "supports_vision": true,
+        "supports_web_search": false
+    },
     "vertex_ai/meta/llama-3.1-405b-instruct-maas": {
         "input_cost_per_token": 5e-06,
         "litellm_provider": "vertex_ai-llama_models",

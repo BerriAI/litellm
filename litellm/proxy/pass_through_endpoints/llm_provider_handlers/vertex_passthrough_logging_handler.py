@@ -37,6 +37,7 @@ else:
 
 # Define EndpointType locally to avoid import issues
 EndpointType = Any
+_LYRIA_SECONDS_PER_AUDIO_PREDICTION = 30
 
 
 class VertexPassthroughLoggingHandler:
@@ -254,6 +255,16 @@ class VertexPassthroughLoggingHandler:
         _json_response = httpx_response.json()
 
         litellm_prediction_response: Union[ModelResponse, EmbeddingResponse, ImageResponse] = ModelResponse()
+        if VertexPassthroughLoggingHandler._is_lyria_predict_response(
+            model=model,
+            json_response=_json_response,
+        ):
+            return VertexPassthroughLoggingHandler._handle_lyria_predict_response(
+                json_response=_json_response,
+                logging_obj=logging_obj,
+                model=model,
+                kwargs=kwargs,
+            )
         if vertex_image_generation_class.is_image_generation_response(_json_response):
             litellm_prediction_response = vertex_image_generation_class.process_image_generation_response(
                 _json_response,
@@ -305,6 +316,64 @@ class VertexPassthroughLoggingHandler:
             "result": litellm_prediction_response,
             "kwargs": kwargs,
         }
+
+    @staticmethod
+    def _handle_lyria_predict_response(
+        json_response: dict,
+        logging_obj: LiteLLMLoggingObj,
+        model: str,
+        kwargs: dict,
+    ) -> PassThroughEndpointLoggingTypedDict:
+        prediction_count = (
+            VertexPassthroughLoggingHandler._get_lyria_audio_prediction_count(
+                json_response=json_response
+            )
+        )
+        model_info = litellm.model_cost.get(f"vertex_ai/{model}", {})
+        response_cost = (
+            model_info.get("output_cost_per_second", 0.0)
+            * _LYRIA_SECONDS_PER_AUDIO_PREDICTION
+            * prediction_count
+        )
+
+        logging_obj.model = model
+        logging_obj.model_call_details["model"] = model
+        logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+        logging_obj.custom_llm_provider = "vertex_ai"
+        logging_obj.model_call_details["response_cost"] = response_cost
+
+        kwargs["response_cost"] = response_cost
+        kwargs["model"] = model
+        kwargs["custom_llm_provider"] = "vertex_ai"
+
+        standard_pass_through_response_object: StandardPassThroughResponseObject = {
+            "response": json_response,
+        }
+        return {
+            "result": standard_pass_through_response_object,
+            "kwargs": kwargs,
+        }
+
+    @staticmethod
+    def _is_lyria_predict_response(model: str, json_response: dict) -> bool:
+        return (
+            model == "lyria-002"
+            and VertexPassthroughLoggingHandler._get_lyria_audio_prediction_count(
+                json_response=json_response
+            )
+            > 0
+        )
+
+    @staticmethod
+    def _get_lyria_audio_prediction_count(json_response: dict) -> int:
+        predictions = json_response.get("predictions")
+        if not isinstance(predictions, list):
+            return 0
+        return sum(
+            1
+            for prediction in predictions
+            if isinstance(prediction, dict) and prediction.get("audioContent")
+        )
 
     @staticmethod
     def _extract_embed_content_input(request_body: Optional[dict], batch: bool) -> str:
