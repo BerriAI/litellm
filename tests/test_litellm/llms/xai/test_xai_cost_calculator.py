@@ -432,10 +432,10 @@ class TestXAICostCalculator:
             model="grok-4.20-beta-0309-reasoning", usage=usage
         )
 
-        # Input: 100 tokens * $2e-6 = $0.0002
-        # Output: 200 tokens * $6e-6 = $0.0012
-        expected_prompt_cost = 100 * 2e-6
-        expected_completion_cost = 200 * 6e-6
+        # Input: 100 tokens * $1.25e-6 = $0.000125
+        # Output: 200 tokens * $2.5e-6 = $0.0005
+        expected_prompt_cost = 100 * 1.25e-6
+        expected_completion_cost = 200 * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -448,10 +448,10 @@ class TestXAICostCalculator:
             model="grok-4.20-beta-0309-non-reasoning", usage=usage
         )
 
-        # Input: 50 tokens * $2e-6 = $0.0001
-        # Output: 100 tokens * $6e-6 = $0.0006
-        expected_prompt_cost = 50 * 2e-6
-        expected_completion_cost = 100 * 6e-6
+        # Input: 50 tokens * $1.25e-6 = $0.0000625
+        # Output: 100 tokens * $2.5e-6 = $0.00025
+        expected_prompt_cost = 50 * 1.25e-6
+        expected_completion_cost = 100 * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -464,10 +464,10 @@ class TestXAICostCalculator:
             model="grok-4.20-multi-agent-beta-0309", usage=usage
         )
 
-        # Input: 200 tokens * $2e-6 = $0.0004
-        # Output: 300 tokens * $6e-6 = $0.0018
-        expected_prompt_cost = 200 * 2e-6
-        expected_completion_cost = 300 * 6e-6
+        # Input: 200 tokens * $1.25e-6 = $0.00025
+        # Output: 300 tokens * $2.5e-6 = $0.00075
+        expected_prompt_cost = 200 * 1.25e-6
+        expected_completion_cost = 300 * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
