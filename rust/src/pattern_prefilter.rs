@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use pyo3::pyclass;
 use pyo3::pymethods;
 use regex::{RegexBuilder, RegexSet, RegexSetBuilder};
@@ -28,15 +30,11 @@ impl PatternPrefilter {
 #[pyo3::pyfunction]
 pub fn build_pattern_prefilter(patterns: Vec<String>) -> (PatternPrefilter, Vec<usize>) {
     let mut covered_sources: Vec<&str> = Vec::new();
-    let mut covered_indices: Vec<usize> = Vec::new();
     let mut rejected_indices: Vec<usize> = Vec::new();
 
     for (index, source) in patterns.iter().enumerate() {
         match RegexBuilder::new(source).case_insensitive(true).build() {
-            Ok(_) => {
-                covered_sources.push(source);
-                covered_indices.push(index);
-            }
+            Ok(_) => covered_sources.push(source),
             Err(_) => rejected_indices.push(index),
         }
     }
@@ -56,7 +54,8 @@ pub fn build_pattern_prefilter(patterns: Vec<String>) -> (PatternPrefilter, Vec<
             rejected_indices,
         ),
         Err(_) => {
-            rejected_indices.extend(covered_indices);
+            let already_rejected: HashSet<usize> = rejected_indices.iter().copied().collect();
+            rejected_indices.extend((0..patterns.len()).filter(|i| !already_rejected.contains(i)));
             (PatternPrefilter { regex_set: None }, rejected_indices)
         }
     }
