@@ -26,6 +26,7 @@ from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.core_helpers import (
+    strip_internal_params_from_chat_request_body,
     strip_internal_params_from_request_body,
 )
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
@@ -447,7 +448,9 @@ class BaseLLMHTTPHandler:
         data = provider_config.transform_request(
             model=model,
             messages=messages,
-            optional_params=strip_internal_params_from_request_body(optional_params),
+            optional_params=strip_internal_params_from_chat_request_body(
+                optional_params
+            ),
             litellm_params=litellm_params,
             headers=headers,
         )

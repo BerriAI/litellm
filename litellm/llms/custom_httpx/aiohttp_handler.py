@@ -9,7 +9,7 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm.litellm_core_utils.core_helpers import (
-    strip_internal_params_from_request_body,
+    strip_internal_params_from_chat_request_body,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.image_variations.transformation import (
@@ -370,7 +370,9 @@ class BaseLLMAIOHTTPHandler:
         data = provider_config.transform_request(
             model=model,
             messages=messages,
-            optional_params=strip_internal_params_from_request_body(optional_params),
+            optional_params=strip_internal_params_from_chat_request_body(
+                optional_params
+            ),
             litellm_params=litellm_params,
             headers=headers,
         )

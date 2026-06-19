@@ -23,6 +23,17 @@ LITELLM_INTERNAL_REQUEST_BODY_PARAMS: frozenset[str] = frozenset(
     member.value for member in LiteLLMInternalParam
 )
 
+LITELLM_CHAT_REQUEST_BODY_STRIP_PARAMS: frozenset[str] = (
+    LITELLM_INTERNAL_REQUEST_BODY_PARAMS
+    - frozenset({LiteLLMInternalParam.CACHE_CONTROL_INJECTION_POINTS.value})
+)
+"""Variant of `LITELLM_INTERNAL_REQUEST_BODY_PARAMS` for the chat-completion
+boundary. `cache_control_injection_points` is consumed inside `transform_request`
+by `AmazonConverseConfig` (it appends a `cachePoint` to the Bedrock tool list for
+``location: "tool_config"``), so it must reach the transform on the
+``converse_like/`` and other shared HTTP handler routes. Splat-style transforms
+that never consume it strip the full set themselves before serialization."""
+
 MCP_INTERNAL_PARAMS: frozenset[str] = frozenset(
     {
         LiteLLMInternalParam.SKIP_MCP_HANDLER.value,

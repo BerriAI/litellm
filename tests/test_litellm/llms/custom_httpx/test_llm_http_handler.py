@@ -79,6 +79,64 @@ def test_embedding_strips_internal_params_from_request_body():
     assert "output_dimension" in body
 
 
+def test_chat_boundary_preserves_cache_control_injection_points():
+    """Regression: the chat-completion boundary must NOT strip
+    `cache_control_injection_points`. AmazonConverseConfig.transform_request
+    consumes that key to append a `cachePoint` to Bedrock tool_config (used by
+    the `converse_like/` route, which goes through this shared handler), so
+    stripping it here silently disables tool-config prompt caching. Universal
+    LiteLLM-internal knobs (skip_mcp_handler, fake_stream, ...) must still be
+    stripped before the transform splats optional_params into the wire body."""
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.internal_params import LiteLLMInternalParam
+    from litellm.types.utils import ModelResponse
+
+    handler = BaseLLMHTTPHandler()
+
+    captured: dict = {}
+
+    provider_config = Mock()
+    provider_config.should_fake_stream.return_value = False
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://example.invalid/chat"
+    provider_config.sign_request.return_value = ({}, None)
+
+    def _capture_transform_request(*, model, messages, optional_params, **_):
+        captured["optional_params"] = optional_params
+        raise RuntimeError("stop after capture")
+
+    provider_config.transform_request.side_effect = _capture_transform_request
+
+    seeded = {param.value: "internal" for param in LiteLLMInternalParam}
+    seeded["cache_control_injection_points"] = [{"location": "tool_config"}]
+    seeded["temperature"] = 0.5
+
+    with pytest.raises(RuntimeError, match="stop after capture"):
+        handler.completion(
+            model="anthropic.claude-3-5-haiku-20241022-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=None,
+            custom_llm_provider="bedrock",
+            model_response=ModelResponse(),
+            encoding=None,
+            logging_obj=Mock(),
+            optional_params=seeded,
+            timeout=10.0,
+            litellm_params={},
+            acompletion=False,
+            provider_config=provider_config,
+        )
+
+    forwarded = captured["optional_params"]
+    assert forwarded["cache_control_injection_points"] == [{"location": "tool_config"}]
+    for param in LiteLLMInternalParam:
+        if param is LiteLLMInternalParam.CACHE_CONTROL_INJECTION_POINTS:
+            continue
+        assert (
+            param.value not in forwarded
+        ), f"{param.value} leaked past the chat-completion strip"
+
+
 def test_prepare_fake_stream_request():
     # Initialize the BaseLLMHTTPHandler
     handler = BaseLLMHTTPHandler()

@@ -7,6 +7,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.types.internal_params import (
+    LITELLM_CHAT_REQUEST_BODY_STRIP_PARAMS,
     LITELLM_INTERNAL_REQUEST_BODY_PARAMS,
     MCP_INTERNAL_PARAMS,
 )
@@ -478,6 +479,22 @@ def strip_internal_params_from_request_body(data: dict) -> dict:
 
     return {
         k: v for k, v in data.items() if k not in LITELLM_INTERNAL_REQUEST_BODY_PARAMS
+    }
+
+
+def strip_internal_params_from_chat_request_body(data: dict) -> dict:
+    """
+    Strip variant for the chat-completion boundary that preserves keys consumed
+    inside `transform_request` (currently `cache_control_injection_points`, which
+    `AmazonConverseConfig` reads to append a `cachePoint` to Bedrock tool_config).
+    Splat-style transforms still call `strip_internal_params_from_request_body`
+    themselves before serialization, so the param never leaks into the wire body.
+    """
+    if not isinstance(data, dict):
+        return data
+
+    return {
+        k: v for k, v in data.items() if k not in LITELLM_CHAT_REQUEST_BODY_STRIP_PARAMS
     }
 
 
