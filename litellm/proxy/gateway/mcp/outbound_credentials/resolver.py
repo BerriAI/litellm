@@ -44,7 +44,6 @@ from .types import (
     CredError,
     NoneConfig,
     PassthroughConfig,
-    PerUserEnvVar,
     ServerSpec,
     SharedKey,
     Subject,
@@ -112,18 +111,6 @@ class UpstreamCredentialProvider:
                 # The shared key is read straight from ServerSpec.config, not the per-user
                 # store; it is the same credential for every caller.
                 return Ok(_api_key_auth(config, source.value.get_secret_value()))
-            case PerUserEnvVar():
-                fetched = await self._per_user_value(subject, server)
-                if isinstance(fetched, Error):
-                    return Error(fetched.error)  # store/DB down -> 503
-                value = fetched.ok
-                if value is None:
-                    return Error(
-                        CredError.of_precondition_required(
-                            "api_key: per-user env var not set for this subject"
-                        )
-                    )
-                return Ok(_api_key_auth(config, value))
             case Byok():
                 fetched = await self._per_user_value(subject, server)
                 if isinstance(fetched, Error):

@@ -59,7 +59,6 @@ from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     CredError,
     NoneConfig,
     PassthroughConfig,
-    PerUserEnvVar,
     ServerSpec,
     SharedKey,
     StaticKeys,
@@ -295,13 +294,12 @@ def test_secret_fields_are_masked_in_serialization():
     assert config.key_source.value.get_secret_value() == "SUPER-SECRET"
 
 
-@pytest.mark.parametrize("source", [Byok(), PerUserEnvVar()])
-async def test_api_key_per_user_pulls_the_subject_credential(source: object):
+async def test_api_key_byok_pulls_the_subject_credential():
     store = InMemoryCredentialStore(
         {CredentialKey(tenant_id="t1", subject_id="u1", server_id="s1"): "user-secret"}
     )
     provider = _provider(credential_store=store)
-    result = await provider.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=source)))  # type: ignore[arg-type]
+    result = await provider.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=Byok())))
     assert isinstance(result, Ok)
     assert _applied_headers(result.ok)["Authorization"] == "Bearer user-secret"
 
@@ -311,15 +309,6 @@ async def test_api_key_byok_missing_returns_unauthorized():
     result = await PROVIDER.resolve(SUBJECT, _spec(ApiKeyConfig(key_source=Byok())))
     assert isinstance(result, Error)
     assert result.error.tag == "unauthorized"
-
-
-async def test_api_key_env_var_missing_returns_precondition_required():
-    # Missing per-user env var -> 412 (a setup precondition), distinct from BYOK's 401.
-    result = await PROVIDER.resolve(
-        SUBJECT, _spec(ApiKeyConfig(key_source=PerUserEnvVar()))
-    )
-    assert isinstance(result, Error)
-    assert result.error.tag == "precondition_required"
 
 
 async def test_api_key_per_user_isolated_by_subject():

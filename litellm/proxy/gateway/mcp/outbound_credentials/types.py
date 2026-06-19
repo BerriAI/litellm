@@ -188,15 +188,6 @@ class SharedKey(BaseModel):
     value: SecretStr
 
 
-class PerUserEnvVar(BaseModel):
-    """A per-user value the admin templated as an env var; the user fills it in. Pulled from
-    the credential store at resolve time. Missing means the user has not completed setup, a
-    precondition (412) rather than an auth failure."""
-
-    model_config = ConfigDict(frozen=True)
-    source: Literal["per_user_env_var"] = "per_user_env_var"
-
-
 class Byok(BaseModel):
     """A key the user brings via the entry flow, stored per-user. Pulled from the credential
     store at resolve time. Missing means the user must provide it, a 401 + WWW-Authenticate
@@ -206,9 +197,7 @@ class Byok(BaseModel):
     source: Literal["byok"] = "byok"
 
 
-ApiKeySource = Annotated[
-    SharedKey | PerUserEnvVar | Byok, Field(discriminator="source")
-]
+ApiKeySource = Annotated[SharedKey | Byok, Field(discriminator="source")]
 
 
 class ApiKeyConfig(BaseModel):
