@@ -197,6 +197,13 @@ def _supports_native_anthropic_messages(
     provider selected purely by endpoint (e.g. an ``/anthropic`` ``api_base``)
     resolves the same way it will in the handler, instead of being misread as a
     fallback and having its cache injection skipped.
+
+    Note: ``get_llm_provider`` is called unconditionally here even when
+    ``custom_llm_provider`` is already set. Skipping it is non-trivial because
+    model strings may carry routing prefixes (e.g. ``converse/``) that affect
+    both the resolved model name and whether ``get_provider_anthropic_messages_config``
+    returns a native config — plain prefix-stripping produces wrong answers for
+    those cases. Left as a potential optimisation for a follow-up.
     """
     from litellm.types.utils import LlmProviders
 

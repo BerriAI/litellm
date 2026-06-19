@@ -10,6 +10,7 @@ import copy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_logger
+from litellm.constants import ANTHROPIC_NON_CACHEABLE_TOOL_TYPES
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
@@ -31,13 +32,9 @@ else:
 # breakpoints: "A maximum of 4 blocks with cache_control may be provided."
 MAX_CACHE_CONTROL_BLOCKS = 4
 
-# Tool types Anthropic rejects `cache_control` on. Mirrors the exclusion in
-# litellm/llms/anthropic/chat/transformation.py so the native /v1/messages path
-# never marks a tool the API would 400 on.
-NON_CACHEABLE_TOOL_TYPES = (
-    "tool_search_tool_regex_20251119",
-    "tool_search_tool_bm25_20251119",
-)
+# Re-export for any existing internal callers while the canonical definition
+# lives in litellm.constants (shared with transformation.py).
+NON_CACHEABLE_TOOL_TYPES = ANTHROPIC_NON_CACHEABLE_TOOL_TYPES
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -287,8 +284,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 downstream provider transforms still receive them.
 
         Returns:
-            A tuple of (messages, system, tools) with cache control applied. The
-            inputs are deep-copied, so the caller's originals are never mutated.
+            A tuple of (messages, system, tools). When there are no injection
+            points, the original references are returned as-is (no copy is
+            made). When injection occurs, the inputs are deep-copied before
+            modification so the caller's originals are not mutated.
         """
         injection_points: list[CacheControlInjectionPoint] = non_default_params.pop(
             "cache_control_injection_points", []
