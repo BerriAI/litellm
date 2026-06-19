@@ -13,11 +13,13 @@ from litellm.proxy._experimental.mcp_server.v2_port_bodies import (
     HttpxSigV4Signer,
     HttpxTokenExchanger,
     V1ByokCredentialStore,
+    V1OAuthTokenStore,
     _classify_sigv4_error,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.credential_store import (
     CredentialKey,
 )
+from litellm.proxy.gateway.mcp.outbound_credentials.token_store import TokenKey
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     AwsSigV4Config,
     ClientCredentialsConfig,
@@ -207,6 +209,64 @@ async def test_byok_store_db_error_is_upstream_unavailable():
         raise RuntimeError("db down")
 
     result = await V1ByokCredentialStore(reader=reader).get(_cred_key())
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+def _token_key(subject_id="u1", server_id="s1"):
+    return TokenKey(
+        tenant_id="org1",
+        subject_id=subject_id,
+        server_id=server_id,
+        resource="https://up.example/mcp",
+    )
+
+
+async def test_oauth_store_returns_valid_token():
+    async def reader(subject_id, server_id):
+        assert (subject_id, server_id) == ("u1", "s1")
+        return {"type": "oauth2", "access_token": "valid-access", "refresh_token": "r"}
+
+    result = await V1OAuthTokenStore(reader=reader).get(_token_key())
+    assert isinstance(result, Ok)
+    assert result.ok is not None
+    assert result.ok.access_token.get_secret_value() == "valid-access"
+    # v1 owns refresh, so v2's refresh path is kept inert: no refresh_token, expiry beyond the buffer
+    assert result.ok.refresh_token is None
+
+
+async def test_oauth_store_missing_token_is_ok_none():
+    async def reader(subject_id, server_id):
+        return None
+
+    result = await V1OAuthTokenStore(reader=reader).get(_token_key())
+    assert isinstance(result, Ok)
+    assert result.ok is None
+
+
+async def test_oauth_store_payload_without_access_token_is_ok_none():
+    async def reader(subject_id, server_id):
+        return {"type": "oauth2"}  # no access_token -> drives the OAuth dance
+
+    result = await V1OAuthTokenStore(reader=reader).get(_token_key())
+    assert isinstance(result, Ok)
+    assert result.ok is None
+
+
+async def test_oauth_store_empty_subject_skips_the_store():
+    async def reader(subject_id, server_id):
+        raise AssertionError("store must not be queried for an empty subject")
+
+    result = await V1OAuthTokenStore(reader=reader).get(_token_key(subject_id=""))
+    assert isinstance(result, Ok)
+    assert result.ok is None
+
+
+async def test_oauth_store_db_error_is_upstream_unavailable():
+    async def reader(subject_id, server_id):
+        raise RuntimeError("db down")
+
+    result = await V1OAuthTokenStore(reader=reader).get(_token_key())
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
 

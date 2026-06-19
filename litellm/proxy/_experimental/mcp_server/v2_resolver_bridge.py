@@ -25,6 +25,7 @@ from litellm.proxy._experimental.mcp_server.v2_port_bodies import (
     HttpxSigV4Signer,
     HttpxTokenExchanger,
     V1ByokCredentialStore,
+    V1OAuthTokenStore,
 )
 from litellm.proxy.gateway.mcp.outbound_credentials.clock import SystemClock
 from litellm.proxy.gateway.mcp.outbound_credentials.resolver import (
@@ -33,10 +34,7 @@ from litellm.proxy.gateway.mcp.outbound_credentials.resolver import (
 from litellm.proxy.gateway.mcp.outbound_credentials.service_token_store import (
     InMemoryServiceTokenStore,
 )
-from litellm.proxy.gateway.mcp.outbound_credentials.token_store import (
-    InMemoryTokenStore,
-    StoredToken,
-)
+from litellm.proxy.gateway.mcp.outbound_credentials.token_store import StoredToken
 from litellm.proxy.gateway.mcp.outbound_credentials.types import (
     Ambient,
     ApiKeyConfig,
@@ -94,12 +92,13 @@ class _Unwired:
 
 @functools.lru_cache(maxsize=1)
 def _provider() -> UpstreamCredentialProvider:
-    # none + api_key resolve from config alone, so the stores/ports below are inert placeholders;
-    # real bodies get wired in as their modes are grafted.
+    # Real bodies are wired as their modes are grafted. token_refresher stays unwired: the bridge's
+    # V1OAuthTokenStore returns currently-valid tokens (v1 refreshes on read), so the resolver's
+    # proactive-refresh path is inert until v1 retires.
     unwired = _Unwired()
     return UpstreamCredentialProvider(
         credential_store=V1ByokCredentialStore(),
-        token_store=InMemoryTokenStore(),
+        token_store=V1OAuthTokenStore(),
         token_refresher=unwired,
         clock=SystemClock(),
         service_token_store=InMemoryServiceTokenStore(),
