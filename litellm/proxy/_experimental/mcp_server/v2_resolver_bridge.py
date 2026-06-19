@@ -57,6 +57,7 @@ from litellm.proxy.gateway.mcp.result import Error, Result
 from litellm.types.mcp import MCPAuth
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 _V2_ENV_FLAG = "LITELLM_USE_V2_MCP_RESOLVER"
@@ -158,7 +159,30 @@ def _added_headers(auth: httpx.Auth) -> Dict[str, str]:
     }
 
 
-async def resolve_v2_auth_value(server: MCPServer) -> Optional[Dict[str, str]]:
+def _to_subject(
+    user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optional[str]
+) -> Subject:
+    """Map v1's authenticated principal onto the v2 Subject.
+
+    Isolated so it can later swap to auth_v2's Principal. tenant_id/subject_id are empty for an
+    unauthenticated caller; the per-user arms (BYOK api_key, token_exchange, authorization_code)
+    must reject an empty subject_id rather than share one credential slot across callers.
+    """
+    inbound = SecretStr(subject_token) if subject_token else None
+    if user_api_key_auth is None:
+        return Subject(tenant_id="", subject_id="", inbound_token=inbound)
+    return Subject(
+        tenant_id=user_api_key_auth.org_id or user_api_key_auth.team_id or "",
+        subject_id=user_api_key_auth.user_id or "",
+        inbound_token=inbound,
+    )
+
+
+async def resolve_v2_auth_value(
+    server: MCPServer,
+    user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    subject_token: Optional[str] = None,
+) -> Optional[Dict[str, str]]:
     """Resolve `none`/`api_key` via the v2 resolver, or return None to defer to v1."""
     if not v2_resolver_enabled():
         return None
@@ -166,7 +190,7 @@ async def resolve_v2_auth_value(server: MCPServer) -> Optional[Dict[str, str]]:
     if spec is None:
         return None
     result = await _provider().resolve(
-        Subject(tenant_id="", subject_id="", inbound_token=None), spec
+        _to_subject(user_api_key_auth, subject_token), spec
     )
     if isinstance(result, Error):
         verbose_logger.warning(

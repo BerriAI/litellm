@@ -43,6 +43,7 @@ except ImportError as _e:
     resolve_v2_auth_value = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -289,6 +290,7 @@ async def resolve_mcp_auth(
     server: "MCPServer",
     mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
     subject_token: Optional[str] = None,
+    user_api_key_auth: Optional["UserAPIKeyAuth"] = None,
 ) -> Optional[Union[str, Dict[str, str]]]:
     """Resolve the auth value for an MCP server.
 
@@ -301,7 +303,9 @@ async def resolve_mcp_auth(
     if mcp_auth_header:
         return mcp_auth_header
     if resolve_v2_auth_value is not None:
-        v2_auth_value = await resolve_v2_auth_value(server)
+        v2_auth_value = await resolve_v2_auth_value(
+            server, user_api_key_auth=user_api_key_auth, subject_token=subject_token
+        )
         if v2_auth_value is not None:
             return v2_auth_value
     if server.has_token_exchange_config:

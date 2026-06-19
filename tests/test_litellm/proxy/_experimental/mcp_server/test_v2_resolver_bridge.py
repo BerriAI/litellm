@@ -11,9 +11,11 @@ import pytest
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.v2_resolver_bridge import (
+    _to_subject,
     resolve_v2_auth_value,
     resolve_v2_aws_auth,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -238,3 +240,37 @@ async def test_aws_sigv4_config_defaults_to_ambient(v2_on):
     cfg = _to_aws_sigv4_config(_aws_server())
     assert cfg is not None
     assert isinstance(cfg.credentials, Ambient)
+
+
+async def test_to_subject_maps_v1_identity():
+    auth = UserAPIKeyAuth(token="sk-test", user_id="u1", org_id="org1", team_id="t1")
+    subj = _to_subject(auth, "inbound-jwt")
+    assert subj.subject_id == "u1"
+    assert subj.tenant_id == "org1"  # org preferred over team
+    assert subj.inbound_token is not None
+    assert subj.inbound_token.get_secret_value() == "inbound-jwt"
+
+
+async def test_to_subject_anonymous_when_no_auth():
+    subj = _to_subject(None, None)
+    assert subj.subject_id == ""
+    assert subj.tenant_id == ""
+    assert subj.inbound_token is None
+
+
+async def test_to_subject_falls_back_to_team_and_blanks_missing_user():
+    auth = UserAPIKeyAuth(token="sk-test", team_id="team-x")
+    subj = _to_subject(auth, None)
+    assert subj.tenant_id == "team-x"  # no org -> team
+    assert (
+        subj.subject_id == ""
+    )  # missing user -> empty; per-user arms fail closed on this
+
+
+async def test_resolve_v2_auth_value_threads_identity_without_breaking_static(v2_on):
+    auth = UserAPIKeyAuth(token="sk-test", user_id="u1", org_id="org1")
+    server = _server(MCPAuth.api_key, "up-secret")
+    result = await resolve_v2_auth_value(
+        server, user_api_key_auth=auth, subject_token="jwt"
+    )
+    assert result == {"X-API-Key": "up-secret"}

@@ -1940,7 +1940,10 @@ class MCPServerManager:
             Configured MCP client instance.
         """
         auth_value = await resolve_mcp_auth(
-            server, mcp_auth_header, subject_token=subject_token
+            server,
+            mcp_auth_header,
+            subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
         )
 
         transport = server.transport or MCPTransport.sse
