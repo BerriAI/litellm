@@ -5842,6 +5842,9 @@ def _is_potential_model_name_in_model_cost(
     )
 
 
+_ABOVE_THRESHOLD_COST_KEY = re.compile(r"_above_\d+k?_tokens$")
+
+
 def _get_model_info_helper(
     model: str,
     custom_llm_provider: Optional[str] = None,
@@ -6019,7 +6022,7 @@ def _get_model_info_helper(
                 )
                 _output_cost_per_token = 0
 
-            return ModelInfoBase(
+            returned_model_info = ModelInfoBase(
                 key=key,
                 max_tokens=_model_info.get("max_tokens", None),
                 max_input_tokens=_model_info.get("max_input_tokens", None),
@@ -6236,6 +6239,13 @@ def _get_model_info_helper(
                 uses_embed_content=_model_info.get("uses_embed_content", None),
                 supports_image_size=_model_info.get("supports_image_size", None),
             )
+            for cost_key, cost_value in _model_info.items():
+                if (
+                    cost_key not in returned_model_info
+                    and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None
+                ):
+                    returned_model_info[cost_key] = cost_value  # type: ignore[literal-required]
+            return returned_model_info
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
         raise Exception(
