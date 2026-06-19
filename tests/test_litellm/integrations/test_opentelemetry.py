@@ -417,9 +417,7 @@ class TestOpenTelemetryMCPToolCall(unittest.TestCase):
         mock_span = MagicMock()
         result = CallToolResult(content=[TextContent(type="text", text="20")])
 
-        with patch(
-            "litellm.integrations.opentelemetry.verbose_logger"
-        ) as mock_logger:
+        with patch("litellm.integrations.opentelemetry.verbose_logger") as mock_logger:
             otel.set_attributes(
                 span=mock_span, kwargs=self._mcp_kwargs(), response_obj=result
             )

@@ -190,7 +190,7 @@ def _normalize_team_metadata_keys(value: Any) -> List[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
-def _response_obj_as_mapping(response_obj: Optional[Any]) -> Optional[Dict[str, Any]]:
+def _response_obj_as_mapping(response_obj: Optional[Any]) -> Optional[Any]:
     """Return a dict view of ``response_obj`` for the OTEL attribute writers.
 
     Chat-completions and Responses-API responses already behave like dicts.
@@ -199,6 +199,10 @@ def _response_obj_as_mapping(response_obj: Optional[Any]) -> Optional[Dict[str, 
     ``set_attributes`` raises ``AttributeError`` and the span loses its output
     attributes (issue #30651). ``model_dump`` is the documented way to
     flatten a Pydantic ``BaseModel`` to a dict.
+
+    The return is typed ``Optional[Any]`` rather than ``Optional[Dict[str, Any]]``
+    so downstream ``response_obj.get(...)`` calls keep their pre-existing mypy
+    semantics (which assume an ``Any``-typed value, not an Optional one).
     """
     if response_obj is None:
         return None
