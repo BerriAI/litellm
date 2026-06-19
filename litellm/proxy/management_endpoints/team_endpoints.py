@@ -3028,6 +3028,28 @@ async def team_member_update(
             team_default_budget_id=team_default_budget_id,
         )
 
+    ### update team member spend
+    if data.spend is not None:
+        await prisma_client.db.litellm_teammembership.update(
+            where={"user_id_team_id": {"user_id": received_user_id, "team_id": data.team_id}},
+            data={"spend": data.spend}
+        )
+
+        from litellm.proxy.proxy_server import spend_counter_cache
+        if spend_counter_cache is not None:
+            _counter_key = f"spend:team_member:{received_user_id}:{data.team_id}"
+            if spend_counter_cache.in_memory_cache is not None:
+                spend_counter_cache.in_memory_cache.set_cache(
+                    key=_counter_key, value=data.spend, ttl=60
+                )
+            if spend_counter_cache.redis_cache is not None:
+                try:
+                    await spend_counter_cache.redis_cache.async_set_cache(
+                        key=_counter_key, value=data.spend, ttl=60
+                    )
+                except Exception:
+                    pass
+
     ### update team member role
     if data.role is not None:
         team_members: List[Member] = []
@@ -3056,6 +3078,7 @@ async def team_member_update(
         user_id=received_user_id,
         user_email=data.user_email,
         max_budget_in_team=data.max_budget_in_team,
+        spend=data.spend,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
         budget_duration=data.budget_duration,

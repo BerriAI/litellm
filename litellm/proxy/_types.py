@@ -3639,6 +3639,9 @@ class TeamMemberDeleteRequest(MemberDeleteRequest):
 
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     max_budget_in_team: Optional[float] = None
+    spend: Optional[float] = Field(
+        default=None, description="Amount spent by team member"
+    )
     role: Optional[Literal["admin", "user"]] = None
     tpm_limit: Optional[int] = Field(
         default=None, description="Tokens per minute limit for this team member"
@@ -3659,6 +3662,7 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
     max_budget_in_team: Optional[float] = None
+    spend: Optional[float] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
