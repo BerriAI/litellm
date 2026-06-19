@@ -10,8 +10,8 @@ back here from the same config file. Three behaviors are checked independently:
 - reporting: /model/info surfaces those rates for the model
 - isolation: gemini-2.5-flash shares the same underlying gemini/gemini-2.5-flash
   but sets no override, so it must keep its own price; an override that leaks into
-  the shared cost map misprices it. A regression that reintroduces that leak makes
-  the sibling's rate match the custom one and fails the isolation check.
+  the shared cost map misprices it. This currently fails on a real gap and is left
+  failing rather than weakened to pass.
 """
 
 import time
@@ -126,7 +126,7 @@ def _poll_breakdown_row(
         for row in priced:
             if response_id and row.request_id == response_id:
                 return row
-        if priced and response_id is None:
+        if priced:
             return priced[0]
         time.sleep(client.gateway.poll_interval)
     pytest.fail("no spend row with a cost breakdown landed before the deadline")

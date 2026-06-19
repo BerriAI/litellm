@@ -6,7 +6,7 @@ response validates without mirroring every proxy field. No untyped dicts.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, RootModel
+from pydantic import BaseModel, ConfigDict, RootModel
 
 # ---------- keys ----------
 
@@ -198,3 +198,56 @@ class RouteSpec(RootModel[dict[str, object]]):
 
 class OpenAPISchema(BaseModel):
     paths: dict[str, RouteSpec] = {}
+
+
+# ---------- model info / custom pricing ----------
+
+
+class CustomPricing(BaseModel):
+    """The per-token custom-pricing fields a deployment can override in
+    litellm_params - the token-cost subset of litellm's CustomPricingLiteLLMParams
+    the proxy applies to chat spend. All optional: a config sets only what it
+    overrides, and /model/info echoes the rates the proxy resolved."""
+
+    model_config = ConfigDict(extra="ignore")
+    input_cost_per_token: float | None = None
+    output_cost_per_token: float | None = None
+    cache_read_input_token_cost: float | None = None
+    cache_creation_input_token_cost: float | None = None
+
+    def overrides(self) -> dict[str, float]:
+        """The rates actually declared (non-null) - e.g. those a config.yml sets."""
+        declared = {
+            "input_cost_per_token": self.input_cost_per_token,
+            "output_cost_per_token": self.output_cost_per_token,
+            "cache_read_input_token_cost": self.cache_read_input_token_cost,
+            "cache_creation_input_token_cost": self.cache_creation_input_token_cost,
+        }
+        return {field: rate for field, rate in declared.items() if rate is not None}
+
+    def token_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
+        """Spend for a fresh (uncached) call under these rates: the proxy's
+        custom-pricing formula (prompt * input + completion * output)."""
+        assert (
+            self.input_cost_per_token is not None
+            and self.output_cost_per_token is not None
+        ), "custom pricing has no per-token rates"
+        return (
+            prompt_tokens * self.input_cost_per_token
+            + completion_tokens * self.output_cost_per_token
+        )
+
+
+class ModelInfoEntry(BaseModel):
+    """One /model/info row. `litellm_params` is the configured deployment (carries
+    any custom-pricing override); `model_info` is the price the proxy resolved for
+    it - the override merged over the cost-map defaults."""
+
+    model_config = ConfigDict(protected_namespaces=())
+    model_name: str
+    litellm_params: CustomPricing = CustomPricing()
+    model_info: CustomPricing = CustomPricing()
+
+
+class ModelInfoResponse(BaseModel):
+    data: list[ModelInfoEntry] = []

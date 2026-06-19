@@ -103,6 +103,17 @@ model_list:
       model: gemini/gemini-2.5-flash
       api_key: os.environ/GEMINI_API_KEY
 
+  # Custom per-token pricing exercised by llm_translation/test_custom_pricing_e2e.py.
+  # Rates deliberately exceed canonical gemini-2.5-flash (input 3e-7 / output 2.5e-6)
+  # so an override that is ignored or under-applied reports spend at the base rate
+  # and fails that test. The test reads these same rates back from this file.
+  - model_name: custom-priced-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+      input_cost_per_token: 0.00005
+      output_cost_per_token: 0.0001
+
   # embedding models
   - model_name: openai-text-embedding-3-small
     litellm_params:
