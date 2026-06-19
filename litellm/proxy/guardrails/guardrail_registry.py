@@ -22,7 +22,7 @@ from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import GuardrailsRepository
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, get_secret_bool
 from litellm.types.guardrails import (
     Guardrail,
     GuardrailEventHooks,
@@ -444,6 +444,14 @@ class InMemoryGuardrailHandler:
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
         if isinstance(litellm_params_data, dict):
+            default_on_raw = litellm_params_data.get("default_on")
+            if isinstance(default_on_raw, str) and default_on_raw.startswith(
+                "os.environ/"
+            ):
+                litellm_params_data = {
+                    **litellm_params_data,
+                    "default_on": get_secret_bool(default_on_raw),
+                }
             litellm_params = LitellmParams(**litellm_params_data)
         else:
             litellm_params = litellm_params_data

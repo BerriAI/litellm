@@ -349,3 +349,93 @@ def test_repeated_db_sync_does_not_accumulate_runner_instances():
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
+
+
+def _guardrail_with_default_on(raw_default_on) -> Guardrail:
+    return Guardrail(
+        guardrail_id="default-on-env-var",
+        guardrail_name="default-on-env-var-guard",
+        litellm_params={
+            "guardrail": "default_on_env_var_fake",
+            "mode": "pre_call",
+            "default_on": raw_default_on,
+        },
+    )
+
+
+def _init_handler_with_fake_initializer(captured, default_on_value):
+    from unittest.mock import patch
+
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def fake_initializer(params, guardrail):
+        captured["default_on"] = params.default_on
+        return CustomGuardrail(
+            guardrail_name=guardrail.get("guardrail_name", ""),
+            event_hook=params.mode,
+            default_on=params.default_on,
+        )
+
+    with patch.dict(
+        registry_module.guardrail_initializer_registry,
+        {"default_on_env_var_fake": fake_initializer},
+    ):
+        handler = registry_module.InMemoryGuardrailHandler()
+        handler.initialize_guardrail(
+            guardrail=_guardrail_with_default_on(default_on_value), source="config"
+        )
+        return handler
+
+
+def test_initialize_guardrail_resolves_default_on_env_var_true(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setenv("LITELLM_TEST_DEFAULT_ON_TRUE", "true")
+    handler = _init_handler_with_fake_initializer(
+        captured, "os.environ/LITELLM_TEST_DEFAULT_ON_TRUE"
+    )
+
+    assert captured["default_on"] is True
+    callback = handler.guardrail_id_to_custom_guardrail["default-on-env-var"]
+    assert isinstance(callback, CustomGuardrail)
+    assert callback.default_on is True
+
+
+def test_initialize_guardrail_resolves_default_on_env_var_false(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setenv("LITELLM_TEST_DEFAULT_ON_FALSE", "false")
+    handler = _init_handler_with_fake_initializer(
+        captured, "os.environ/LITELLM_TEST_DEFAULT_ON_FALSE"
+    )
+
+    assert captured["default_on"] is False
+    callback = handler.guardrail_id_to_custom_guardrail["default-on-env-var"]
+    assert callback.default_on is False
+
+
+def test_initialize_guardrail_unsets_default_on_env_var_falls_back_false(monkeypatch):
+    captured: dict = {}
+    monkeypatch.delenv("LITELLM_TEST_DEFAULT_ON_MISSING", raising=False)
+    handler = _init_handler_with_fake_initializer(
+        captured, "os.environ/LITELLM_TEST_DEFAULT_ON_MISSING"
+    )
+
+    assert captured["default_on"] is False
+    callback = handler.guardrail_id_to_custom_guardrail["default-on-env-var"]
+    assert callback.default_on is False
+
+
+def test_initialize_guardrail_non_prefixed_bool_string_not_env_resolved(monkeypatch):
+    monkeypatch.setenv("true", "false")
+    captured: dict = {}
+    _init_handler_with_fake_initializer(captured, "true")
+
+    assert captured["default_on"] is True
+
+
+def test_initialize_guardrail_plain_bool_default_on_still_works():
+    captured: dict = {}
+    handler = _init_handler_with_fake_initializer(captured, True)
+
+    assert captured["default_on"] is True
+    callback = handler.guardrail_id_to_custom_guardrail["default-on-env-var"]
+    assert callback.default_on is True
