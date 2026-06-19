@@ -63,7 +63,9 @@ class BaseLLMAIOHTTPHandler:
 
         # Create a transport using AsyncHTTPHandler's logic
         try:
-            self.transport = AsyncHTTPHandler._create_aiohttp_transport(ssl_verify=self.ssl_verify)
+            self.transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_verify=self.ssl_verify
+            )
             self._owns_transport = True
             return self.transport
         except Exception:
