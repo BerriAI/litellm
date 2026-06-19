@@ -405,6 +405,15 @@ def anthropic_messages_handler(
     # full-messages scan. Pop it so it never leaks into provider params.
     if not kwargs.pop("_litellm_messages_presanitized", False):
         messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+        # Anthropic's Messages API rejects role="system" entries inside
+        # messages[] with "Unexpected role \"system\". The Messages API accepts
+        # a top-level `system` parameter, not \"system\" as an input message
+        # role."  OpenAI-style clients routinely send the system prompt as
+        # messages[0]; lift those up to the top-level `system` parameter so
+        # sync callers (litellm.messages.create) stay valid too. See #30705.
+        messages, system = normalize_system_role_in_anthropic_messages(
+            messages, system
+        )
 
     metadata = validate_anthropic_api_metadata(metadata)
 

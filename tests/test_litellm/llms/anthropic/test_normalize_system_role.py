@@ -187,5 +187,105 @@ class TestNormalizeSystemRole:
         assert new_messages[2] == {"role": "user", "content": "hi"}
 
 
+class TestSyncPathNormalization:
+    """
+    Verify the sync entry point ``anthropic_messages_handler`` also normalizes
+    role=system messages, not just the async ``anthropic_messages`` wrapper.
+
+    Regression for the Greptile review on #30719: the async wrapper applied
+    the normalizer before dispatching to the sync handler, but callers using
+    ``litellm.messages.create`` go directly through the sync handler and were
+    still hitting Anthropic's 400 on role=system messages.
+
+    These tests assert the contract the handler enforces: any role=system
+    entry in messages is lifted to the top-level system parameter before the
+    request is built, regardless of which entry path was used.
+    """
+
+    def test_sync_handler_invokes_normalizer(self):
+        """
+        When a caller enters the sync ``anthropic_messages_handler`` with a
+        role=system message and no ``_litellm_messages_presanitized`` flag,
+        the handler must invoke ``normalize_system_role_in_anthropic_messages``
+        before dispatching. We spy on the helper via monkeypatching.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.messages import (
+            handler as handler_module,
+        )
+
+        calls = []
+
+        def spy_normalize(messages, system=None):
+            calls.append((list(messages), system))
+            # Delegate to the real helper so we exercise the same code path.
+            from litellm.llms.anthropic.common_utils import (
+                normalize_system_role_in_anthropic_messages as real_normalize,
+            )
+            return real_normalize(messages, system)
+
+        # Patch the symbol the handler imported.
+        original = handler_module.normalize_system_role_in_anthropic_messages
+        handler_module.normalize_system_role_in_anthropic_messages = spy_normalize
+        try:
+            handler_module.anthropic_messages_handler(
+                max_tokens=64,
+                messages=[
+                    {"role": "system", "content": "be concise"},
+                    {"role": "user", "content": "hi"},
+                ],
+                model="claude-test",
+            )
+        except Exception:
+            # We don't care about the dispatch outcome; we only want to
+            # confirm normalization was invoked before the failure.
+            pass
+        finally:
+            handler_module.normalize_system_role_in_anthropic_messages = original
+
+        assert len(calls) >= 1, (
+            "sync handler did not invoke normalize_system_role_in_anthropic_messages"
+        )
+
+    def test_sync_handler_skips_normalizer_when_presanitized_flag_set(self):
+        """
+        When the async wrapper dispatches to the sync handler it sets
+        ``_litellm_messages_presanitized=True`` so the handler does NOT
+        normalize again (would be wasted work since messages and system are
+        already normalized and not reassigned before dispatch). This test
+        pins that contract.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.messages import (
+            handler as handler_module,
+        )
+
+        calls = []
+
+        def spy_normalize(messages, system=None):  # pragma: no cover - patched at runtime
+            calls.append((list(messages), system))
+            from litellm.llms.anthropic.common_utils import (
+                normalize_system_role_in_anthropic_messages as real_normalize,
+            )
+            return real_normalize(messages, system)
+
+        original = handler_module.normalize_system_role_in_anthropic_messages
+        handler_module.normalize_system_role_in_anthropic_messages = spy_normalize
+        try:
+            handler_module.anthropic_messages_handler(
+                max_tokens=64,
+                messages=[{"role": "user", "content": "hi"}],
+                model="claude-test",
+                _litellm_messages_presanitized=True,
+            )
+        except Exception:
+            pass
+        finally:
+            handler_module.normalize_system_role_in_anthropic_messages = original
+
+        assert calls == [], (
+            "sync handler re-invoked the normalizer even though "
+            "_litellm_messages_presanitized=True was passed"
+        )
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
