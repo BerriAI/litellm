@@ -280,8 +280,12 @@ def _strip_deployment_owned_credential_kwargs(kwargs: dict) -> None:
     """Drop caller-supplied credential/endpoint/project kwargs in place.
 
     Run before merging request ``kwargs`` over deployment ``litellm_params``
-    so user input cannot override the server-pinned credential fields.
+    so user input cannot override the server-pinned credential fields. Only
+    active under the proxy; direct SDK Router callers keep their per-call
+    overrides since they build their own request boundary.
     """
+    if not litellm.proxy_is_running:
+        return
     dropped = {
         k: v
         for k, v in ((k, kwargs.get(k)) for k in _DEPLOYMENT_OWNED_CREDENTIAL_KWARGS)

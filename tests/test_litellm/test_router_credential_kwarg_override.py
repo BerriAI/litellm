@@ -16,6 +16,33 @@ from litellm.router import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _proxy_running():
+    """The strip is only active behind the proxy boundary. These tests exercise
+    that security path, so enable the flag for their duration."""
+    original = litellm.proxy_is_running
+    litellm.proxy_is_running = True
+    try:
+        yield
+    finally:
+        litellm.proxy_is_running = original
+
+
+def test_strip_helper_passthrough_when_proxy_not_running():
+    """In direct SDK use (no proxy), deployment-owned kwargs must NOT be
+    stripped, so existing per-call overrides like api_version on Azure
+    keep working. The proxy is the security boundary; SDK callers build
+    their own."""
+    original = litellm.proxy_is_running
+    litellm.proxy_is_running = False
+    try:
+        kwargs = {"api_version": "2024-02-01", "vertex_project": "p"}
+        _strip_deployment_owned_credential_kwargs(kwargs)
+        assert kwargs == {"api_version": "2024-02-01", "vertex_project": "p"}
+    finally:
+        litellm.proxy_is_running = original
+
+
 def test_strip_helper_warns_once_on_dropped_nonempty_value():
     kwargs = {"temperature": 0.2, "vertex_project": "caller-project"}
     with patch.object(verbose_router_logger, "warning") as mock_warn:
