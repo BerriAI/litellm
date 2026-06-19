@@ -802,10 +802,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 elif isinstance(content, list) and content_idx_optional is not None:
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
 
-            # Also mask PII in tool_call / function_call arguments. The content loop
-            # above only inspects message content, so PII embedded in tool-call
-            # arguments would otherwise reach the provider unmasked -- this mirrors the
-            # response-side handling in _process_response_for_pii.
+            # Also mask PII in tool_call / function_call arguments. Gather
+            # coroutines to match the parallel dispatch used for content above.
+            tool_tasks: List[Any] = []
+            tool_targets: List[Any] = []
             for m in messages:
                 if not isinstance(m, dict):
                     continue
@@ -818,22 +818,32 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if isinstance(function, dict) and isinstance(
                         function.get("arguments"), str
                     ):
-                        function["arguments"] = await self.check_pii(
-                            text=function["arguments"],
-                            output_parse_pii=self.output_parse_pii,
-                            presidio_config=presidio_config,
-                            request_data=data,
+                        tool_tasks.append(
+                            self.check_pii(
+                                text=function["arguments"],
+                                output_parse_pii=self.output_parse_pii,
+                                presidio_config=presidio_config,
+                                request_data=data,
+                            )
                         )
+                        tool_targets.append((function, "arguments"))
                 function_call = m.get("function_call")
                 if isinstance(function_call, dict) and isinstance(
                     function_call.get("arguments"), str
                 ):
-                    function_call["arguments"] = await self.check_pii(
-                        text=function_call["arguments"],
-                        output_parse_pii=self.output_parse_pii,
-                        presidio_config=presidio_config,
-                        request_data=data,
+                    tool_tasks.append(
+                        self.check_pii(
+                            text=function_call["arguments"],
+                            output_parse_pii=self.output_parse_pii,
+                            presidio_config=presidio_config,
+                            request_data=data,
+                        )
                     )
+                    tool_targets.append((function_call, "arguments"))
+            if tool_tasks:
+                tool_results = await asyncio.gather(*tool_tasks)
+                for (container, key), result in zip(tool_targets, tool_results):
+                    container[key] = result
 
             verbose_proxy_logger.debug(
                 f"Presidio PII Masking: Redacted pii message: {data['messages']}"
@@ -1015,6 +1025,38 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         break
         return text
 
+    async def _mask_nested_strings(
+        self,
+        obj: Any,
+        mode: Literal["mask", "unmask"],
+        pii_tokens: Dict[str, str],
+        presidio_config: Optional[dict],
+        request_data: dict,
+    ) -> Any:
+        """Recursively mask/unmask every string leaf in a JSON-like structure."""
+        if isinstance(obj, str):
+            if mode == "unmask":
+                return self._unmask_pii_text(obj, pii_tokens)
+            return await self.check_pii(
+                text=obj,
+                output_parse_pii=False,
+                presidio_config=presidio_config,
+                request_data=request_data,
+            )
+        if isinstance(obj, dict):
+            for key in list(obj.keys()):
+                obj[key] = await self._mask_nested_strings(
+                    obj[key], mode, pii_tokens, presidio_config, request_data
+                )
+            return obj
+        if isinstance(obj, list):
+            for i, item in enumerate(obj):
+                obj[i] = await self._mask_nested_strings(
+                    item, mode, pii_tokens, presidio_config, request_data
+                )
+            return obj
+        return obj
+
     @staticmethod
     def _is_anthropic_message_response(response: Any) -> bool:
         """Check if the response is an Anthropic native message dict."""
@@ -1066,23 +1108,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         request_data=request_data,
                     )
             elif block_type == "tool_use":
-                # Mirror the OpenAI-format path (_process_response_for_pii), which masks
-                # tool_call arguments: a tool_use block's `input` dict can carry PII the
-                # model produced, and must be masked too -- not just sibling text blocks.
                 tool_input = block.get("input")
-                if isinstance(tool_input, dict):
-                    for key, value in list(tool_input.items()):
-                        if not isinstance(value, str):
-                            continue
-                        if mode == "unmask":
-                            tool_input[key] = self._unmask_pii_text(value, pii_tokens)
-                        elif mode == "mask":
-                            tool_input[key] = await self.check_pii(
-                                text=value,
-                                output_parse_pii=False,
-                                presidio_config=presidio_config,
-                                request_data=request_data,
-                            )
+                if isinstance(tool_input, (dict, list)):
+                    await self._mask_nested_strings(
+                        tool_input, mode, pii_tokens, presidio_config, request_data
+                    )
 
         return response
 

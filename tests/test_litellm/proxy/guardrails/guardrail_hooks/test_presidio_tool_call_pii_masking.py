@@ -147,3 +147,52 @@ async def test_anthropic_response_masks_pii_in_tool_use_input(presidio_guardrail
     ), "tool_use input should be masked"
     assert tool_block["input"]["ssn"] == "<US_SSN>"
     assert tool_block["input"]["note"] == "customer", "non-PII values unchanged"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_response_masks_nested_tool_use_input(presidio_guardrail):
+    """
+    PII inside nested dicts/lists within tool_use input must also be masked.
+    """
+    response = {
+        "id": "msg_02",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "tu_2",
+                "name": "save_patient",
+                "input": {
+                    "patient": {
+                        "ssn": "078-05-1120",
+                        "name": "Alice",
+                    },
+                    "addresses": [
+                        {"street": "123 Main", "phone": "078-05-1120"}
+                    ],
+                    "code": 42,
+                },
+            },
+        ],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("078-05-1120", "<US_SSN>")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    result = await presidio_guardrail._process_anthropic_response_for_pii(
+        response=response,
+        request_data={},
+        mode="mask",
+    )
+
+    tool_input = result["content"][0]["input"]
+    assert tool_input["patient"]["ssn"] == "<US_SSN>", "nested dict value masked"
+    assert tool_input["patient"]["name"] == "Alice", "non-PII nested value unchanged"
+    assert tool_input["addresses"][0]["phone"] == "<US_SSN>", "list-nested value masked"
+    assert tool_input["addresses"][0]["street"] == "123 Main", "non-PII list value unchanged"
+    assert tool_input["code"] == 42, "non-string values unchanged"
