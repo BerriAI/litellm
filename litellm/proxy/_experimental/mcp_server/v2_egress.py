@@ -15,17 +15,39 @@ is assembled). The CLI flag wiring lands at the cutover step.
 
 from __future__ import annotations
 
+import contextlib
 import os
-from typing import TYPE_CHECKING, Dict, List, Optional, Protocol, Union
+from typing import (
+    TYPE_CHECKING,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+)
+
+import httpx
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+from pydantic import BaseModel, ConfigDict
+
+from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.proxy.gateway.mcp.result import Error, Ok, Result
 
 if TYPE_CHECKING:
     from mcp import ReadResourceResult, Resource
-    from mcp.types import GetPromptResult, Prompt
+    from mcp.types import CallToolResult, GetPromptResult, Prompt
     from mcp.types import Tool as MCPTool
     from pydantic import AnyUrl
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+_T = TypeVar("_T")
 
 _V2_EGRESS_ENV_FLAG = "LITELLM_USE_V2_MCP_EGRESS"
 
@@ -96,3 +118,114 @@ class MCPEgressManager(Protocol):
         extra_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
     ) -> GetPromptResult: ...
+
+
+class ConnError(BaseModel):
+    """A connection/transport failure to an upstream MCP server, modeled as a value.
+
+    Discriminated on ``tag`` so callers can route on it (a 401 is surfaced to the client to
+    trigger the upstream OAuth flow; transient/transport failures map to a 503).
+    """
+
+    model_config = ConfigDict(frozen=True)
+    tag: Literal["unauthorized", "upstream_unavailable", "protocol_error"]
+    summary: str
+
+    @classmethod
+    def of_unauthorized(cls, summary: str) -> "ConnError":
+        return cls(tag="unauthorized", summary=summary)
+
+    @classmethod
+    def of_upstream_unavailable(cls, summary: str) -> "ConnError":
+        return cls(tag="upstream_unavailable", summary=summary)
+
+    @classmethod
+    def of_protocol_error(cls, summary: str) -> "ConnError":
+        return cls(tag="protocol_error", summary=summary)
+
+
+_TRANSIENT_ERROR_NAMES = (
+    "ConnectError",
+    "ConnectTimeout",
+    "ReadTimeout",
+    "WriteTimeout",
+    "PoolTimeout",
+    "TimeoutException",
+    "ConnectionError",
+    "RemoteProtocolError",
+)
+
+
+def _classify_conn_error(error: Exception) -> ConnError:
+    response = getattr(error, "response", None)
+    if getattr(response, "status_code", None) == 401:
+        return ConnError.of_unauthorized(f"upstream returned 401: {error}")
+    if type(error).__name__ == "McpError":
+        return ConnError.of_protocol_error(f"MCP protocol error: {error}")
+    if type(error).__name__ in _TRANSIENT_ERROR_NAMES:
+        return ConnError.of_upstream_unavailable(f"upstream unreachable: {error}")
+    return ConnError.of_upstream_unavailable(f"upstream connection failed: {error}")
+
+
+class UpstreamConnection:
+    """Opens the SDK client connection to one upstream MCP server and runs an operation.
+
+    The v2 egress transport: attaches ``resolve()``'s ``httpx.Auth`` (and any static/env-var
+    headers) to the connection through litellm's httpx client (SSL/proxy config), opens a
+    streamable-http ``ClientSession`` per request, and returns typed results (errors-as-values).
+    Replaces v1's ``MCPClient`` for the modes routed through the v2 manager. (sse/stdio transports
+    and the prompt/resource ops land in later steps.)
+    """
+
+    def __init__(
+        self,
+        server_url: str,
+        *,
+        auth: Optional[httpx.Auth] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        timeout: float = 60.0,
+    ) -> None:
+        self._server_url = server_url
+        self._auth = auth
+        self._extra_headers = extra_headers
+        self._timeout = timeout
+
+    async def _run(
+        self, operation: Callable[[ClientSession], Awaitable[_T]]
+    ) -> Result[_T, ConnError]:
+        # The resolved auth (and any static/env-var headers) ride on the httpx client; SSL/proxy
+        # config comes from litellm's get_ssl_configuration, matching v1's connection behavior.
+        http_client = httpx.AsyncClient(
+            headers=self._extra_headers,
+            timeout=httpx.Timeout(self._timeout),
+            auth=self._auth,
+            verify=get_ssl_configuration(None),
+            follow_redirects=True,
+        )
+        try:
+            async with streamable_http_client(
+                url=self._server_url, http_client=http_client
+            ) as (read_stream, write_stream, _):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    result = await operation(session)
+            return Ok(result)
+        except Exception as e:  # transport / protocol failures -> ConnError
+            return Error(_classify_conn_error(e))
+        finally:
+            with contextlib.suppress(Exception):
+                await http_client.aclose()
+
+    async def list_tools(self) -> Result[List[MCPTool], ConnError]:
+        async def op(session: ClientSession) -> List[MCPTool]:
+            return (await session.list_tools()).tools
+
+        return await self._run(op)
+
+    async def call_tool(
+        self, name: str, arguments: Dict[str, object]
+    ) -> Result[CallToolResult, ConnError]:
+        async def op(session: ClientSession) -> CallToolResult:
+            return await session.call_tool(name, arguments)
+
+        return await self._run(op)
