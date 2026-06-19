@@ -38,8 +38,10 @@ class BaseLLMAIOHTTPHandler:
         client_session: Optional[aiohttp.ClientSession] = None,
         transport: Optional[LiteLLMAiohttpTransport] = None,
         connector: Optional[aiohttp.BaseConnector] = None,
+        ssl_verify: Optional[Union[bool, str]] = None,
     ):
         self.client_session = client_session
+        self.ssl_verify = ssl_verify
         self._owns_session = (
             client_session is None
         )  # Track if we own the session for cleanup
@@ -61,7 +63,7 @@ class BaseLLMAIOHTTPHandler:
 
         # Create a transport using AsyncHTTPHandler's logic
         try:
-            self.transport = AsyncHTTPHandler._create_aiohttp_transport()
+            self.transport = AsyncHTTPHandler._create_aiohttp_transport(ssl_verify=self.ssl_verify)
             self._owns_transport = True
             return self.transport
         except Exception:
