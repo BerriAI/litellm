@@ -191,6 +191,11 @@ class LiteLLMCompletionResponsesConfig:
                 raise ValueError("missing content")
         return total
 
+    #????
+    @staticmethod
+    def _cheap_token_counter_for_messages(messages):
+        return LiteLLMCompletionResponsesConfig._cheap_token_counter(messages)
+
     @staticmethod
     async def _transform_context_management(
         model: str,
@@ -215,7 +220,20 @@ class LiteLLMCompletionResponsesConfig:
         """
         Check if compaction should be executed
         """
-        pass
+        if not context_management:
+            return False
+        compact_threshold = 0
+        for item in context_management:
+            if item.get("type") == "compaction":
+                compact_threshold = item.get("compact_threshold")
+                if type(compact_threshold) is not int:
+                    raise ValueError("Non-integer compaction threshold")
+                if compact_threshold < 0:
+                    raise ValueError("Negative compaction threshold")
+                break # could valueerror on multiple compaction objs, didn't find that necessary here
+        if compact_threshold == 0:
+            return False
+        return input_token_size > compact_threshold
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
