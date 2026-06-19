@@ -1085,7 +1085,6 @@ def _build_custom_pricing_entry(
     return entry
 
 
-@tracer.wrap()
 @dataclass(frozen=True, slots=True)
 class _CompletionDispatchContext:
     _azure_detection_model: str
@@ -5011,6 +5010,7 @@ def _complete_langflow(ctx: _CompletionDispatchContext):
     return response
 
 
+@tracer.wrap()
 @client
 def completion(  # type: ignore
     model: str,
