@@ -29,6 +29,14 @@ class PerplexitySearchRequest(_PerplexitySearchRequestRequired, total=False):
 
     max_results: int  # Optional - maximum number of results (1-20), default 10
     search_domain_filter: List[str]  # Optional - list of domains to filter (max 20)
+    search_recency_filter: str  # Optional - hour | day | week | month | year
+    search_after_date_filter: str  # Optional - publish date >= MM/DD/YYYY
+    search_before_date_filter: str  # Optional - publish date <= MM/DD/YYYY
+    last_updated_after_filter: str  # Optional - last-updated date >= MM/DD/YYYY
+    last_updated_before_filter: str  # Optional - last-updated date <= MM/DD/YYYY
+    search_language_filter: List[str]  # Optional - ISO 639-1 codes (max 20)
+    search_context_size: str  # Optional - low | medium | high
+    max_tokens: int  # Optional - max tokens across results
     max_tokens_per_page: int  # Optional - max tokens per page, default 1024
     country: str  # Optional - country code filter (e.g., 'US', 'GB', 'DE')
 
