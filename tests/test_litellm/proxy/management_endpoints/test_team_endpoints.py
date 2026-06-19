@@ -9344,3 +9344,195 @@ async def test_team_info_forwards_key_limit_to_get_data():
         )
 
     assert mock_prisma.get_data.await_args.kwargs["limit"] == 7
+
+
+@pytest.mark.asyncio
+async def test_team_info_translates_internal_routing_keys_in_models():
+    """Regression (#30798): `/team/info` must surface the public
+    ``team_public_model_name`` in ``team_info.models`` for any internal
+    routing-key entries that snuck into the team's stored ``models`` column.
+    Otherwise the dashboard's team-edit form binds to the routing key and
+    re-submits it on save, persisting ``model_name_<team_id>_<uuid>`` strings
+    that show up as gibberish for every model in the list.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_id = "team-corruption"
+    stored_team = LiteLLM_TeamTable(
+        team_id=team_id,
+        models=[
+            "gpt-4",
+            f"model_name_{team_id}_4a6b8e2c",
+            f"model_name_{team_id}_orphaned",
+        ],
+    )
+
+    mock_router = MagicMock(spec=Router)
+    mock_router.get_model_list.return_value = [
+        {
+            "model_name": f"model_name_{team_id}_4a6b8e2c",
+            "model_info": {
+                "team_id": team_id,
+                "team_public_model_name": "team-claude-sonnet",
+            },
+        }
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=stored_team)
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch.object(
+            team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])
+        ),
+    ):
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id=team_id,
+            key_limit=None,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    returned_models = response["team_info"].models
+    assert "team-claude-sonnet" in returned_models
+    assert "gpt-4" in returned_models
+    assert f"model_name_{team_id}_4a6b8e2c" not in returned_models
+    # Orphaned routing key (no live deployment) is preserved so the team's
+    # historical access list is not silently truncated; only live keys swap.
+    assert f"model_name_{team_id}_orphaned" in returned_models
+
+
+@pytest.mark.asyncio
+async def test_team_info_legacy_flag_keeps_routing_keys():
+    """``general_settings.use_team_public_model_name=False`` pins the legacy
+    internal routing keys in every other listing endpoint; ``/team/info`` has
+    to honor the same flag or the dashboard would see two different names
+    depending on which endpoint it queried."""
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_id = "team-legacy"
+    stored_team = LiteLLM_TeamTable(
+        team_id=team_id,
+        models=[f"model_name_{team_id}_uuid"],
+    )
+
+    mock_router = MagicMock(spec=Router)
+    mock_router.get_model_list.return_value = [
+        {
+            "model_name": f"model_name_{team_id}_uuid",
+            "model_info": {
+                "team_id": team_id,
+                "team_public_model_name": "claude-2",
+            },
+        }
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=stored_team)
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"use_team_public_model_name": False},
+        ),
+        patch.object(
+            team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])
+        ),
+    ):
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id=team_id,
+            key_limit=None,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert response["team_info"].models == [f"model_name_{team_id}_uuid"]
+
+
+@pytest.mark.asyncio
+async def test_update_team_strips_internal_routing_keys_from_models():
+    """Regression (#30798): even when a stale dashboard or scripted client
+    POSTs internal routing keys back through ``/team/update``'s ``models``
+    field, the proxy must translate them to the public
+    ``team_public_model_name`` before persisting. Without this, a team-edit
+    save (which the UI submits with the entire ``models`` array, even
+    untouched) corrupts the row on every save."""
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_id = "team-update-bypass"
+    existing_team = LiteLLM_TeamTable(
+        team_id=team_id,
+        models=["claude-2", "gpt-4"],
+    )
+
+    mock_router = MagicMock(spec=Router)
+    mock_router.get_model_list.return_value = [
+        {
+            "model_name": f"model_name_{team_id}_4a6b8e2c",
+            "model_info": {
+                "team_id": team_id,
+                "team_public_model_name": "claude-2",
+            },
+        }
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+    mock_prisma.jsonify_team_object = lambda db_data: db_data
+
+    repo_table = MagicMock(
+        find_unique=AsyncMock(return_value=existing_team),
+        update=AsyncMock(return_value=existing_team),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch.object(team_endpoints, "_refresh_cached_team", AsyncMock()),
+        patch.object(team_endpoints, "_verify_team_access", AsyncMock()),
+        patch.object(
+            team_endpoints,
+            "_check_passthrough_routes_caller_permission",
+            MagicMock(),
+        ),
+        patch.object(
+            team_endpoints,
+            "TeamRepository",
+            MagicMock(return_value=MagicMock(table=repo_table)),
+        ),
+    ):
+        await team_endpoints.update_team(
+            data=UpdateTeamRequest(
+                team_id=team_id,
+                models=[
+                    "gpt-4",
+                    f"model_name_{team_id}_4a6b8e2c",
+                ],
+            ),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_changed_by=None,
+        )
+
+    persisted_models = repo_table.update.await_args.kwargs["data"]["models"]
+    assert "claude-2" in persisted_models
+    assert "gpt-4" in persisted_models
+    assert f"model_name_{team_id}_4a6b8e2c" not in persisted_models

@@ -74,6 +74,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -1712,6 +1713,7 @@ async def update_team(
     """
     try:
         from litellm.proxy.proxy_server import (
+            general_settings,
             litellm_proxy_admin_name,
             llm_router,
             prisma_client,
@@ -1730,6 +1732,18 @@ async def update_team(
                 status_code=400, detail={"error": "No team id passed in"}
             )
         verbose_proxy_logger.debug("/team/update - %s", data)
+
+        # Defense-in-depth against #30798: a team-edit form that re-submits the
+        # whole `models` array (even when the user did not touch it) must not be
+        # able to round-trip an internal `model_name_<team_id>_<uuid>` routing
+        # key back into `team.models`. Translate any incoming routing keys to
+        # their public `team_public_model_name` before the value reaches the DB.
+        if data.models is not None:
+            data.models = TeamModelNameTranslator.sanitize_team_models_list(
+                list(data.models),
+                llm_router,
+                general_settings,
+            )
 
         # Validate budget values are not negative
         if data.max_budget is not None and (
@@ -3595,7 +3609,11 @@ async def team_info(
     ```
     """
     from litellm.proxy._types import TeamInfoResponseObjectTeamTable
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        prisma_client,
+    )
 
     try:
         if prisma_client is None:
@@ -3685,6 +3703,16 @@ async def team_info(
 
         # Resolve resources inherited from access groups
         await _resolve_team_access_group_resources(_team_info)
+
+        # Translate any internal BYOK routing keys (`model_name_<team_id>_<uuid>`)
+        # in `models` to their public `team_public_model_name`. Without this, the
+        # dashboard's team-edit form binds to the routing key and re-submits it
+        # on save, persisting the internal name into `team.models` (issue #30798).
+        _team_info.models = TeamModelNameTranslator.sanitize_team_models_list(
+            list(_team_info.models or []),
+            llm_router,
+            general_settings,
+        )
 
         response_object = TeamInfoResponseObject(
             team_id=team_id,

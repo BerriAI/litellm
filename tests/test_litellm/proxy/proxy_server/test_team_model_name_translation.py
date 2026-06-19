@@ -1052,6 +1052,51 @@ def _public_named_router(*team_rows: dict) -> MagicMock:
     return router
 
 
+def test_sanitize_team_models_translates_internal_routing_keys():
+    """Regression (#30798): `team.models` entries with the internal routing-key
+    shape must be swapped to their public `team_public_model_name` so the
+    dashboard's team-edit form never binds to the routing key (and never
+    round-trips it back into the row on save)."""
+    router = _public_named_router(_team_row())
+
+    assert TeamModelNameTranslator.sanitize_team_models_list(
+        ["model_name_team-abc-123_4a6b8", "gpt-4o"], router, {}
+    ) == ["team-claude-sonnet", "gpt-4o"]
+
+
+def test_sanitize_team_models_keeps_unmapped_routing_keys():
+    """A routing-key string with no live deployment in the router (e.g. the
+    BYOK row was deleted but the team's `models` column still references it)
+    must pass through unchanged. Dropping it would silently revoke the team's
+    access to a name the operator may want to migrate by hand."""
+    router = _public_named_router(_team_row())
+
+    assert TeamModelNameTranslator.sanitize_team_models_list(
+        ["model_name_other-team_orphaned"], router, {}
+    ) == ["model_name_other-team_orphaned"]
+
+
+def test_sanitize_team_models_passthrough_when_disabled():
+    """The legacy flag pins the internal routing key everywhere else; the team
+    sanitizer has to honor it too or the dashboard would see two different
+    names depending on which endpoint it queried."""
+    router = _public_named_router(_team_row())
+
+    assert TeamModelNameTranslator.sanitize_team_models_list(
+        ["model_name_team-abc-123_4a6b8"],
+        router,
+        {"use_team_public_model_name": False},
+    ) == ["model_name_team-abc-123_4a6b8"]
+
+
+def test_sanitize_team_models_no_router_returns_input():
+    """No router (e.g. proxy still booting): translation is a no-op so the
+    caller can wrap a value through this without an `if router is None` guard."""
+    assert TeamModelNameTranslator.sanitize_team_models_list(
+        ["model_name_team-abc-123_4a6b8", "gpt-4"], None, {}
+    ) == ["model_name_team-abc-123_4a6b8", "gpt-4"]
+
+
 def test_resolve_public_name_to_internal_routing_key():
     """A public team name resolves back to the internal routing key the router
     indexes by, so `GET /v1/models/{public_name}` can find the deployment."""

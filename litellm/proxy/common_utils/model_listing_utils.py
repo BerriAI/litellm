@@ -140,6 +140,29 @@ class TeamModelNameTranslator:
         ]
 
     @staticmethod
+    def sanitize_team_models_list(
+        models: list[str],
+        llm_router: "Router | None",
+        general_settings: Mapping[str, object],
+    ) -> list[str]:
+        """Replace any internal team routing keys in `models` with their public
+        `team_public_model_name`. Names that are already public, plus globals
+        and access-group keys (and routing keys we can't resolve, e.g. the
+        deployment was deleted) pass through unchanged so we never silently
+        revoke a team's access.
+
+        Used by `/team/info` (so the dashboard never binds its team-edit form
+        to the internal name) and `/team/update` (so a form that re-submits
+        stale data can't round-trip the routing key back into the row).
+        """
+        internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(
+            llm_router, general_settings
+        )
+        if not internal_to_public:
+            return list(models)
+        return [internal_to_public.get(name, name) for name in models]
+
+    @staticmethod
     def resolve_public_name(
         model_id: str,
         available_models: list[str],
