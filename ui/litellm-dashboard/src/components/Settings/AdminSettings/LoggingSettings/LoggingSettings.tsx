@@ -10,14 +10,16 @@ import {
   StoreRequestInSpendLogsParams,
   useStoreRequestInSpendLogs,
 } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { ClockCircleOutlined } from "@ant-design/icons";
-import { Button, Card, Form, Input, Skeleton, Space, Switch, Typography } from "antd";
+import { Button, Card, Form, Input, Skeleton, Space, Switch, Tooltip, Typography } from "antd";
 import React, { useMemo } from "react";
 
 const LoggingSettings: React.FC = () => {
   const [form] = Form.useForm();
+  const { premiumUser } = useAuthorized();
   const { mutate, isPending } = useStoreRequestInSpendLogs();
   const { mutate: deleteField, isPending: isDeletingField } = useDeleteProxyConfigField();
   const { data: proxyConfigData, isLoading: isLoadingConfig } = useProxyConfig(ConfigType.GENERAL_SETTINGS);
@@ -109,17 +111,40 @@ const LoggingSettings: React.FC = () => {
           </Form.Item>
 
           <Form.Item
-            label="Maximum Spend Logs Retention Period (Optional)"
+            label={
+              <span>
+                Maximum Spend Logs Retention Period (Optional)
+                {!premiumUser && (
+                  <a
+                    href="https://www.litellm.ai/enterprise#trial"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ marginLeft: 8, fontSize: 12 }}
+                  >
+                    ✨ Enterprise Feature
+                  </a>
+                )}
+              </span>
+            }
             name="maximum_spend_logs_retention_period"
             tooltip={
-              proxyConfigData?.find((f) => f.field_name === "maximum_spend_logs_retention_period")?.field_description ||
-              "Set the maximum retention period for spend logs (e.g., '7d' for 7 days, '30d' for 30 days). Leave empty for no limit."
+              !premiumUser
+                ? "This feature requires an Enterprise license. Get a trial key at https://www.litellm.ai/enterprise#trial"
+                : proxyConfigData?.find((f) => f.field_name === "maximum_spend_logs_retention_period")
+                    ?.field_description ||
+                  "Set the maximum retention period for spend logs (e.g., '7d' for 7 days, '30d' for 30 days). Leave empty for no limit."
             }
           >
             {isLoadingConfig ? (
               <Skeleton.Input active block />
             ) : (
-              <Input placeholder="e.g., 7d, 30d" prefix={<ClockCircleOutlined />} />
+              <Tooltip title={!premiumUser ? "Requires Enterprise license" : undefined}>
+                <Input
+                  placeholder="e.g., 7d, 30d"
+                  prefix={<ClockCircleOutlined />}
+                  disabled={!premiumUser}
+                />
+              </Tooltip>
             )}
           </Form.Item>
 

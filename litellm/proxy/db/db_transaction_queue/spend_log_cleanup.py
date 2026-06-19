@@ -51,7 +51,16 @@ class SpendLogCleanup:
     def _should_delete_spend_logs(self) -> bool:
         """
         Determines if logs should be deleted based on the max retention period in settings.
+        Requires enterprise (premium) license.
         """
+        from litellm.proxy.proxy_server import premium_user
+
+        if premium_user is not True:
+            verbose_proxy_logger.warning(
+                "Spend log retention cleanup requires an enterprise license. Skipping."
+            )
+            return False
+
         retention_setting = self.general_settings.get(
             "maximum_spend_logs_retention_period"
         )

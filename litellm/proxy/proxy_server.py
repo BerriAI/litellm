@@ -5663,8 +5663,9 @@ class ProxyConfig:
         Reschedule the spend log cleanup job based on current general_settings.
         This is called when maximum_spend_logs_retention_period is updated dynamically.
         If the retention period is None, the job will be removed.
+        Requires enterprise (premium) license.
         """
-        global scheduler, general_settings, prisma_client
+        global scheduler, general_settings, prisma_client, premium_user
         if scheduler is None:
             return
 
@@ -5675,9 +5676,9 @@ class ProxyConfig:
         except Exception:
             pass  # Job might not exist, which is fine
 
-        # Schedule new job if retention period is set (not None)
+        # Schedule new job if retention period is set (not None) AND user is premium
         retention_period = general_settings.get("maximum_spend_logs_retention_period")
-        if retention_period is not None:
+        if retention_period is not None and premium_user is True:
             from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
                 SpendLogCleanup,
             )
@@ -5802,14 +5803,25 @@ class ProxyConfig:
                 store_model_in_db = bool(value)
             general_settings["store_model_in_db"] = store_model_in_db
 
-        ## MAXIMUM SPEND LOGS RETENTION PERIOD ##
+        ## MAXIMUM SPEND LOGS RETENTION PERIOD (Enterprise only) ##
         if "maximum_spend_logs_retention_period" in _general_settings:
-            old_value = general_settings.get("maximum_spend_logs_retention_period")
-            new_value = _general_settings["maximum_spend_logs_retention_period"]
-            general_settings["maximum_spend_logs_retention_period"] = new_value
-            # Reschedule cleanup job if value changed (including when set to None)
-            if old_value != new_value:
-                await self._reschedule_spend_log_cleanup_job()
+            if premium_user is True:
+                old_value = general_settings.get(
+                    "maximum_spend_logs_retention_period"
+                )
+                new_value = _general_settings[
+                    "maximum_spend_logs_retention_period"
+                ]
+                general_settings[
+                    "maximum_spend_logs_retention_period"
+                ] = new_value
+                # Reschedule cleanup job if value changed (including when set to None)
+                if old_value != new_value:
+                    await self._reschedule_spend_log_cleanup_job()
+            else:
+                verbose_proxy_logger.warning(
+                    "maximum_spend_logs_retention_period requires an enterprise license. Ignoring setting."
+                )
 
     def _update_config_fields(
         self,
@@ -7972,7 +7984,7 @@ class ProxyStartupEvent:
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
         ### SPEND LOG CLEANUP ###
-        if general_settings.get("maximum_spend_logs_retention_period") is not None:
+        if general_settings.get("maximum_spend_logs_retention_period") is not None and premium_user is True:
             spend_log_cleanup = SpendLogCleanup()
             cleanup_cron = general_settings.get("maximum_spend_logs_cleanup_cron")
 
@@ -14821,6 +14833,19 @@ async def update_config(
         if config_info.general_settings is not None:
             existing = await _read_section("general_settings")
             updates = config_info.general_settings.dict(exclude_none=True)
+
+            # Enterprise-only: maximum_spend_logs_retention_period
+            if (
+                "maximum_spend_logs_retention_period" in updates
+                and premium_user is not True
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": f"maximum_spend_logs_retention_period is an enterprise-only feature. {CommonProxyErrors.not_premium_user.value}"
+                    },
+                )
+
             for k, v in updates.items():
                 if k == "alert_to_webhook_url":
                     if "alerting" not in existing:
