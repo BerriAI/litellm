@@ -920,6 +920,7 @@ def responses(
             )
 
         if responses_api_provider_config is None:
+            print("entering response handler")
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,

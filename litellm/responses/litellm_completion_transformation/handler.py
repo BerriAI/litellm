@@ -49,6 +49,7 @@ class LiteLLMCompletionTransformationHandler:
         )
 
         if _is_async:
+            print("entering async")
             return self.async_response_api_handler(
                 litellm_completion_request=litellm_completion_request,
                 request_input=input,
@@ -105,28 +106,40 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
             )
 
+        print('hello')
         #print(request_input)
         input_token_size = LiteLLMCompletionResponsesConfig._cheap_token_counter(request_input)
         #print(input_token_size, responses_api_request)
         compaction_item = None
         if LiteLLMCompletionResponsesConfig.should_execute_compaction(input_token_size, responses_api_request.get("context_management")):
+            print('compacting')
             request_input, compaction_item = await LiteLLMCompletionResponsesConfig._apply_compaction_to_messages(litellm_completion_request["model"], request_input)
             litellm_completion_request = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=litellm_completion_request["model"],
                 input=request_input,
                 responses_api_request=ResponsesAPIOptionalRequestParams(**responses_api_request),
             )
+            print('compacting done')
             
-
+        print('acompletion')
         acompletion_args = {}
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
+
+        print(acompletion_args)
+        if acompletion_args.get('context_management'):
+            for i, item in enumerate(acompletion_args.get('context_management')):
+                if item["type"] == "compaction":
+                    acompletion_args.get('context_management').pop(i)
+                    break
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = await litellm.acompletion(
             **acompletion_args,
         )
+        print('acompletion done')
+        print(litellm_completion_response)
 
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: ResponsesAPIResponse = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
@@ -135,7 +148,7 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
             )
             if compaction_item:
-                responses_api_response.output = [compaction_item] + responses_api_response.output
+                responses_api_response.output = responses_api_response.output + [compaction_item]
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
