@@ -1,6 +1,7 @@
 import os
 import sys
 
+import httpx
 import pytest
 
 import litellm
@@ -596,3 +597,32 @@ def test_cohere_connection_error_maps_to_rate_limit():
         )
 
     assert excinfo.value.llm_provider == "cohere"
+
+
+class ReplicateError(Exception):
+    """Mimics a replicate HTTP error carrying a status_code and response."""
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.response = httpx.Response(
+            status_code=status_code,
+            request=httpx.Request("POST", "https://api.replicate.com/v1/predictions"),
+        )
+
+
+def test_replicate_422_maps_to_unprocessable_entity():
+    """The replicate status-code ladder carried two identical ``status_code == 422``
+    branches; the second was unreachable dead code. After dropping the duplicate the
+    surviving branch must still map 422 to UnprocessableEntityError."""
+    original_exception = ReplicateError("validation failed for the input", 422)
+
+    with pytest.raises(litellm.UnprocessableEntityError) as excinfo:
+        exception_type(
+            model="replicate/meta/llama-2-70b-chat",
+            original_exception=original_exception,
+            custom_llm_provider="replicate",
+        )
+
+    assert excinfo.value.llm_provider == "replicate"

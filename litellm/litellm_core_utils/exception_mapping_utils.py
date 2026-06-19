@@ -689,13 +689,6 @@ def _map_replicate_exception(
                 model=model,
                 llm_provider="replicate",
             )
-        elif original_exception.status_code == 422:
-            raise UnprocessableEntityError(
-                message=f"ReplicateException - {original_exception.message}",
-                llm_provider="replicate",
-                model=model,
-                response=getattr(original_exception, "response", None),
-            )
         elif original_exception.status_code == 429:
             raise RateLimitError(
                 message=f"ReplicateException - {original_exception.message}",
