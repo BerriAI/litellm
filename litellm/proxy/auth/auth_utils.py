@@ -361,7 +361,7 @@ def _check_banned_params(
         )
 
 
-_BASE_OVERRIDE_FIELDS: Tuple[str, ...] = ("api_base", "base_url")
+_BASE_OVERRIDE_FIELDS: tuple[str, ...] = ("api_base", "base_url")
 
 
 def _check_base_override_has_api_key(body: dict) -> None:
@@ -447,7 +447,7 @@ def is_request_body_safe(
     return True
 
 
-def _iter_request_tools(tools: Any) -> Tuple[Dict[str, Any], ...]:
+def _iter_request_tools(tools: Any) -> tuple[dict[str, Any], ...]:
     """Return the dict entries of a request ``tools`` array.
 
     The OpenAI ``tools`` field is a list of objects; provider-specific tools

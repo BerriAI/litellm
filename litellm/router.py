@@ -26,7 +26,6 @@ from typing import (
     AsyncGenerator,
     Callable,
     Dict,
-    FrozenSet,
     Generator,
     List,
     Literal,
@@ -239,7 +238,7 @@ class RoutingArgs(enum.Enum):
 # first to keep the deployment config authoritative. The clientside keys
 # (api_key/api_base/base_url) are intentionally excluded; they flow through
 # the allow_client_side_credentials opt-in instead.
-_DEPLOYMENT_OWNED_CREDENTIAL_KWARGS: FrozenSet[str] = frozenset(
+_DEPLOYMENT_OWNED_CREDENTIAL_KWARGS: frozenset[str] = frozenset(
     {
         "api_version",
         "vertex_project",
