@@ -2287,3 +2287,79 @@ def test_chunk_creator_tool_calls_not_dropped_on_finish(
     assert result.choices[0].delta.tool_calls is not None
     assert result.choices[0].finish_reason is None
     assert initialized_custom_stream_wrapper.received_finish_reason == "tool_calls"
+
+
+def test_record_partial_usage_for_failure_stashes_usage_and_cost():
+    """A stream that breaks mid-flight must surface the usage assembled from the
+    chunks already delivered, plus its cost, on the logging object so the
+    failure handler records the real partial spend instead of zero.
+    """
+    logging_obj = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-1",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-partial-1",
+            created=1742056047,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="The Roman Empire began when", role="assistant"
+                    ),
+                )
+            ],
+            usage=Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+        )
+    ]
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.prompt_tokens == 30
+    assert stashed.completion_tokens == 1
+    assert stashed.total_tokens == 31
+    assert isinstance(logging_obj.model_call_details["response_cost"], float)
+
+
+def test_record_partial_usage_for_failure_noop_without_chunks():
+    """With no chunks delivered there is nothing billed to recover, so the
+    failure stash must stay absent and not force a zero-usage row.
+    """
+    logging_obj = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-2",
+        function_id="1245",
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = []
+
+    wrapper._record_partial_usage_for_failure()
+
+    assert "combined_usage_object" not in logging_obj.model_call_details
